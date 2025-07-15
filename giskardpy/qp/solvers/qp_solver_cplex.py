@@ -2,8 +2,7 @@ import cplex
 import numpy as np
 
 from giskardpy.data_types.exceptions import QPSolverException, InfeasibleException
-from giskardpy.qp.qp_solver import QPSolver
-from line_profiler import profile
+from giskardpy.qp.solvers.qp_solver import QPSolver
 from giskardpy.middleware import get_middleware
 
 error_info = {

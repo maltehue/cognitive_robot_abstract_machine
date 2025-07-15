@@ -1,7 +1,7 @@
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List
+from typing import List
 
 import numpy as np
 import pytest
@@ -11,12 +11,10 @@ from giskardpy.god_map import god_map
 from giskardpy.motion_statechart.tasks.task import WEIGHT_BELOW_CA
 from giskardpy.qp.constraint import EqualityConstraint, InequalityConstraint
 from giskardpy.qp.free_variable import FreeVariable
-from giskardpy.qp.qp_controller import QPFormulation
-from giskardpy.qp.qp_adapter import GiskardToQPAdapter, GiskardToExplicitQPAdapter
-from giskardpy.qp.qp_solver_qpSWIFT import QPSolverQPSwift
-from giskardpy.qp.qp_solver_qpalm import QPSolverQPalm
+from giskardpy.qp.qp_formulation import QPFormulation
+from giskardpy.qp.solvers.qp_solver_qpSWIFT import QPSolverQPSwift
+from giskardpy.qp.solvers.qp_solver_qpalm import QPSolverQPalm
 from semantic_world.spatial_types.symbol_manager import symbol_manager
-import semantic_world.spatial_types.spatial_types as cas
 
 
 @dataclass

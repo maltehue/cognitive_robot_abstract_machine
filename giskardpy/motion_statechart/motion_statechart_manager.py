@@ -242,7 +242,7 @@ class MotionStatechartManager:
             expressions=[task_obs_expr,
                          monitor_obs_expr,
                          goal_obs_expr],
-            parameters=[god_map.world.get_state_symbols(),
+            parameters=[god_map.world.get_world_state_symbols(),
                         self.task_state.get_life_cycle_state_symbols(),
                         self.monitor_state.get_life_cycle_state_symbols(),
                         self.goal_state.get_life_cycle_state_symbols(),

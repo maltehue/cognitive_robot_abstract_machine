@@ -1,7 +1,7 @@
 from typing import Union, Optional
 
 from giskardpy.middleware import get_middleware
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 import semantic_world.spatial_types.spatial_types as cas
 from giskardpy.data_types.exceptions import MonitorInitalizationException
 from giskardpy.god_map import god_map

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from dataclasses import dataclass, field
 from typing import List, Dict, TYPE_CHECKING, Optional, Union
 import numpy as np
 
@@ -8,6 +10,9 @@ from giskardpy.qp.free_variable import FreeVariable
 import giskardpy.utils.math as giskard_math
 from giskardpy.utils.decorators import memoize
 from line_profiler import profile
+
+from semantic_world.world import World
+
 if TYPE_CHECKING:
     from giskardpy.model.world import WorldTree
 
@@ -26,12 +31,11 @@ def joint_derivative_filter(offset, prediction_horizon, max_derivative):
                      for derivative in Derivatives.range(Derivatives.velocity, max_derivative)])
 
 
+@dataclass
 class NextCommands:
-    free_variable_data: Dict[PrefixName, List[float]]
+    world: World
 
-    @profile
-    def __init__(self):
-        self.free_variable_data = {}
+    free_variable_data: Dict[PrefixName, List[float]] = field(default_factory=dict)
 
     @classmethod
     @profile
@@ -78,21 +82,3 @@ class NextCommands:
                                  float(xdot[joint_derivative_filter_ + i][1])] for i, free_variable in enumerate(free_variables)
         }
         return self
-
-    @profile
-    def are_uncertain_variables_needed(self, free_variables: List[FreeVariable]) -> bool:
-        """
-        Check if any base variable has values below its corresponding threshold
-        :param free_variables: List of free variables
-        :param thresholds: List of threshold values corresponding to each free variable
-        :return: Name of first variable found below threshold or None if all above
-        :raises ValueError: If length of thresholds doesn't match number of free variables
-        """
-        data = []
-        for free_variable in free_variables:
-            if free_variable.is_base:
-                data.append(self.free_variable_data[free_variable.name][0])
-        v = np.linalg.norm(data)
-        # print(v)
-        return v > 0.01
-

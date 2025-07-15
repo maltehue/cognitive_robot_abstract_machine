@@ -8,8 +8,8 @@ if TYPE_CHECKING:
 import numpy as np
 import piqp
 from giskardpy.data_types.exceptions import InfeasibleException
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
-from giskardpy.qp.qp_solver_gurobi import QPSolverGurobi
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_gurobi import QPSolverGurobi
 
 
 class QPSolverPIQP(QPSolverGurobi):

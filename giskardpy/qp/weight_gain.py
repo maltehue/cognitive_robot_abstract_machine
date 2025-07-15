@@ -1,17 +1,14 @@
-from collections import defaultdict
-from typing import List, Union, Optional, Callable, Dict, DefaultDict
+from typing import List, Dict, DefaultDict
 
-import semantic_world.spatial_types.spatial_types as cas
-from giskardpy.god_map import god_map
-from giskardpy.data_types.data_types import Derivatives, PrefixName
-from giskardpy.qp.free_variable import FreeVariable
+from giskardpy.data_types.data_types import Derivatives
+from semantic_world.degree_of_freedom import DegreeOfFreedom
 
 
 class WeightGain:
     _name: str
-    gains: List[DefaultDict[Derivatives, Dict[FreeVariable, float]]]
+    gains: List[DefaultDict[Derivatives, Dict[DegreeOfFreedom, float]]]
 
-    def __init__(self, name: str, gains: List[DefaultDict[Derivatives, Dict[FreeVariable, float]]]):
+    def __init__(self, name: str, gains: List[DefaultDict[Derivatives, Dict[DegreeOfFreedom, float]]]):
         self._name = name
         self.gains = gains
 
@@ -23,12 +20,12 @@ class WeightGain:
 class LinearWeightGain(WeightGain):
     def __init__(self,
                  name: str,
-                 gains: List[DefaultDict[Derivatives, Dict[FreeVariable, float]]]):
+                 gains: List[DefaultDict[Derivatives, Dict[DegreeOfFreedom, float]]]):
         super().__init__(name, gains)
 
 
 class QuadraticWeightGain(WeightGain):
     def __init__(self,
                  name: str,
-                 gains: List[DefaultDict[Derivatives, Dict[FreeVariable, float]]]):
+                 gains: List[DefaultDict[Derivatives, Dict[DegreeOfFreedom, float]]]):
         super().__init__(name, gains)

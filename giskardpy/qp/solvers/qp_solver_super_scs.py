@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 import numpy as np
 import scs
 
-from giskardpy.qp.qp_solver import QPSolver
+from giskardpy.qp.solvers.qp_solver import QPSolver
 
 
 class QPSolverSuperSCS(QPSolver):

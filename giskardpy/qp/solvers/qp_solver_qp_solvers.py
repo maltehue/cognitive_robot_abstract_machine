@@ -9,8 +9,8 @@ import numpy as np
 from qpsolvers import solve_qp
 
 from giskardpy.data_types.exceptions import InfeasibleException
-from giskardpy.qp.qp_solver_gurobi import QPSolverGurobi
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_gurobi import QPSolverGurobi
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 from line_profiler import profile
 
 class QPSolverQPSolvers(QPSolverGurobi):

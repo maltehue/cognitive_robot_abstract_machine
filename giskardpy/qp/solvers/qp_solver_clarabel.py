@@ -5,8 +5,8 @@ import numpy as np
 from clarabel import clarabel
 
 from giskardpy.data_types.exceptions import InfeasibleException
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
-from giskardpy.qp.qp_solver_qpSWIFT import QPSolverQPSwift
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_qpSWIFT import QPSolverQPSwift
 
 if TYPE_CHECKING:
     import scipy.sparse as sp

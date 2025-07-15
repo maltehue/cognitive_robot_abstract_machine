@@ -4,13 +4,13 @@ from typing import Tuple, Dict, TYPE_CHECKING
 
 import gurobipy
 import numpy as np
-from giskardpy.qp.qp_adapter import QPData, GiskardToExplicitQPAdapter
+from giskardpy.qp.adapters.qp_adapter import QPData, GiskardToExplicitQPAdapter
 from gurobipy import GRB, GurobiError
 from line_profiler import profile
 from giskardpy.data_types.exceptions import QPSolverException, InfeasibleException
 from giskardpy.middleware import get_middleware
-from giskardpy.qp.qp_solver import QPSolver
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver import QPSolver
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 
 if TYPE_CHECKING:
     import scipy.sparse as sp

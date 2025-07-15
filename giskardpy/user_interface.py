@@ -433,7 +433,7 @@ class GiskardWrapper:
         # god_map.debug_expression_manager.eval_debug_expressions()
 
         update_world_time = time.time()
-        god_map.world.update_state(next_cmd, god_map.qp_controller.control_dt, god_map.qp_controller.max_derivative)
+        god_map.world.apply_control_commands(next_cmd, god_map.qp_controller.config.control_dt, god_map.qp_controller.config.max_derivative)
         god_map.world.notify_state_change()
         update_world_time = time.time() - update_world_time
 

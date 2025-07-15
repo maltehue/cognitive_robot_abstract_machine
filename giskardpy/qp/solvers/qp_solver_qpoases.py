@@ -3,12 +3,11 @@ from enum import IntEnum
 import numpy as np
 import qpoases
 from qpoases import PyReturnValue
-from line_profiler import profile
 
 from giskardpy.data_types.exceptions import QPSolverException, InfeasibleException, HardConstraintsViolatedException
-from giskardpy.qp.qp_solver import QPSolver
+from giskardpy.qp.solvers.qp_solver import QPSolver
 from giskardpy.middleware import get_middleware
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 from giskardpy.utils.decorators import record_time
 
 

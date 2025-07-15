@@ -3,9 +3,8 @@ from typing import Tuple, Union, Dict, Type, Optional, List
 import numpy as np
 
 from giskardpy.data_types.data_types import Derivatives
-from giskardpy.qp.qp_adapter import QPData
-from giskardpy.qp.qp_solver import QPSolver
-from giskardpy.qp.qp_solver_qpalm import QPSolverQPalm
+from giskardpy.qp.qp_data import QPData
+from giskardpy.qp.solvers.qp_solver import QPSolver
 from giskardpy.utils.decorators import memoize
 
 
@@ -200,40 +199,6 @@ def max_velocity_from_horizon_and_jerk(prediction_horizon: int,
     return vel_limit
 
 
-def max_velocity_from_horizon_and_jerk_qp(prediction_horizon: int,
-                                          vel_limit: float,
-                                          acc_limit: float,
-                                          jerk_limit: float,
-                                          dt: float,
-                                          max_derivative: Derivatives):
-    upper_limits = ((vel_limit,) * prediction_horizon,
-                    (acc_limit,) * prediction_horizon,
-                    (jerk_limit,) * prediction_horizon)
-    lower_limits = ((-vel_limit,) * prediction_horizon,
-                    (-acc_limit,) * prediction_horizon,
-                    (-jerk_limit,) * prediction_horizon)
-    return mpc(upper_limits=upper_limits, lower_limits=lower_limits,
-               current_values=(0, 0), dt=dt, ph=prediction_horizon, q_weight=(0, 0, 0), lin_weight=(-1, 0, 0),
-               solver_class=None, link_to_current_vel=False)
-
-
-def max_velocity_from_horizon_and_jerk_qp2(prediction_horizon: int,
-                                           vel_limit: float,
-                                           acc_limit: float,
-                                           jerk_limit: float,
-                                           dt: float,
-                                           max_derivative: Derivatives):
-    upper_limits = ((vel_limit,) * prediction_horizon,
-                    tuple([0] + [acc_limit] * (prediction_horizon - 1)),
-                    (np.inf,) * prediction_horizon)
-    lower_limits = ((-vel_limit,) * prediction_horizon,
-                    tuple([0] + [-acc_limit] * (prediction_horizon - 1)),
-                    (-np.inf,) * prediction_horizon)
-    return mpc(upper_limits=upper_limits, lower_limits=lower_limits,
-               current_values=(vel_limit, 0), dt=dt, ph=prediction_horizon, q_weight=(0, 0, 1), lin_weight=(0, 0, 0),
-               solver_class=None, link_to_current_vel=True)
-
-
 @memoize
 def mpc(upper_limits: Tuple[Tuple[float, ...], ...],
         lower_limits: Tuple[Tuple[float, ...], ...],
@@ -242,14 +207,9 @@ def mpc(upper_limits: Tuple[Tuple[float, ...], ...],
         ph: int,
         q_weight: Tuple[float, ...],
         lin_weight: Tuple[float, ...],
-        solver_class: Optional[Type[QPSolver]] = None,
+        solver_class: Type[QPSolver],
         link_to_current_vel: bool = True) -> np.ndarray:
-    if solver_class is None:
-        solver = QPSolverQPalm()
-        # solver = QPSolverQPSwift.empty()
-        # solver = QPSolverGurobi.empty()
-    else:
-        solver = solver_class()
+    solver = solver_class()
     max_d = len(upper_limits)
     lb = []
     ub = []
@@ -504,33 +464,3 @@ def quaternion_slerp(q1, q2, t):
     if 0.001 > abs(sin_half_theta):
         return 0.5 * q1 + 0.5 * q2
     return ratio_a * q1 + ratio_b * q2
-
-
-@memoize
-def find_best_jerk_limit(prediction_horizon: int, dt: float, target_vel_limit: float, eps: float = 0.0001) -> float:
-    jerk_limit = (4 * target_vel_limit) / dt ** 2
-    upper_bound = jerk_limit
-    lower_bound = 0
-    best_vel_limit = 0
-    best_jerk_limit = 0
-    for i in range(100):
-        vel_limit = max_velocity_from_horizon_and_jerk_qp(prediction_horizon=prediction_horizon,
-                                                          vel_limit=1000,
-                                                          acc_limit=np.inf,
-                                                          jerk_limit=jerk_limit,
-                                                          dt=dt,
-                                                          max_derivative=Derivatives.jerk)[0]
-        if abs(vel_limit - target_vel_limit) < abs(best_vel_limit - target_vel_limit):
-            best_vel_limit = vel_limit
-            best_jerk_limit = jerk_limit
-        if abs(vel_limit - target_vel_limit) < eps:
-            break
-        if vel_limit > target_vel_limit:
-            upper_bound = jerk_limit
-            jerk_limit = round((jerk_limit + lower_bound) / 2, 4)
-        else:
-            lower_bound = jerk_limit
-            jerk_limit = round((jerk_limit + upper_bound) / 2, 4)
-    print(
-        f'best velocity limit: {best_vel_limit} (target = {target_vel_limit}) with jerk limit: {best_jerk_limit} after {i + 1} iterations')
-    return best_jerk_limit

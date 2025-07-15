@@ -1,25 +1,27 @@
+from __future__ import annotations
+
 import datetime
-import os
 from copy import deepcopy
-from typing import List, Dict, Type, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, TYPE_CHECKING
 
 import numpy as np
-from giskardpy.data_types.data_types import Derivatives
-from giskardpy.data_types.exceptions import HardConstraintsViolatedException, QPSolverException, InfeasibleException
+from line_profiler import profile
+
+from giskardpy.data_types.exceptions import HardConstraintsViolatedException, InfeasibleException
 from giskardpy.god_map import god_map
 from giskardpy.middleware import get_middleware
+from giskardpy.qp.adapters.qp_adapter import GiskardToQPAdapter, QPData
 from giskardpy.qp.constraint import DerivativeEqualityConstraint
 from giskardpy.qp.constraint import InequalityConstraint, EqualityConstraint, DerivativeInequalityConstraint
 from giskardpy.qp.free_variable import FreeVariable
 from giskardpy.qp.next_command import NextCommands
-from giskardpy.qp.qp_adapter import GiskardToExplicitQPAdapter, GiskardToQPAdapter, QPData
-from giskardpy.qp.qp_formulation import QPFormulation
-from giskardpy.qp.qp_solver import QPSolver
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
 from giskardpy.qp.weight_gain import QuadraticWeightGain, LinearWeightGain
-from semantic_world.spatial_types.symbol_manager import symbol_manager, SymbolManager
-from giskardpy.utils.utils import create_path, get_all_classes_in_module
-from line_profiler import profile
+from giskardpy.utils.utils import create_path
+from semantic_world.spatial_types.symbol_manager import SymbolManager
+
+if TYPE_CHECKING:
+    from giskardpy.qp.qp_controller_config import QPControllerConfig
 
 # used for saving pandas in the same folder every time within a run
 date_str = datetime.datetime.now().strftime('%Yy-%mm-%dd--%Hh-%Mm-%Ss')
@@ -45,104 +47,24 @@ def save_pandas(dfs, names, path, time: float, folder_name: Optional[str] = None
             f.write(csv_string)
 
 
-available_solvers: Dict[SupportedQPSolver, Type[QPSolver]] = {}
-
-
-def detect_solvers():
-    global available_solvers
-    solver_name: str
-    qp_solver_class: Type[QPSolver]
-    for qp_solver_name in SupportedQPSolver:
-        module_name = f'giskardpy.qp.qp_solver_{qp_solver_name.name}'
-        try:
-            qp_solver_class = list(get_all_classes_in_module(module_name, QPSolver).items())[0][1]
-            available_solvers[qp_solver_name] = qp_solver_class
-        except Exception:
-            continue
-    solver_names = [solver_name.name for solver_name in available_solvers.keys()]
-    print(f'Found these qp solvers: {solver_names}')
-
-
-detect_solvers()
-
-
+@dataclass
 class QPController:
     """
     Wraps around QP Solver. Builds the required matrices from constraints.
     """
-    qp_adapter: GiskardToQPAdapter
+    config: QPControllerConfig
+    qp_adapter: GiskardToQPAdapter = field(default=None)
 
     @profile
-    def __init__(self,
-                 mpc_dt: float,
-                 prediction_horizon: int,
-                 control_dt: Optional[float] = None,
-                 max_derivative: Derivatives = Derivatives.jerk,
-                 solver_id: Optional[SupportedQPSolver] = None,
-                 retries_with_relaxed_constraints: int = 5,
-                 retry_added_slack: float = 100,
-                 retry_weight_factor: float = 100,
-                 qp_formulation: Optional[QPFormulation] = None,
-                 horizon_weight_gain_scalar: float = 0.1,
-                 verbose: bool = True):
-        # todo
-        # base_symbols = []
-        # non_base_free_variables = []
-        # for v in free_variables:
-        #     if v.is_base:
-        #         base_symbols.append(v.get_symbol(Derivatives.position))
-        #     else:
-        #         non_base_free_variables.append(v)
-        #
-        # god_map.qp_controller2.init(
-        #     free_variables=non_base_free_variables,
-        #     equality_constraints=eq_constraints,
-        #     inequality_constraints=neq_constraints,
-        #     eq_derivative_constraints=eq_derivative_constraints,
-        #     derivative_constraints=derivative_constraints,
-        #     quadratic_weight_gains=quadratic_weight_gains,
-        #     linear_weight_gains=linear_weight_gains,
-        # )
-        # god_map.qp_controller2.compile()
-        if control_dt is None:
-            control_dt = mpc_dt
-        self.control_dt = control_dt
-        self.horizon_weight_gain_scalar = horizon_weight_gain_scalar
-        self.qp_formulation = qp_formulation or QPFormulation()
-        self.mpc_dt = mpc_dt
-        self.max_derivative = max_derivative
-        self.prediction_horizon = prediction_horizon
-        self.retries_with_relaxed_constraints = retries_with_relaxed_constraints
-        self.retry_added_slack = retry_added_slack
-        self.retry_weight_factor = retry_weight_factor
-        self.verbose = verbose
-        self.set_qp_solver(solver_id)
-        if not self.qp_formulation.is_mpc:
-            self.prediction_horizon = 1
-            self.max_derivative = Derivatives.velocity
-
-        if self.verbose:
+    def __post_init__(self):
+        self.qp_solver = self.config.qp_solver_class()
+        if self.config.verbose:
             get_middleware().loginfo(f'Initialized QP Controller:\n'
-                                     f'sample period: "{self.mpc_dt}"s\n'
-                                     f'max derivative: "{self.max_derivative.name}"\n'
-                                     f'prediction horizon: "{self.prediction_horizon}"\n'
-                                     f'QP solver: "{self.qp_solver_class.solver_id.name}"')
+                                     f'sample period: "{self.config.mpc_dt}"s\n'
+                                     f'max derivative: "{self.config.max_derivative.name}"\n'
+                                     f'prediction horizon: "{self.config.prediction_horizon}"\n'
+                                     f'QP solver: "{self.config.qp_solver_id.name}"')
         self.reset()
-
-    def set_qp_solver(self, solver_id: Optional[SupportedQPSolver] = None) -> None:
-        print_later = hasattr(self, 'qp_solver_class')
-        if solver_id is not None:
-            self.qp_solver_class = available_solvers[solver_id]
-        else:
-            for solver_id in SupportedQPSolver:
-                if solver_id in available_solvers:
-                    self.qp_solver_class = available_solvers[solver_id]
-                    break
-            else:
-                raise QPSolverException(f'No qp solver found')
-        self.qp_solver = self.qp_solver_class()
-        if print_later:
-            get_middleware().loginfo(f'QP Solver set to "{self.qp_solver_class.solver_id.name}"')
 
     def reset(self):
         self.free_variables = []
@@ -164,7 +86,7 @@ class QPController:
              linear_weight_gains: List[LinearWeightGain] = None):
         self.free_variables = free_variables
         self.qp_adapter = self.qp_solver.required_adapter_type(
-            world_state_symbols=god_map.world.get_state_symbols(),
+            world_state_symbols=god_map.world.get_world_state_symbols(),
             task_life_cycle_symbols=god_map.motion_statechart_manager.task_state.get_life_cycle_state_symbols(),
             goal_life_cycle_symbols=god_map.motion_statechart_manager.goal_state.get_life_cycle_state_symbols(),
             external_collision_symbols=god_map.collision_scene.get_external_collision_symbol(),
@@ -174,11 +96,7 @@ class QPController:
             inequality_constraints=inequality_constraints,
             derivative_constraints=derivative_constraints,
             eq_derivative_constraints=eq_derivative_constraints,
-            mpc_dt=self.mpc_dt,
-            prediction_horizon=self.prediction_horizon,
-            max_derivative=self.max_derivative,
-            horizon_weight_gain_scalar=self.horizon_weight_gain_scalar,
-            qp_formulation=self.qp_formulation)
+            config=self.config)
 
         get_middleware().loginfo('Done compiling controller:')
         # get_middleware().loginfo(f'  #free variables: {self.num_free_variables}')
@@ -204,7 +122,7 @@ class QPController:
                 print(array)
 
     @profile
-    def get_cmd(self, symbol_manager: SymbolManager) -> NextCommands:
+    def get_cmd(self, symbol_manager: SymbolManager) -> np.ndarray:
         """
         Uses substitutions for each symbol to compute the next commands for each joint.
         """
@@ -218,30 +136,12 @@ class QPController:
             try:
                 self.xdot_full = self.qp_solver.solver_call(qp_data.filtered)
             except InfeasibleException as e:
-                self.retries_with_relaxed_constraints -= 1
+                self.config.retries_with_relaxed_constraints -= 1
                 relaxed_solution = self.qp_solver.solver_call(qp_data.relaxed())
-                if self.retries_with_relaxed_constraints < 0:
+                if self.config.retries_with_relaxed_constraints < 0:
                     raise HardConstraintsViolatedException(f'Hard constraints were violated too often.')
                 self.xdot_full = self.qp_solver.solver_call(qp_data.partially_relaxed(relaxed_solution))
-            if self.qp_formulation.is_implicit:
-                return NextCommands.from_xdot_implicit(self.free_variables,
-                                                       self.xdot_full,
-                                                       self.max_derivative,
-                                                       self.prediction_horizon,
-                                                       god_map.world,
-                                                       self.mpc_dt)
-            elif self.qp_formulation.is_explicit or not self.qp_formulation.is_mpc:
-                return NextCommands.from_xdot(self.free_variables,
-                                              self.xdot_full,
-                                              self.max_derivative,
-                                              self.prediction_horizon)
-            else:
-                return NextCommands.from_xdot_explicit_no_acc(self.free_variables,
-                                                              self.xdot_full,
-                                                              self.max_derivative,
-                                                              self.prediction_horizon,
-                                                              god_map.world,
-                                                              self.mpc_dt)
+            return self.xdot_to_control_commands(self.xdot_full)
 
         except InfeasibleException as e_original:
             self.xdot_full = None
@@ -253,6 +153,9 @@ class QPController:
             self.xdot_full = None
             self._are_hard_limits_violated(str(e_original))
             raise
+
+    def xdot_to_control_commands(self, xdot: np.ndarray) -> np.ndarray:
+        pass
 
     def _has_nan(self):
         nan_entries = self.p_A[0].isnull().stack()
@@ -277,74 +180,6 @@ class QPController:
             pass
         get_middleware().loginfo('No slack limit violation detected.')
 
-    def _viz_mpc(self, joint_name):
-        import matplotlib.pyplot as plt
-        def pad(a, desired_length, pad_value):
-            tmp = np.ones(desired_length) * pad_value
-            tmp[:len(a)] = a
-            return tmp
-
-        free_variable: FreeVariable = [x for x in self.free_variables if x.name == joint_name][0]
-        try:
-            start_pos = god_map.world.state[joint_name].position
-        except KeyError:
-            get_middleware().loginfo('start position not found in state')
-            start_pos = 0
-        ts = np.array([(i + 1) * self.mpc_dt for i in range(self.prediction_horizon)])
-        filtered_x = self.p_xdot.filter(like=f'/{joint_name}/', axis=0)
-        vel_end = self.prediction_horizon - self.order + 1
-        acc_end = vel_end + self.prediction_horizon - self.order + 2
-        velocities = filtered_x[:vel_end].values
-        positions = [start_pos]
-        for x_ in velocities:
-            positions.append(positions[-1] + x_ * self.mpc_dt)
-
-        positions = np.array(positions[1:])
-        positions = pad(positions.T[0], len(ts), pad_value=positions[-1])
-        velocities = pad(velocities.T[0], len(ts), pad_value=0)
-
-        if joint_name in god_map.world.state:
-            accelerations = filtered_x[vel_end:acc_end].values
-            jerks = filtered_x[acc_end:].values
-            accelerations = pad(accelerations.T[0], len(ts), pad_value=0)
-
-        f, axs = plt.subplots(4, sharex=True, figsize=(2 + self.prediction_horizon, 16))
-        axs[0].set_title('position')
-        axs[0].plot(ts, positions, 'b')
-        axs[0].grid()
-        axs[1].set_title('velocity')
-        axs[1].plot(ts, velocities, 'b')
-        axs[1].grid()
-        if joint_name in god_map.world.state:
-            axs[2].set_title('acceleration')
-            axs[2].plot(ts, accelerations, 'b')
-            axs[2].grid()
-            axs[3].set_title('jerk')
-            axs[3].plot(ts, jerks, 'b')
-            axs[3].grid()
-        for i, ax in enumerate(axs):
-            derivative = Derivatives(i)
-            if not free_variable.has_position_limits():
-                continue
-            upper_limit = free_variable.get_upper_limit(derivative, evaluated=True)
-            if not np.isinf(upper_limit):
-                ax.axhline(y=upper_limit, color='k', linestyle='--')
-            lower_limit = free_variable.get_lower_limit(derivative, evaluated=True)
-            if not np.isinf(lower_limit):
-                ax.axhline(y=lower_limit, color='k', linestyle='--')
-        # Example: Set x-ticks for each subplot
-        tick_labels = [f'{x}/{x * self.mpc_dt:.3f}' for x in range(self.prediction_horizon)]
-
-        axs[-1].set_xticks(ts)  # Set tick locations
-        axs[-1].set_xticklabels(tick_labels)  # Set custom tick labels
-
-        plt.tight_layout()
-        path, dirs, files = next(os.walk('tmp_data/mpc'))
-        file_count = len(files)
-        file_name = f'{god_map.tmp_folder}/mpc/mpc_{joint_name}_{file_count}.png'
-        create_path(file_name)
-        plt.savefig(file_name)
-
     @profile
     def _create_debug_pandas(self) -> None:
         import pandas as pd
@@ -353,8 +188,8 @@ class QPController:
         free_variable_names = self.qp_adapter.free_variable_bounds.names
         equality_constr_names = self.qp_adapter.equality_bounds.names
         inequality_constr_names = self.qp_adapter.inequality_bounds.names
-        num_vel_constr = len(self.qp_adapter.derivative_constraints) * (self.qp_adapter.prediction_horizon - 2)
-        num_eq_vel_constr = len(self.qp_adapter.eq_derivative_constraints) * (self.qp_adapter.prediction_horizon - 2)
+        num_vel_constr = len(self.qp_adapter.derivative_constraints) * (self.config.prediction_horizon - 2)
+        num_eq_vel_constr = len(self.qp_adapter.eq_derivative_constraints) * (self.config.prediction_horizon - 2)
         num_neq_constr = len(self.qp_adapter.inequality_constraints)
         num_eq_constr = len(self.qp_adapter.equality_constraints)
         num_constr = num_vel_constr + num_neq_constr + num_eq_constr + num_eq_vel_constr
@@ -368,24 +203,24 @@ class QPController:
         if len(qp_data.eq_bounds) > 0:
             self.p_bE_raw = pd.DataFrame(qp_data.eq_bounds, equality_constr_names, ['data'], dtype=float)
             self.p_bE = deepcopy(self.p_bE_raw)
-            self.p_bE[len(self.qp_adapter.equality_bounds.names_derivative_links):] /= self.mpc_dt
+            self.p_bE[len(self.qp_adapter.equality_bounds.names_derivative_links):] /= self.config.mpc_dt
         else:
             self.p_bE = pd.DataFrame()
         if len(qp_data.neq_lower_bounds) > 0:
             self.p_lbA_raw = pd.DataFrame(qp_data.neq_lower_bounds, inequality_constr_names, ['data'],
                                           dtype=float)
             self.p_lbA = deepcopy(self.p_lbA_raw)
-            self.p_lbA /= self.qp_adapter.mpc_dt
+            self.p_lbA /= self.config.mpc_dt
 
             self.p_ubA_raw = pd.DataFrame(qp_data.neq_upper_bounds, inequality_constr_names, ['data'],
                                           dtype=float)
             self.p_ubA = deepcopy(self.p_ubA_raw)
-            self.p_ubA /= self.qp_adapter.mpc_dt
+            self.p_ubA /= self.config.mpc_dt
 
             self.p_bA_raw = pd.DataFrame({'lbA': qp_data.neq_lower_bounds, 'ubA': qp_data.neq_upper_bounds},
                                          inequality_constr_names, dtype=float)
             self.p_bA = deepcopy(self.p_bA_raw)
-            self.p_bA /= self.qp_adapter.mpc_dt
+            self.p_bA /= self.config.mpc_dt
         else:
             self.p_lbA = pd.DataFrame()
             self.p_ubA = pd.DataFrame()
@@ -444,7 +279,7 @@ class QPController:
         result = self.qp_solver.analyze_infeasibility()
         if result is None:
             get_middleware().loginfo(f'Can only compute possible causes with gurobi, '
-                                     f'but current solver is {self.qp_solver_class.solver_id.name}.')
+                                     f'but current solver is {self.config.qp_solver_id.name}.')
             return
         lb_ids, ub_ids, eq_ids, lbA_ids, ubA_ids = result
         b_ids = lb_ids | ub_ids

@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 import mosek
 import numpy as np
 
-from giskardpy.qp.qp_solver_gurobi import QPSolverGurobi
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_gurobi import QPSolverGurobi
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 
 if TYPE_CHECKING:
     import scipy.sparse as sp

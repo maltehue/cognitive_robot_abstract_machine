@@ -94,7 +94,9 @@ class WorldConfig(ABC):
                                  Derivatives.acceleration: np.inf,
                                  Derivatives.jerk: 711}
         """
-        self.world.update_default_limits(new_limits)
+        for dof in self.world.degrees_of_freedom.values():
+            dof._lower_limits_overwrite = {k: -v if v is not None else None for k, v in new_limits.items()}
+            dof._upper_limits_overwrite = new_limits
 
     def add_robot_urdf(self,
                        urdf: str,
@@ -231,10 +233,6 @@ class WorldWithOmniDriveRobot(WorldConfig):
         self.odom_link_name = PrefixedName(odom_link_name)
 
     def setup(self, robot_name: Optional[str] = None):
-        # todo
-        # self.set_default_limits({Derivatives.velocity: 1,
-        #                          Derivatives.acceleration: np.inf,
-        #                          Derivatives.jerk: None})
         map = Body(self.map_name)
         odom = Body(self.odom_link_name)
         localization = Connection6DoF(parent=map, child=odom, _world=self.world)
@@ -250,6 +248,9 @@ class WorldWithOmniDriveRobot(WorldConfig):
         self.world.merge_world(world_with_robot)
         self.world.add_connection(localization)
         self.world.add_connection(odom)
+        self.set_default_limits({Derivatives.velocity: 1,
+                                 Derivatives.acceleration: np.inf,
+                                 Derivatives.jerk: None})
 
 
 class WorldWithDiffDriveRobot(WorldConfig):

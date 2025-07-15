@@ -7,8 +7,8 @@ if TYPE_CHECKING:
 import numpy as np
 import scs
 from giskardpy.data_types.exceptions import InfeasibleException
-from giskardpy.qp.qp_solver_clarabel import QPSolverClarabel
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_clarabel import QPSolverClarabel
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 
 
 class QPSolverSCS(QPSolverClarabel):

@@ -6,8 +6,8 @@ import daqp
 import numpy as np
 
 from giskardpy.data_types.exceptions import InfeasibleException
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
-from giskardpy.qp.qp_solver_qpalm import QPSolverQPalm
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_qpalm import QPSolverQPalm
 
 if TYPE_CHECKING:
     import scipy.sparse as sp

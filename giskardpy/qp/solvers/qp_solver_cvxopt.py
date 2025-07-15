@@ -4,8 +4,8 @@ from typing import Union, TYPE_CHECKING
 import cvxopt
 import numpy as np
 
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
-from giskardpy.qp.qp_solver_qpSWIFT import QPSolverQPSwift
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_qpSWIFT import QPSolverQPSwift
 
 if TYPE_CHECKING:
     import scipy.sparse as sp

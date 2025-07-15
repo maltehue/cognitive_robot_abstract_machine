@@ -4,8 +4,8 @@ import numpy as np
 import quadprog
 
 from giskardpy.data_types.exceptions import InfeasibleException
-from giskardpy.qp.qp_solver_clarabel import QPSolverClarabel
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_clarabel import QPSolverClarabel
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 
 
 class QPSolverQuadprog(QPSolverClarabel):

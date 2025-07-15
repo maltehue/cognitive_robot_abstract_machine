@@ -1,46 +1,31 @@
 from __future__ import annotations
 
-import abc
-from abc import ABC
 from typing import TYPE_CHECKING, Type, List
 
 import numpy as np
 
-from giskardpy.qp.qp_adapter import QPData, GiskardToQPAdapter
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.qp_data import QPData
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 
 if TYPE_CHECKING:
-    pass
+    from giskardpy.qp.adapters.qp_adapter import GiskardToQPAdapter
 
 
-class QPSolver(ABC):
+class QPSolver:
     solver_id: SupportedQPSolver
     required_adapter_type: Type[GiskardToQPAdapter]
 
-    @abc.abstractmethod
     def solver_call(self, qp_data: QPData) -> np.ndarray:
-        ...
+        raise NotImplementedError()
 
-    # @abc.abstractmethod
     def solver_call_batch(self, qps: List[QPData]) -> np.ndarray:
-        raise NotImplemented()
+        raise NotImplementedError()
 
-    @abc.abstractmethod
     def solver_call_explicit_interface(self, qp_data: QPData) -> np.ndarray:
         """
         min_x 0.5 x^T H x + g^T x
         s.t.  lb <= x <= ub     (box constraints)
                    Ex <= bE     (equality constraints)
             lbA <= Ax <= ubA    (lower/upper inequality constraints)
-        :param H:
-        :param g:
-        :param lb:
-        :param ub:
-        :param E:
-        :param bE:
-        :param A:
-        :param lbA:
-        :param ubA:
-        :return: x
         """
-        ...
+        raise NotImplementedError()

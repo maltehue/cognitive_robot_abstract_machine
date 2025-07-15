@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List
 
-from giskardpy.qp.qp_adapter import QPData, GiskardToExplicitQPAdapter
+from giskardpy.qp.adapters.explicit_adapter import GiskardToExplicitQPAdapter
+from giskardpy.qp.adapters.qp_adapter import QPData
 
 if TYPE_CHECKING:
     pass
@@ -11,10 +12,10 @@ from enum import IntEnum
 import numpy as np
 
 from giskardpy.data_types.exceptions import QPSolverException, InfeasibleException
-from giskardpy.qp.qp_solver import QPSolver
+from giskardpy.qp.solvers.qp_solver import QPSolver
 import qpSWIFT_sparse_bindings as qpSWIFT
 
-from giskardpy.qp.qp_solver_ids import SupportedQPSolver
+from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 
 
 class QPSWIFTExitFlags(IntEnum):
