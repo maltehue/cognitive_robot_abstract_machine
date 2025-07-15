@@ -679,6 +679,10 @@ def if_greater(a: symbol_expr_float, b: symbol_expr_float, if_result: symbol_exp
                else_result: symbol_expr_float) -> Expression: ...
 
 @overload
+def if_less(a: symbol_expr_float, b: symbol_expr_float, if_result: Quaternion,
+            else_result: Quaternion) -> Quaternion: ...
+
+@overload
 def if_less(a: symbol_expr_float, b: symbol_expr_float, if_result: Vector3,
             else_result: Vector3) -> Vector3: ...
 @overload

@@ -338,27 +338,25 @@ class Task(MotionStatechartNode):
         frame.
         :param frame_R_current: current rotation as rotation matrix
         :param frame_R_goal: goal rotation as rotation matrix
-        :param current_R_frame_eval: an expression that computes the reverse of frame_R_current.
-                                        Use self.get_fk_evaluated for this.
         :param reference_velocity: rad/s
         :param weight:
         :param name:
         """
-        hack = cas.RotationMatrix.from_axis_angle(cas.Vector3((0, 0, 1)), 0.0001)
-        frame_R_current = frame_R_current.dot(hack)  # hack to avoid singularity
-        tip_Q_tipCurrent = current_R_frame_eval.dot(frame_R_current).to_quaternion()
-        tip_R_goal = current_R_frame_eval.dot(frame_R_goal)
+        # avoid singularity
+        # the sign determines in which direction the robot moves when in singularity.
+        # -0.0001 preserves the old behavior from before this goal was refactored
+        hack = cas.RotationMatrix.from_axis_angle(cas.Vector3((0, 0, 1)), -0.0001)
+        frame_R_current = frame_R_current.dot(hack)
+        q_actual = frame_R_current.to_quaternion()
+        q_goal = frame_R_goal.to_quaternion()
+        q_goal = cas.if_less(q_goal.dot(q_actual), 0, -q_goal, q_goal)
+        q_error = cas.quaternion_multiply(q_goal, cas.quaternion_conjugate(q_actual))
 
-        tip_Q_goal = tip_R_goal.to_quaternion()
-
-        tip_Q_goal = cas.if_greater_zero(-tip_Q_goal[3], -tip_Q_goal, tip_Q_goal)  # flip to get shortest path
-
-        expr = tip_Q_tipCurrent
-        # w is not needed because its derivative is always 0 for identity quaternions
+        # w is redundant
         self.add_equality_constraint_vector(reference_velocities=[reference_velocity] * 3,
-                                            equality_bounds=tip_Q_goal[:3],
+                                            equality_bounds=-q_error[:3],
                                             weights=[weight] * 3,
-                                            task_expression=expr[:3],
+                                            task_expression=q_error[:3],
                                             names=[f'{name}/rot/x',
                                                    f'{name}/rot/y',
                                                    f'{name}/rot/z'])
