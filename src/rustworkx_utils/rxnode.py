@@ -110,7 +110,8 @@ class RWXNode:
 
     def visualize(self, figsize=(35, 30), node_size=7000, font_size=25, spacing_x: float = 4, spacing_y: float = 4,
                   curve_scale: float = 0.5, layout: str = 'tidy', edge_style: str = 'orthogonal',
-                  label_max_chars_per_line: Optional[int] = 13):
+                  label_max_chars_per_line: Optional[int] = 13,
+                  filename: str = "pdf_graph.pdf", title: str = "Directed Query Graph (Top to Bottom)"):
         """Render a rooted, top-to-bottom directed graph.
         Delegates to a dedicated visualizer class to keep this method small and reusable.
         """
@@ -125,5 +126,7 @@ class RWXNode:
             layout=layout,
             edge_style=edge_style,
             label_max_chars_per_line=label_max_chars_per_line,
+            filename=filename,
+            title=title,
         )
         return visualizer.render()

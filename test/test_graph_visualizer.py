@@ -1,14 +1,15 @@
 import os
 
 from rustworkx_utils.rxnode import RWXNode
+from rustworkx_utils.utils import ColorLegend
 
 
 def test_create_and_visualize_graph(tmp_path):
     # Build a small DAG using RWXNode
-    root = RWXNode("Root")
-    a = RWXNode("A")
-    b = RWXNode("B")
-    c = RWXNode("C")
+    root = RWXNode("Root", enclosed=True)
+    a = RWXNode("A", color=ColorLegend(name="A", color="red"))
+    b = RWXNode("B", color=ColorLegend(name="B", color="green"))
+    c = RWXNode("C", color=ColorLegend(name="C", color="blue"))
 
     # Establish primary parent relationships
     a.parent = root

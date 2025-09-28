@@ -30,7 +30,8 @@ class GraphVisualizer:
                  label_max_chars_per_line: Optional[int] = 13,
                  orthogonal_spline_ratio_threshold: float = 3,
                  orthogonal_crossings_threshold: int = 4,
-                 orthogonal_min_length_threshold: Optional[float] = 4):
+                 orthogonal_min_length_threshold: Optional[float] = 4,
+                 filename: str = "pdf_graph.pdf", title: str = "Directed Query Graph (Top to Bottom)"):
         self.node = node
         self.params = dict(
             figsize=figsize,
@@ -45,6 +46,8 @@ class GraphVisualizer:
             orthogonal_spline_ratio_threshold=orthogonal_spline_ratio_threshold,
             orthogonal_crossings_threshold=orthogonal_crossings_threshold,
             orthogonal_min_length_threshold=orthogonal_min_length_threshold,
+            filename=filename,
+            title=title
         )
         self.ctx: Dict[str, Any] = {}
 
@@ -955,7 +958,7 @@ class GraphVisualizer:
         # Optional grid can remain subtle
         ax.grid(True, alpha=0.25)
         # Keep title if desired
-        ax.set_title("Directed Query Graph (Top to Bottom)", fontsize=14, pad=20)
+        ax.set_title(self.params['title'], fontsize=14, pad=20)
         ax.set_aspect('auto', adjustable='box')
         xlim = self.ctx.get('xlim', (0.0, self.ctx['x_extent']))
         ylim = self.ctx.get('ylim', (0.0, self.ctx['y_extent']))
@@ -970,6 +973,6 @@ class GraphVisualizer:
         ax.set_frame_on(False)
         # Compact layout then save with a small white margin around content
         plt.tight_layout()
-        filename = "pdf_graph.pdf"
+        filename = self.params['filename']
         dpi = 300
         plt.savefig(filename, format='pdf', dpi=dpi, bbox_inches='tight', pad_inches=0.2, facecolor=fig.get_facecolor())
