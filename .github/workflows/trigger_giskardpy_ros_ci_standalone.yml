@@ -1,6 +1,6 @@
 name: Trigger giskardpy_ros ros1-noetic-main Tests
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
   push:
     branches:
@@ -30,7 +30,7 @@ jobs:
       # Triggers ci_standalone workflow of giskardpy_ros repo. Needs setup secret token to work
       - name: Trigger workflow in giskardpy_ros
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
             DATA='{
               "ref":"${{ matrix.branch }}",
               "inputs": {
