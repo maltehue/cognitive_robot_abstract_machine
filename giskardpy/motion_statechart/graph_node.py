@@ -73,6 +73,25 @@ class StateTransitionCondition:
             return str(cas.is_true_symbol(self.expression))
         return cas.trinary_logic_to_str(self.expression)
 
+    def __repr__(self):
+        return str(self)
+
+
+@dataclass
+class StartCondition(StateTransitionCondition): ...
+
+
+@dataclass
+class PauseCondition(StateTransitionCondition): ...
+
+
+@dataclass
+class EndCondition(StateTransitionCondition): ...
+
+
+@dataclass
+class ResetCondition(StateTransitionCondition): ...
+
 
 @dataclass(repr=False, eq=False)
 class MotionStatechartNode(cas.Symbol, SubclassJSONSerializer):
@@ -87,6 +106,8 @@ class MotionStatechartNode(cas.Symbol, SubclassJSONSerializer):
     The index of the entity in `_world.kinematic_structure`.
     """
 
+    parent_node: MotionStatechartNode = field(default=None, init=False)
+
     life_cycle_symbol: cas.Symbol = field(init=False)
     observation_expression: cas.Expression = field(
         default_factory=lambda: cas.TrinaryUnknown, init=False
@@ -97,25 +118,25 @@ class MotionStatechartNode(cas.Symbol, SubclassJSONSerializer):
     _plot_shape: str = field(kw_only=True)
     _plot_extra_boarder_styles: List[str] = field(default_factory=list, kw_only=True)
 
-    _start_condition: StateTransitionCondition = field(init=False)
-    _pause_condition: StateTransitionCondition = field(init=False)
-    _end_condition: StateTransitionCondition = field(init=False)
-    _reset_condition: StateTransitionCondition = field(init=False)
+    _start_condition: StartCondition = field(init=False)
+    _pause_condition: PauseCondition = field(init=False)
+    _end_condition: EndCondition = field(init=False)
+    _reset_condition: ResetCondition = field(init=False)
 
     def __post_init__(self):
         self.life_cycle_symbol = cas.Symbol(
             name=PrefixedName("life_cycle", str(self.name))
         )
-        self._start_condition = StateTransitionCondition.create_true(
+        self._start_condition = StartCondition.create_true(
             motion_statechart=self.motion_statechart
         )
-        self._pause_condition = StateTransitionCondition.create_false(
+        self._pause_condition = PauseCondition.create_false(
             motion_statechart=self.motion_statechart
         )
-        self._end_condition = StateTransitionCondition.create_false(
+        self._end_condition = EndCondition.create_false(
             motion_statechart=self.motion_statechart
         )
-        self._reset_condition = StateTransitionCondition.create_false(
+        self._reset_condition = ResetCondition.create_false(
             motion_statechart=self.motion_statechart
         )
         self.motion_statechart.add_node(self)
@@ -210,6 +231,62 @@ class Monitor(MotionStatechartNode):
 
 
 @dataclass(eq=False, repr=False)
+class Goal(MotionStatechartNode):
+    nodes: List[MotionStatechartNode] = field(default_factory=list)
+    _plot_style: str = field(default="filled", kw_only=True)
+    _plot_shape: str = field(default="none", kw_only=True)
+
+    def add_node(self, node: MotionStatechartNode) -> None:
+        self.nodes.append(node)
+        node.parent_node = self
+
+    def arrange_in_sequence(self, nodes: List[MotionStatechartNode]) -> None:
+        first_node = nodes[0]
+        first_node.end_condition = first_node
+        for node in nodes[1:]:
+            node.start_condition = first_node
+            node.end_condition = node
+            first_node = node
+
+    def apply_goal_conditions_to_children(self):
+        for node in self.nodes:
+            self.apply_start_condition_to_node(node)
+            self.apply_pause_condition_to_node(node)
+            self.apply_end_condition_to_node(node)
+            self.apply_reset_condition_to_node(node)
+            if isinstance(node, Goal):
+                node.apply_goal_conditions_to_children()
+
+    def apply_start_condition_to_node(self, node: MotionStatechartNode):
+        if cas.is_trinary_true_symbol(node.start_condition):
+            node.start_condition = self.start_condition
+
+    def apply_pause_condition_to_node(self, node: MotionStatechartNode):
+        if cas.is_trinary_false_symbol(node.pause_condition):
+            node.pause_condition = node.pause_condition
+        elif not cas.is_trinary_false_symbol(node.pause_condition):
+            node.pause_condition = cas.trinary_logic_or(
+                node.pause_condition, node.pause_condition
+            )
+
+    def apply_end_condition_to_node(self, node: MotionStatechartNode):
+        if cas.is_trinary_false_symbol(node.end_condition):
+            node.end_condition = self.end_condition
+        elif not cas.is_trinary_false_symbol(self.end_condition):
+            node.end_condition = cas.trinary_logic_or(
+                node.end_condition, self.end_condition
+            )
+
+    def apply_reset_condition_to_node(self, node: MotionStatechartNode):
+        if cas.is_trinary_false_symbol(node.reset_condition):
+            node.reset_condition = node.reset_condition
+        elif not cas.is_trinary_false_symbol(node.pause_condition):
+            node.reset_condition = cas.trinary_logic_or(
+                node.reset_condition, node.reset_condition
+            )
+
+
+@dataclass(eq=False, repr=False)
 class PayloadMonitor(Monitor, ABC):
     observation_expression: cas.Expression = field(init=False)
 
@@ -227,7 +304,7 @@ class PayloadMonitor(Monitor, ABC):
     ]: ...
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, repr=False)
 class EndMotion(MotionStatechartNode):
     observation_expression: cas.Expression = field(
         default_factory=lambda: cas.TrinaryTrue, init=False
@@ -239,7 +316,7 @@ class EndMotion(MotionStatechartNode):
     _plot_shape: str = field(default="rectangle", kw_only=True)
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, repr=False)
 class CancelMotion(MotionStatechartNode):
     exception: Exception = field(kw_only=True)
     observation_expression: cas.Expression = field(

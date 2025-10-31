@@ -7,11 +7,16 @@ import pydot
 from typing_extensions import List, Dict, Optional, Union, Set, TYPE_CHECKING
 
 from giskardpy.motion_statechart.data_types import LifeCycleValues, ObservationState
+from giskardpy.motion_statechart.graph_node import Goal
 
 from giskardpy.motion_statechart.graph_node import (
     EndMotion,
     CancelMotion,
     MotionStatechartNode,
+    StartCondition,
+    PauseCondition,
+    EndCondition,
+    ResetCondition,
 )
 
 if TYPE_CHECKING:
@@ -248,161 +253,211 @@ class MotionStatechartGraphviz:
         )
         return pydot_node
 
-    def cluster_name_to_goal_name(self, name: str) -> str:
-        if name == "":
-            return name
-        if '"' in name:
-            return name[9:-1]
-        return name[8:]
-
     def to_dot_graph(self) -> pydot.Graph:
-        self.add_goal_cluster(self.graph)
+        top_level_nodes = [
+            node for node in self.motion_statechart.nodes if not node.parent_node
+        ]
+        self.add_goal_cluster(self.graph, top_level_nodes)
+        self.add_edges()
         return self.graph
 
     def add_goal_cluster(
         self,
         parent_cluster: Union[pydot.Graph, pydot.Cluster],
+        nodes: List[MotionStatechartNode],
     ):
-        for i, node in enumerate(self.motion_statechart.nodes):
-            # todo check parent cluster
+        for i, node in enumerate(nodes):
+            if isinstance(node, Goal):
+                goal_cluster = pydot.Cluster(
+                    graph_name=str(node.name),
+                    fontname=FONT,
+                    fontsize=Fontsize,
+                    style=GoalClusterStyle,
+                    color="black",
+                    fillcolor="white",
+                    penwidth=LineWidth,
+                )
+                self.add_node(
+                    graph=goal_cluster,
+                    node=node,
+                )
+                parent_cluster.add_subgraph(goal_cluster)
+                self.add_goal_cluster(goal_cluster, node.nodes)
             self.add_node(
                 parent_cluster,
                 node=node,
             )
 
-        # for i, goal in enumerate(self.execution_state.goals):
-        #     if self.execution_state.goal_parents[i] == self.cluster_name_to_goal_name(
-        #         parent_cluster.get_name()
-        #     ):
-        #         obs_state = self.execution_state.goal_state[i]
-        #         goal_cluster = pydot.Cluster(
-        #             graph_name=goal.name,
-        #             fontname=FONT,
-        #             fontsize=Fontsize,
-        #             style=GoalClusterStyle,
-        #             color="black",
-        #             fillcolor="white",
-        #             penwidth=LineWidth,
-        #         )
-        #         self.add_node(
-        #             graph=goal_cluster,
-        #             node_msg=goal,
-        #             style=GoalNodeStyle,
-        #             shape=GoalNodeShape,
-        #             obs_state=obs_state,
-        #             life_cycle_state=self.execution_state.goal_life_cycle_state[i],
-        #         )
-        #         obs_states[goal.name] = obs_state
-        #         parent_cluster.add_subgraph(goal_cluster)
-        #         self.add_goal_cluster(goal_cluster, obs_states)
-        #         my_goals.append(goal)
-        # %% add edges
-        # self.add_edges(parent_cluster, my_tasks, my_monitors, my_goals, obs_states)
+    def add_edges(self):
+        for edge_index, (
+            parent_node_index,
+            child_node_index,
+            transition,
+        ) in self.motion_statechart.rx_graph.edge_index_map().items():
+            parent_node = self.motion_statechart.rx_graph.get_node_data(
+                parent_node_index
+            )
+            child_node = self.motion_statechart.rx_graph.get_node_data(child_node_index)
+            if not self._are_nodes_in_same_cluster(parent_node, child_node):
+                continue
+            graph = self._get_cluster_of_edge(parent_node)
+            if isinstance(transition, StartCondition):
+                self.add_start_condition_edge(graph, parent_node, child_node)
+            if isinstance(transition, PauseCondition):
+                self.add_pause_condition_edge(graph, parent_node, child_node)
+            if isinstance(transition, EndCondition):
+                self.add_end_condition_edge(graph, parent_node, child_node)
+            if isinstance(transition, ResetCondition):
+                self.add_reset_condition_edge(graph, parent_node, child_node)
 
-    def add_edges(
+    def _get_cluster_of_edge(
         self,
-        graph: Union[pydot.Graph, pydot.Cluster],
-        tasks: List[MotionStatechartNode],
-        monitors: List[MotionStatechartNode],
-        goals: List[MotionStatechartNode],
-        obs_states: Dict[str, ObservationState],
-    ) -> pydot.Graph:
-        all_nodes = tasks + monitors + goals
-        all_node_name = [
-            node.name for node in all_nodes
-        ]  # + [self.cluster_name_to_goal_name(graph.get_name())]
-        for node in all_nodes:
-            node_name = node.name
-            node_cluster = self.get_cluster_of_node(node_name, graph)
-            for sub_node_name in extract_node_names_from_condition(
-                node.start_condition
-            ):
-                if sub_node_name not in all_node_name:
-                    continue
-                sub_node_cluster = self.get_cluster_of_node(sub_node_name, graph)
-                kwargs = {}
-                if node_cluster is not None:
-                    kwargs["lhead"] = node_cluster.get_name()
-                if sub_node_cluster is not None:
-                    kwargs["ltail"] = sub_node_cluster.get_name()
-                kwargs.update(ObservationStateToEdgeStyle[obs_states[sub_node_name]])
-                graph.add_edge(
-                    pydot.Edge(
-                        src=sub_node_name,
-                        dst=node_name,
-                        color=StartCondColor,
-                        arrowsize=ArrowSize,
-                        **kwargs,
-                    )
-                )
-            for sub_node_name in extract_node_names_from_condition(
-                node.pause_condition
-            ):
-                if sub_node_name not in all_node_name:
-                    continue
-                sub_node_cluster = self.get_cluster_of_node(sub_node_name, graph)
-                kwargs = {}
-                if node_cluster is not None:
-                    kwargs["lhead"] = node_cluster.get_name()
-                if sub_node_cluster is not None:
-                    kwargs["ltail"] = sub_node_cluster.get_name()
-                kwargs.update(ObservationStateToEdgeStyle[obs_states[sub_node_name]])
-                graph.add_edge(
-                    pydot.Edge(
-                        sub_node_name,
-                        node_name,
-                        color=PauseCondColor,
-                        minlen=0,
-                        arrowsize=ArrowSize,
-                        **kwargs,
-                    )
-                )
-            for sub_node_name in extract_node_names_from_condition(node.end_condition):
-                if sub_node_name not in all_node_name:
-                    continue
-                sub_node_cluster = self.get_cluster_of_node(sub_node_name, graph)
-                kwargs = {}
-                if node_cluster is not None:
-                    kwargs["ltail"] = node_cluster.get_name()
-                if sub_node_cluster is not None:
-                    kwargs["lhead"] = sub_node_cluster.get_name()
-                kwargs.update(ObservationStateToEdgeStyle[obs_states[sub_node_name]])
-                graph.add_edge(
-                    pydot.Edge(
-                        node_name,
-                        sub_node_name,
-                        color=EndCondColor,
-                        arrowhead="none",
-                        arrowtail="normal",
-                        dir="both",
-                        arrowsize=ArrowSize,
-                        **kwargs,
-                    )
-                )
-            for sub_node_name in extract_node_names_from_condition(
-                node.reset_condition
-            ):
-                if sub_node_name not in all_node_name:
-                    continue
-                sub_node_cluster = self.get_cluster_of_node(sub_node_name, graph)
-                kwargs = {}
-                if node_cluster is not None:
-                    kwargs["ltail"] = node_cluster.get_name()
-                if sub_node_cluster is not None:
-                    kwargs["lhead"] = sub_node_cluster.get_name()
-                kwargs.update(ObservationStateToEdgeStyle[obs_states[sub_node_name]])
-                graph.add_edge(
-                    pydot.Edge(
-                        node_name,
-                        sub_node_name,
-                        color=ResetCondColor,
-                        arrowhead="none",
-                        arrowtail="normal",
-                        minlen=0,
-                        dir="both",
-                        arrowsize=ArrowSize,
-                        **kwargs,
-                    )
-                )
+        node: MotionStatechartNode,
+    ) -> Union[pydot.Graph, pydot.Cluster]:
+        if node.parent_node is None:
+            return self.graph
+        else:
+            return self.graph.get_subgraph("cluster_" + str(node.parent_node.name))[0]
 
-        return graph
+    def _are_nodes_in_same_cluster(
+        self, parent_node: MotionStatechartNode, child_node: MotionStatechartNode
+    ) -> bool:
+        if parent_node.parent_node is None and child_node.parent_node is None:
+            return True
+        if (parent_node.parent_node is None and child_node.parent_node is not None) or (
+            parent_node.parent_node is not None and child_node.parent_node is None
+        ):
+            return False
+        return parent_node.parent_node.name == child_node.parent_node.name
+
+    def add_start_condition_edge(
+        self,
+        graph: pydot.Graph,
+        parent_node: MotionStatechartNode,
+        child_node: MotionStatechartNode,
+    ):
+        destination_node = child_node
+        source_node = parent_node
+        source_node_name = str(destination_node.name)
+        destination_node_name = str(source_node.name)
+        node_cluster = self.get_cluster_of_node(destination_node_name, graph)
+        sub_node_cluster = self.get_cluster_of_node(source_node_name, graph)
+        kwargs = {}
+        if node_cluster is not None:
+            kwargs["lhead"] = node_cluster.get_name()
+        if sub_node_cluster is not None:
+            kwargs["ltail"] = sub_node_cluster.get_name()
+        source_observation_state = self.motion_statechart.observation_state[
+            destination_node
+        ]
+        kwargs.update(ObservationStateToEdgeStyle[source_observation_state])
+        graph.add_edge(
+            pydot.Edge(
+                src=source_node_name,
+                dst=destination_node_name,
+                color=StartCondColor,
+                arrowsize=ArrowSize,
+                **kwargs,
+            )
+        )
+
+    def add_pause_condition_edge(
+        self,
+        graph: pydot.Graph,
+        parent_node: MotionStatechartNode,
+        child_node: MotionStatechartNode,
+    ):
+        destination_node = child_node
+        source_node = parent_node
+        source_node_name = str(destination_node.name)
+        destination_node_name = str(source_node.name)
+        node_cluster = self.get_cluster_of_node(destination_node_name, graph)
+        sub_node_cluster = self.get_cluster_of_node(source_node_name, graph)
+        kwargs = {}
+        if node_cluster is not None:
+            kwargs["lhead"] = node_cluster.get_name()
+        if sub_node_cluster is not None:
+            kwargs["ltail"] = sub_node_cluster.get_name()
+        source_observation_state = self.motion_statechart.observation_state[
+            destination_node
+        ]
+        kwargs.update(ObservationStateToEdgeStyle[source_observation_state])
+        graph.add_edge(
+            pydot.Edge(
+                src=source_node_name,
+                dst=destination_node_name,
+                color=PauseCondColor,
+                minlen=0,
+                arrowsize=ArrowSize,
+                **kwargs,
+            )
+        )
+
+    def add_end_condition_edge(
+        self,
+        graph: pydot.Graph,
+        parent_node: MotionStatechartNode,
+        child_node: MotionStatechartNode,
+    ):
+        destination_node = child_node
+        source_node = parent_node
+        source_node_name = str(destination_node.name)
+        destination_node_name = str(source_node.name)
+        node_cluster = self.get_cluster_of_node(destination_node_name, graph)
+        sub_node_cluster = self.get_cluster_of_node(source_node_name, graph)
+        kwargs = {}
+        if node_cluster is not None:
+            kwargs["lhead"] = node_cluster.get_name()
+        if sub_node_cluster is not None:
+            kwargs["ltail"] = sub_node_cluster.get_name()
+        source_observation_state = self.motion_statechart.observation_state[
+            destination_node
+        ]
+        kwargs.update(ObservationStateToEdgeStyle[source_observation_state])
+        graph.add_edge(
+            pydot.Edge(
+                src=source_node_name,
+                dst=destination_node_name,
+                color=EndCondColor,
+                arrowhead="none",
+                arrowtail="normal",
+                dir="both",
+                arrowsize=ArrowSize,
+                **kwargs,
+            )
+        )
+
+    def add_reset_condition_edge(
+        self,
+        graph: pydot.Graph,
+        parent_node: MotionStatechartNode,
+        child_node: MotionStatechartNode,
+    ):
+        destination_node = child_node
+        source_node = parent_node
+        source_node_name = str(destination_node.name)
+        destination_node_name = str(source_node.name)
+        node_cluster = self.get_cluster_of_node(destination_node_name, graph)
+        sub_node_cluster = self.get_cluster_of_node(source_node_name, graph)
+        kwargs = {}
+        if node_cluster is not None:
+            kwargs["lhead"] = node_cluster.get_name()
+        if sub_node_cluster is not None:
+            kwargs["ltail"] = sub_node_cluster.get_name()
+        source_observation_state = self.motion_statechart.observation_state[
+            destination_node
+        ]
+        kwargs.update(ObservationStateToEdgeStyle[source_observation_state])
+        graph.add_edge(
+            pydot.Edge(
+                src=source_node_name,
+                dst=destination_node_name,
+                color=ResetCondColor,
+                arrowhead="none",
+                arrowtail="normal",
+                minlen=0,
+                dir="both",
+                arrowsize=ArrowSize,
+                **kwargs,
+            )
+        )

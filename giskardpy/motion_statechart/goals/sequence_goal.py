@@ -3,7 +3,7 @@ from __future__ import division
 from typing import Union, List
 
 import semantic_digital_twin.spatial_types.spatial_types as cas
-from giskardpy.motion_statechart.goals.goal import Goal
+from giskardpy.motion_statechart.graph_node import Goal
 from giskardpy.motion_statechart.tasks.task import Task
 from giskardpy.utils.decorators import validated_dataclass
 

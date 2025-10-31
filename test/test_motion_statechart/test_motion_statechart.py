@@ -2,7 +2,7 @@ import pytest
 
 import semantic_digital_twin.spatial_types.spatial_types as cas
 from giskardpy.motion_statechart.data_types import LifeCycleValues
-from giskardpy.motion_statechart.goals.goal import Goal
+from giskardpy.motion_statechart.graph_node import Goal
 from giskardpy.motion_statechart.graph_node import (
     MotionStatechartNode,
     EndMotion,
@@ -33,13 +33,22 @@ def test_condition_to_str():
         node1, cas.trinary_logic_or(node2, cas.trinary_logic_not(node3))
     )
     a = str(end._start_condition)
-    assert a == '"muh" and ("muh2" or not "muh3")'
+    assert a == '("muh" and ("muh2" or not "muh3"))'
 
 
 def test_motion_statechart_to_dot():
     msg = MotionStatechart(World())
     node1 = TrueMonitor(name=PrefixedName("muh"), motion_statechart=msg)
+    node2 = TrueMonitor(name=PrefixedName("muh2"), motion_statechart=msg)
+    end = EndMotion(name=PrefixedName("done"), motion_statechart=msg)
+    node1.end_condition = node2
+    end.start_condition = cas.trinary_logic_and(node1, node2)
     msg.draw()
+
+
+@pytest.mark.skip(reason="not implemented yet")
+def test_self_start_condition():
+    pass
 
 
 def test_motion_statechart():
@@ -113,8 +122,8 @@ def test_duplicate_name():
 
     with pytest.raises(ValueError):
         cas.Symbol(name=PrefixedName("muh"))
-        MotionStatechartNode(name=PrefixedName("muh"), motion_statechart=msg)
-        MotionStatechartNode(name=PrefixedName("muh"), motion_statechart=msg)
+        TrueMonitor(name=PrefixedName("muh"), motion_statechart=msg)
+        TrueMonitor(name=PrefixedName("muh"), motion_statechart=msg)
 
 
 def test_print():

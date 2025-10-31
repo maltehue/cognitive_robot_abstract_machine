@@ -1,5 +1,4 @@
 import re
-import traceback
 from collections import defaultdict
 from itertools import chain
 from typing import Optional, List, Dict, Tuple, Union, Type
@@ -11,10 +10,10 @@ from giskardpy.data_types.exceptions import EmptyProblemException
 from giskardpy.data_types.exceptions import SetupException
 from giskardpy.god_map import god_map
 from giskardpy.middleware import get_middleware
+from giskardpy.model.trajectory import Trajectory
 from giskardpy.model.world_config import WorldConfig
 from giskardpy.motion_statechart.goals.collision_avoidance import CollisionAvoidance
-from giskardpy.motion_statechart.goals.goal import Goal
-from giskardpy.motion_statechart.graph_node import EndMotion
+from giskardpy.motion_statechart.graph_node import EndMotion, Goal
 from giskardpy.motion_statechart.monitors.monitors import Monitor, LocalMinimumReached
 from giskardpy.motion_statechart.monitors.overwrite_state_monitors import (
     SetSeedConfiguration,
@@ -23,9 +22,6 @@ from giskardpy.motion_statechart.monitors.overwrite_state_monitors import (
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList
 from giskardpy.motion_statechart.tasks.task import Task
-from giskardpy.qp.qp_controller_config import QPControllerConfig
-from giskardpy.utils.utils import get_all_classes_in_package
-from giskardpy.model.trajectory import Trajectory
 from giskardpy.motion_statechart.tasks.task import WEIGHT_BELOW_CA
 from giskardpy.qp.constraint import (
     EqualityConstraint,
@@ -33,8 +29,9 @@ from giskardpy.qp.constraint import (
     DerivativeEqualityConstraint,
     DerivativeInequalityConstraint,
 )
+from giskardpy.qp.qp_controller_config import QPControllerConfig
+from giskardpy.utils.utils import get_all_classes_in_package
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 
 
 def quote_node_names(condition: str) -> str:

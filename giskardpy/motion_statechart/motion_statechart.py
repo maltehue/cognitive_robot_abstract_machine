@@ -9,10 +9,10 @@ from typing_extensions import List, MutableMapping, ClassVar, Self, Type
 
 import semantic_digital_twin.spatial_types.spatial_types as cas
 from giskardpy.motion_statechart.data_types import LifeCycleValues
-from giskardpy.motion_statechart.goals.goal import Goal
 from giskardpy.motion_statechart.graph_node import (
     MotionStatechartNode,
     StateTransitionCondition,
+    Goal,
     EndMotion,
     CancelMotion,
     GenericMotionStatechartNode,
