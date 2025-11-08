@@ -389,7 +389,38 @@ class MotionStatechart(SubclassJSONSerializer):
                     self.observation_state[node] = observation_overwrite
 
     def _update_life_cycle_state(self):
+        previous = self.life_cycle_state.data.copy()
         self.life_cycle_state.update_state(self.observation_state.data)
+        self._trigger_life_cycle_callbacks(previous, self.life_cycle_state.data)
+
+    def _trigger_life_cycle_callbacks(
+        self,
+        previous_state: np.ndarray,
+        current_state: np.ndarray,
+    ) -> None:
+        for node in self.nodes:
+            prev = LifeCycleValues(int(previous_state[node.index]))
+            curr = LifeCycleValues(int(current_state[node.index]))
+
+            if prev == curr:
+                continue
+
+            match (prev, curr):
+                case (_, LifeCycleValues.NOT_STARTED):
+                    node.on_reset()
+                case (LifeCycleValues.NOT_STARTED, LifeCycleValues.RUNNING):
+                    node.on_start()
+                case (LifeCycleValues.RUNNING, LifeCycleValues.PAUSED):
+                    node.on_pause()
+                case (LifeCycleValues.PAUSED, LifeCycleValues.RUNNING):
+                    node.on_unpause()
+                case (
+                    (LifeCycleValues.RUNNING | LifeCycleValues.PAUSED),
+                    LifeCycleValues.DONE,
+                ):
+                    node.on_end()
+                case _:
+                    pass
 
     def tick(self):
         self._update_observation_state()
@@ -408,6 +439,17 @@ class MotionStatechart(SubclassJSONSerializer):
             self.qp_controller.config.control_dt,
             self.qp_controller.config.max_derivative,
         )
+
+    def tick_until_end(self, timeout: int = 1_000):
+        """
+        Calls tick until is_end_motion() returns True.
+        :param timeout: Max number of ticks to perform.
+        """
+        for i in range(timeout):
+            self.tick()
+            if self.is_end_motion():
+                return
+        raise TimeoutError("Timeout reached while waiting for end of motion.")
 
     def get_nodes_by_type(
         self, node_type: Type[GenericMotionStatechartNode]

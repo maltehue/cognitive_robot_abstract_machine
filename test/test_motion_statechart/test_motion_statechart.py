@@ -1,6 +1,7 @@
 import time
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 import semantic_digital_twin.spatial_types.spatial_types as cas
@@ -13,17 +14,25 @@ from giskardpy.motion_statechart.graph_node import (
 from giskardpy.motion_statechart.graph_node import Goal
 from giskardpy.motion_statechart.graph_node import ThreadPayloadMonitor
 from giskardpy.motion_statechart.monitors.monitors import TrueMonitor
+from giskardpy.motion_statechart.monitors.overwrite_state_monitors import (
+    SetSeedConfiguration,
+    SetOdometry,
+)
 from giskardpy.motion_statechart.monitors.payload_monitors import Print
 from giskardpy.motion_statechart.motion_statechart import (
     MotionStatechart,
     ObservationState,
 )
-from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList
+from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList, JointState
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.spatial_types import TransformationMatrix
 from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import RevoluteConnection
+from semantic_digital_twin.world_description.connections import (
+    RevoluteConnection,
+    ActiveConnection1DOF,
+)
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -319,7 +328,9 @@ def test_joint_goal():
 
     msc = MotionStatechart(world)
 
-    task1 = JointPositionList(name=PrefixedName("task1"), goal_state={root_C_tip: 1})
+    task1 = JointPositionList(
+        name=PrefixedName("task1"), goal_state=JointState({root_C_tip: 1})
+    )
     always_true = TrueMonitor(name=PrefixedName("muh"))
     msc.add_node(always_true)
     msc.add_node(task1)
@@ -782,3 +793,67 @@ def test_goal():
     assert end.life_cycle_state == LifeCycleValues.RUNNING
     assert msc.is_end_motion()
     msc.draw("muh.pdf")
+
+
+def test_set_seed_configuration(pr2_world):
+    msc = MotionStatechart(pr2_world)
+    goal = 0.1
+
+    connection: ActiveConnection1DOF = pr2_world.get_connection_by_name(
+        "torso_lift_joint"
+    )
+
+    node1 = SetSeedConfiguration(
+        name=PrefixedName("muh"), seed_configuration=JointState({connection: goal})
+    )
+    end = EndMotion(name=PrefixedName("done"))
+    msc.add_node(node1)
+    msc.add_node(end)
+    node1.end_condition = node1.observation_variable
+    end.start_condition = node1.observation_variable
+
+    msc.compile()
+
+    msc.tick_until_end()
+    assert node1.observation_state == msc.observation_state.TrinaryTrue
+    assert node1.life_cycle_state == LifeCycleValues.DONE
+    assert end.observation_state == msc.observation_state.TrinaryTrue
+    assert end.life_cycle_state == LifeCycleValues.RUNNING
+
+    assert np.isclose(connection.position, goal)
+
+
+def test_set_seed_odometry(pr2_world):
+    msc = MotionStatechart(pr2_world)
+
+    goal = TransformationMatrix.from_xyz_rpy(
+        x=1, y=-1, z=1, roll=1, pitch=1, yaw=1, reference_frame=pr2_world.root
+    )
+    expected = TransformationMatrix.from_xyz_rpy(
+        x=1, y=-1, yaw=1, reference_frame=pr2_world.root
+    )
+
+    node1 = SetOdometry(
+        name=PrefixedName("muh"),
+        base_pose=goal,
+    )
+    end = EndMotion(name=PrefixedName("done"))
+    msc.add_node(node1)
+    msc.add_node(end)
+    node1.end_condition = node1.observation_variable
+    end.start_condition = node1.observation_variable
+
+    msc.compile()
+
+    msc.tick_until_end()
+    assert node1.observation_state == msc.observation_state.TrinaryTrue
+    assert node1.life_cycle_state == LifeCycleValues.DONE
+    assert end.observation_state == msc.observation_state.TrinaryTrue
+    assert end.life_cycle_state == LifeCycleValues.RUNNING
+
+    assert np.allclose(
+        expected.to_np(),
+        pr2_world.compute_forward_kinematics_np(
+            pr2_world.root, node1.odom_connection.child
+        ),
+    )

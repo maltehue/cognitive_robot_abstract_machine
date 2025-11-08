@@ -24,12 +24,12 @@ from semantic_digital_twin.world_description.connections import (
 
 @dataclass
 class JointState(SubclassJSONSerializer):
-    mapping: InitVar[Dict[Union[ActiveConnection1DOF, str], float]]
+    mapping: InitVar[Dict[ActiveConnection1DOF, float]]
 
     _connections: List[ActiveConnection1DOF] = field(init=False, default_factory=list)
     _target_values: List[float] = field(init=False, default_factory=list)
 
-    def __post_init__(self, mapping: Dict[Union[ActiveConnection1DOF, str], float]):
+    def __post_init__(self, mapping: Dict[ActiveConnection1DOF, float]):
         for connection, target in mapping.items():
             self._connections.append(connection)
             self._target_values.append(target)

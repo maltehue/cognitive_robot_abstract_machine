@@ -35,7 +35,7 @@ class Sleep(MotionStatechartNode):
     seconds: float
     start_time: Optional[float] = field(default=None, init=False)
 
-    def on_start(self) -> Optional[float]:
+    def on_start(self):
         self.start_time = None
 
     def on_tick(self) -> Optional[float]:

@@ -351,12 +351,6 @@ class MotionStatechartNode(SubclassJSONSerializer):
             observation=cas.Expression(self.observation_variable),
         )
 
-    def on_start(self) -> Optional[float]:
-        """
-        Triggered when the node transitions from NOT_STARTED to RUNNING.
-        :return: An optional observation state overwrite
-        """
-
     def on_tick(self) -> Optional[float]:
         """
         Triggered when the node is ticked.
@@ -364,28 +358,29 @@ class MotionStatechartNode(SubclassJSONSerializer):
         :return: An optional observation state overwrite
         """
 
-    def on_pause(self) -> Optional[float]:
+    def on_start(self):
+        """
+        Triggered when the node transitions from NOT_STARTED to RUNNING.
+        """
+
+    def on_pause(self):
         """
         Triggered when the node transitions from RUNNING to PAUSED.
-        :return: An optional observation state overwrite
         """
 
-    def on_unpause(self) -> Optional[float]:
+    def on_unpause(self):
         """
         Triggered when the node transitions from PAUSED to RUNNING.
-        :return: An optional observation state overwrite
         """
 
-    def on_end(self) -> Optional[float]:
+    def on_end(self):
         """
         Triggered when the node transitions from RUNNING to DONE.
-        :return: An optional observation state overwrite
         """
 
-    def on_reset(self) -> Optional[float]:
+    def on_reset(self):
         """
         Triggered when the node transitions from any state to NOT_STARTED.
-        :return: An optional observation state overwrite
         """
 
     @property
