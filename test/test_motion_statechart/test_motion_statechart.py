@@ -7,6 +7,8 @@ import pytest
 import semantic_digital_twin.spatial_types.spatial_types as cas
 from conftest import box_bot_world
 from giskardpy.executor import Executor
+from giskardpy.model.collision_matrix_manager import CollisionViewRequest
+from giskardpy.model.collision_world_syncer import CollisionCheckerLib
 from giskardpy.motion_statechart.binding_policy import GoalBindingPolicy
 from giskardpy.motion_statechart.data_types import (
     LifeCycleValues,
@@ -14,6 +16,7 @@ from giskardpy.motion_statechart.data_types import (
 )
 from giskardpy.motion_statechart.goals.collision_avoidance import (
     ExternalCollisionAvoidance,
+    CollisionAvoidance,
 )
 from giskardpy.motion_statechart.graph_node import (
     EndMotion,
@@ -48,6 +51,7 @@ from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     RevoluteConnection,
     ActiveConnection1DOF,
+    OmniDrive,
 )
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
 from semantic_digital_twin.world_description.world_entity import Body
@@ -1199,14 +1203,14 @@ def test_transition_triggers():
     assert changer.state == "on_reset"
 
 
-def test_external_collision_avoidance(box_bot_world):
+def test_collision_avoidance(box_bot_world):
     msc = MotionStatechart()
 
     root = box_bot_world.root
     tip = box_bot_world.get_kinematic_structure_entity_by_name("bot")
 
     target_pose = TransformationMatrix.from_xyz_quaternion(
-        2, reference_frame=box_bot_world.root
+        1, reference_frame=box_bot_world.root
     )
     cart_goal = CartesianPose(
         name=PrefixedName("cart_goal"),
@@ -1216,7 +1220,11 @@ def test_external_collision_avoidance(box_bot_world):
     )
     msc.add_node(cart_goal)
 
-    collision_avoidance = ExternalCollisionAvoidance()
+    collision_avoidance = CollisionAvoidance(
+        name=PrefixedName("ca"),
+        collision_entries=[CollisionViewRequest.avoid_all_collision()],
+    )
+    msc.add_node(collision_avoidance)
 
     end = EndMotion(name=PrefixedName("end"))
     msc.add_node(end)
@@ -1226,7 +1234,17 @@ def test_external_collision_avoidance(box_bot_world):
         motion_statechart=msc,
         world=box_bot_world,
         controller_config=QPControllerConfig.create_default_with_50hz(),
+        collision_checker=CollisionCheckerLib.bpb,
     )
     kin_sim.compile()
 
-    kin_sim.tick_until_end()
+    msc.draw("muh.pdf")
+    with pytest.raises(TimeoutError):
+        kin_sim.tick_until_end(500)
+        kin_sim.collision_scene.check_collisions()
+    contact_distance = (
+        kin_sim.collision_scene.closest_points.external_collisions[tip]
+        .data[0]
+        .contact_distance
+    )
+    assert contact_distance > 0.049

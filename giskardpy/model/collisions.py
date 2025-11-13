@@ -7,12 +7,12 @@ from typing import List, Dict, Optional, Tuple, Set
 import numpy as np
 from line_profiler import profile
 
-from giskardpy.god_map import god_map
 from semantic_digital_twin.collision_checking.collision_detector import (
     CollisionDetector,
     CollisionCheck,
 )
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
+from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import ActiveConnection
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -200,28 +200,33 @@ class Collisions:
     )
 
     def get_robot_from_self_collision(
-        self, collision: GiskardCollision
+        self, collision: GiskardCollision, robots: List[AbstractRobot]
     ) -> Optional[AbstractRobot]:
         body_a, body_b = collision.body_a, collision.body_b
-        for robot in god_map.collision_scene.robots:
+        for robot in robots:
             if body_a in robot.bodies and body_b in robot.bodies:
                 return robot
 
     @classmethod
     def from_collision_list(
-        cls, collision_list: List[GiskardCollision], collision_list_size: int
+        cls,
+        collision_list: List[GiskardCollision],
+        collision_list_size: int,
+        robots: List[AbstractRobot],
     ):
         collisions = cls(collision_list_size)
         for collision in collision_list:
-            collisions.add(collision)
+            collisions.add(collision, robots=robots)
         return collisions
 
     @profile
-    def add(self, collision: GiskardCollision):
-        robot = self.get_robot_from_self_collision(collision)
+    def add(self, collision: GiskardCollision, robots: List[AbstractRobot]):
+        robot = self.get_robot_from_self_collision(collision, robots=robots)
         collision.is_external = robot is None
         if collision.is_external:
-            collision = self.transform_external_collision(collision)
+            collision = self.transform_external_collision(
+                collision, world=robots[0]._world
+            )
             key = collision.body_a
             self.external_collisions[key].add(collision)
             self.number_of_external_collisions[key] = min(
@@ -252,12 +257,11 @@ class Collisions:
     def transform_self_collision(
         self, collision: GiskardCollision, robot: AbstractRobot
     ) -> GiskardCollision:
+        world = robot._world
         link_a = collision.original_body_a
         link_b = collision.original_body_b
-        new_link_a, new_link_b = (
-            god_map.world.compute_chain_reduced_to_controlled_connections(
-                link_a, link_b
-            )
+        new_link_a, new_link_b = world.compute_chain_reduced_to_controlled_connections(
+            link_a, link_b
         )
         if new_link_a.name > new_link_b.name:
             collision = collision.reverse()
@@ -265,25 +269,21 @@ class Collisions:
         collision.body_a = new_link_a
         collision.body_b = new_link_b
 
-        new_b_T_r = god_map.world.compute_forward_kinematics_np(new_link_b, robot.root)
-        root_T_map = god_map.world.compute_forward_kinematics_np(
-            robot.root, god_map.world.root
-        )
+        new_b_T_r = world.compute_forward_kinematics_np(new_link_b, robot.root)
+        root_T_map = world.compute_forward_kinematics_np(robot.root, world.root)
         new_b_T_map = new_b_T_r @ root_T_map
         collision.new_b_V_n = new_b_T_map @ collision.map_V_n
 
         if collision.map_P_pa is not None:
-            new_a_T_r = god_map.world.compute_forward_kinematics_np(
-                new_link_a, robot.root
-            )
+            new_a_T_r = world.compute_forward_kinematics_np(new_link_a, robot.root)
             collision.new_a_P_pa = new_a_T_r @ root_T_map @ collision.map_P_pa
             collision.new_b_P_pb = new_b_T_map @ collision.map_P_pb
         else:
-            new_a_T_a = god_map.world.compute_forward_kinematics_np(
+            new_a_T_a = world.compute_forward_kinematics_np(
                 new_link_a, collision.original_body_a
             )
             collision.new_a_P_pa = new_a_T_a @ collision.a_P_pa
-            new_b_T_b = god_map.world.compute_forward_kinematics_np(
+            new_b_T_b = world.compute_forward_kinematics_np(
                 new_link_b, collision.original_body_b
             )
             collision.new_b_P_pb = new_b_T_b @ collision.b_P_pb
@@ -291,7 +291,7 @@ class Collisions:
 
     @profile
     def transform_external_collision(
-        self, collision: GiskardCollision
+        self, collision: GiskardCollision, world: World
     ) -> GiskardCollision:
         body_a = collision.original_body_a
         movable_joint = body_a.parent_connection
@@ -303,7 +303,7 @@ class Collisions:
                 and not connection.frozen_for_collision_avoidance
             )
 
-        while movable_joint != god_map.world.root:
+        while movable_joint != world.root:
             if is_joint_movable(movable_joint):
                 break
             movable_joint = movable_joint.parent.parent_connection
@@ -315,12 +315,10 @@ class Collisions:
         new_a = movable_joint.child
         collision.body_a = new_a
         if collision.map_P_pa is not None:
-            new_a_T_map = god_map.world.compute_forward_kinematics_np(
-                new_a, god_map.world.root
-            )
+            new_a_T_map = world.compute_forward_kinematics_np(new_a, world.root)
             collision.new_a_P_pa = new_a_T_map @ collision.map_P_pa
         else:
-            new_a_T_a = god_map.world.compute_forward_kinematics_np(
+            new_a_T_a = world.compute_forward_kinematics_np(
                 new_a, collision.original_body_a
             )
             collision.new_a_P_pa = new_a_T_a @ collision.a_P_pa

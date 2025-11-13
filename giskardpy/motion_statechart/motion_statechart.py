@@ -220,6 +220,8 @@ class ObservationState(State):
                 self.observation_symbols(),
                 self.life_cycle_symbols(),
                 context.world.state.get_variables(),
+                context.collision_scene.get_external_collision_symbol(),
+                context.collision_scene.get_self_collision_symbol(),
                 context.auxiliary_variable_manager.variables,
             ],
             sparse=False,
@@ -229,10 +231,17 @@ class ObservationState(State):
         self,
         life_cycle_state: np.ndarray,
         world_state: np.ndarray,
+        external_collision_data: np.ndarray,
+        self_collision_data: np.ndarray,
         auxiliar_variables: np.ndarray,
     ):
         self.data = self._compiled_updater(
-            self.data, life_cycle_state, world_state, auxiliar_variables
+            self.data,
+            life_cycle_state,
+            world_state,
+            external_collision_data,
+            self_collision_data,
+            auxiliar_variables,
         )
 
 
@@ -445,9 +454,11 @@ class MotionStatechart(SubclassJSONSerializer):
 
     def _update_observation_state(self, context: BuildContext):
         self.observation_state.update_state(
-            self.life_cycle_state.data,
-            context.world.state.data,
-            context.auxiliary_variable_manager.resolve_auxiliary_variables(),
+            life_cycle_state=self.life_cycle_state.data,
+            world_state=context.world.state.data,
+            external_collision_data=context.collision_scene.get_external_collision_data(),
+            self_collision_data=context.collision_scene.get_self_collision_data(),
+            auxiliar_variables=context.auxiliary_variable_manager.resolve_auxiliary_variables(),
         )
         for node in self.nodes:
             if self.life_cycle_state[node] == LifeCycleValues.RUNNING:

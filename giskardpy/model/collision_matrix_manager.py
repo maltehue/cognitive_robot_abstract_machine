@@ -31,6 +31,10 @@ class CollisionViewRequest:
         if self.type_ not in [self.AVOID_COLLISION, self.ALLOW_COLLISION]:
             raise ValueError(f"Unknown type {self.type_}")
 
+    @classmethod
+    def avoid_all_collision(cls) -> CollisionViewRequest:
+        return CollisionViewRequest(type_=cls.AVOID_COLLISION)
+
     def is_distance_set(self) -> bool:
         return self.distance is not None
 

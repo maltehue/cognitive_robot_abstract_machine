@@ -1,10 +1,9 @@
 from dataclasses import dataclass
-from typing import Dict, Tuple, DefaultDict, List, Set, Optional, Iterable
+from typing import Dict, Tuple, DefaultDict, List, Set, Optional
 
 import giskardpy_bullet_bindings as bpb
 from line_profiler import profile
 
-from giskardpy.god_map import god_map
 from giskardpy.middleware import get_middleware
 from giskardpy.model.bpb_wrapper import create_shape_from_link, create_collision
 from giskardpy.model.collisions import GiskardCollision
@@ -98,7 +97,7 @@ class BulletCollisionDetector(CollisionDetector):
         self.objects_in_order = []
 
         for body in sorted(
-            god_map.world.bodies_with_enabled_collision, key=lambda b: b.name
+            self._world.bodies_with_enabled_collision, key=lambda b: b.name
         ):
             self.add_object(body)
             self.objects_in_order.append(self.body_to_bpb_obj[body])
@@ -106,7 +105,7 @@ class BulletCollisionDetector(CollisionDetector):
     def sync_world_state(self) -> None:
         bpb.batch_set_transforms(
             self.objects_in_order,
-            god_map.world.compute_forward_kinematics_of_all_collision_bodies(),
+            self._world.compute_forward_kinematics_of_all_collision_bodies(),
         )
 
     @profile

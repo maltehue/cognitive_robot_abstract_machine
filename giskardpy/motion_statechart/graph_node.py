@@ -519,7 +519,7 @@ GenericMotionStatechartNode = TypeVar(
 
 @dataclass(eq=False, repr=False)
 class Goal(MotionStatechartNode):
-    nodes: List[MotionStatechartNode] = field(default_factory=list)
+    nodes: List[MotionStatechartNode] = field(default_factory=list, init=False)
     _plot_style: str = field(default="filled", init=False)
     _plot_shape: str = field(default="none", init=False)
 

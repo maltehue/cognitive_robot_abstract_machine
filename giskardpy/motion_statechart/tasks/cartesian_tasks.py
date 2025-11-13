@@ -246,7 +246,7 @@ class CartesianPose(Task):
     """Describes when the goal is computed. See GoalBindingPolicy for more information."""
     _fk_binding: ForwardKinematicsBinding = field(kw_only=True, init=False)
 
-    weight: float = field(default=DefaultWeights.WEIGHT_ABOVE_CA)
+    weight: float = field(default=DefaultWeights.WEIGHT_BELOW_CA)
 
     def build(self, context: BuildContext) -> NodeArtifacts:
         artifacts = NodeArtifacts()

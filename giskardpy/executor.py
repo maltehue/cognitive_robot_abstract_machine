@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 
 import numpy as np
 from typing_extensions import Optional
@@ -7,7 +7,12 @@ from giskardpy.data_types.exceptions import (
     EmptyProblemException,
     NoQPControllerConfigException,
 )
-from giskardpy.model.collision_world_syncer import CollisionWorldSynchronizer
+from giskardpy.model.better_pybullet_syncer import BulletCollisionDetector
+from giskardpy.model.collision_world_syncer import (
+    CollisionWorldSynchronizer,
+    CollisionCheckerLib,
+)
+from giskardpy.model.collisions import NullCollisionDetector
 from giskardpy.motion_statechart.auxilary_variable_manager import (
     AuxiliaryVariableManager,
 )
@@ -15,6 +20,9 @@ from giskardpy.motion_statechart.context import BuildContext
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.qp.qp_controller import QPController
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from semantic_digital_twin.robots.abstract_robot import (
+    AbstractRobot,
+)
 from semantic_digital_twin.world import World
 
 
@@ -23,11 +31,28 @@ class Executor:
     motion_statechart: MotionStatechart
     world: World
     controller_config: Optional[QPControllerConfig] = None
-    collision_scene: Optional[CollisionWorldSynchronizer] = None
+    collision_checker: InitVar[CollisionCheckerLib] = field(
+        default=CollisionCheckerLib.none
+    )
+    collision_scene: Optional[CollisionWorldSynchronizer] = field(
+        default=None, init=False
+    )
     auxiliary_variable_manager: AuxiliaryVariableManager = field(
         default_factory=AuxiliaryVariableManager, init=False
     )
     qp_controller: Optional[QPController] = field(default=None, init=False)
+
+    def __post_init__(self, collision_checker: CollisionCheckerLib):
+        if collision_checker == CollisionCheckerLib.bpb:
+            collision_detector = BulletCollisionDetector(_world=self.world)
+        else:
+            collision_detector = NullCollisionDetector(_world=self.world)
+
+        self.collision_scene = CollisionWorldSynchronizer(
+            world=self.world,
+            robots=self.world.get_semantic_annotations_by_type(AbstractRobot),
+            collision_detector=collision_detector,
+        )
 
     def compile(self):
         self.motion_statechart.compile(self.build_context)
@@ -43,14 +68,16 @@ class Executor:
         )
 
     def tick(self):
+        self.collision_scene.sync()
+        self.collision_scene.check_collisions()
         self.motion_statechart.tick(self.build_context)
         if self.qp_controller is None:
             return
         next_cmd = self.qp_controller.get_cmd(
             world_state=self.world.state.data,
             life_cycle_state=self.motion_statechart.life_cycle_state.data,
-            external_collisions=np.array([], dtype=np.float64),
-            self_collisions=np.array([], dtype=np.float64),
+            external_collisions=self.collision_scene.get_external_collision_data(),
+            self_collisions=self.collision_scene.get_self_collision_data(),
             auxiliary_variables=self.auxiliary_variable_manager.resolve_auxiliary_variables(),
         )
         self.world.apply_control_commands(
@@ -92,6 +119,8 @@ class Executor:
             constraint_collection=constraint_collection,
             world_state_symbols=self.world.state.get_variables(),
             life_cycle_variables=self.motion_statechart.life_cycle_state.life_cycle_symbols(),
+            external_collision_avoidance_variables=self.collision_scene.get_external_collision_symbol(),
+            self_collision_avoidance_variables=self.collision_scene.get_self_collision_symbol(),
             auxiliary_variables=self.auxiliary_variable_manager.variables,
         )
         if self.qp_controller.has_not_free_variables():

@@ -370,6 +370,8 @@ class QPController:
     constraint_collection: ConstraintCollection
     world_state_symbols: List[cas.FloatVariable]
     life_cycle_variables: List[cas.FloatVariable]
+    external_collision_avoidance_variables: List[cas.FloatVariable]
+    self_collision_avoidance_variables: List[cas.FloatVariable]
     auxiliary_variables: List[cas.FloatVariable]
 
     qp_adapter: GiskardToQPAdapter = field(default=None, init=False)
@@ -394,8 +396,8 @@ class QPController:
             world_state_symbols=self.world_state_symbols,
             life_cycle_symbols=self.life_cycle_variables,
             auxiliary_variables=self.auxiliary_variables,
-            external_collision_symbols=[],
-            self_collision_symbols=[],
+            external_collision_symbols=self.external_collision_avoidance_variables,
+            self_collision_symbols=self.self_collision_avoidance_variables,
             degrees_of_freedom=self.active_dofs,
             constraint_collection=self.constraint_collection,
             config=self.config,

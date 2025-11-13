@@ -8,6 +8,7 @@ from semantic_digital_twin.spatial_types import (
     FloatVariable,
     Point3,
     TransformationMatrix,
+    Vector3,
 )
 
 
@@ -18,6 +19,40 @@ class AuxiliaryVariable(FloatVariable):
 
     def resolve(self) -> float:
         return float(self.provider())
+
+
+def create_point(name: PrefixedName, provider: Callable[[], List[float]]):
+    return Point3(
+        x_init=AuxiliaryVariable(
+            name=PrefixedName("x", str(name)),
+            provider=lambda: provider()[0],
+        ),
+        y_init=AuxiliaryVariable(
+            name=PrefixedName("y", str(name)),
+            provider=lambda: provider()[1],
+        ),
+        z_init=AuxiliaryVariable(
+            name=PrefixedName("z", str(name)),
+            provider=lambda: provider()[2],
+        ),
+    )
+
+
+def create_vector3(name: PrefixedName, provider: Callable[[], List[float]]):
+    return Vector3(
+        x_init=AuxiliaryVariable(
+            name=PrefixedName("x", str(name)),
+            provider=lambda: provider()[0],
+        ),
+        y_init=AuxiliaryVariable(
+            name=PrefixedName("y", str(name)),
+            provider=lambda: provider()[1],
+        ),
+        z_init=AuxiliaryVariable(
+            name=PrefixedName("z", str(name)),
+            provider=lambda: provider()[2],
+        ),
+    )
 
 
 @dataclass
