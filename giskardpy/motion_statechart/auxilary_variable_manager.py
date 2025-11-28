@@ -61,12 +61,17 @@ def create_vector3(name: PrefixedName, provider: Callable[[], List[float]]):
 @dataclass
 class AuxiliaryVariableManager:
     variables: List[AuxiliaryVariable] = field(default_factory=list)
+    data: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
+
+    def add_variable(self, variable: AuxiliaryVariable):
+        self.variables.append(variable)
+        self.data = np.append(self.data, 0.0)
 
     def create_float_variable(
         self, name: PrefixedName, provider: Callable[[], float] = None
     ) -> AuxiliaryVariable:
         v = AuxiliaryVariable(name=name, provider=provider)
-        self.variables.append(v)
+        self.add_variable(v)
         return v
 
     def create_point3(
@@ -81,7 +86,9 @@ class AuxiliaryVariableManager:
         z = AuxiliaryVariable(
             name=PrefixedName("z", str(name)), provider=lambda: provider()[2]
         )
-        self.variables.extend([x, y, z])
+        self.add_variable(x)
+        self.add_variable(y)
+        self.add_variable(z)
         return Point3(x, y, z)
 
     def create_transformation_matrix(
@@ -94,9 +101,11 @@ class AuxiliaryVariableManager:
                     name=PrefixedName(f"t[{row},{column}]", str(name)),
                     provider=lambda r=row, c=column: provider()[r, c],
                 )
-                self.variables.append(auxiliary_variable)
+                self.add_variable(auxiliary_variable)
                 transformation_matrix[row, column] = auxiliary_variable
         return transformation_matrix
 
     def resolve_auxiliary_variables(self) -> np.ndarray:
-        return np.array([v.resolve() for v in self.variables])
+        for i, v in enumerate(self.variables):
+            self.data[i] = v.resolve()
+        return self.data

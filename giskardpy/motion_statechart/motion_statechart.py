@@ -7,6 +7,7 @@ from typing import Dict, Any
 import numpy as np
 import rustworkx as rx
 from krrood.adapters.json_serializer import SubclassJSONSerializer
+from line_profiler.explicit_profiler import profile
 from typing_extensions import List, MutableMapping, ClassVar, Self, Type
 
 import semantic_digital_twin.spatial_types.spatial_types as cas
@@ -177,12 +178,19 @@ class LifeCycleState(State):
             parameters=[self.observation_symbols(), self.life_cycle_symbols()],
             sparse=False,
         )
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=0, numpy_array=self.motion_statechart.observation_state.data
+        )
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=1, numpy_array=self.data
+        )
 
     def __getitem__(self, node: MotionStatechartNode) -> LifeCycleValues:
         return LifeCycleValues(super().__getitem__(node))
 
-    def update_state(self, observation_state: np.ndarray):
-        self.data = self._compiled_updater(observation_state, self.data)
+    @profile
+    def update_state(self):
+        np.copyto(self.data, self._compiled_updater.evaluate())
 
     def __str__(self) -> str:
         return str(
@@ -228,23 +236,28 @@ class ObservationState(State):
             ],
             sparse=False,
         )
-
-    def update_state(
-        self,
-        life_cycle_state: np.ndarray,
-        world_state: np.ndarray,
-        external_collision_data: np.ndarray,
-        self_collision_data: np.ndarray,
-        auxiliar_variables: np.ndarray,
-    ):
-        self.data = self._compiled_updater(
-            self.data,
-            life_cycle_state,
-            world_state,
-            external_collision_data,
-            self_collision_data,
-            auxiliar_variables,
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=0, numpy_array=self.data
         )
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=1, numpy_array=self.motion_statechart.life_cycle_state.data
+        )
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=2, numpy_array=context.world.state.data
+        )
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=3, numpy_array=context.collision_scene.external_collision_data
+        )
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=4, numpy_array=context.collision_scene.self_collision_data
+        )
+        self._compiled_updater.bind_args_to_memory_view(
+            arg_idx=5, numpy_array=context.auxiliary_variable_manager.data
+        )
+
+    @profile
+    def update_state(self):
+        np.copyto(self.data, self._compiled_updater.evaluate())
 
 
 @dataclass(repr=False, eq=False)
@@ -520,25 +533,17 @@ class MotionStatechart(SubclassJSONSerializer):
             )
         return combined_constraint_collection
 
-    def _update_observation_state(self, context: BuildContext):
-        self.observation_state.update_state(
-            life_cycle_state=self.life_cycle_state.data,
-            world_state=context.world.state.data,
-            external_collision_data=context.collision_scene.get_external_collision_data(),
-            self_collision_data=context.collision_scene.get_self_collision_data(),
-            auxiliar_variables=context.auxiliary_variable_manager.resolve_auxiliary_variables(),
-        )
+    def _update_observation_state(self, context: ExecutionContext):
+        self.observation_state.update_state()
         for node in self.nodes:
             if self.life_cycle_state[node] == LifeCycleValues.RUNNING:
-                observation_overwrite = node.on_tick(
-                    context=context.to_execution_context()
-                )
+                observation_overwrite = node.on_tick(context=context)
                 if observation_overwrite is not None:
                     self.observation_state[node] = observation_overwrite
 
     def _update_life_cycle_state(self, context: ExecutionContext):
         previous = self.life_cycle_state.data.copy()
-        self.life_cycle_state.update_state(self.observation_state.data)
+        self.life_cycle_state.update_state()
         self._trigger_life_cycle_callbacks(
             previous, self.life_cycle_state.data, context
         )
@@ -573,18 +578,18 @@ class MotionStatechart(SubclassJSONSerializer):
                 case _:
                     pass
 
-    def tick(self, context: BuildContext):
+    def tick(self, context: ExecutionContext):
         """
         Executes a single tick of the motion statechart.
         First the observation state is updated, then the life cycle state is updated.
         :param context: The context required to execute the tick.
         """
         self._update_observation_state(context)
-        self._update_life_cycle_state(context.to_execution_context())
+        self._update_life_cycle_state(context)
         self._raise_if_cancel_motion()
         self.history.append(
             next_item=StateHistoryItem(
-                control_cycle=context.control_cycle_variable.evaluate(),
+                control_cycle=context.control_cycle_counter,
                 life_cycle_state=self.life_cycle_state,
                 observation_state=self.observation_state,
             )

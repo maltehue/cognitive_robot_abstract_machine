@@ -61,6 +61,7 @@ from giskardpy.motion_statechart.test_nodes.test_nodes import (
 from giskardpy.qp.exceptions import HardConstraintsViolatedException
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.utils.math import angle_between_vector
+from semantic_digital_twin.adapters.ros.world_synchronizer import StateSynchronizer
 from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
     KinematicStructureEntityKwargsTracker,
 )
@@ -1048,6 +1049,60 @@ def test_cart_goal_1eef(pr2_world: World):
     kin_sim.tick_until_end()
 
 
+def test_long_goal(pr2_world: World, rclpy_node):
+    state_sync = StateSynchronizer(world=pr2_world, node=rclpy_node)
+    msc = MotionStatechart()
+    msc.add_nodes(
+        [
+            cart_goal := CartesianPose(
+                root_link=pr2_world.root,
+                tip_link=pr2_world.get_kinematic_structure_entity_by_name(
+                    "base_footprint"
+                ),
+                goal_pose=TransformationMatrix.from_xyz_rpy(
+                    x=50, reference_frame=pr2_world.root
+                ),
+            ),
+            JointPositionList(
+                goal_state=JointState.from_str_dict(
+                    {
+                        "torso_lift_joint": 0.2999225173357618,
+                        "head_pan_joint": 0.041880780651479044,
+                        "head_tilt_joint": -0.37,
+                        "r_upper_arm_roll_joint": -0.9487714747527726,
+                        "r_shoulder_pan_joint": -1.0047307505973626,
+                        "r_shoulder_lift_joint": 0.48736790658811985,
+                        "r_forearm_roll_joint": -14.895833882874182,
+                        "r_elbow_flex_joint": -1.392377908925028,
+                        "r_wrist_flex_joint": -0.4548695149411013,
+                        "r_wrist_roll_joint": 0.11426798984097819,
+                        "l_upper_arm_roll_joint": 1.7383062350263658,
+                        "l_shoulder_pan_joint": 1.8799810286792007,
+                        "l_shoulder_lift_joint": 0.011627231224188975,
+                        "l_forearm_roll_joint": 312.67276414458695,
+                        "l_elbow_flex_joint": -2.0300928925694675,
+                        "l_wrist_flex_joint": -0.1,
+                        "l_wrist_roll_joint": -6.062015047706399,
+                    },
+                    world=pr2_world,
+                )
+            ),
+        ]
+    )
+    msc.add_node(EndMotion.when_true(cart_goal))
+
+    kin_sim = Executor(
+        world=pr2_world,
+        controller_config=QPControllerConfig.create_default_with_50hz(),
+    )
+    kin_sim.compile(motion_statechart=msc)
+    t = time.perf_counter()
+    kin_sim.tick_until_end(1_000_000)
+    after = time.perf_counter()
+    diff = after - t
+    print(diff / kin_sim.control_cycles)
+
+
 def test_cart_goal_sequence_at_build(pr2_world: World):
     tip = pr2_world.get_kinematic_structure_entity_by_name("base_footprint")
     root = pr2_world.get_kinematic_structure_entity_by_name("odom_combined")
@@ -1226,7 +1281,9 @@ def test_pointing_cone(pr2_world: World):
     kin_sim.tick_until_end()
 
     # Check if angle between pointing axis and tip->goal vector is within the cone
-    root_V_pointing_axis = pr2_world.transform(target_frame=root, spatial_object=pointing_axis)
+    root_V_pointing_axis = pr2_world.transform(
+        target_frame=root, spatial_object=pointing_axis
+    )
     root_V_pointing_axis.scale(1)
     v_pointing = root_V_pointing_axis.to_np()[:3]
 
@@ -1244,9 +1301,10 @@ def test_pointing_cone(pr2_world: World):
 
     angle = angle_between_vector(v_pointing, v_goal)
 
-    assert angle <= cone_theta + pointing_cone.threshold, (
-        f"PointingCone failed: final angle {angle:.6f} rad > cone_theta {cone_theta:.6f} rad"
-    )
+    assert (
+        angle <= cone_theta + pointing_cone.threshold
+    ), f"PointingCone failed: final angle {angle:.6f} rad > cone_theta {cone_theta:.6f} rad"
+
 
 def test_align_planes(pr2_world: World):
     tip = pr2_world.get_kinematic_structure_entity_by_name("r_gripper_tool_frame")

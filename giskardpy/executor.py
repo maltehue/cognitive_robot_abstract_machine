@@ -15,7 +15,7 @@ from giskardpy.motion_statechart.auxilary_variable_manager import (
     AuxiliaryVariableManager,
     AuxiliaryVariable,
 )
-from giskardpy.motion_statechart.context import BuildContext
+from giskardpy.motion_statechart.context import BuildContext, ExecutionContext
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.qp.exceptions import EmptyProblemException
 from giskardpy.qp.qp_controller import QPController
@@ -120,19 +120,30 @@ class Executor:
             control_cycle_variable=self._control_cycles_variable,
         )
 
+    @property
+    def execution_context(self) -> ExecutionContext:
+        return ExecutionContext(
+            world=self.world,
+            external_collision_data_data=self.collision_scene.get_external_collision_data(),
+            self_collision_data_data=self.collision_scene.get_self_collision_data(),
+            auxiliar_variables_data=self.auxiliary_variable_manager.resolve_auxiliary_variables(),
+            control_cycle_counter=self.control_cycles,
+        )
+
     def tick(self):
         self.control_cycles += 1
         self.collision_scene.sync()
         self.collision_scene.check_collisions()
-        self.motion_statechart.tick(self.build_context)
+        execution_context = self.execution_context
+        self.motion_statechart.tick(execution_context)
         if self.qp_controller is None:
             return
         next_cmd = self.qp_controller.get_cmd(
             world_state=self.world.state.data,
             life_cycle_state=self.motion_statechart.life_cycle_state.data,
-            external_collisions=self.collision_scene.get_external_collision_data(),
-            self_collisions=self.collision_scene.get_self_collision_data(),
-            auxiliary_variables=self.auxiliary_variable_manager.resolve_auxiliary_variables(),
+            external_collisions=execution_context.external_collision_data_data,
+            self_collisions=execution_context.self_collision_data_data,
+            auxiliary_variables=execution_context.auxiliar_variables_data,
         )
         self.world.apply_control_commands(
             next_cmd,

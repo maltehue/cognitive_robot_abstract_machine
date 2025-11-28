@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import numpy as np
 from typing_extensions import Self
 
 from giskardpy.model.collision_world_syncer import CollisionWorldSynchronizer
@@ -19,9 +20,6 @@ class BuildContext:
     qp_controller_config: QPControllerConfig
     control_cycle_variable: AuxiliaryVariable
 
-    def to_execution_context(self):
-        return ExecutionContext(world=self.world)
-
     @classmethod
     def empty(cls) -> Self:
         return cls(
@@ -36,3 +34,7 @@ class BuildContext:
 @dataclass
 class ExecutionContext:
     world: World
+    external_collision_data_data: np.ndarray
+    self_collision_data_data: np.ndarray
+    auxiliar_variables_data: np.ndarray
+    control_cycle_counter: int
