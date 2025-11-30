@@ -145,11 +145,19 @@ class Executor:
         Calls tick until is_end_motion() returns True.
         :param timeout: Max number of ticks to perform.
         """
-        for i in range(timeout):
-            self.tick()
-            if self.motion_statechart.is_end_motion():
-                return
-        raise TimeoutError("Timeout reached while waiting for end of motion.")
+        try:
+            for i in range(timeout):
+                self.tick()
+                if self.motion_statechart.is_end_motion():
+                    return
+            raise TimeoutError("Timeout reached while waiting for end of motion.")
+        finally:
+            self._set_velocity_acceleration_jerk_to_zero()
+
+    def _set_velocity_acceleration_jerk_to_zero(self):
+        self.world.state.velocities[:] = 0
+        self.world.state.accelerations[:] = 0
+        self.world.state.jerks[:] = 0
 
     def _compile_qp_controller(self, controller_config: QPControllerConfig):
         ordered_dofs = sorted(

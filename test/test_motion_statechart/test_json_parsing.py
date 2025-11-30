@@ -22,6 +22,7 @@ from giskardpy.motion_statechart.graph_node import (
     EndMotion,
     CancelMotion,
 )
+from giskardpy.motion_statechart.monitors.monitors import LocalMinimumReached
 from giskardpy.motion_statechart.motion_statechart import (
     MotionStatechart,
     LifeCycleState,
@@ -347,3 +348,39 @@ def test_cancel_motion():
 
     with pytest.raises(Exception):
         kin_sim.tick_until_end()
+
+
+def test_unreachable_cart_goal(pr2_world):
+    root = pr2_world.root
+    tip = pr2_world.get_kinematic_structure_entity_by_name("base_footprint")
+    msc = MotionStatechart()
+    msc.add_node(
+        cart_goal := CartesianPose(
+            root_link=root,
+            tip_link=tip,
+            goal_pose=TransformationMatrix.from_xyz_rpy(
+                z=-1,
+                reference_frame=root,
+            ),
+        )
+    )
+    msc.add_node(local_min := LocalMinimumReached())
+    msc.add_node(CancelMotion.when_true(cart_goal))
+    msc.add_node(EndMotion.when_true(local_min))
+
+    json_data = msc.to_json()
+    json_str = json.dumps(json_data)
+    new_json_data = json.loads(json_str)
+
+    tracker = KinematicStructureEntityKwargsTracker.from_world(pr2_world)
+    kwargs = tracker.create_kwargs()
+    msc_copy = MotionStatechart.from_json(new_json_data, **kwargs)
+
+    kin_sim = Executor(
+        world=pr2_world,
+        controller_config=QPControllerConfig.create_default_with_50hz(),
+    )
+
+    kin_sim.compile(motion_statechart=msc_copy)
+
+    kin_sim.tick_until_end()

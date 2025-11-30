@@ -478,6 +478,46 @@ def test_joint_goal():
     )
 
 
+def test_two_goals(pr2_world: World):
+    torso_joint = pr2_world.get_connection_by_name("torso_lift_joint")
+    r_wrist_roll_joint = pr2_world.get_connection_by_name("r_wrist_roll_joint")
+    msc = MotionStatechart()
+    msc.add_nodes(
+        [
+            JointPositionList(goal_state=JointState({torso_joint: 0.1})),
+            local_min := LocalMinimumReached(),
+        ]
+    )
+    msc.add_node(EndMotion.when_true(local_min))
+
+    kin_sim = Executor(
+        world=pr2_world,
+        controller_config=QPControllerConfig.create_default_with_50hz(),
+    )
+    kin_sim.compile(motion_statechart=msc)
+
+    kin_sim.tick_until_end()
+    assert np.isclose(torso_joint.position, 0.1, atol=1e-4)
+
+    msc = MotionStatechart()
+    msc.add_node(
+        joint_goal := JointPositionList(goal_state=JointState({r_wrist_roll_joint: 1}))
+    )
+    msc.add_node(EndMotion.when_true(joint_goal))
+
+    kin_sim = Executor(
+        world=pr2_world,
+        controller_config=QPControllerConfig.create_default_with_50hz(),
+    )
+    kin_sim.compile(motion_statechart=msc)
+
+    kin_sim.tick_until_end()
+    assert np.isclose(torso_joint.position, 0.1, atol=1e-4)
+    assert np.allclose(pr2_world.state.velocities, 0)
+    assert np.allclose(pr2_world.state.accelerations, 0)
+    assert np.allclose(pr2_world.state.jerks, 0)
+
+
 def test_reset():
     msc = MotionStatechart()
     node1 = ConstTrueNode()
