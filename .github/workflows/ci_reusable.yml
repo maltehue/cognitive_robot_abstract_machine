@@ -1,4 +1,7 @@
 name: CI reusable
+defaults:
+  run:
+    shell: bash -ieo pipefail {0}
 
 on:
   workflow_call:
@@ -9,10 +12,9 @@ jobs:
     container:
       image: ghcr.io/${{ github.repository }}:jazzy
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout main repo
+        uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository }}
-          ref: ${{ github.ref }}
           path: 'cognitive_robot_abstract_machine'
           submodules: 'recursive'
 
