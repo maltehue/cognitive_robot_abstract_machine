@@ -794,6 +794,8 @@ def test_limit(handles_and_containers_world):
     with pytest.raises(NonPositiveLimitValue):
         list(query.evaluate(limit=0))
     with pytest.raises(NonPositiveLimitValue):
+        list(query.evaluate(limit=-1))
+    with pytest.raises(NonPositiveLimitValue):
         list(query.evaluate(limit="0"))
 
 
