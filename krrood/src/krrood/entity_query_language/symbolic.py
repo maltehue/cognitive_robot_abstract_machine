@@ -829,10 +829,17 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
         """
         variable = variable or self._selected_variables[0]
         map_to_var_val = lambda res: res[variable._id_].value
-        mapping = lambda results_gen: [
-            {variable._id_: HashedValue(sum(map(map_to_var_val, results_gen)))}
-        ]
-        self._results_mapping.append(mapping)
+
+        def apply_sum(results_gen):
+            entered = False
+            sum_val = 0
+            for val in map(map_to_var_val, results_gen):
+                entered = True
+                sum_val += val
+            sum_val = HashedValue(sum_val if entered else None)
+            yield {variable._id_: sum_val}
+
+        self._results_mapping.append(apply_sum)
         return self
 
     @lru_cache(maxsize=None)

@@ -772,6 +772,15 @@ def test_sum(handles_and_containers_world):
     assert results[0] == sum(heights)
 
 
+def test_sum_on_empty_list(handles_and_containers_world):
+    empty_list = []
+    empty_var = let(int, domain=empty_list)
+    query = an(entity(empty_var).sum())
+    results = list(query.evaluate())
+    assert len(results) == 1
+    assert results[0] is None
+
+
 def test_limit(handles_and_containers_world):
     world = handles_and_containers_world
     query = an(
