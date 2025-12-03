@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 import numpy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import mujoco
 from scipy.spatial.transform import Rotation
@@ -36,7 +36,7 @@ from ..world_description.inertial_properties import (
     PrincipalAxes,
 )
 from ..world_description.shape_collection import ShapeCollection
-from .multi_sim import MujocoActuator, MujocoCamera
+from .multi_sim import MujocoActuator
 
 
 @dataclass
@@ -78,9 +78,6 @@ class MJCFParser:
 
             for mujoco_body in self.spec.bodies[1:]:
                 self.parse_joints(mujoco_body=mujoco_body)
-
-            for mujoco_camera in self.spec.cameras:
-                self.parse_camera(mujoco_camera=mujoco_camera)
 
             for mujoco_actuator in self.spec.actuators:
                 self.parse_actuator(mujoco_actuator=mujoco_actuator)
@@ -444,66 +441,3 @@ class MJCFParser:
         )
         actuator.add_dof(dof)
         self.world.add_actuator(actuator)
-
-    def parse_camera(self, mujoco_camera: mujoco.MjsCamera):
-        camera_name = PrefixedName(mujoco_camera.name)
-        body_name = mujoco_camera.parent.name
-        body = self.world.get_body_by_name(body_name)
-        resolution = (
-            [1, 1]
-            if any(numpy.isnan(x) for x in mujoco_camera.resolution)
-            else mujoco_camera.resolution.tolist()
-        )
-        focal_length = (
-            [0, 0]
-            if any(numpy.isnan(x) for x in mujoco_camera.focal_length)
-            else mujoco_camera.focal_length.tolist()
-        )
-        focal_pixel = (
-            [0, 0]
-            if any(numpy.isnan(x) for x in mujoco_camera.focal_pixel)
-            else mujoco_camera.focal_pixel.astype(int).tolist()
-        )
-        principal_length = (
-            [0, 0]
-            if any(numpy.isnan(x) for x in mujoco_camera.principal_length)
-            else mujoco_camera.principal_length.tolist()
-        )
-        principal_pixel = (
-            [0, 0]
-            if any(numpy.isnan(x) for x in mujoco_camera.principal_pixel)
-            else mujoco_camera.principal_pixel.astype(int).tolist()
-        )
-        sensor_size = (
-            [0, 0]
-            if any(numpy.isnan(x) for x in mujoco_camera.sensor_size)
-            else mujoco_camera.sensor_size.tolist()
-        )
-        pos = (
-            [0, 0, 0]
-            if any(numpy.isnan(x) for x in mujoco_camera.pos)
-            else mujoco_camera.pos.tolist()
-        )
-        quat = (
-            [1, 0, 0, 0]
-            if any(numpy.isnan(x) for x in mujoco_camera.quat)
-            else mujoco_camera.quat.tolist()
-        )
-
-        camera = MujocoCamera(
-            name=camera_name,
-            body=body,
-            mode=mujoco_camera.mode,
-            orthographic=mujoco_camera.orthographic,
-            fovy=mujoco_camera.fovy,
-            resolution=resolution,
-            focal_length=focal_length,
-            focal_pixel=focal_pixel,
-            principal_length=principal_length,
-            principal_pixel=principal_pixel,
-            sensor_size=sensor_size,
-            ipd=mujoco_camera.ipd,
-            pos=pos,
-            quat=quat,
-        )
-        self.world.add_semantic_annotation(camera)

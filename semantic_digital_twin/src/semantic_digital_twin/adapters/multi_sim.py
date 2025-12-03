@@ -48,7 +48,6 @@ from ..world_description.world_entity import (
     Connection,
     WorldEntity,
     Actuator,
-    SemanticAnnotation,
 )
 from ..world_description.world_modification import (
     AddKinematicStructureEntityModification,
@@ -68,16 +67,6 @@ def cas_pose_to_list(pose: TransformationMatrix) -> List[float]:
     px, py, pz, _ = pos.evaluate().tolist()
     qx, qy, qz, qw = quat.evaluate().tolist()
     return [px, py, pz, qw, qx, qy, qz]
-
-
-@dataclass(eq=False)
-class Camera(SemanticAnnotation):
-    """Semantic annotation declaring that a Body is a Camera."""
-
-    body: Body
-    """
-    The body which is the camera
-    """
 
 
 @dataclass
@@ -159,7 +148,7 @@ class EntityConverter(ABC):
         :param entity: The object to convert.
         :return: A dictionary of properties.
         """
-        for subclass in recursive_subclasses(cls) + [cls]:
+        for subclass in recursive_subclasses(cls):
             if (
                 not inspect.isabstract(subclass)
                 and not inspect.isabstract(subclass.entity_type)
@@ -562,28 +551,6 @@ class ActuatorConverter(EntityConverter, ABC):
         return actuator_props
 
 
-class CameraConverter(EntityConverter, ABC):
-    """
-    Converts an Camera object to a dictionary of actuator properties for Multiverse simulator.
-    """
-
-    entity_type: ClassVar[Type[Camera]] = Camera
-    """
-    The type of the entity to convert.
-    """
-
-    def _convert(self, entity: Camera, **kwargs) -> Dict[str, Any]:
-        """
-        Converts a Camera object to a dictionary of camera properties for Multiverse simulator.
-
-        :param entity: The Camera object to convert.
-        :return: A dictionary of camer properties, by default containing list of DOF names.
-        """
-        camera_props = EntityConverter._convert(self, entity)
-        camera_props["body"] = entity.body.name.name
-        return camera_props
-
-
 @dataclass(eq=False)
 class MujocoActuator(Actuator):
     """
@@ -705,24 +672,6 @@ class MujocoActuator(Actuator):
         actuator.gain_parameters = data["gain_parameters"]
         actuator.gain_type = mujoco.mjtGain(data["gain_type"])
         return actuator
-
-
-@dataclass(eq=False)
-class MujocoCamera(Camera):
-    """Semantic annotation declaring that a Body is a MujocoCamera."""
-
-    mode: mujoco.mjtCamLight = mujoco.mjtCamLight.mjCAMLIGHT_FIXED
-    orthographic: bool = False
-    fovy: float = 45.0
-    resolution: list = field(default_factory=lambda: [1, 1])
-    focal_length: list = field(default_factory=lambda: [0, 0])
-    focal_pixel: list = field(default_factory=lambda: [0, 0])
-    principal_length: list = field(default_factory=lambda: [0, 0])
-    principal_pixel: list = field(default_factory=lambda: [0, 0])
-    sensor_size: list = field(default_factory=lambda: [0, 0])
-    ipd: float = 0.068
-    pos: list = field(default_factory=lambda: [0, 0, 0])
-    quat: list = field(default_factory=lambda: [1, 0, 0, 0])
 
 
 class MujocoConverter(EntityConverter, ABC): ...
@@ -927,28 +876,6 @@ class MujocoGeneralActuatorConverter(MujocoActuatorConverter, ActuatorConverter)
         return actuator_props
 
 
-class MujocoCameraConverter(CameraConverter, ABC):
-
-    entity_type: ClassVar[Type[MujocoCamera]] = MujocoCamera
-
-    def _post_convert(
-        self, entity: MujocoCamera, camera_props: Dict[str, Any], **kwargs
-    ) -> Dict[str, Any]:
-        camera_props["mode"] = entity.mode
-        camera_props["orthographic"] = entity.orthographic
-        camera_props["fovy"] = entity.fovy
-        camera_props["resolution"] = entity.resolution
-        camera_props["focal_length"] = entity.focal_length
-        camera_props["focal_pixel"] = entity.focal_pixel
-        camera_props["principal_length"] = entity.principal_length
-        camera_props["principal_pixel"] = entity.principal_pixel
-        camera_props["sensor_size"] = entity.sensor_size
-        camera_props["ipd"] = entity.ipd
-        camera_props["pos"] = entity.pos
-        camera_props["quat"] = entity.quat
-        return camera_props
-
-
 @dataclass
 class MultiSimBuilder(ABC):
     """
@@ -1012,8 +939,6 @@ class MultiSimBuilder(ABC):
                 is_visible=shape in body.visual,
                 is_collidable=shape in body.collision,
             )
-        for camera in body.get_semantic_annotations_by_type(Camera):
-            self._build_camera(camera=camera)
 
     def build_region(self, region: Region):
         """
@@ -1091,20 +1016,11 @@ class MultiSimBuilder(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _build_actuator(self, actuator: Actuator):
+    def _build_actuator(self, actuator):
         """
         Builds an actuator in the simulator.
 
         :param actuator: The actuator to build.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def _build_camera(self, camera: Camera):
-        """
-        Builds a camera in the simulator.
-
-        :param camera: The camera to build.
         """
         raise NotImplementedError
 
@@ -1294,18 +1210,6 @@ class MujocoBuilder(MultiSimBuilder):
         actuator_name = actuator.name.name
         actuator_spec = self.spec.add_actuator(**actuator_props)
         assert actuator_spec is not None, f"Failed to add actuator {actuator_name}."
-
-    def _build_camera(self, camera: Camera):
-        camera_name = camera.name.name
-        camera_props = MujocoCameraConverter.convert(camera)
-        assert camera_props is not None, f"Failed to convert camera {camera_name}."
-        body_name = camera_props.pop("body")
-        body_spec = self._find_entity(
-            entity_type=mujoco.mjtObj.mjOBJ_BODY, entity_name=body_name
-        )
-        assert body_spec is not None, f"Failed to find body {body_name}."
-        camera_spec = body_spec.add_camera(**camera_props)
-        assert camera_spec is not None, f"Failed to add actuator {camera_name}."
 
     def _build_mujoco_body(self, body: Union[Region, Body]):
         """
