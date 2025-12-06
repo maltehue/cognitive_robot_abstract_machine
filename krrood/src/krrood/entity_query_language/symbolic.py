@@ -15,8 +15,6 @@ from collections import UserDict
 from copy import copy
 from dataclasses import dataclass, field, fields, MISSING, is_dataclass
 from functools import lru_cache, cached_property
-from typing import Union, Iterable
-
 from typing_extensions import (
     Iterable,
     Any,
