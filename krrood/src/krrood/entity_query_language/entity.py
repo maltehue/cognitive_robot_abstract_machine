@@ -29,13 +29,12 @@ from .symbolic import (
     Comparator,
     chained_logic,
     CanBehaveLikeAVariable,
-    From,
     Variable,
     optimize_or,
     Flatten,
     ForAll,
     Exists,
-    Literal, Selectable, Max, Min, Sum, Count, QueryObjectDescriptor, Average,
+    Literal, Selectable, Max, Min, Sum, Count, Average, DomainType,
 )
 
 from .predicate import (
@@ -113,9 +112,6 @@ def _extract_variables_and_expression(
     return selected_variables, expression
 
 
-DomainType = Union[Iterable, None]
-
-
 def let(
     type_: Type[T],
     domain: DomainType,
@@ -154,7 +150,7 @@ def let(
 
 def _get_domain_source_from_domain_and_type_values(
     domain: DomainType, type_: Type
-) -> Optional[From]:
+) -> Optional[DomainType]:
     """
     Get the domain source from the domain and the type values.
 
@@ -166,7 +162,7 @@ def _get_domain_source_from_domain_and_type_values(
         domain = filter(lambda x: isinstance(x, type_), domain)
     elif domain is None and issubclass(type_, Symbol):
         domain = SymbolGraph().get_instances_of_type(type_)
-    return From(domain)
+    return domain
 
 
 def and_(*conditions: ConditionType):

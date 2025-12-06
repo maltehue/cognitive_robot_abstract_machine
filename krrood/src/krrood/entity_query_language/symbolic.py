@@ -15,6 +15,7 @@ from collections import UserDict
 from copy import copy
 from dataclasses import dataclass, field, fields, MISSING, is_dataclass
 from functools import lru_cache, cached_property
+from typing import Union, Iterable
 
 from typing_extensions import (
     Iterable,
@@ -256,8 +257,8 @@ class SymbolicExpression(Generic[T], ABC):
         while any(isinstance(v, SymbolicExpression) for v in vars):
             vars = {
                 (
-                    v._domain_source_.domain
-                    if isinstance(v, Variable) and v._domain_source_
+                    v._domain_source_
+                    if isinstance(v, Variable) and v._domain_source_ is not None
                     else v
                 )
                 for v in vars
@@ -1091,19 +1092,6 @@ class Entity(QueryObjectDescriptor[T], Selectable[T]):
         return self._selected_variables[0] if self._selected_variables else None
 
 
-@dataclass
-class From:
-    """
-    A dataclass that holds the domain for a symbolic variable, this will be used instead of the global cache
-    of the variable class type.
-    """
-
-    domain: Any
-    """
-    The domain to use for the symbolic variable.
-    """
-
-
 @dataclass(eq=False, repr=False)
 class Variable(CanBehaveLikeAVariable[T]):
     """
@@ -1125,7 +1113,7 @@ class Variable(CanBehaveLikeAVariable[T]):
     The properties of the variable as keyword arguments.
     """
 
-    _domain_source_: Optional[From] = field(default=None, kw_only=True, repr=False)
+    _domain_source_: Optional[DomainType] = field(default=None, kw_only=True, repr=False)
     """
     An optional source for the variable domain. If not given, the global cache of the variable class type will be used
     as the domain, or if kwargs are given the type and the kwargs will be used to inference/infer new values for the
@@ -1166,7 +1154,7 @@ class Variable(CanBehaveLikeAVariable[T]):
             )
         self._child_ = None
         if self._domain_source_:
-            self._update_domain_(self._domain_source_.domain)
+            self._update_domain_(self._domain_source_)
 
     def _update_domain_(self, domain):
         if domain:
@@ -1302,7 +1290,7 @@ class Literal(Variable[T]):
                 name = type_.__name__
             else:
                 name = type(original_data).__name__
-        super().__init__(_name__=name, _type_=type_, _domain_source_=From(data))
+        super().__init__(_name__=name, _type_=type_, _domain_source_=data)
 
     @property
     def _plot_color_(self) -> ColorLegend:
@@ -2029,3 +2017,6 @@ def _any_of_the_kwargs_is_a_variable(bindings: Dict[str, HashedValue]) -> bool:
     return any(
         isinstance(binding, Selectable) for binding in bindings.values()
     )
+
+
+DomainType = TypingUnion[Iterable, None]

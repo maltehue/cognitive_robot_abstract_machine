@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Generic, Optional, Type, Dict, Any, List, Union, Self, Iterable
 
-from krrood.entity_query_language.symbolic import Exists
+from krrood.entity_query_language.symbolic import Exists, DomainType
 
 from .entity import (
     ConditionType,
@@ -14,7 +14,6 @@ from .entity import (
     let,
     set_of,
     entity,
-    DomainType,
     exists,
 )
 from .failures import NoneWrappedFieldError

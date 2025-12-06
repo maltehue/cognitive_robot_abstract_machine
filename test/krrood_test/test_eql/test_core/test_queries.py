@@ -397,7 +397,7 @@ def test_sources(handles_and_containers_world):
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
     prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
     drawer_components = (container, handle, fixed_connection, prismatic_connection)
-    query = an(
+    query = a(
         set_of(
             drawer_components,
             container == fixed_connection.parent,
