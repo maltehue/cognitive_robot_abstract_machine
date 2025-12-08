@@ -41,13 +41,13 @@ class Effect(SemanticAnnotation):
 class OpenEffect(Effect):
     def is_achieved(self) -> bool:
         current_value = self.property_getter(self.target_object)
-        return current_value >= self.goal_value
+        return current_value >= self.goal_value - self.tolerance
 
 
 class ClosedEffect(Effect):
     def is_achieved(self) -> bool:
         current_value = self.property_getter(self.target_object)
-        return current_value <= self.goal_value
+        return current_value <= self.goal_value + self.tolerance
 
 
 @dataclass(eq=False)

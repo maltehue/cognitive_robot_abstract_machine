@@ -21,7 +21,13 @@ from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from krrood.entity_query_language.predicate import Predicate
 from ..robots.abstract_robot import AbstractRobot
 from ..semantic_annotations.semantic_annotations import Drawer, Fridge, Door
-from ..semantic_annotations.task_effect_motion import Task, Effect, Motion
+from ..semantic_annotations.task_effect_motion import (
+    Task,
+    Effect,
+    Motion,
+    OpenEffect,
+    ClosedEffect,
+)
 from ..world import World
 from ..world_description.connections import PrismaticConnection, RevoluteConnection
 from ..world_description.world_entity import SemanticAnnotation
@@ -150,10 +156,10 @@ class CausesOpening(Predicate):
         # self.environment.notify_state_change()
 
         self.motion = Motion(
-            trajectory=[], actuator=handle.body, expected_effect=self.effect, duration=2
+            trajectory=[], actuator=handle.body, expected_effect=None, duration=2
         )
 
-        return True
+        return is_achieved
 
     def _extract_container_info(self, annotation: SemanticAnnotation):
         """
@@ -167,3 +173,64 @@ class CausesOpening(Predicate):
             return None
 
         return handle
+
+
+@dataclass
+class SatisfiesRequest(Predicate):
+    """
+    Check whether an effect satisfies a task request.
+
+    The predicate is a pure compatibility check. The query engine provides
+    the task and effect combinations and this predicate returns True only
+    if the given effect satisfies the given task.
+    """
+
+    task: Task
+    effect: Effect
+
+    def __call__(self, *args, **kwargs) -> bool:
+        return self._effect_satisfies_task(self.task, self.effect)
+
+    # --- helpers ---
+    def _effect_satisfies_task(self, task: Task, effect: Effect) -> bool:
+        # If the task specifies a concrete desired effect, enforce compatibility
+        if task.desired_effect is not None:
+            return self._effects_compatible(task.desired_effect, effect)
+
+        # Fallback: map by task type to effect kind
+        task_type = (task.task_type or "").lower()
+        if task_type == "open":
+            return isinstance(effect, OpenEffect)
+        if task_type == "close":
+            return isinstance(effect, ClosedEffect)
+        return False
+
+    @staticmethod
+    def _effects_compatible(desired: Effect, actual: Effect) -> bool:
+        # same intent via class match
+        if type(desired) is not type(actual):
+            return False
+
+        # same target if desired specifies one
+        desired_target = getattr(desired, "target_object", None)
+        if desired_target is not None and desired_target is not getattr(
+            actual, "target_object", None
+        ):
+            return False
+
+        # directional goal check for known effects
+        if isinstance(desired, OpenEffect):
+            current = actual.property_getter(actual.target_object)
+            return current >= desired.goal_value - max(
+                getattr(desired, "tolerance", 0.0), getattr(actual, "tolerance", 0.0)
+            )
+        if isinstance(desired, ClosedEffect):
+            current = actual.property_getter(actual.target_object)
+            return current <= desired.goal_value + max(
+                getattr(desired, "tolerance", 0.0), getattr(actual, "tolerance", 0.0)
+            )
+
+        # generic tolerance check
+        current = actual.property_getter(actual.target_object)
+        tol = max(getattr(desired, "tolerance", 0.0), getattr(actual, "tolerance", 0.0))
+        return abs(current - desired.goal_value) <= tol

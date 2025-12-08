@@ -19,7 +19,10 @@ from semantic_digital_twin.adapters.mesh import STLParser
 from semantic_digital_twin.adapters.procthor.procthor_semantic_annotations import Milk
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.adapters.viz_marker import VizMarkerPublisher
-from semantic_digital_twin.reasoning.predicates_base import CausesOpening
+from semantic_digital_twin.reasoning.predicates_base import (
+    CausesOpening,
+    SatisfiesRequest,
+)
 from semantic_digital_twin.reasoning.world_reasoner import WorldReasoner
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Container,
@@ -33,6 +36,7 @@ from semantic_digital_twin.semantic_annotations.task_effect_motion import (
     OpenEffect,
     ClosedEffect,
     Motion,
+    Task,
 )
 from semantic_digital_twin.spatial_types.spatial_types import TransformationMatrix
 from semantic_digital_twin.world_description.connections import (
@@ -208,11 +212,22 @@ class ContainerDemo:
         #
         # print(list(query.evaluate()))
 
-        motion = let(Motion, domain=None)
-        effect = let(Effect, domain=[effect_open])
-        causes_opening = CausesOpening(effect=effect, environment=self.world)
-        motion = an(entity(causes_opening.motion, causes_opening))
-        print(list(motion.evaluate()))
+        # --- Minimal drop-in example combining satisfies_request with causes ---
+        # Create one opening and one closing task
+        open_task = Task(task_type="open")
+        close_task = Task(task_type="close")
+
+        # Bind symbols for krrood: choose the opening task for the query
+        task_sym = let(Task, domain=[close_task])
+        effect_sym = let(Effect, domain=effects)
+
+        # Predicates: compatibility and motion generation
+        satisfies = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        causes_opening = CausesOpening(effect=effect_sym, environment=self.world)
+
+        # Ask for one motion that causes an effect satisfying the opening task
+        one_motion = an(entity(causes_opening.motion, satisfies, causes_opening))
+        print(list(one_motion.evaluate()))
 
         # causes_opening = CausesOpening(effect=effect_open, environment=self.world)
         # assert causes_opening.__call__() is True
