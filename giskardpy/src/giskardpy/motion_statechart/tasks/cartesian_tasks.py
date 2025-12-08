@@ -400,9 +400,11 @@ class CartesianVelocityLimit(Task):
         )
 
         _, angle = root_R_tip.to_axis_angle()
-        angle_vars: list[PositionVariable] = angle.free_variables()
-        angle_vels = [v.dof.variables.velocity for v in angle_vars]
-        angle_dot = cas.Expression(angle).total_derivative(angle_vars, angle_vels)
+        angle_variables: list[PositionVariable] = angle.free_variables()
+        angle_velocities = [v.dof.variables.velocity for v in angle_variables]
+        angle_dot = cas.Expression(angle).total_derivative(
+            angle_variables, angle_velocities
+        )
 
         artifacts.observation = cas.logic_and(
             root_P_tip_dot.norm() <= self.max_linear_velocity,
