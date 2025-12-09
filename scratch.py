@@ -34,7 +34,7 @@ from semantic_digital_twin.semantic_annotations.semantic_annotations import (
 )
 from semantic_digital_twin.semantic_annotations.task_effect_motion import (
     Effect,
-    OpenEffect,
+    OpenedEffect,
     ClosedEffect,
     Motion,
     TaskRequest,
@@ -180,7 +180,7 @@ class ContainerDemo:
             else:
                 continue
 
-            effect_open = OpenEffect(
+            effect_open = OpenedEffect(
                 target_object=container, goal_value=0.2, property_getter=property_getter
             )
             close_effect = ClosedEffect(

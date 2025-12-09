@@ -25,7 +25,7 @@ from ..semantic_annotations.task_effect_motion import (
     TaskRequest,
     Effect,
     Motion,
-    OpenEffect,
+    OpenedEffect,
     ClosedEffect,
 )
 from ..world import World
@@ -170,7 +170,7 @@ class SatisfiesRequest(Predicate):
         # Fallback: map by task type to effect kind
         task_type = (task.task_type or "").lower()
         if task_type == "open":
-            return isinstance(effect, OpenEffect)
+            return isinstance(effect, OpenedEffect)
         if task_type == "close":
             return isinstance(effect, ClosedEffect)
         return False
@@ -189,7 +189,7 @@ class SatisfiesRequest(Predicate):
             return False
 
         # directional goal check for known effects
-        if isinstance(desired, OpenEffect):
+        if isinstance(desired, OpenedEffect):
             current = actual.property_getter(actual.target_object)
             return current >= desired.goal_value - max(
                 getattr(desired, "tolerance", 0.0), getattr(actual, "tolerance", 0.0)
