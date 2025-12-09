@@ -21,7 +21,9 @@ from semantic_digital_twin.spatial_types import (
     RotationMatrix,
     FloatVariable,
 )
-from semantic_digital_twin.spatial_types.spatial_types import TransformationMatrix
+from semantic_digital_twin.spatial_types.spatial_types import (
+    HomogeneousTransformationMatrix,
+)
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.geometry import Box
@@ -31,7 +33,9 @@ from semantic_digital_twin.world_description.world_entity import Body
 
 def test_body_json_serialization():
     body = Body(name=PrefixedName("body"))
-    collision = [Box(origin=TransformationMatrix.from_xyz_rpy(0, 1, 0, 0, 0, 1, body))]
+    collision = [
+        Box(origin=HomogeneousTransformationMatrix.from_xyz_rpy(0, 1, 0, 0, 0, 1, body))
+    ]
     body.collision = ShapeCollection(collision, reference_frame=body)
     body.collision_config.max_avoided_bodies = 69
     body.collision_config.disabled = False
@@ -67,7 +71,7 @@ def test_body_json_serialization():
 def test_transformation_matrix_json_serialization():
     body = Body(name=PrefixedName("body"))
     body2 = Body(name=PrefixedName("body2"))
-    transform = TransformationMatrix.from_xyz_rpy(
+    transform = HomogeneousTransformationMatrix.from_xyz_rpy(
         x=1, y=2, z=3, roll=1, pitch=2, yaw=3, reference_frame=body, child_frame=body2
     )
     json_data = transform.to_json()
@@ -75,7 +79,7 @@ def test_transformation_matrix_json_serialization():
     tracker = KinematicStructureEntityKwargsTracker.from_kwargs(kwargs)
     tracker.add_kinematic_structure_entity(body)
     tracker.add_kinematic_structure_entity(body2)
-    transform_copy = TransformationMatrix.from_json(json_data, **kwargs)
+    transform_copy = HomogeneousTransformationMatrix.from_json(json_data, **kwargs)
     assert transform.reference_frame == transform_copy.reference_frame
     assert id(transform.reference_frame) == id(transform_copy.reference_frame)
 
@@ -144,7 +148,7 @@ def test_rotation_matrix_json_serialization_with_expression():
 
 def test_transformation_matrix_json_serialization_with_expression():
     body = Body(name=PrefixedName("body"))
-    transform = TransformationMatrix.from_xyz_rpy(
+    transform = HomogeneousTransformationMatrix.from_xyz_rpy(
         FloatVariable(name=PrefixedName("muh")), reference_frame=body
     )
     with pytest.raises(SpatialTypeNotJsonSerializable):
@@ -197,7 +201,7 @@ def test_connection_json_serialization_with_world():
         c = FixedConnection(
             parent=body,
             child=body2,
-            parent_T_connection_expression=TransformationMatrix.from_xyz_rpy(
+            parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
                 x=1, roll=2, reference_frame=body, child_frame=body2
             ),
         )
@@ -233,7 +237,7 @@ def test_transformation_matrix_json_serialization_with_world_in_kwargs():
         c = FixedConnection(
             parent=body,
             child=body2,
-            parent_T_connection_expression=TransformationMatrix.from_xyz_rpy(
+            parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
                 x=1, roll=2, reference_frame=body, child_frame=body2
             ),
         )

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False)
-class ReferenceFrameMixin:
+class SpatialType(SymbolicType):
     """
     Provides functionality to associate a reference frame with an object.
 
@@ -69,16 +69,62 @@ class ReferenceFrameMixin:
         :return: None if the key is not present or its value is None.
         """
 
-        frame_data = data.get(key, None)
-        if frame_data is None:
+        frame_data = data.get(key, {})
+        if not frame_data:
             return None
         tracker = KinematicStructureEntityKwargsTracker.from_kwargs(kwargs)
         return tracker.get_kinematic_structure_entity(id=from_json(frame_data))
 
+    @staticmethod
+    def _ensure_consistent_frame(
+        spatial_objects: List[Optional[SpatialType]],
+    ) -> Optional[KinematicStructureEntity]:
+        """
+        Ensures that all provided spatial objects have a consistent reference frame. If a mismatch
+        in the reference frames is detected among the non-null spatial objects, an exception is
+        raised. If the list contains only null objects, None is returned.
+
+        This method is primarily used to validate the reference frames of spatial objects before
+        proceeding with further operations.
+
+        :param spatial_objects: A list containing zero or more spatial objects, which can either
+            be instances of ReferenceFrameMixin or None.
+        :return: The common reference frame of the spatial objects if consistent, or None if no
+            valid reference frame exists.
+
+        :raises SpatialTypesError: Raised when the reference frames of provided input spatial
+            objects are inconsistent.
+        """
+        reference_frame = None
+        for spatial_object in spatial_objects:
+            if (
+                spatial_object is not None
+                and spatial_object.reference_frame is not None
+            ):
+                if reference_frame is None:
+                    reference_frame = spatial_object.reference_frame
+                    continue
+                if reference_frame != spatial_object.reference_frame:
+                    raise SpatialTypesError(
+                        f"Reference frames of input parameters don't match ({reference_frame} != {spatial_object.reference_frame})."
+                    )
+        return reference_frame
+
+    def __deepcopy__(self, memo) -> Self:
+        """
+        Even in a deep copy, we don't want to copy the reference and child frame, just the matrix itself,
+        because are just references to kinematic structure entities.
+        """
+        if id(self) in memo:
+            return memo[id(self)]
+        result = type(self).from_casadi_sx(deepcopy(self.casadi_sx))
+        result.reference_frame = self.reference_frame
+        return result
+
 
 @dataclass(eq=False)
-class TransformationMatrix(
-    SymbolicType, ReferenceFrameMixin, MatrixOperationsMixin, SubclassJSONSerializer
+class HomogeneousTransformationMatrix(
+    SpatialType, MatrixOperationsMixin, SubclassJSONSerializer
 ):
     """
     Represents a 4x4 transformation matrix used in kinematics and transformations.
@@ -158,7 +204,7 @@ class TransformationMatrix(
         rotation_matrix: Optional[RotationMatrix] = None,
         reference_frame: Optional[KinematicStructureEntity] = None,
         child_frame: Optional[KinematicStructureEntity] = None,
-    ) -> TransformationMatrix:
+    ) -> HomogeneousTransformationMatrix:
         """
         Constructs a TransformationMatrix object from a given point, a rotation matrix,
         a reference frame, and a child frame.
@@ -192,41 +238,6 @@ class TransformationMatrix(
             a_T_b[2, 3] = point.z
         return a_T_b
 
-    @staticmethod
-    def _ensure_consistent_frame(
-        spatial_objects: List[Optional[ReferenceFrameMixin]],
-    ) -> Optional[KinematicStructureEntity]:
-        """
-        Ensures that all provided spatial objects have a consistent reference frame. If a mismatch
-        in the reference frames is detected among the non-null spatial objects, an exception is
-        raised. If the list contains only null objects, None is returned.
-
-        This method is primarily used to validate the reference frames of spatial objects before
-        proceeding with further operations.
-
-        :param spatial_objects: A list containing zero or more spatial objects, which can either
-            be instances of ReferenceFrameMixin or None.
-        :return: The common reference frame of the spatial objects if consistent, or None if no
-            valid reference frame exists.
-
-        :raises SpatialTypesError: Raised when the reference frames of provided input spatial
-            objects are inconsistent.
-        """
-        reference_frame = None
-        for spatial_object in spatial_objects:
-            if (
-                spatial_object is not None
-                and spatial_object.reference_frame is not None
-            ):
-                if reference_frame is None:
-                    reference_frame = spatial_object.reference_frame
-                    continue
-                if reference_frame != spatial_object.reference_frame:
-                    raise SpatialTypesError(
-                        f"Reference frames of input parameters don't match ({reference_frame} != {spatial_object.reference_frame})."
-                    )
-        return reference_frame
-
     @classmethod
     def from_xyz_rpy(
         cls,
@@ -238,7 +249,7 @@ class TransformationMatrix(
         yaw: ScalarData = 0,
         reference_frame: Optional[KinematicStructureEntity] = None,
         child_frame: Optional[KinematicStructureEntity] = None,
-    ) -> TransformationMatrix:
+    ) -> HomogeneousTransformationMatrix:
         """
         Creates a TransformationMatrix object from position (x, y, z) and Euler angles
         (roll, pitch, yaw) values. The function also accepts optional reference and
@@ -273,7 +284,7 @@ class TransformationMatrix(
         quat_w: ScalarData = 1,
         reference_frame: Optional[KinematicStructureEntity] = None,
         child_frame: Optional[KinematicStructureEntity] = None,
-    ) -> TransformationMatrix:
+    ) -> HomogeneousTransformationMatrix:
         """
         Creates a `TransformationMatrix` instance from the provided position coordinates and quaternion
         values representing rotation. This method constructs a 3D point for the position and a rotation
@@ -364,7 +375,9 @@ class TransformationMatrix(
     def dot(
         self, other: GenericHomogeneousSpatialType
     ) -> GenericHomogeneousSpatialType:
-        if isinstance(other, (Vector3, Point3, RotationMatrix, TransformationMatrix)):
+        if isinstance(
+            other, (Vector3, Point3, RotationMatrix, HomogeneousTransformationMatrix)
+        ):
             result = ca.mtimes(self.casadi_sx, other.casadi_sx)
             if isinstance(other, Vector3):
                 result = Vector3.from_iterable(
@@ -383,8 +396,8 @@ class TransformationMatrix(
                     sanity_check=False,
                 )
                 return result
-            if isinstance(other, TransformationMatrix):
-                result = TransformationMatrix(
+            if isinstance(other, HomogeneousTransformationMatrix):
+                result = HomogeneousTransformationMatrix(
                     data=result,
                     reference_frame=self.reference_frame,
                     child_frame=other.child_frame,
@@ -396,8 +409,8 @@ class TransformationMatrix(
     def __matmul__(self, other: GenericSpatialType) -> GenericSpatialType:
         return self.dot(other)
 
-    def inverse(self) -> TransformationMatrix:
-        inv = TransformationMatrix(
+    def inverse(self) -> HomogeneousTransformationMatrix:
+        inv = HomogeneousTransformationMatrix(
             child_frame=self.reference_frame, reference_frame=self.child_frame
         )
         inv[:3, :3] = self[:3, :3].T
@@ -410,15 +423,15 @@ class TransformationMatrix(
         )
         return result
 
-    def to_translation(self) -> TransformationMatrix:
+    def to_translation_matrix(self) -> HomogeneousTransformationMatrix:
         """
         :return: sets the rotation part of a frame to identity
         """
-        r = TransformationMatrix()
+        r = HomogeneousTransformationMatrix()
         r[0, 3] = self[0, 3]
         r[1, 3] = self[1, 3]
         r[2, 3] = self[2, 3]
-        return TransformationMatrix(
+        return HomogeneousTransformationMatrix(
             data=r, reference_frame=self.reference_frame, child_frame=None
         )
 
@@ -426,16 +439,21 @@ class TransformationMatrix(
         return RotationMatrix(data=self, reference_frame=self.reference_frame)
 
     def to_quaternion(self) -> Quaternion:
-        return Quaternion.from_rotation_matrix(self)
+        return self.to_rotation_matrix().to_quaternion()
 
-    def __deepcopy__(self, memo) -> TransformationMatrix:
+    def to_pose(self) -> Pose:
+        result = Pose.from_casadi_sx(casadi_sx=self.casadi_sx)
+        result.reference_frame = self.reference_frame
+        return result
+
+    def __deepcopy__(self, memo) -> HomogeneousTransformationMatrix:
         """
         Even in a deep copy, we don't want to copy the reference and child frame, just the matrix itself,
         because are just references to kinematic structure entities.
         """
         if id(self) in memo:
             return memo[id(self)]
-        return TransformationMatrix(
+        return HomogeneousTransformationMatrix(
             data=deepcopy(self.casadi_sx),
             reference_frame=self.reference_frame,
             child_frame=self.child_frame,
@@ -443,9 +461,7 @@ class TransformationMatrix(
 
 
 @dataclass(eq=False)
-class RotationMatrix(
-    SymbolicType, ReferenceFrameMixin, MatrixOperationsMixin, SubclassJSONSerializer
-):
+class RotationMatrix(SpatialType, MatrixOperationsMixin, SubclassJSONSerializer):
     """
     Class to represent a 4x4 symbolic rotation matrix tied to kinematic references.
 
@@ -471,7 +487,7 @@ class RotationMatrix(
     def __post_init__(self, data: Optional[Matrix2dData], sanity_check: bool):
         if data is None:
             return
-        if isinstance(data, (RotationMatrix, TransformationMatrix)):
+        if isinstance(data, (RotationMatrix, HomogeneousTransformationMatrix)):
             self.casadi_sx[:3, :3] = copy(data.casadi_sx)[:3, :3]
             return
         self.casadi_sx[:3, :3] = Expression(data=data).casadi_sx[:3, :3]
@@ -608,14 +624,11 @@ class RotationMatrix(
         )
 
     def dot(self, other: GenericRotatableSpatialType) -> GenericRotatableSpatialType:
-        if isinstance(other, (Vector3, RotationMatrix, TransformationMatrix)):
-            result = ca.mtimes(self.casadi_sx, other.casadi_sx)
-            if isinstance(other, Vector3):
-                result = Vector3.from_iterable(result)
-            elif isinstance(other, RotationMatrix):
-                result = RotationMatrix(data=result, sanity_check=False)
-            elif isinstance(other, TransformationMatrix):
-                result = TransformationMatrix(result, sanity_check=False)
+        if isinstance(
+            other, (Vector3, RotationMatrix, HomogeneousTransformationMatrix, Pose)
+        ):
+            result_sx = ca.mtimes(self.casadi_sx, other.casadi_sx)
+            result = type(other).from_casadi_sx(casadi_sx=result_sx)
             result.reference_frame = self.reference_frame
             return result
         raise UnsupportedOperationError("dot", self, other)
@@ -775,9 +788,7 @@ class RotationMatrix(
 
 
 @dataclass(eq=False)
-class Point3(
-    SymbolicType, ReferenceFrameMixin, VectorOperationsMixin, SubclassJSONSerializer
-):
+class Point3(SpatialType, VectorOperationsMixin, SubclassJSONSerializer):
     """
     Represents a 3D point with reference frame handling.
 
@@ -995,9 +1006,7 @@ class Point3(
 
 
 @dataclass(eq=False)
-class Vector3(
-    SymbolicType, ReferenceFrameMixin, VectorOperationsMixin, SubclassJSONSerializer
-):
+class Vector3(SpatialType, VectorOperationsMixin, SubclassJSONSerializer):
     """
     Representation of a 3D vector with reference frame support for homogenous transformations.
 
@@ -1314,7 +1323,7 @@ class Vector3(
 
 
 @dataclass(eq=False)
-class Quaternion(SymbolicType, ReferenceFrameMixin, SubclassJSONSerializer):
+class Quaternion(SpatialType, SubclassJSONSerializer):
     """
     Represents a quaternion, which is a mathematical entity used to encode
     rotations in three-dimensional space.
@@ -1537,7 +1546,7 @@ class Quaternion(SymbolicType, ReferenceFrameMixin, SubclassJSONSerializer):
 
     @classmethod
     def from_rotation_matrix(
-        cls, r: Union[RotationMatrix, TransformationMatrix]
+        cls, r: Union[RotationMatrix, HomogeneousTransformationMatrix]
     ) -> Quaternion:
         """
         Creates a Quaternion object initialized from a given rotation matrix.
@@ -1700,6 +1709,189 @@ class Quaternion(SymbolicType, ReferenceFrameMixin, SubclassJSONSerializer):
         )
 
 
+@dataclass(eq=False)
+class Pose(SpatialType, SubclassJSONSerializer):
+
+    position: InitVar[Optional[Point3]] = None
+    orientation: InitVar[Optional[RotationMatrix]] = None
+
+    casadi_sx: ca.SX = field(kw_only=True, default_factory=lambda: ca.SX.eye(4))
+
+    def __post_init__(
+        self, position: Optional[Point3], orientation: Optional[RotationMatrix]
+    ):
+        if position is None:
+            position = Point3()
+        if orientation is None:
+            orientation = RotationMatrix()
+        self._ensure_consistent_frame([position, orientation])
+        self.casadi_sx = copy(orientation.casadi_sx)
+        self.casadi_sx[0, 3] = position.casadi_sx[0]
+        self.casadi_sx[1, 3] = position.casadi_sx[1]
+        self.casadi_sx[2, 3] = position.casadi_sx[2]
+
+    @classmethod
+    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
+        reference_frame = cls._parse_optional_frame_from_json(
+            data, key="reference_frame_id", **kwargs
+        )
+        return cls.from_xyz_quaternion(
+            *data["position"][:3],
+            *data["rotation"],
+            reference_frame=reference_frame,
+        )
+
+    def to_json(self) -> Dict[str, Any]:
+        if not self.is_constant():
+            raise SpatialTypeNotJsonSerializable(self)
+        result = super().to_json()
+        if self.reference_frame is not None:
+            result["reference_frame_id"] = to_json(self.reference_frame.id)
+        result["position"] = self.to_position().to_np().tolist()
+        result["rotation"] = self.to_quaternion().to_np().tolist()
+        return result
+
+    @classmethod
+    def from_xyz_rpy(
+        cls,
+        x: ScalarData = 0,
+        y: ScalarData = 0,
+        z: ScalarData = 0,
+        roll: ScalarData = 0,
+        pitch: ScalarData = 0,
+        yaw: ScalarData = 0,
+        reference_frame: Optional[KinematicStructureEntity] = None,
+    ) -> Self:
+        """
+        Creates a Pose object from position (x, y, z) and Euler angles
+        (roll, pitch, yaw) values. The function also accepts optional reference and
+        child frame parameters.
+
+        :param x: The x-coordinate of the position
+        :param y: The y-coordinate of the position
+        :param z: The z-coordinate of the position
+        :param roll: The rotation around the x-axis
+        :param pitch: The rotation around the y-axis
+        :param yaw: The rotation around the z-axis
+        :param reference_frame: The reference frame for the transformation
+        :return: A Pose object created using the provided
+            position and orientation values
+        """
+        p = Point3(x_init=x, y_init=y, z_init=z)
+        r = RotationMatrix.from_rpy(roll, pitch, yaw)
+        return cls(p, r, reference_frame=reference_frame)
+
+    @classmethod
+    def from_xyz_quaternion(
+        cls,
+        pos_x: ScalarData = 0,
+        pos_y: ScalarData = 0,
+        pos_z: ScalarData = 0,
+        quat_x: ScalarData = 0,
+        quat_y: ScalarData = 0,
+        quat_z: ScalarData = 0,
+        quat_w: ScalarData = 1,
+        reference_frame: Optional[KinematicStructureEntity] = None,
+    ) -> Self:
+        """
+        Creates a `Pose` instance from the provided position coordinates and quaternion
+        values representing rotation. This method constructs a 3D point for the position and a rotation
+        matrix derived from the quaternion, and initializes the transformation matrix with these along
+        with optional reference and child frame entities.
+
+        :param pos_x: X coordinate of the position in space.
+        :param pos_y: Y coordinate of the position in space.
+        :param pos_z: Z coordinate of the position in space.
+        :param quat_w: W component of the quaternion representing rotation.
+        :param quat_x: X component of the quaternion representing rotation.
+        :param quat_y: Y component of the quaternion representing rotation.
+        :param quat_z: Z component of the quaternion representing rotation.
+        :param reference_frame: Optional reference frame for the transformation matrix.
+        :return: A `Pose` object constructed from the given parameters.
+        """
+        p = Point3(x_init=pos_x, y_init=pos_y, z_init=pos_z)
+        r = RotationMatrix.from_quaternion(
+            q=Quaternion(w_init=quat_w, x_init=quat_x, y_init=quat_y, z_init=quat_z)
+        )
+        return cls(p, r, reference_frame=reference_frame)
+
+    @classmethod
+    def from_xyz_axis_angle(
+        cls,
+        x: ScalarData = 0,
+        y: ScalarData = 0,
+        z: ScalarData = 0,
+        axis: Vector3 | NumericalArray = None,
+        angle: ScalarData = 0,
+        reference_frame: Optional[KinematicStructureEntity] = None,
+    ) -> Self:
+        """
+        Creates an instance of the class from x, y, z coordinates, axis and angle.
+
+        This class method generates an object using provided spatial coordinates and a
+        rotation defined by an axis and angle. The resulting object is defined with
+        a specified reference frame and child frame.
+
+        :param x: Initial x-coordinate.
+        :param y: Initial y-coordinate.
+        :param z: Initial z-coordinate.
+        :param axis: Vector defining the axis of rotation. Defaults to Vector3(0, 0, 1) if not specified.
+        :param angle: Angle of rotation around the specified axis, in radians.
+        :param reference_frame: Reference frame entity to be associated with the object.
+        :return: An instance of the class with the specified transformations applied.
+        """
+        if axis is None:
+            axis = Vector3(0, 0, 1)
+        rotation_matrix = RotationMatrix.from_axis_angle(axis=axis, angle=angle)
+        point = Point3(x_init=x, y_init=y, z_init=z)
+        return cls(
+            position=point,
+            orientation=rotation_matrix,
+            reference_frame=reference_frame,
+        )
+
+    @property
+    def x(self) -> Expression:
+        return self[0, 3]
+
+    @x.setter
+    def x(self, value: ScalarData):
+        self[0, 3] = value
+
+    @property
+    def y(self) -> Expression:
+        return self[1, 3]
+
+    @y.setter
+    def y(self, value: ScalarData):
+        self[1, 3] = value
+
+    @property
+    def z(self) -> Expression:
+        return self[2, 3]
+
+    @z.setter
+    def z(self, value: ScalarData):
+        self[2, 3] = value
+
+    def to_position(self) -> Point3:
+        result = Point3.from_iterable(
+            self[:4, 3:], reference_frame=self.reference_frame
+        )
+        return result
+
+    def to_rotation_matrix(self) -> RotationMatrix:
+        return RotationMatrix(data=self, reference_frame=self.reference_frame)
+
+    def to_quaternion(self) -> Quaternion:
+        return self.to_rotation_matrix().to_quaternion()
+
+    def to_homogeneous_matrix(self) -> Self:
+        return HomogeneousTransformationMatrix(
+            data=self, reference_frame=self.reference_frame
+        )
+
+
 # %% type hints
 
 NumericalScalar = Union[int, float, IntEnum]
@@ -1709,7 +1901,9 @@ NumericalData = Union[NumericalScalar, NumericalArray, Numerical2dMatrix]
 
 SymbolicScalar = Union[FloatVariable, Expression]
 SymbolicArray = Union[Expression, Point3, Vector3, Quaternion]
-Symbolic2dMatrix = Union[Expression, RotationMatrix, TransformationMatrix]
+Symbolic2dMatrix = Union[
+    Expression, RotationMatrix, HomogeneousTransformationMatrix, Pose
+]
 SymbolicData = Union[SymbolicScalar, SymbolicArray, Symbolic2dMatrix]
 
 ScalarData = Union[NumericalScalar, SymbolicScalar]
@@ -1719,23 +1913,22 @@ Matrix2dData = Union[Numerical2dMatrix, Symbolic2dMatrix]
 
 GenericSpatialType = TypeVar(
     "GenericSpatialType",
-    Point3,
-    Vector3,
-    TransformationMatrix,
-    RotationMatrix,
-    Quaternion,
+    bound=SpatialType,
 )
 
 GenericHomogeneousSpatialType = TypeVar(
     "GenericHomogeneousSpatialType",
     Point3,
     Vector3,
-    TransformationMatrix,
+    HomogeneousTransformationMatrix,
     RotationMatrix,
 )
 
 GenericRotatableSpatialType = TypeVar(
-    "GenericRotatableSpatialType", Vector3, TransformationMatrix, RotationMatrix
+    "GenericRotatableSpatialType",
+    Vector3,
+    HomogeneousTransformationMatrix,
+    RotationMatrix,
 )
 
 GenericSymbolicType = TypeVar(
@@ -1744,7 +1937,7 @@ GenericSymbolicType = TypeVar(
     Expression,
     Point3,
     Vector3,
-    TransformationMatrix,
+    HomogeneousTransformationMatrix,
     RotationMatrix,
     Quaternion,
 )

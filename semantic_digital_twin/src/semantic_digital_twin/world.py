@@ -1157,9 +1157,7 @@ class World:
     def get_actuator_by_id(self, id: UUID) -> Actuator:
         return self._get_world_entity_by_hash(hash(id))
 
-    def _get_world_entity_by_hash(
-        self, entity_hash: int
-    ) -> GenericWorldEntity:
+    def _get_world_entity_by_hash(self, entity_hash: int) -> GenericWorldEntity:
         """
         Retrieve a WorldEntity by its hash.
 
@@ -1175,7 +1173,10 @@ class World:
     def is_semantic_annotation_in_world(
         self, semantic_annotation: SemanticAnnotation
     ) -> bool:
-        return semantic_annotation._world == self and semantic_annotation in self.semantic_annotations
+        return (
+            semantic_annotation._world == self
+            and semantic_annotation in self.semantic_annotations
+        )
 
     def is_body_in_world(self, body: Body) -> bool:
         return self._is_world_entity_with_hash_in_world_from_iterable(hash(body))
@@ -1209,7 +1210,9 @@ class World:
         return entity_hash in self._world_entity_hash_table
 
     # %% World Merging
-    def merge_world_at_pose(self, other: World, pose: cas.TransformationMatrix) -> None:
+    def merge_world_at_pose(
+        self, other: World, pose: cas.HomogeneousTransformationMatrix
+    ) -> None:
         """
         Merge another world into the existing one, creates a 6DoF connection between the root of this world and the root
         of the other world.
@@ -1738,7 +1741,7 @@ class World:
 
     def compute_forward_kinematics(
         self, root: KinematicStructureEntity, tip: KinematicStructureEntity
-    ) -> cas.TransformationMatrix:
+    ) -> cas.HomogeneousTransformationMatrix:
         """
         Compute the forward kinematics from the root KinematicStructureEntity to the tip KinematicStructureEntity.
 
@@ -1753,7 +1756,7 @@ class World:
 
     def compose_forward_kinematics_expression(
         self, root: KinematicStructureEntity, tip: KinematicStructureEntity
-    ) -> cas.TransformationMatrix:
+    ) -> cas.HomogeneousTransformationMatrix:
         """
         :param root: The root KinematicStructureEntity in the kinematic chain.
             It determines the starting point of the forward kinematics calculation.
@@ -1790,7 +1793,7 @@ class World:
         self,
         root: KinematicStructureEntity,
         tip: KinematicStructureEntity,
-        target: cas.TransformationMatrix,
+        target: cas.HomogeneousTransformationMatrix,
         dt: float = 0.05,
         max_iterations: int = 200,
         translation_velocity: float = 0.2,

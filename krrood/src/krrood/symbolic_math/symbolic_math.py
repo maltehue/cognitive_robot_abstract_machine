@@ -675,6 +675,7 @@ class VectorOperationsMixin:
     """
     Reference to the casadi data structure of type casadi.SX
     """
+
     def __sub__(self, other: _te.Self) -> Expression: ...
 
     def euclidean_distance(self, other: _te.Self) -> Expression:
