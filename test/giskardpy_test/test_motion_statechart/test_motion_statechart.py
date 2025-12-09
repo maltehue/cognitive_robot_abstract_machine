@@ -18,6 +18,12 @@ from giskardpy.motion_statechart.data_types import (
 from giskardpy.motion_statechart.exceptions import (
     NotInMotionStatechartError,
     InvalidConditionError,
+    NodeInitializationError,
+    EndMotionInGoalError,
+    InputNotExpressionError,
+    SelfInStartConditionError,
+    NonObservationVariableError,
+    NodeAlreadyBelongsToDifferentNodeError,
 )
 from giskardpy.motion_statechart.goals.collision_avoidance import (
     CollisionAvoidance,
@@ -91,8 +97,6 @@ from semantic_digital_twin.world_description.shape_collection import ShapeCollec
 from semantic_digital_twin.world_description.world_entity import Body
 
 
-
-
 def test_condition_to_str():
     msc = MotionStatechart()
     node1 = ConstTrueNode()
@@ -131,11 +135,6 @@ def test_motion_statechart_to_dot():
 
 
 @pytest.mark.skip(reason="not implemented yet")
-def test_self_start_condition():
-    pass
-
-
-@pytest.mark.skip(reason="not implemented yet")
 def test_all_conditions_with_goals():
     pass
 
@@ -147,16 +146,6 @@ def test_all_conditions_with_nodes():
 
 @pytest.mark.skip(reason="not implemented yet")
 def test_transition_hooks():
-    pass
-
-
-@pytest.mark.skip(reason="not implemented yet")
-def test_optionality_of_qp_controller_in_compile():
-    pass
-
-
-@pytest.mark.skip(reason="not implemented yet")
-def test_state_deletion():
     pass
 
 
@@ -477,6 +466,50 @@ def test_joint_goal():
     assert (
         msc.history.get_life_cycle_history_of_node(end)[-1] == LifeCycleValues.RUNNING
     )
+
+
+class TestConditions:
+    def test_InvalidConditionError(self):
+        node = ConstTrueNode()
+        with pytest.raises(InputNotExpressionError):
+            node.end_condition = node
+
+    def test_nodes_cannot_have_themselves_as_start_condition(self):
+        msc = MotionStatechart()
+        node1 = ConstTrueNode()
+        msc.add_node(node1)
+        with pytest.raises(SelfInStartConditionError):
+            node1.start_condition = node1.observation_variable
+
+    def test_non_observation_variable_in_condition(self):
+        msc = MotionStatechart()
+        msc.add_node(node := ConstTrueNode())
+        with pytest.raises(NonObservationVariableError):
+            node.start_condition = cas.FloatVariable(name="muh")
+
+    def test_add_node_to_multiple_goals(self):
+        msc = MotionStatechart()
+        node = ConstTrueNode()
+        msc.add_node(Sequence([node]))
+        msc.add_node(Sequence([node]))
+
+        kin_sim = Executor(
+            world=World(),
+        )
+        with pytest.raises(NodeAlreadyBelongsToDifferentNodeError):
+            kin_sim.compile(motion_statechart=msc)
+
+    def test_add_node_to_multiple_goals2(self):
+        msc = MotionStatechart()
+        node = ConstTrueNode()
+        msc.add_node(node)
+        msc.add_node(Sequence([node]))
+
+        kin_sim = Executor(
+            world=World(),
+        )
+        with pytest.raises(NodeAlreadyBelongsToDifferentNodeError):
+            kin_sim.compile(motion_statechart=msc)
 
 
 def test_two_goals(pr2_world: World):
@@ -1503,14 +1536,6 @@ def test_count_ticks():
     assert kin_sim.control_cycles == 3 + 2
 
 
-def test_InvalidConditionError():
-    msc = MotionStatechart()
-    node = ConstTrueNode()
-    msc.add_node(node)
-    with pytest.raises(InvalidConditionError):
-        node.end_condition = node
-
-
 class TestEndMotion:
     def test_end_motion_when_all_done1(self):
         msc = MotionStatechart()
@@ -1589,6 +1614,15 @@ class TestEndMotion:
             kin_sim.tick_until_end()
         msc.draw("muh.pdf")
         assert end.life_cycle_state == LifeCycleValues.NOT_STARTED
+
+    def test_goals_cannot_have_end_motion(self):
+        msc = MotionStatechart()
+        msc.add_node(Sequence([ConstTrueNode(), EndMotion()]))
+        with pytest.raises(EndMotionInGoalError):
+            kin_sim = Executor(
+                world=World(),
+            )
+            kin_sim.compile(motion_statechart=msc)
 
 
 class TestParallel:

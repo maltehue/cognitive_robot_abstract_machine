@@ -10,7 +10,10 @@ from giskardpy.data_types.exceptions import (
     DuplicateNameException,
 )
 from giskardpy.motion_statechart.data_types import LifeCycleValues, DefaultWeights
-from giskardpy.motion_statechart.exceptions import GoalInitalizationException
+from giskardpy.motion_statechart.exceptions import (
+    NodeInitializationError,
+    MotionStatechartError,
+)
 from giskardpy.qp.constraint import (
     EqualityConstraint,
     InequalityConstraint,
@@ -103,7 +106,7 @@ class ConstraintCollection:
         :param upper_slack_limit: how much the upper error can be violated, don't use unless you know what you are doing
         """
         if task_expression.shape != (1, 1):
-            raise GoalInitalizationException(
+            raise MotionStatechartError(
                 f"expression must have shape (1, 1), has {task_expression.shape}"
             )
         name = name or f"{len(self.constraints)}"
@@ -155,7 +158,7 @@ class ConstraintCollection:
         :param upper_slack_limit: how much the upper error can be violated, don't use unless you know what you are doing
         """
         if task_expression.shape != (1, 1):
-            raise GoalInitalizationException(
+            raise MotionStatechartError(
                 f"expression must have shape (1,1), has {task_expression.shape}"
             )
         name = name or ""
