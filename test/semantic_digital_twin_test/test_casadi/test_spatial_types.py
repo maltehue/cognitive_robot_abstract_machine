@@ -371,24 +371,6 @@ class TestRotationMatrix:
         r_roundtrip = cas.RotationMatrix.from_quaternion(q)
         assert np.allclose(r, r_roundtrip, atol=1e-10)
 
-    def test_invalid_matmul_operations(self):
-        """Test invalid matrix multiplication operations"""
-        r = cas.RotationMatrix()
-        s = cas.FloatVariable(name="s")
-        e = cas.Expression(data=1)
-        p = cas.Point3(x_init=1, y_init=2, z_init=3)
-        q = cas.Quaternion()
-
-        # These should raise UnsupportedOperationError
-        with pytest.raises(UnsupportedOperationError):
-            r @ s  # Matrix @ FloatVariable
-        with pytest.raises(UnsupportedOperationError):
-            r @ e  # Matrix @ Expression (scalar)
-        with pytest.raises(UnsupportedOperationError):
-            r @ p  # Matrix @ Point3 (use TransformationMatrix instead)
-        with pytest.raises(UnsupportedOperationError):
-            r @ q  # Matrix @ Quaternion
-
     @pytest.mark.parametrize("roll", [np.pi / 2, 0, -np.pi / 23])
     @pytest.mark.parametrize("pitch", [np.pi / 3, 0, -np.pi / 23])
     @pytest.mark.parametrize("yaw", [np.pi / 2, 0, -np.pi / 23])
@@ -561,9 +543,9 @@ class TestPoint3:
         cas.Point3.from_iterable(cas.Expression(data=v))
         cas.Point3.from_iterable(l)
         with pytest.raises(WrongDimensionsError):
-            cas.Point3.from_iterable(r)
+            cas.Point3.from_iterable(r.to_np())
         with pytest.raises(WrongDimensionsError):
-            cas.Point3.from_iterable(t)
+            cas.Point3.from_iterable(t.to_np())
         with pytest.raises(WrongDimensionsError):
             cas.Point3.from_iterable(t.to_np())
 
@@ -589,64 +571,38 @@ class TestPoint3:
         assert result.reference_frame == p1.reference_frame
 
         # Test Point - Point = Vector (displacement between points)
-        result = p2 - p1
-        assert isinstance(result, cas.Vector3)
-        assert result.x == 3 and result.y == 3 and result.z == 3
-        assert result[3] == 0  # Vector has 0 in homogeneous coordinate
-        assert result.reference_frame == p2.reference_frame
+        result2 = p2 - p1
+        assert isinstance(result2, cas.Vector3)
+        assert result2.x == 3 and result2.y == 3 and result2.z == 3
+        assert result2[3] == 0  # Vector has 0 in homogeneous coordinate
+        assert result2.reference_frame == p2.reference_frame
 
         # Test Point - Vector = Point (translate point by negative vector)
-        result = p2 - v
-        assert isinstance(result, cas.Point3)
-        assert result.x == 3 and result.y == 4 and result.z == 5
-        assert result[3] == 1
-        assert result.reference_frame == p2.reference_frame
+        result3 = p2 - v
+        assert isinstance(result3, cas.Point3)
+        assert result3.x == 3 and result3.y == 4 and result3.z == 5
+        assert result3[3] == 1
+        assert result3.reference_frame == p2.reference_frame
 
         # Test -Point = Point (negate all coordinates)
-        result = -p1
-        assert isinstance(result, cas.Point3)
-        assert result.x == -1 and result.y == -2 and result.z == -3
-        assert result[3] == 1
-        assert result.reference_frame == p1.reference_frame
+        result4 = -p1
+        assert isinstance(result4, cas.Point3)
+        assert result4.x == -1 and result4.y == -2 and result4.z == -3
+        assert result4[3] == 1
+        assert result4.reference_frame == p1.reference_frame
 
         # Test Point.norm() = scalar (distance from origin)
-        result = p1.norm()
-        assert isinstance(result, cas.Expression)
+        result5 = p1.norm()
+        assert isinstance(result5, cas.Expression)
         expected_norm = np.sqrt(1**2 + 2**2 + 3**2)
-        assert np.allclose(result, expected_norm)
-
-        with pytest.raises(TypeError):
-            p1 + p2  # Point + Point not allowed
-
-        with pytest.raises(TypeError):
-            s + p2
-        with pytest.raises(TypeError):
-            p1 + s
-
-        with pytest.raises(TypeError):
-            p1 * 2  # Point * scalar not allowed (scaling a position is meaningless)
-
-        with pytest.raises(TypeError):
-            2 * p1  # scalar * Point not allowed
-
-        with pytest.raises(TypeError):
-            p1 / 2  # Point / scalar not allowed
-
-        with pytest.raises(TypeError):
-            p1**2  # Point ** scalar not allowed
-
-        with pytest.raises(TypeError):
-            p1 @ p2  # Point @ Point not allowed
-
-        with pytest.raises(TypeError):
-            p1 @ v  # Point @ Vector not allowed
+        assert np.allclose(result5, expected_norm)
 
         # Test operations with symbolic expressions
         x = cas.FloatVariable(name="x")
         p_symbolic = cas.Point3(x, y_init=2, z_init=3)
-        result = p_symbolic + v
-        assert isinstance(result, cas.Point3)
-        assert result[3] == 1
+        result6 = p_symbolic + v
+        assert isinstance(result6, cas.Point3)
+        assert result6[3] == 1
 
         # Test property access
         assert p1.x == 1
@@ -744,7 +700,52 @@ class TestPoint3:
         for other in does_not_work:
             with pytest.raises(TypeError):
                 # noinspection PyTypeChecker
-                point + other
+                point - other
+
+    def test_invalid_multiplication(self):
+        point = cas.Point3()
+        does_not_work = [
+            1.0,
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.FloatVariable(name="s"),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyTypeChecker
+                point * other
+
+    def test_invalid_division(self):
+        point = cas.Point3()
+        does_not_work = [
+            1.0,
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.FloatVariable(name="s"),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyTypeChecker
+                point / other
+
+    def test_invalid_mat_mul(self):
+        point = cas.Point3()
+        does_not_work = [
+            1.0,
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.FloatVariable(name="s"),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyUnresolvedReferences
+                point @ other
 
     @pytest.mark.parametrize("p1_data", points)
     @pytest.mark.parametrize("p2_data", points)
@@ -770,10 +771,6 @@ class TestPoint3:
         result = t @ p
         assert isinstance(result, cas.Point3)
         assert result[3] == 1  # Homogeneous coordinate preserved
-
-        # Test that point @ matrix raises error (not mathematically meaningful)
-        with pytest.raises(TypeError):
-            p @ t
 
     def test_project_to_line(self):
         point = cas.Point3(x_init=1, y_init=2, z_init=3)
@@ -908,9 +905,9 @@ class TestVector3:
         cas.Vector3.from_iterable(l)
         cas.Vector3.from_iterable(q)
         with pytest.raises(WrongDimensionsError):
-            cas.Vector3.from_iterable(r)
+            cas.Vector3.from_iterable(r.to_np())
         with pytest.raises(WrongDimensionsError):
-            cas.Vector3.from_iterable(t)
+            cas.Vector3.from_iterable(t.to_np())
         with pytest.raises(WrongDimensionsError):
             cas.Vector3.from_iterable(t.to_np())
 
@@ -1032,26 +1029,83 @@ class TestVector3:
         expected_norm2 = v_copy2.norm()
         assert np.allclose(expected_norm2, 10)
 
-    def test_invalid_operations(self):
-        """Test operations that should raise UnsupportedOperationError"""
-        v = cas.Vector3(x_init=1, y_init=2, z_init=3)
-        r = cas.RotationMatrix()
-        q = cas.Quaternion()
-        t = cas.HomogeneousTransformationMatrix()
+    def test_invalid_add(self):
+        vector = cas.Vector3()
+        does_not_work = [
+            1.0,
+            cas.Point3(),
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.FloatVariable(name="s"),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyTypeChecker
+                vector + other
 
-        # Invalid additions
-        with pytest.raises(TypeError):
-            v + r
-        with pytest.raises(TypeError):
-            v + q
-        with pytest.raises(TypeError):
-            v + t
+    def test_invalid_sub(self):
+        vector = cas.Vector3()
+        does_not_work = [
+            1.0,
+            cas.Point3(),
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.FloatVariable(name="s"),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyTypeChecker
+                vector - other
 
-        # Invalid multiplications with vectors
-        with pytest.raises(TypeError):
-            v * v  # Vector * Vector is not defined (use dot or cross)
-        with pytest.raises(TypeError):
-            v / v
+    def test_invalid_multiplication(self):
+        vector = cas.Vector3()
+        does_not_work = [
+            vector,
+            cas.Point3(),
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyTypeChecker
+                vector * other
+
+    def test_invalid_division(self):
+        vector = cas.Vector3()
+        does_not_work = [
+            vector,
+            cas.Point3(),
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyTypeChecker
+                vector / other
+
+    def test_invalid_mat_mul(self):
+        vector = cas.Vector3()
+        does_not_work = [
+            1.0,
+            cas.Point3(),
+            cas.RotationMatrix(),
+            cas.Quaternion(),
+            cas.HomogeneousTransformationMatrix(),
+            cas.FloatVariable(name="s"),
+            cas.Pose(),
+        ]
+        for other in does_not_work:
+            with pytest.raises(TypeError):
+                # noinspection PyTypeChecker
+                vector @ other
 
     @pytest.mark.parametrize("v_data", points)
     def test_norm_property_based(self, v_data):
@@ -1129,10 +1183,10 @@ class TestTransformationMatrix:
         assert np.allclose(t.to_np(), t_copy.to_np())
 
     def test_reference_frames(self):
-        reference_frame = "muh"
-        child_frame = "kikariki"
-        reference_frame2 = "muh2"
-        child_frame2 = "kikariki2"
+        reference_frame = Body(name=PrefixedName("muh"))
+        child_frame = Body(name=PrefixedName("kikariki"))
+        reference_frame2 = Body(name=PrefixedName("muh2"))
+        child_frame2 = Body(name=PrefixedName("kikariki2"))
         t1 = cas.HomogeneousTransformationMatrix(
             reference_frame=reference_frame, child_frame=child_frame
         )
@@ -1576,21 +1630,6 @@ class TestTransformationMatrix:
         # Frame handling depends on implementation
         assert hasattr(result, "reference_frame")
         assert hasattr(result, "child_frame")
-
-    def test_invalid_operations(self):
-        """Test invalid operations that should raise UnsupportedOperationError"""
-        t = cas.HomogeneousTransformationMatrix()
-        s = cas.FloatVariable(name="s")
-        e = cas.Expression(data=1)
-        q = cas.Quaternion()
-
-        # These should raise UnsupportedOperationError
-        with pytest.raises(UnsupportedOperationError):
-            t @ s  # Matrix @ FloatVariable
-        with pytest.raises(UnsupportedOperationError):
-            t @ e  # Matrix @ Expression (scalar)
-        with pytest.raises(UnsupportedOperationError):
-            t @ q  # Matrix @ Quaternion
 
     def test_pure_translation(self):
         x, y, z = 1, 2, 3

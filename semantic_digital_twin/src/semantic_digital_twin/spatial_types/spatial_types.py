@@ -1054,7 +1054,7 @@ class Vector3(SpatialType, VectorOperationsMixin, SubclassJSONSerializer):
     @classmethod
     def from_iterable(
         cls,
-        data: Union[NumericalArray, Expression],
+        data: Union[NumericalArray, Expression, Point3, Vector3, Quaternion],
         reference_frame: Optional[KinematicStructureEntity] = None,
     ) -> Vector3:
         """
