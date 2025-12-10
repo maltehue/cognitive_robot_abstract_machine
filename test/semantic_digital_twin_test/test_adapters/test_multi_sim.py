@@ -52,12 +52,16 @@ handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.DEBUG)
-# headless = os.environ.get("CI", "false").lower() == "true"
-headless = True
+headless = os.environ.get("CI", "false").lower() == "true"
+# headless = True
+only_run_test_in_CI = os.environ.get("CI", "false").lower() == "false"
 
 
-@unittest.skipIf(not multi_sim_found, "multisim could not be imported.")
-class MultiverseMujocoConnectorTestCase(unittest.TestCase):
+@unittest.skipIf(
+    only_run_test_in_CI or not multi_sim_found,
+    "Only run test in CI or multisim could not be imported.",
+)
+class MujocoSimReadWriteTestCase(unittest.TestCase):
     file_path = os.path.normpath(os.path.join(mjcf_dir, "mjx_single_cube_no_mesh.xml"))
     Simulator = MultiverseMujocoConnector
     step_size = 5e-4
@@ -218,7 +222,10 @@ class MultiverseMujocoConnectorTestCase(unittest.TestCase):
         self.assertIs(simulator.state, MultiverseSimulatorState.STOPPED)
 
 
-@unittest.skipIf(not multi_sim_found, "multisim could not be imported.")
+@unittest.skipIf(
+    only_run_test_in_CI or not multi_sim_found,
+    "Only run test in CI or multisim could not be imported.",
+)
 class MujocoSimTestCase(unittest.TestCase):
     test_urdf_1 = os.path.normpath(os.path.join(urdf_dir, "simple_two_arm_robot.urdf"))
     test_urdf_2 = os.path.normpath(os.path.join(urdf_dir, "hsrb.urdf"))
