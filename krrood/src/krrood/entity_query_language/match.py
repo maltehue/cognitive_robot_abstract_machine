@@ -528,11 +528,11 @@ def select(
     """
     Equivalent to matching(type_) and selecting the variable to be included in the result.
     """
+    if not variables:
+        raise ValueError("select() requires at least one variable to be provided.")
     for variable in variables:
         variable._match_expression_.set_as_selected()
     return variables[0]._match_expression_.root
-
-
 def entity_matching(
         type_: Union[Type[T], CanBehaveLikeAVariable[T]], domain: DomainType
 ) -> Union[Type[T], CanBehaveLikeAVariable[T], Match[T]]:
