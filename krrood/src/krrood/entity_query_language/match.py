@@ -228,7 +228,7 @@ class Match(AbstractMatchExpression[T]):
     A list of selected attributes.
     """
 
-    def __call__(self, *args, **kwargs) -> Union[Self, T, CanBehaveLikeAVariable[T]]:
+    def __call__(self, **kwargs) -> Union[Self, T, CanBehaveLikeAVariable[T]]:
         """
         Update the match with new keyword arguments to constrain the type we are matching with.
 
