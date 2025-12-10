@@ -1,12 +1,20 @@
-from krrood.entity_query_language.entity import let, entity, set_of
+from krrood.entity_query_language.conclusion import Add, Set
+from krrood.entity_query_language.entity import let, entity, set_of, inference
+from krrood.entity_query_language.match import match, entity_matching
 from krrood.entity_query_language.quantify_entity import an
+from giskardpy.motion_statechart.goals.open_close import Open
+from giskardpy.motion_statechart.graph_node import EndMotion
+from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from semantic_digital_twin.reasoning.predicates_base import (
     CausesOpening,
     SatisfiesRequest,
     Causes,
 )
 from semantic_digital_twin.reasoning.world_reasoner import WorldReasoner
-from semantic_digital_twin.semantic_annotations.semantic_annotations import Drawer
+from semantic_digital_twin.semantic_annotations.semantic_annotations import (
+    Drawer,
+    Container,
+)
 from semantic_digital_twin.semantic_annotations.task_effect_motion import (
     OpenedEffect,
     ClosedEffect,
@@ -16,9 +24,25 @@ from semantic_digital_twin.semantic_annotations.task_effect_motion import (
 )
 from semantic_digital_twin.testing import apartment_world
 from semantic_digital_twin.world import World
+from semantic_digital_twin.reasoning.effect_execution_models import RunMSCModel
 
 
 class TestBodyMotionProblem:
+    @staticmethod
+    def _attach_open_msc_model_in_place(
+        handle_body, actuator, goal_value
+    ) -> RunMSCModel:
+        msc = MotionStatechart()
+        goal = Open(
+            tip_link=handle_body,
+            environment_link=handle_body,
+            goal_joint_state=goal_value,
+        )
+        msc.add_node(goal)
+        msc.add_node(EndMotion.when_true(goal))
+
+        return RunMSCModel(msc=msc, actuator=actuator, timeout=500)
+
     def _extend_world(self, world: World):
         with world.modify_world():
             world_reasoner = WorldReasoner(world)
@@ -31,10 +55,20 @@ class TestBodyMotionProblem:
         property_getter = lambda obj: obj.container.body.parent_connection.position
         for drawer in drawers:
             effect_open = OpenedEffect(
-                target_object=drawer, goal_value=0.3, property_getter=property_getter
+                target_object=drawer,
+                goal_value=0.3,
+                property_getter=property_getter,
+                model=self._attach_open_msc_model_in_place(
+                    drawer.handle.body, drawer.container.body.parent_connection, 0.3
+                ),
             )
             close_effect = ClosedEffect(
-                target_object=drawer, goal_value=0.0, property_getter=property_getter
+                target_object=drawer,
+                goal_value=0.0,
+                property_getter=property_getter,
+                model=self._attach_open_msc_model_in_place(
+                    drawer.handle.body, drawer.container.body.parent_connection, 0.0
+                ),
             )
             effects.append(effect_open)
             effects.append(close_effect)
@@ -138,14 +172,39 @@ class TestBodyMotionProblem:
             drawer.container.body.parent_connection.position = 0.3
         apartment_world.notify_state_change()
 
-        # execute the same query as before. Only ClosedEffects should be available, as all drawers are open
-        query = an(
-            set_of(
-                [causes_opening.motion, effect_sym, task_sym],
-                satisfies_request,
-                causes_opening,
-            )
-        )
+        # query again
         results = list(query.evaluate())
+
         assert all([res.data[task_sym].task_type == "close" for res in results])
         print("second query done with task type ", results[0].data[task_sym].task_type)
+
+    def test_query_constructs_msc_and_executes_via_effect_model(
+        self, apartment_world: World
+    ):
+        """
+        Build the MotionStatechart (MSC) and the Effect directly in the EQL query.
+        Attach the MSC as an effect model (RunMSCModel) to that inferred Effect, and
+        then use CausesOpening to execute. No pre-defined Effect domain is used.
+        """
+        effects, _, _, drawers = self._extend_world(apartment_world)
+
+        effect_sym = let(Effect, domain=effects)
+        task_sym = let(
+            TaskRequest,
+            domain=[TaskRequest(task_type="open"), TaskRequest(task_type="close")],
+        )
+
+        causes = CausesOpening(effect=effect_sym, environment=apartment_world)
+
+        query = an(
+            set_of(
+                [task_sym.task_type, effect_sym.name, causes.motion.trajectory],
+                SatisfiesRequest(task=task_sym, effect=effect_sym),
+                causes,
+            )
+        )
+
+        results = list(query.evaluate())
+        motion: Motion = results[0]
+        print(len(results))
+        print(motion)

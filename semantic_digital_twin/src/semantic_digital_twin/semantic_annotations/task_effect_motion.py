@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Callable
+from typing import Dict, List, Tuple, Optional, Callable, Any
 
 from ..spatial_types import Point3
 from ..world_description.world_entity import (
@@ -25,12 +25,14 @@ class Effect(SemanticAnnotation):
     target_object: SemanticAnnotation
     """The object being affected."""
 
-    # TODO: make property a link to some property of the target object
     property_getter: Callable[[SemanticAnnotation], float]
     """The property being changed (e.g., 'joint_angle', 'liquid_level')."""
 
     goal_value: float
     """Target value for the property."""
+
+    model: Optional[Any]
+    # TODO: docstring and effect execution model type
 
     tolerance: float = 0.05
     """Acceptable deviation from goal value."""

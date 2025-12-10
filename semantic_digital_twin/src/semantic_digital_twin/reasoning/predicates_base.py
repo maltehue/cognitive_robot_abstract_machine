@@ -26,6 +26,7 @@ from ..semantic_annotations.task_effect_motion import (
 from ..world import World
 from ..world_description.connections import PrismaticConnection, RevoluteConnection
 from ..world_description.world_entity import SemanticAnnotation
+from .effect_execution_models import RunMSCModel
 
 
 @dataclass
@@ -78,34 +79,15 @@ class CausesOpening(Causes):
         if self.effect.is_achieved():
             return False
 
-        initial_state_data = self.environment.state.data.copy()
-        executor = Executor(world=self.environment)
+        # If an execution model is provided on the effect, delegate to it.
+        model = getattr(self.effect, "model", None)
+        if model is not None and hasattr(model, "run"):
+            motion, success = model.run(self.effect, self.environment)
+            if motion is not None:
+                self.motion = motion
+            return success
 
-        handle, joint = self._extract_container_info(self.effect.target_object)
-
-        open_goal = Open(
-            tip_link=handle.body,
-            environment_link=handle.body,
-            goal_joint_state=self.effect.goal_value,
-        )
-
-        msc = MotionStatechart()
-        msc.add_node(open_goal)
-        msc.add_node(EndMotion.when_true(open_goal))
-
-        executor.compile(motion_statechart=msc)
-
-        trajectory = self._execute_and_record_trajectory(executor, msc)
-
-        is_achieved = self.effect.is_achieved()
-
-        # Reset state
-        self.environment.state.data = initial_state_data
-        self.environment.notify_state_change()
-
-        self.motion = Motion(trajectory=trajectory, actuator=joint)
-
-        return is_achieved
+        return False
 
     def _extract_container_info(self, annotation: SemanticAnnotation):
         """
