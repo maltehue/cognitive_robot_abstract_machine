@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Union, Type, Iterable
 
-from .match import Match
+from .match import Match, SelectableMatchExpression
 from .result_quantification_constraint import (
     ResultQuantificationConstraint,
 )
@@ -56,6 +56,6 @@ def _quantify_entity(
     :param quantifier_kwargs: Keyword arguments to pass to the quantifier.
     :return: The quantified entity.
     """
-    if isinstance(entity_, Match):
-        return entity_.quantify(quantifier, **quantifier_kwargs)._resolve_()
+    if isinstance(entity_, SelectableMatchExpression):
+        return entity_._quantify_(quantifier, **quantifier_kwargs)
     return quantifier(entity_, **quantifier_kwargs)

@@ -67,12 +67,49 @@ class SelectableMatchExpression(Selectable[T], ABC):
     """
     _match_expression_: AbstractMatchExpression[T]
 
+    def __post_init__(self):
+        self._child_ = None
+        super().__post_init__()
+
+    def evaluate(self):
+        """
+        Evaluate the match expression and return the result.
+        """
+        return self._match_expression_.evaluate()
+
     def __getattr__(self, item):
         if item not in self._match_expression_.attribute_matches:
             attr = Attribute(_child_=self._var_, _attr_name_=item, _owner_class_=self._match_expression_.type)
             self._match_expression_.attribute_matches[item] = AttributeMatch(parent=self._match_expression_, attr_name=item,
                                                                              variable=attr)
         return self._match_expression_.attribute_matches[item]
+
+    def __call__(self, *args, **kwargs) -> Union[Self, T, CanBehaveLikeAVariable[T]]:
+        """
+        Update the match with new keyword arguments to constrain the type we are matching with.
+
+        :param kwargs: The keyword arguments to match against.
+        :return: The current match instance after updating it with the new keyword arguments.
+        """
+        self._match_expression_.kwargs = kwargs
+        return self
+
+    def domain_from(self, domain: DomainType):
+        """
+        Record the domain to use for the variable created by the match.
+        """
+        self._match_expression_.domain = domain
+        return self
+
+    def _quantify_(
+            self, quantifier: Type[ResultQuantifier], **quantifier_kwargs
+    ) -> Union[ResultQuantifier[T], T]:
+        """
+        Record the quantifier to be applied to the result of the match.
+        """
+        self._match_expression_.quantifier_data = QuantifierData(quantifier, quantifier_kwargs)
+        self._match_expression_.resolve()
+        return self
 
     @property
     def _var_(self) -> Selectable[T]:
@@ -85,7 +122,7 @@ class SelectableMatchExpression(Selectable[T], ABC):
 
     @property
     def _name_(self) -> str:
-        return self._var_._name_
+        return self._match_expression_.name
 
     def _all_variable_instances_(self) -> List[Variable]:
         return self._var_._all_variable_instances_
@@ -211,16 +248,6 @@ class Match(AbstractMatchExpression[T]):
     A list of selected attributes.
     """
 
-    def __call__(self, *args, **kwargs) -> Union[Self, T, CanBehaveLikeAVariable[T]]:
-        """
-        Update the match with new keyword arguments to constrain the type we are matching with.
-
-        :param kwargs: The keyword arguments to match against.
-        :return: The current match instance after updating it with the new keyword arguments.
-        """
-        self.kwargs = kwargs
-        return self
-
     def resolve(
             self,
             variable: Optional[Selectable] = None,
@@ -236,6 +263,8 @@ class Match(AbstractMatchExpression[T]):
         """
         self.update_fields(variable, parent)
         for attr_name, attr_assigned_value in self.kwargs.items():
+            if isinstance(attr_assigned_value, Selectable):
+                attr_assigned_value = attr_assigned_value._match_expression_
             attr_match = AttributeMatch(
                 parent=self, attr_name=attr_name, assigned_value=attr_assigned_value
             )
@@ -283,8 +312,6 @@ class Match(AbstractMatchExpression[T]):
         """
         if not self.variable:
             self.resolve()
-        if self._var_ is None:
-            self._var_ = self.variable
         if len(self.selected_variables) > 1:
             query_descriptor = set_of(self.selected_variables, *self.conditions)
         else:
@@ -292,22 +319,6 @@ class Match(AbstractMatchExpression[T]):
                 self.selected_variables.append(self.variable)
             query_descriptor = entity(self.selected_variables[0], *self.conditions)
         return self.quantifier_data.apply(query_descriptor)
-
-    def domain_from(self, domain: DomainType):
-        """
-        Record the domain to use for the variable created by the match.
-        """
-        self.domain = domain
-        return self
-
-    def quantify(
-            self, quantifier: Type[ResultQuantifier], **quantifier_kwargs
-    ) -> Union[ResultQuantifier[T], T]:
-        """
-        Record the quantifier to be applied to the result of the match.
-        """
-        self.quantifier_data = QuantifierData(quantifier, quantifier_kwargs)
-        return self
 
     @property
     def name(self) -> str:
@@ -320,11 +331,11 @@ class AttributeMatch(AbstractMatchExpression[T]):
     A class representing an attribute assignment in a Match statement.
     """
 
-    parent: AbstractMatchExpression
+    parent: AbstractMatchExpression = field(kw_only=True)
     """
     The parent match expression.
     """
-    attr_name: str
+    attr_name: str = field(kw_only=True)
     """
     The name of the attribute to assign the value to.
     """
@@ -521,7 +532,7 @@ def select(
 
 def entity_matching(
         type_: Union[Type[T], CanBehaveLikeAVariable[T]], domain: DomainType
-) -> Union[Type[T], CanBehaveLikeAVariable[T], Match[T]]:
+) -> Union[Type[T], CanBehaveLikeAVariable[T], SelectableMatchExpression[T]]:
     """
     Same as :py:func:`krrood.entity_query_language.match.match` but with a domain to use for the variable created
      by the match.
@@ -531,7 +542,9 @@ def entity_matching(
     :return: The MatchEntity instance.
     """
     if isinstance(type_, CanBehaveLikeAVariable):
-        return Match(type_._type_, domain=domain, variable=type_)
+        match_expression =  Match(_type=type_._type_, domain=domain, variable=type_)
     elif type_ and not isinstance(type_, type):
-        return Match(type_, domain=domain, variable=Literal(type_))
-    return Match(type_, domain=domain)
+        match_expression = Match(_type=type_, domain=domain, variable=Literal(type_))
+    else:
+        match_expression = Match(_type=type_, domain=domain)
+    return SelectableMatchExpression(_match_expression_=match_expression)
