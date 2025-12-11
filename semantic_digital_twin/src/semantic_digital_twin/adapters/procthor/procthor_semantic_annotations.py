@@ -13,14 +13,6 @@ from semantic_digital_twin.semantic_annotations.mixins import (
 from ...world_description.world_entity import SemanticAnnotation
 
 
-class AmbiguousNameError(ValueError):
-    """Raised when more than one semantic annotation class matches a given name with the same score."""
-
-
-class UnresolvedNameError(ValueError):
-    """Raised when no semantic annotation class matches a given name."""
-
-
 @dataclass
 class ProcthorResolver:
     """Central resolver that deterministically maps a ProcTHOR name to exactly one class."""
