@@ -21,7 +21,7 @@ class ColorLegend:
 @dataclass
 class RWXNode:
     name: str
-    weight: str = field(default='')
+    weight: str = field(default="")
     data: Optional[Any] = field(default=None)
     _primary_parent_id: Optional[int] = None
     color: ColorLegend = field(default_factory=ColorLegend)
@@ -34,7 +34,7 @@ class RWXNode:
     enclosed: bool = field(default=False)
     id: int = field(init=False)
     _graph: ClassVar[rx.PyDAG] = rx.PyDAG()
-    enclosed_name: ClassVar[str] = 'enclosed'
+    enclosed_name: ClassVar[str] = "enclosed"
 
     def __post_init__(self):
         # store self as node data to keep a 1:1 mapping
@@ -49,7 +49,9 @@ class RWXNode:
         if self._graph.has_edge(parent.id, self.id):
             return
         # Avoid creating cycles: PyDAG will raise if creates a cycle
-        self._graph.add_edge(parent.id, self.id, edge_weight if edge_weight is not None else self.weight)
+        self._graph.add_edge(
+            parent.id, self.id, edge_weight if edge_weight is not None else self.weight
+        )
 
     def remove(self):
         self._graph.remove_node(self.id)
@@ -82,9 +84,10 @@ class RWXNode:
     @parent.setter
     def parent(self, value: Optional["RWXNode"]):
         if value is None:
-            # detach current parent
-            self._graph.remove_edge(self._primary_parent_id, self.id)
-            self._primary_parent_id = None
+            # detach current parent if exists
+            if self.parent is not None:
+                self._graph.remove_edge(self._primary_parent_id, self.id)
+                self._primary_parent_id = None
             return
         # Create edge and set as primary (no need to detach non-primary edges)
         self.add_parent(value)
@@ -102,7 +105,9 @@ class RWXNode:
 
     @property
     def leaves(self) -> List["RWXNode"]:
-        return [n for n in [self] + self.descendants if self._graph.out_degree(n.id) == 0]
+        return [
+            n for n in [self] + self.descendants if self._graph.out_degree(n.id) == 0
+        ]
 
     @property
     def root(self) -> "RWXNode":
@@ -114,14 +119,25 @@ class RWXNode:
     def __str__(self):
         return self.name
 
-    def visualize(self, figsize=(35, 30), node_size=7000, font_size=25, spacing_x: float = 4, spacing_y: float = 4,
-                  curve_scale: float = 0.5, layout: str = 'tidy', edge_style: str = 'orthogonal',
-                  label_max_chars_per_line: Optional[int] = 13):
+    def visualize(
+        self,
+        figsize=(35, 30),
+        node_size=7000,
+        font_size=25,
+        spacing_x: float = 4,
+        spacing_y: float = 4,
+        curve_scale: float = 0.5,
+        layout: str = "tidy",
+        edge_style: str = "orthogonal",
+        label_max_chars_per_line: Optional[int] = 13,
+    ):
         """Render a rooted, top-to-bottom directed graph.
         Delegates to a dedicated visualizer class to keep this method small and reusable.
         """
         if not GraphVisualizer:
-            raise RuntimeError("rustworkx_utils is not installed. Please install it with `pip install rustworkx_utils`")
+            raise RuntimeError(
+                "rustworkx_utils is not installed. Please install it with `pip install rustworkx_utils`"
+            )
         visualizer = GraphVisualizer(
             node=self,
             figsize=figsize,

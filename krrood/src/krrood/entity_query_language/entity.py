@@ -80,6 +80,7 @@ def var(
     type_: Type[T],
     domain: DomainType,
     name: Optional[str] = None,
+    inferred: bool = False,
 ) -> Union[T, Selectable[T]]:
     """
     Declare a symbolic variable that can be used inside queries.
@@ -96,6 +97,7 @@ def var(
      If None, the domain will be inferred from the SymbolGraph for Symbol types, else should not be evaluated by EQL
       but by another evaluator (e.g., EQL To SQL converter in Ormatic).
     :param name: The variable name, only required for pretty printing.
+    :param inferred: Whether the variable is inferred or not.
     :return: A Variable that can be queried for.
     """
     domain_source = _get_domain_source_from_domain_and_type_values(domain, type_)
@@ -107,6 +109,7 @@ def var(
         _type_=type_,
         _domain_source_=domain_source,
         _name__=name,
+        _is_inferred_=inferred,
     )
 
     return result
