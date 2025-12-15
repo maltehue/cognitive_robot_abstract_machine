@@ -99,14 +99,14 @@ class UsageError(DataclassException):
 @dataclass
 class NoKwargsInMatchVar(UsageError):
     """
-    Raised when a match_var is used without any keyword arguments.
+    Raised when a match_variable is used without any keyword arguments.
     """
 
-    match_var: Match
+    match_variable: Match
 
     def __post_init__(self):
         self.message = (
-            f"The match variable {self.match_var} was used without any keyword arguments."
+            f"The match variable {self.match_variable} was used without any keyword arguments."
             f"If you don't want to specify keyword arguments use variable() instead"
         )
 

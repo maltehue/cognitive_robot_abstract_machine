@@ -7,7 +7,7 @@ from krrood.entity_query_language.entity import (
 )
 from krrood.entity_query_language.entity_result_processors import the
 from krrood.entity_query_language.failures import NoKwargsInMatchVar
-from krrood.entity_query_language.match import match_var, match
+from krrood.entity_query_language.match import match_variable, match
 from krrood.entity_query_language.predicate import HasType
 from krrood.entity_query_language.symbolic import UnificationDict
 from ..dataset.semantic_world_like_classes import (
@@ -20,7 +20,7 @@ from ..dataset.semantic_world_like_classes import (
 def test_match(handles_and_containers_world):
     world = handles_and_containers_world
 
-    fixed_connection = match_var(FixedConnection, domain=world.connections)(
+    fixed_connection = match_variable(FixedConnection, domain=world.connections)(
         parent=match(Container)(name="Container1"),
         child=match(Handle)(name="Handle1"),
     )
@@ -49,7 +49,7 @@ def test_select(handles_and_containers_world):
     world = handles_and_containers_world
 
     # Method 1
-    fixed_connection = match_var(FixedConnection, domain=world.connections)(
+    fixed_connection = match_variable(FixedConnection, domain=world.connections)(
         parent=match(Container)(name="Container1"), child=match(Handle)(name="Handle1")
     )
     container_and_handle = the(
@@ -84,7 +84,7 @@ def test_select_where(handles_and_containers_world):
     world = handles_and_containers_world
 
     # Method 1
-    fixed_connection = match_var(FixedConnection, domain=world.connections)(
+    fixed_connection = match_variable(FixedConnection, domain=world.connections)(
         parent=match(Container),
         child=match(Handle),
     )
@@ -120,4 +120,4 @@ def test_select_where(handles_and_containers_world):
 def test_empty_conditions_match_var(handles_and_containers_world):
     world = handles_and_containers_world
     with pytest.raises(NoKwargsInMatchVar):
-        match_var(FixedConnection, domain=world.connections)()
+        match_variable(FixedConnection, domain=world.connections)()

@@ -11,10 +11,10 @@ kernelspec:
   name: python3
 ---
 
-# Pattern matching with `match_var` and `match`
+# Pattern matching with `match_variable` and `match`
 
 EQL provides a concise pattern-matching API for building nested structural queries.
-Use `match_var(type_, domain=domain)(kwarg1=match(type_2)(...),...)` to describe a nested pattern on attributes.
+Use `match_variable(type_, domain=domain)(kwarg1=match(type_2)(...),...)` to describe a nested pattern on attributes.
 This replaces `variable()` when you want to match a nested structure.
 
 The following example shows how nested patterns translate
@@ -30,7 +30,7 @@ from krrood.entity_query_language.entity import (
 )
 from krrood.entity_query_language.entity_result_processors import the, a
 from krrood.entity_query_language.match import (
-    match_var, match,
+    match_variable, match,
 )
 from krrood.entity_query_language.predicate import HasType
 
@@ -97,11 +97,11 @@ world = World(
 
 ## Matching a nested structure
 
-`match_var(FixedConnection, domain=world.connections)` selects from `world.connections` items of type
+`match_variable(FixedConnection, domain=world.connections)` selects from `world.connections` items of type
 `FixedConnection`. Inner `match(...)` clauses describe constraints on attributes of that selected item.
 
 ```{code-cell} ipython3
-fixed_connection = match_var(FixedConnection, domain=world.connections)(
+fixed_connection = match_variable(FixedConnection, domain=world.connections)(
         parent=match(Container)(name="Container1"),
         child=match(Handle)(name="Handle1")
     )
@@ -137,7 +137,7 @@ print(type(fixed_connection).__name__, fixed_connection.parent.name, fixed_conne
 ```
 
 Notes:
-- Use `match_var` as the outermost match because it allows binding domains and returns an expression.
+- Use `match_variable` as the outermost match because it allows binding domains and returns an expression.
 - Nested `match(...)` can be composed arbitrarily deep following your object graph.
-- `match_var(...)` is syntactic sugar that allows creating a variable with a specific structure pre filtered.
+- `match_variable(...)` is syntactic sugar that allows creating a variable with a specific structure pre filtered.
 - if you do not need a specific structure, just use `variable()` instead.

@@ -149,7 +149,7 @@ class Match(AbstractMatchExpression[T]):
         >>> @dataclass
         >>> class Drawer:
         >>>     body: Body
-        >>> drawer = match_var(Drawer, domain=None)(body=match(Body)(name="drawer_1")))
+        >>> drawer = match_variable(Drawer, domain=None)(body=match(Body)(name="drawer_1")))
     """
 
     kwargs: Dict[str, Any] = field(init=False, default_factory=dict)
@@ -382,7 +382,7 @@ def match(
     return Match(type_=type_)
 
 
-def match_var(
+def match_variable(
     type_: Union[Type[T], Selectable[T]], domain: DomainType
 ) -> Union[An[T], CanBehaveLikeAVariable[T], MatchVar[T]]:
     """
