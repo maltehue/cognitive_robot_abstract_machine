@@ -113,19 +113,3 @@ class NonObservationVariableError(InvalidConditionError):
     def __post_init__(self):
         self.reason = f'Contains "{self.non_observation_variable}", which is not an observation variable.'
         super().__post_init__()
-
-
-def serialize_exception(obj: Exception) -> Dict[str, Any]:
-    return {
-        JSON_TYPE_NAME: get_full_class_name(type(obj)),
-        "value": str(obj),
-    }
-
-
-def deserialize_exception(data: Dict[str, Any], **kwargs) -> Exception:
-    return Exception(data["value"])
-
-
-JSONSerializableTypeRegistry().register(
-    Exception, serialize_exception, deserialize_exception
-)
