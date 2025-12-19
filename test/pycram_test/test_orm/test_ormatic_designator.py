@@ -104,7 +104,7 @@ class PoseTestCases(ORMaticBaseTestCaseMixin):
         dao = to_dao(plan)
         self.session.add(dao)
         self.session.commit()
-        result = self.session.scalars(select(PoseDAO)).all()
+        result = self.session.scalars(select(PyCramPoseDAO)).all()
         self.assertGreater(len(result), 0)
         self.assertTrue(
             all([r.position is not None and r.orientation is not None for r in result])
@@ -137,10 +137,10 @@ class PoseTestCases(ORMaticBaseTestCaseMixin):
         self.session.add(dao)
         self.session.commit()
         pose_stamped_result = self.session.scalars(select(PoseStampedDAO)).all()
-        pose_result = self.session.scalars(select(PoseDAO)).all()
+        pose_result = self.session.scalars(select(PyCramPoseDAO)).all()
         poses_from_pose_stamped_results = self.session.scalars(
-            select(PoseDAO).where(
-                PoseDAO.database_id.in_([r.pose_id for r in pose_stamped_result])
+            select(PyCramPoseDAO).where(
+                PyCramPoseDAO.database_id.in_([r.pose_id for r in pose_stamped_result])
             )
         ).all()
         self.assertTrue(all([r.pose is not None for r in pose_stamped_result]))
@@ -173,9 +173,9 @@ class PoseTestCases(ORMaticBaseTestCaseMixin):
         self.session.commit()
 
         with self.session.bind.connect() as conn:
-            raw_pose = conn.execute(text("SELECT * FROM PoseDAO")).fetchall()
+            raw_pose = conn.execute(text("SELECT * FROM PyCramPoseDAO")).fetchall()
 
-        pose_result = self.session.scalars(select(PoseDAO)).first()
+        pose_result = self.session.scalars(select(PyCramPoseDAO)).first()
         self.assertEqual(pose_result.position.x, 1.0)
         self.assertEqual(pose_result.position.y, 2.0)
         self.assertEqual(pose_result.position.z, 3.0)
