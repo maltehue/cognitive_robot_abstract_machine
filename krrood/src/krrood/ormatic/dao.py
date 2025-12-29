@@ -26,6 +26,7 @@ from typing_extensions import (
     Tuple,
 )
 
+from collections import deque
 from .exceptions import (
     NoGenericError,
     NoDAOFoundError,
@@ -74,6 +75,16 @@ class ToDAOState:
     Dictionary that prevents objects from being garbage collected.
     """
 
+    queue: deque = field(default_factory=deque)
+    """
+    Queue of (source_object, dao_instance, base_to_use) tuples to be processed.
+    """
+
+    def add_to_queue(
+        self, obj: Any, dao_instance: Any, base: Optional[Type[DataAccessObject]] = None
+    ):
+        self.queue.append((obj, dao_instance, base))
+
     def get_existing(self, obj: Any) -> Any:
         """
         Return an existing DAO for the given object if it was already created.
@@ -120,6 +131,14 @@ class FromDAOState:
     """
     Dictionary that marks objects as currently being processed by the `from_dao` method.
     """
+
+    queue: deque = field(default_factory=deque)
+    """
+    Queue of (dao_instance, domain_object) tuples to be processed.
+    """
+
+    def add_to_queue(self, dao_instance: Any, domain_object: Any):
+        self.queue.append((dao_instance, domain_object))
 
     def has(self, dao_obj: Any) -> bool:
         return id(dao_obj) in self.memo
@@ -330,12 +349,15 @@ class DataAccessObject(HasGeneric[T]):
             return existing
 
         dao_obj = state.apply_alternative_mapping_if_needed(cls, obj)
+        # If alternative mapping returned an object of a different type that is not a DAO,
+        # it might be the case for recursive AlternativeMappings.
+        # But if it's already a DAO (of this class or a subclass), we should use it.
+        if isinstance(dao_obj, cls):
+            if register:
+                state.register(obj, dao_obj)
+            return dao_obj
 
         # Determine the appropriate DAO base to consider for alternative mappings.
-        # The previous implementation only looked at the immediate base class, which
-        # fails when an alternatively-mapped parent exists higher up the hierarchy
-        # (e.g., a grandparent). We now scan the MRO to find the nearest DAO ancestor
-        # whose original class uses AlternativeMapping.
         alt_base: Optional[Type[DataAccessObject]] = None
         for b in cls.__mro__[1:]:  # skip cls itself
             try:
@@ -352,14 +374,22 @@ class DataAccessObject(HasGeneric[T]):
 
         if register:
             state.register(obj, result)
+            if id(obj) != id(dao_obj):
+                state.register(dao_obj, result)
 
-        # choose the correct building method
-        if alt_base is not None:
-            result.to_dao_if_subclass_of_alternative_mapping(
-                obj=dao_obj, base=alt_base, state=state
-            )
-        else:
-            result.to_dao_default(obj=dao_obj, state=state)
+        # Add to queue for attribute/relationship filling
+        is_entry_call = len(state.queue) == 0
+        state.add_to_queue(dao_obj, result, alt_base)
+
+        if is_entry_call:
+            while state.queue:
+                current_obj, current_dao, current_base = state.queue.popleft()
+                if current_base is not None:
+                    current_dao.fill_dao_if_subclass_of_alternative_mapping(
+                        obj=current_obj, base=current_base, state=state
+                    )
+                else:
+                    current_dao.fill_dao_default(obj=current_obj, state=state)
 
         return result
 
@@ -382,10 +412,16 @@ class DataAccessObject(HasGeneric[T]):
         :param obj: The source object to be converted into a DAO representation.
         :param state: The conversion state for memoization and lifecycle control.
         """
+        self.fill_dao_default(obj, state)
+
+    def fill_dao_default(self, obj: T, state: ToDAOState):
+        """
+        Populate this DAO instance with data from the given object.
+        """
         mapper: sqlalchemy.orm.Mapper = sqlalchemy.inspection.inspect(type(self))
 
         self.get_columns_from(obj=obj, columns=mapper.columns)
-        self.get_relationships_from(
+        self.fill_relationships_from(
             obj=obj,
             relationships=mapper.relationships,
             state=state,
@@ -399,14 +435,18 @@ class DataAccessObject(HasGeneric[T]):
     ):
         """
         Transforms the given object into a corresponding DAO if it is a
-        subclass of an alternatively mapped entity. This involves processing both the inherited
-        and subclass-specific attributes and relationships of the object.
-        The method directly modifies the DAO instance by populating it with attribute
-        and relationship data from the source object.
+        subclass of an alternatively mapped entity.
+        """
+        self.fill_dao_if_subclass_of_alternative_mapping(obj, base, state)
 
-        :param obj: The source object to be transformed into a DAO.
-        :param base: The parent class type that defines the base mapping for the DAO.
-        :param state: The conversion state.
+    def fill_dao_if_subclass_of_alternative_mapping(
+        self,
+        obj: T,
+        base: Type[DataAccessObject],
+        state: ToDAOState,
+    ):
+        """
+        Populate this DAO instance if it is a subclass of an alternatively mapped entity.
         """
 
         # Temporarily remove the object from the memo dictionary to allow the parent DAO to be created
@@ -439,11 +479,7 @@ class DataAccessObject(HasGeneric[T]):
         # copy values that only occur in this dao (current table)
         self.get_columns_from(obj, columns_of_this_table)
 
-        # Also ensure that columns declared on intermediate ancestors (between the
-        # alternatively-mapped base and this DAO) are populated. SQLAlchemy may not
-        # include those columns in the current table's column collection, so we walk
-        # all column attributes visible on this mapper and fill any data columns that
-        # are not owned by the alternatively-mapped base.
+        # Also ensure that columns declared on intermediate ancestors
         parent_column_names = {c.name for c in columns_of_parent}
         for prop in mapper.column_attrs:
             try:
@@ -460,10 +496,10 @@ class DataAccessObject(HasGeneric[T]):
         )
 
         # get relationships from parent dao
-        self.get_relationships_from(parent_dao, relationships_of_parent, state)
+        self.fill_relationships_from(parent_dao, relationships_of_parent, state)
 
         # get relationships from the current table
-        self.get_relationships_from(obj, relationships_of_this_table, state)
+        self.fill_relationships_from(obj, relationships_of_this_table, state)
 
     def partition_parent_child_relationships(
         self, parent: sqlalchemy.orm.Mapper, child: sqlalchemy.orm.Mapper
@@ -508,7 +544,7 @@ class DataAccessObject(HasGeneric[T]):
             if is_data_column(column):
                 setattr(self, column.name, getattr(obj, column.name))
 
-    def get_relationships_from(
+    def fill_relationships_from(
         self,
         obj: T,
         relationships: Iterable[RelationshipProperty],
@@ -599,6 +635,25 @@ class DataAccessObject(HasGeneric[T]):
             return state.get(self)
 
         result = self._allocate_uninitialized_and_memoize(state)
+
+        # Add to queue for processing
+        is_entry_call = len(state.queue) == 0
+        state.add_to_queue(self, result)
+
+        if is_entry_call:
+            while state.queue:
+                current_dao, current_obj = state.queue.popleft()
+                current_dao._fill_from_dao(current_obj, state)
+
+            # After processing all, remove from in_progress
+            state.in_progress.clear()
+
+        return state.get(self)
+
+    def _fill_from_dao(self, result: T, state: FromDAOState) -> T:
+        """
+        Actually fill the domain object with data from this DAO.
+        """
         mapper: sqlalchemy.orm.Mapper = sqlalchemy.inspection.inspect(type(self))
 
         argument_names = self._argument_names()
@@ -619,10 +674,14 @@ class DataAccessObject(HasGeneric[T]):
         self._apply_circular_fixes(result, circular_refs, state)
 
         if isinstance(result, AlternativeMapping):
-            result = result.create_from_dao()
-            state.memo[id(self)] = result
+            final_result = result.create_from_dao()
+            # Update memo if AlternativeMapping changed the instance
+            state.memo[id(self)] = final_result
+            # We must NOT delete from in_progress yet if we might still be in the loop
+            # and other things might refer to this DAO.
+            # But actually, FromDAOState doesn't use in_progress for anything other than a flag.
+            return final_result
 
-        del state.in_progress[id(self)]
         return result
 
     def _allocate_uninitialized_and_memoize(self, state: FromDAOState) -> Any:
