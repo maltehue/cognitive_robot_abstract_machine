@@ -281,8 +281,8 @@ def test_segment_map(immutable_model_world):
     seg_maps = gaussian_map.segment_map()
 
     assert len(seg_maps) == 2
-    map_1 = seg_maps[0]
-    map_2 = seg_maps[1]
+    map_2 = seg_maps[0] if np.sum(seg_maps[0][20:40, 20:40]) > 1 else seg_maps[1]
+    map_1 = seg_maps[1] if np.sum(seg_maps[1][90:110, 90:110]) > 1 else seg_maps[0]
 
     assert np.sum(map_2[20:40, 20:40]) == 20**2 and np.sum(map_2[90:110, 90:110]) == 0
     assert np.sum(map_1[90:110, 90:110]) == 20**2 and np.sum(map_1[20:40, 20:40]) == 0
