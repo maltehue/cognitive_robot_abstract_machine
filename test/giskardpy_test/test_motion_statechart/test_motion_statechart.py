@@ -360,8 +360,6 @@ def test_print():
     assert end.life_cycle_state == LifeCycleValues.RUNNING
     assert msc.is_end_motion()
 
-    msc.plot_gantt_chart()
-
 
 def test_cancel_motion():
     msc = MotionStatechart()
@@ -379,7 +377,6 @@ def test_cancel_motion():
     with pytest.raises(Exception):
         kin_sim.tick()  # third tick, cancel goes true and triggers
     msc.draw("muh.pdf")
-    msc.plot_gantt_chart()
 
 
 def test_draw_with_invisible_node():
@@ -813,7 +810,6 @@ def test_nested_goals():
     assert outer.life_cycle_state == LifeCycleValues.RUNNING
     assert end.life_cycle_state == LifeCycleValues.RUNNING
     assert msc_copy.is_end_motion()
-    msc_copy.plot_gantt_chart()
 
 
 @dataclass(eq=False, repr=False)
@@ -1195,7 +1191,6 @@ class TestCartesianTasks:
 
         fk = pr2_world.compute_forward_kinematics_np(root, tip)
         assert np.allclose(fk, tip_goal2.to_np(), atol=cart_goal2.threshold)
-        msc.plot_gantt_chart(context=kin_sim.execution_context)
 
     def test_cart_goal_sequence_on_start(self, pr2_world: World):
         """Test CartesianPose with Bind_on_start policy (default)."""
@@ -1240,7 +1235,6 @@ class TestCartesianTasks:
         fk = pr2_world.compute_forward_kinematics_np(root, tip)
         expected = np.eye(4)
         assert np.allclose(fk, expected, atol=cart_goal2.threshold)
-        msc.plot_gantt_chart()
 
     def test_CartesianOrientation(self, pr2_world: World):
         """Single CartesianOrientation goal test."""
@@ -2045,7 +2039,6 @@ class TestParallel:
         kin_sim.tick_until_end()
         # 5 (longest ticker) + 1 (for parallel to turn True) + 2 (for end to trigger)
         assert kin_sim.control_cycles == 8
-        msc.plot_gantt_chart()
 
     def test_parallel_with_tasks(self, pr2_world: World):
         map = pr2_world.root
@@ -2176,7 +2169,6 @@ class TestOpenClose:
 
         assert opened.observation_state == ObservationStateValues.TRUE
         assert closed.observation_state == ObservationStateValues.TRUE
-        msc.plot_gantt_chart(kin_sim.execution_context)
 
 
 class TestCollisionAvoidance:
