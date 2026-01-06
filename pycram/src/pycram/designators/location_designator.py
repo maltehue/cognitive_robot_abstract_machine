@@ -37,6 +37,7 @@ from giskardpy.motion_statechart.goals.templates import Sequence
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from semantic_digital_twin.adapters.viz_marker import VizMarkerPublisher
 from semantic_digital_twin.datastructures.variables import SpatialVariables
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.spatial_types import Point3
@@ -78,9 +79,8 @@ from ..designator import LocationDesignatorDescription
 from ..failures import RobotInCollision
 from ..pose_generator_and_validator import (
     visibility_validator,
-    pose_sequence_reachability_validator,
     collision_check,
-    pose_sequence_reachability_validator_new,
+    pose_sequence_reachability_validator,
 )
 from ..robot_description import ViewManager
 from ..utils import translate_pose_along_local_axis, link_pose_for_joint_config
@@ -418,7 +418,7 @@ class CostmapLocation(LocationDesignatorDescription):
                     #     allowed_collision=params_box.ignore_collision_with,
                     #     world=test_world,
                     # )
-                    is_reachable = pose_sequence_reachability_validator_new(
+                    is_reachable = pose_sequence_reachability_validator(
                         target_sequence,
                         ee.manipulator.tool_frame,
                         test_robot,
@@ -657,7 +657,7 @@ class AccessingLocation(LocationDesignatorDescription):
                     #     current_target_sequence,
                     #     world=test_world,
                     # )
-                    is_reachable = pose_sequence_reachability_validator_new(
+                    is_reachable = pose_sequence_reachability_validator(
                         current_target_sequence,
                         arm_chain.manipulator.tool_frame,
                         test_robot,
@@ -1603,7 +1603,7 @@ class ProbabilisticCostmapLocation(LocationDesignatorDescription):
                         rotation_agnostic=params_box.rotation_agnostic,
                     )
                     ee = ViewManager.get_arm_view(params_box.reachable_arm, test_robot)
-                    is_reachable = pose_sequence_reachability_validator_new(
+                    is_reachable = pose_sequence_reachability_validator(
                         target_sequence,
                         ee.manipulator.tool_frame,
                         test_robot,

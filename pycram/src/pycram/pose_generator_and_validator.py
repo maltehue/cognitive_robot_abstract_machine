@@ -8,6 +8,7 @@ from skimage.measure import label
 
 from giskardpy.executor import Executor
 from giskardpy.motion_statechart.goals.templates import Sequence
+from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from giskardpy.qp.qp_controller_config import QPControllerConfig
@@ -88,61 +89,28 @@ def visibility_validator(
 
 
 def reachability_validator(
-    root: KinematicStructureEntity,
-    tip: KinematicStructureEntity,
-    target_pose: PoseStamped,
-    world: World,
-    allowed_collision: List[CollisionCheck] = None,
-) -> Optional[Dict[DegreeOfFreedom, float]]:
-    """
-    This method validates if a target position is reachable for the robot.
-    This is done by asking the ik solver if there is a valid solution if the
-    robot stands at the position of the pose candidate. if there is a solution
-    the validator returns True and False in any other case.
-
-    :param root: The body which is the root of the kinematic chain to be used for ik.
-    :param tip: The body which is the tip of the kinematic chain to be used for ik.
-    :param target_pose: The target pose for which the reachability should be validated.
-    :param arm: The arm that should be checked for reachability.
-    :param world: The world in which the robot is located.
-    :param allowed_collision: dict of objects with which the robot is allowed to collide each object correlates
-     to a list of links of which this object consists
-
-    :return: The final joint states of the robot if the target pose is reachable without collision, None in any other case.
-    """
-    old_state = deepcopy(world.state.data)
-    try:
-        joint_states = world.compute_inverse_kinematics(
-            root, tip, target_pose.to_spatial_type(), max_iterations=600
-        )
-        for dof, value in joint_states.items():
-            world.state[dof.id].position = value
-        world.notify_state_change()
-
-        logger.debug(f"Robot is not in contact at target pose")
-
-        return joint_states
-
-    except (IKError, RobotInCollision, MaxIterationsException, UnreachableException):
-        return None
-    finally:
-        world.state.data = old_state
-        world.notify_state_change()
-
-
-def reachability_validator_new(
     target_pose: PoseStamped,
     tip_link: KinematicStructureEntity,
     robot_view: AbstractRobot,
     world: World,
     use_fullbody_ik: bool = False,
 ) -> bool:
-    return pose_sequence_reachability_validator_new(
+    """
+    Evaluates if a pose can be reached with the tip_link in the given world. This uses giskard motion state charts
+    for testing.
+
+    :param target_pose: The sequence of poses which the tip_link needs to reach
+    :param tip_link: The tip link which should be used for reachability
+    :param robot_view: The semantic annotation of the robot which should be evaluated for reachability
+    :param world: The world in which the visibility should be validated.
+    :param use_fullbody_ik: If true the base will be used in trying to reach the poses
+    """
+    return pose_sequence_reachability_validator(
         [target_pose], tip_link, robot_view, world, use_fullbody_ik
     )
 
 
-def pose_sequence_reachability_validator_new(
+def pose_sequence_reachability_validator(
     target_sequence: List[PoseStamped],
     tip_link: KinematicStructureEntity,
     robot_view: AbstractRobot,
@@ -150,21 +118,29 @@ def pose_sequence_reachability_validator_new(
     use_fullbody_ik: bool = False,
 ) -> bool:
     """
-    Evaluates the pose sequence by executing the pose sequence with giskard.
+    Evaluates the pose sequence by executing the pose sequence with giskard motion state charts.
+
+    :param target_sequence: The sequence of poses which the tip_link needs to reach
+    :param tip_link: The tip link which should be used for reachability
+    :param robot_view: The semantic annotation of the robot which should be evaluated for reachability
+    :param world: The world in which the visibility should be validated.
+    :param use_fullbody_ik: If true the base will be used in trying to reach the poses
     """
     old_state = deepcopy(world.state.data)
     root = robot_view.root if not use_fullbody_ik else world.root
-    cart_sequence = Sequence(
-        [
-            CartesianPose(
-                root_link=root, tip_link=tip_link, goal_pose=pose.to_spatial_type()
-            )
-            for pose in target_sequence
-        ]
-    )
+
     msc = MotionStatechart()
-    msc.add_node(cart_sequence)
-    msc.
+    msc.add_node(
+        cart_sequence := Sequence(
+            [
+                CartesianPose(
+                    root_link=root, tip_link=tip_link, goal_pose=pose.to_spatial_type()
+                )
+                for pose in target_sequence
+            ]
+        )
+    )
+    msc.add_node(EndMotion.when_true(cart_sequence))
 
     executor = Executor(
         world,
@@ -177,50 +153,11 @@ def pose_sequence_reachability_validator_new(
     try:
         executor.tick_until_end()
     except TimeoutError:
-        print("Timeout reached")
+        logger.debug(f"Timeout while executing pose sequence: {target_sequence}")
         return False
     finally:
         world.state.data = old_state
         world.notify_state_change()
-    return True
-
-
-def pose_sequence_reachability_validator(
-    root: KinematicStructureEntity,
-    tip: KinematicStructureEntity,
-    target_sequence: List[PoseStamped],
-    world: World,
-    allowed_collision: List[CollisionCheck] = None,
-) -> bool:
-    """
-    This method validates if a target sequence, if traversed in order, is reachable for the robot.
-    This is done by asking the ik solver if there is a valid solution if the
-    robot stands at the position of the pose candidate. If there is a solution
-    the validator returns The arm that can reach the target position and None in any other case.
-
-    :param root: The body which is the root of the kinematic chain to be used for ik.
-    :param tip: The body which is the tip of the kinematic chain to be used
-    :param target_sequence: The target sequence of poses for which the reachability should be validated.
-    :param world: The world in which the robot is located.
-    :param allowed_collision: dict of objects with which the robot is allowed to collide each object correlates
-     to a list of links of which this object consists
-
-    :return: The arm that can reach the target position and None in any other case.
-    """
-    old_state = world.state.data
-    for target_pose in target_sequence:
-        joint_states = reachability_validator(
-            root, tip, target_pose, world, allowed_collision
-        )
-        if joint_states is None:
-            world.state.data = old_state
-            world.notify_state_change()
-            return False
-        world.state.data = old_state
-        world.notify_state_change()
-
-    world.state.data = old_state
-    world.notify_state_change()
     return True
 
 
