@@ -213,7 +213,7 @@ class Stretch(AbstractRobot, HasArms, HasNeck):
 
             stretch.add_joint_states([arm_park, gripper_open, gripper_close, torso_low, torso_mid, torso_high])
 
-            world.add_semantic_annotation(stretch, skip_duplicates=True)
+            world.add_semantic_annotation(stretch)
 
         return stretch
 

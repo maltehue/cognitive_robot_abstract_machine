@@ -43,7 +43,7 @@ class Turtlebot(AbstractRobot):
                 _world=world,
             )
 
-            world.add_semantic_annotation(turtlebot, skip_duplicates=True)
+            world.add_semantic_annotation(turtlebot)
 
         return turtlebot
 

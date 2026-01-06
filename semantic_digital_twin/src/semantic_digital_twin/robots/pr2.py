@@ -298,7 +298,7 @@ class PR2(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
                                     left_gripper_close, right_gripper_open, right_gripper_close, torso_low,
                                     torso_mid, torso_high])
 
-            world.add_semantic_annotation(robot, skip_duplicates=True)
+            world.add_semantic_annotation(robot)
 
             vel_limits = defaultdict(
                 lambda: 1.0,

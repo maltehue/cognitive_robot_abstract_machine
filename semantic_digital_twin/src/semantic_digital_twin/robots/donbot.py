@@ -204,6 +204,6 @@ class Donbot(AbstractRobot, HasArms, HasNeck):
 
             donbot.add_joint_states([arm_park, looking, gripper_open, gripper_close, torso_low, torso_mid, torso_high])
 
-            world.add_semantic_annotation(donbot, skip_duplicates=True)
+            world.add_semantic_annotation(donbot)
 
         return donbot

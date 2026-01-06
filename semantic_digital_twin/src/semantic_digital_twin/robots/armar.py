@@ -268,6 +268,6 @@ class Armar(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             armar.add_joint_states([left_arm_park, right_arm_park, left_gripper_open, left_gripper_close,
                                     right_gripper_open, right_gripper_close, torso_low, torso_mid, torso_high])
 
-            world.add_semantic_annotation(armar, skip_duplicates=True)
+            world.add_semantic_annotation(armar)
 
         return armar

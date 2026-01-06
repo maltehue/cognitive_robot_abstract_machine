@@ -122,7 +122,7 @@ class Panda(AbstractRobot, HasArms):
 
             panda.add_joint_states([arm_park, gripper_open, gripper_close])
 
-            world.add_semantic_annotation(panda, skip_duplicates=True)
+            world.add_semantic_annotation(panda)
 
         return panda
 

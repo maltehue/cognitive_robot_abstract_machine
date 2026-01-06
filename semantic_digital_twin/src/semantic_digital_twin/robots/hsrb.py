@@ -237,7 +237,7 @@ class HSRB(AbstractRobot, HasArms, HasNeck):
 
             hsrb.add_joint_states([arm_park, gripper_open, gripper_close, torso_low, torso_mid, torso_high])
 
-            world.add_semantic_annotation(hsrb, skip_duplicates=True)
+            world.add_semantic_annotation(hsrb)
 
             vel_limits = defaultdict(lambda: 1)
             hsrb.tighten_dof_velocity_limits_of_1dof_connections(new_limits=vel_limits)

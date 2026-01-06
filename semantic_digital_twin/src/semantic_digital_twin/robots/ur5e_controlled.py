@@ -132,7 +132,7 @@ class UR5Controlled(AbstractRobot, HasArms):
 
             ur5_controlled.add_joint_states([arm_park, gripper_open, gripper_close])
 
-            world.add_semantic_annotation(ur5_controlled, skip_duplicates=True)
+            world.add_semantic_annotation(ur5_controlled)
 
         return ur5_controlled
 
