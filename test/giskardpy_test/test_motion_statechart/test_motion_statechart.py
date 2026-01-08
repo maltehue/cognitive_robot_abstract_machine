@@ -646,7 +646,7 @@ def test_reset():
 def test_nested_goals():
     msc = MotionStatechart()
 
-    node1 = ConstTrueNode()
+    node1 = ConstTrueNode(name="w")
     msc.add_node(node1)
 
     outer = TestNestedGoal()
@@ -670,6 +670,14 @@ def test_nested_goals():
     outer = msc_copy.get_nodes_by_type(TestNestedGoal)[0]
     end = msc_copy.get_nodes_by_type(EndMotion)[0]
     kin_sim.compile(motion_statechart=msc_copy)
+
+    assert node1.depth == 0
+    assert outer.depth == 0
+    assert end.depth == 0
+    assert outer.inner.depth == 1
+    assert outer.inner.sub_node1.depth == 2
+    assert outer.inner.sub_node2.depth == 2
+
     msc_copy.draw("muh.pdf")
     assert node1.observation_state == ObservationStateValues.UNKNOWN
     assert outer.inner.sub_node1.observation_state == ObservationStateValues.UNKNOWN
@@ -1187,7 +1195,7 @@ def test_cart_goal_sequence_at_build(pr2_world_state_reset: World):
     root = pr2_world_state_reset.get_kinematic_structure_entity_by_name("odom_combined")
 
     tip_goal1 = HomogeneousTransformationMatrix.from_xyz_quaternion(
-        pos_x=-0.2, reference_frame=tip
+        pos_x=-2, reference_frame=tip
     )
     tip_goal2 = HomogeneousTransformationMatrix.from_xyz_quaternion(
         pos_x=0.2, reference_frame=tip
