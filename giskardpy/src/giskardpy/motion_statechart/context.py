@@ -28,6 +28,10 @@ GenericContextExtension = TypeVar("GenericContextExtension", bound=ContextExtens
 
 @dataclass
 class BuildContext:
+    """
+    Context used during the build phase of a MotionStatechartNode.
+    """
+
     world: World
     auxiliary_variable_manager: AuxiliaryVariableManager
     collision_scene: CollisionWorldSynchronizer
@@ -38,25 +42,21 @@ class BuildContext:
     )
 
     def require_extension(
-        self, cap_type: Type[GenericContextExtension]
+        self, extension_type: Type[GenericContextExtension]
     ) -> GenericContextExtension:
         """
-        Return a capability instance or raise ``MissingCapabilityError``.
+        Return an extension instance or raise ``MissingContextExtensionError``.
         """
-        cap = self.extensions.get(cap_type)
-        if cap is None:
-            raise MissingContextExtensionError(expected_extension=cap_type)
-        return cap
+        extension = self.extensions.get(extension_type)
+        if extension is None:
+            raise MissingContextExtensionError(expected_extension=extension_type)
+        return extension
 
-    def with_capability(
-        self, cap_type: Type[GenericContextExtension], instance: GenericContextExtension
-    ) -> BuildContext:
+    def add_extension(self, extension: GenericContextExtension):
         """
-        Return a shallow copy of this context with an added capability.
+        Extend the build context with a custom extension.
         """
-        new_ctx = BuildContext(extensions=dict(self.extensions))
-        new_ctx.extensions[cap_type] = instance
-        return new_ctx
+        self.extensions[type(extension)] = extension
 
     @classmethod
     def empty(cls) -> Self:

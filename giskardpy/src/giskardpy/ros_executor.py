@@ -25,7 +25,5 @@ class Ros2Executor(Executor):
             qp_controller_config=self.controller_config,
             control_cycle_variable=self._control_cycles_variable,
         )
-        build_context.extensions[RosContextExtension] = RosContextExtension(
-            self.ros_node
-        )
+        build_context.add_extension(RosContextExtension(self.ros_node))
         return build_context
