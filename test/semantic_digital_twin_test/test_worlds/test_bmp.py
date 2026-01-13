@@ -2,7 +2,6 @@ import os
 from copy import deepcopy
 
 from pkg_resources import resource_filename
-from rdflib.plugins.sparql.parser import PrefixedName
 
 from krrood.entity_query_language.conclusion import Add, Set
 from krrood.entity_query_language.entity import entity, set_of, inference, variable
@@ -11,7 +10,9 @@ from krrood.entity_query_language.entity_result_processors import an, a
 from giskardpy.motion_statechart.goals.open_close import Open
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
+from semantic_digital_twin.adapters.mesh import STLParser
 from semantic_digital_twin.adapters.urdf import URDFParser
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.reasoning.predicates_base import (
     SatisfiesRequest,
     Causes,
@@ -23,6 +24,7 @@ from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Drawer,
     Container,
+    Milk,
 )
 from semantic_digital_twin.semantic_annotations.task_effect_motion import (
     OpenedEffect,
@@ -32,6 +34,7 @@ from semantic_digital_twin.semantic_annotations.task_effect_motion import (
     Motion,
     RunMSCModel,
 )
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 import pytest
 import rclpy
@@ -39,6 +42,7 @@ from semantic_digital_twin.adapters.viz_marker import VizMarkerPublisher
 from semantic_digital_twin.world_description.connections import (
     OmniDrive,
     ActiveConnection,
+    Connection6DoF,
 )
 from semantic_digital_twin.world_description.world_entity import (
     Body,
@@ -231,27 +235,67 @@ class TestBodyMotionProblem:
         )
         pr2 = os.path.join(urdf_dir, "pr2_with_ft2_cableguide.urdf")
         pr2_parser = URDFParser.from_file(file_path=pr2)
-        world_with_pr2 = pr2_parser.parse()
-        # leere welt, die andere reinmergen im with block, wie bei giskard.py
-        with world_with_pr2.modify_world():
-            # DoF has hardware interface flag hier setzen. kann ich mir bei pr2_standalone_confign abschauen
-            pr2_root = world_with_pr2.root
-            localization_body = Body(name=PrefixedName("odom_combined"))
-            world_with_pr2.add_kinematic_structure_entity(localization_body)
-            c_root_bf = OmniDrive.create_with_dofs(
-                parent=localization_body, child=pr2_root, world=world_with_pr2
-            )
-            world_with_pr2.add_connection(c_root_bf)
-            robot = PR2.from_world(world_with_pr2)
+        world = World()
 
-        with world_with_pr2.modify_world():
+        # leere welt, die andere reinmergen im with block, wie bei giskard.py
+        with world.modify_world():
+            # DoF has hardware interface flag hier setzen. kann ich mir bei pr2_standalone_confign abschauen
+            map = Body(name=PrefixedName("map"))
+            odom = Body(name=PrefixedName("odom"))
+            localization = Connection6DoF.create_with_dofs(
+                parent=map, child=odom, world=world
+            )
+            world.add_connection(localization)
+
+            world_with_robot = pr2_parser.parse()
+            robot = PR2.from_world(world_with_robot)
+
+            odom = OmniDrive.create_with_dofs(
+                parent=odom,
+                child=world_with_robot.root,
+                translation_velocity_limits=0.2,
+                rotation_velocity_limits=0.2,
+                world=world,
+            )
+
+            world.merge_world(world_with_robot, odom)
+
+            controlled_joints = [
+                "torso_lift_joint",
+                "head_pan_joint",
+                "head_tilt_joint",
+                "r_shoulder_pan_joint",
+                "r_shoulder_lift_joint",
+                "r_upper_arm_roll_joint",
+                "r_forearm_roll_joint",
+                "r_elbow_flex_joint",
+                "r_wrist_flex_joint",
+                "r_wrist_roll_joint",
+                "l_shoulder_pan_joint",
+                "l_shoulder_lift_joint",
+                "l_upper_arm_roll_joint",
+                "l_forearm_roll_joint",
+                "l_elbow_flex_joint",
+                "l_wrist_flex_joint",
+                "l_wrist_roll_joint",
+                odom.name,
+            ]
+            for joint_name in controlled_joints:
+                connection: ActiveConnection = world.get_connection_by_name(joint_name)
+                if not isinstance(connection, ActiveConnection):
+                    raise Exception(
+                        f"{joint_name} is not an active connection and cannot be controlled."
+                    )
+                connection.has_hardware_interface = True
+
+        with world.modify_world():
             path_to_srdf = resource_filename(
                 "giskardpy", "../../self_collision_matrices/iai/pr2.srdf"
             )
-            world_with_pr2.load_collision_srdf(path_to_srdf)
+            world.load_collision_srdf(path_to_srdf)
             frozen_joints = ["r_gripper_l_finger_joint", "l_gripper_l_finger_joint"]
             for joint_name in frozen_joints:
-                c: ActiveConnection = world_with_pr2.get_connection_by_name(joint_name)
+                c: ActiveConnection = world.get_connection_by_name(joint_name)
                 c.frozen_for_collision_avoidance = True
 
             for body in robot.bodies_with_collisions:
@@ -261,9 +305,7 @@ class TestBodyMotionProblem:
                 body.set_static_collision_config(collision_config)
 
             for joint_name in ["r_wrist_roll_joint", "l_wrist_roll_joint"]:
-                connection: ActiveConnection = world_with_pr2.get_connection_by_name(
-                    joint_name
-                )
+                connection: ActiveConnection = world.get_connection_by_name(joint_name)
                 collision_config = CollisionCheckingConfig(
                     buffer_zone_distance=0.05,
                     violated_distance=0.0,
@@ -274,9 +316,7 @@ class TestBodyMotionProblem:
                 )
 
             for joint_name in ["r_wrist_flex_joint", "l_wrist_flex_joint"]:
-                connection: ActiveConnection = world_with_pr2.get_connection_by_name(
-                    joint_name
-                )
+                connection: ActiveConnection = world.get_connection_by_name(joint_name)
                 collision_config = CollisionCheckingConfig(
                     buffer_zone_distance=0.05,
                     violated_distance=0.0,
@@ -286,9 +326,7 @@ class TestBodyMotionProblem:
                     collision_config
                 )
             for joint_name in ["r_elbow_flex_joint", "l_elbow_flex_joint"]:
-                connection: ActiveConnection = world_with_pr2.get_connection_by_name(
-                    joint_name
-                )
+                connection: ActiveConnection = world.get_connection_by_name(joint_name)
                 collision_config = CollisionCheckingConfig(
                     buffer_zone_distance=0.05,
                     violated_distance=0.0,
@@ -298,9 +336,7 @@ class TestBodyMotionProblem:
                     collision_config
                 )
             for joint_name in ["r_forearm_roll_joint", "l_forearm_roll_joint"]:
-                connection: ActiveConnection = world_with_pr2.get_connection_by_name(
-                    joint_name
-                )
+                connection: ActiveConnection = world.get_connection_by_name(joint_name)
                 collision_config = CollisionCheckingConfig(
                     buffer_zone_distance=0.025,
                     violated_distance=0.0,
@@ -316,10 +352,62 @@ class TestBodyMotionProblem:
             robot.drive.set_static_collision_config_for_direct_child_bodies(
                 collision_config
             )
-        return world_with_pr2
 
-    def test_query_motion_satisfying_task_request2(self, mutable_model_world: World):
-        world = mutable_model_world
+        #### apartment
+        apartment_world = URDFParser.from_file(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../..",
+                "pycram",
+                "resources",
+                "worlds",
+                "apartment.urdf",
+            )
+        ).parse()
+        milk_world = STLParser(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../..",
+                "pycram",
+                "resources",
+                "objects",
+                "milk.stl",
+            )
+        ).parse()
+        cereal_world = STLParser(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../..",
+                "pycram",
+                "resources",
+                "objects",
+                "breakfast_cereal.stl",
+            )
+        ).parse()
+        apartment_world.merge_world_at_pose(
+            milk_world,
+            HomogeneousTransformationMatrix.from_xyz_rpy(
+                2.37, 2, 1.05, reference_frame=apartment_world.root
+            ),
+        )
+        apartment_world.merge_world_at_pose(
+            cereal_world,
+            HomogeneousTransformationMatrix.from_xyz_rpy(
+                2.37, 1.8, 1.05, reference_frame=apartment_world.root
+            ),
+        )
+        milk_view = Milk(body=apartment_world.get_body_by_name("milk.stl"))
+        with apartment_world.modify_world():
+            apartment_world.add_semantic_annotation(milk_view)
+
+        world.merge_world(apartment_world)
+        world.get_body_by_name("base_footprint").parent_connection.origin = (
+            HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
+        )
+        return world
+
+    def test_query_motion_satisfying_task_request2(self):
+        world = self.get_world()
         if not rclpy.ok():
             rclpy.init()
         node = rclpy.create_node("viz_node")
