@@ -71,16 +71,12 @@ poetry.lock
 file::memory:
 
 dist
-random_events/src/random_events.egg-info
-*/__pycache__/
-random_events/docs/_build
-random_events/docs/_autosummary
 
-
-probabilistic_model/doc/build
-probabilistic_model/src/probabilistic_model.egg-info
-probabilistic_model/doc/_build
-
+# probabilistic model dependent
 mlruns
 mlartifacts
 .drawio
+
+# Documentation build artifacts
+**/doc/_build/
+**/.jupyter_cache/
