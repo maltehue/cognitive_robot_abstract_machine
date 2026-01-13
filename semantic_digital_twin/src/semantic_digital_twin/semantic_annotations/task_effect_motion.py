@@ -57,8 +57,8 @@ class ClosedEffect(Effect):
         return self.current_value <= self.goal_value + self.tolerance
 
 
-@dataclass(eq=False)
-class TaskRequest(SemanticAnnotation):
+@dataclass(eq=True)
+class TaskRequest:
     """
     Represents a high-level task request.
     Good definition might something like 'Fill me a glas with water' which needs to be mapped to the specific effect
@@ -68,10 +68,11 @@ class TaskRequest(SemanticAnnotation):
 
     task_type: str
     """Task type identifier (e.g., 'open', 'pour', 'grasp')."""
+    name: str
 
 
-@dataclass(eq=False)
-class Motion(SemanticAnnotation):
+@dataclass(eq=True)
+class Motion:
     """
     Represents a planned motion trajectory.
 
@@ -134,11 +135,15 @@ class RunMSCModel(EffectExecutionModel):
             trajectory: List[float] = []
             for _ in range(self.timeout):
                 executor.tick()
-                trajectory.append(effect.current_value)
+                # Record the actuator-space trajectory, not the effect value
+                trajectory.append(float(self.actuator.position))
                 if self.msc.is_end_motion():
                     break
 
-            return trajectory, effect.is_achieved()
+            achieved = effect.is_achieved()
+
         finally:
             world.state.data = initial_state_data
             world.notify_state_change()
+
+        return trajectory, achieved

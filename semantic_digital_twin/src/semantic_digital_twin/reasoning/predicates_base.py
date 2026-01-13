@@ -47,12 +47,11 @@ class Causes(Predicate):
             and self.motion.motion_model
             and len(self.motion.trajectory) == 0
         ):
-            trajectory, success = self.motion.motion_model.run(
-                self.effect, self.environment
-            )
+            trajectory, _ = self.motion.motion_model.run(self.effect, self.environment)
             if trajectory and len(trajectory) > 0:
                 self.motion.trajectory = trajectory
-            return success
+            # # Verify by simulating the generated trajectory on the environment.
+            # return self._map_motion_to_effect()
 
         # If trajectory exists check if it fits the effect
         return self._map_motion_to_effect()
@@ -72,7 +71,7 @@ class Causes(Predicate):
         self.environment.state.data = initial_state_data
         self.environment.notify_state_change()
 
-        return not is_achieved_pre and is_achieved_post
+        return (not is_achieved_pre) and is_achieved_post
 
 
 @dataclass
@@ -86,6 +85,7 @@ class SatisfiesRequest(Predicate):
     effect: Effect
 
     def __call__(self, *args, **kwargs) -> bool:
+        # print(f"CALL IN SATISFIESREQUEST {self.task.task_type} {self.task.name} {self.effect.name} {self._effect_satisfies_task(self.task, self.effect)}")
         return self._effect_satisfies_task(self.task, self.effect)
 
     @staticmethod
@@ -102,10 +102,10 @@ class SatisfiesRequest(Predicate):
 @dataclass
 class CanExecute(Predicate):
     """
-    Check whether a Robot can execute a motion.
-    TODO: Implementation
-    For the sake of demonstration the simplest way would be to place hte gripper of the robot at the handle
-    and execute the Open motion statechart again. Repeat for all grippers.
+    This predicates checks whether a motion can be executed by a robot.
+    An input motion can be abstract to an robot in the way that it describes the movement of an environment entity
+    and not of an part of the robot.
+    For this implementation the robot only uses its grippers to interact with the environment.
     """
 
     motion: Motion

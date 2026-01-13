@@ -1,9 +1,11 @@
 from copy import deepcopy
 
+from rdflib.plugins.sparql.parser import PrefixedName
+
 from krrood.entity_query_language.conclusion import Add, Set
-from krrood.entity_query_language.entity import let, entity, set_of, inference
-from krrood.entity_query_language.match import match, entity_matching
-from krrood.entity_query_language.quantify_entity import an
+from krrood.entity_query_language.entity import entity, set_of, inference, variable
+from krrood.entity_query_language.match import match
+from krrood.entity_query_language.entity_result_processors import an, a
 from giskardpy.motion_statechart.goals.open_close import Open
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
@@ -24,8 +26,14 @@ from semantic_digital_twin.semantic_annotations.task_effect_motion import (
     Motion,
     RunMSCModel,
 )
-from semantic_digital_twin.testing import apartment_world
 from semantic_digital_twin.world import World
+import pytest
+
+
+@pytest.fixture(scope="function")
+def mutable_model_world(pr2_apartment_world):
+    world = deepcopy(pr2_apartment_world)
+    return world
 
 
 class TestBodyMotionProblem:
@@ -84,23 +92,22 @@ class TestBodyMotionProblem:
             motions.append(close_motion)
 
         # Define simple TaskRequests
-        open_task = TaskRequest(task_type="open")
-        close_task = TaskRequest(task_type="close")
+        open_task = TaskRequest(task_type="open", name="open_drawer")
+        close_task = TaskRequest(task_type="close", name="close_drawer")
         return effects, motions, open_task, close_task, drawers
 
-    def test_query_motion_satisfying_task_request1(self, apartment_world: World):
-        effects, motions, open_task, close_task, _ = self._extend_world(apartment_world)
+    def test_query_motion_satisfying_task_request1(self, mutable_model_world):
+        world = mutable_model_world
+        effects, motions, open_task, close_task, _ = self._extend_world(world)
 
         # Define Krrood symbols
-        task_sym = let(TaskRequest, domain=[open_task, close_task])
-        effect_sym = let(Effect, domain=effects)
-        motion_sym = let(Motion, domain=motions)
+        task_sym = variable(TaskRequest, domain=[open_task, close_task])
+        effect_sym = variable(Effect, domain=effects)
+        motion_sym = variable(Motion, domain=motions)
 
         # Define Predicates for the query
         satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
-        causes_opening = Causes(
-            effect=effect_sym, motion=motion_sym, environment=apartment_world
-        )
+        causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
 
         query = an(
             set_of(
@@ -119,7 +126,8 @@ class TestBodyMotionProblem:
             f"on the DoF {results[0].data[motion_key].actuator.name}"
         )
 
-    def test_query_task_and_effect_satisfying_motion(self, apartment_world: World):
+    def test_query_task_and_effect_satisfying_motion(self, mutable_model_world: World):
+        apartment_world = mutable_model_world
         effects, _, open_task, close_task, drawers = self._extend_world(apartment_world)
 
         # Define a motion
@@ -129,9 +137,9 @@ class TestBodyMotionProblem:
         )
 
         # Define Krrood symbols
-        task_sym = let(TaskRequest, domain=[open_task, close_task])
-        effect_sym = let(Effect, domain=effects)
-        motion_sym = let(Motion, domain=[motion])
+        task_sym = variable(TaskRequest, domain=[open_task, close_task])
+        effect_sym = variable(Effect, domain=effects)
+        motion_sym = variable(Motion, domain=[motion])
 
         # Define Predicates for the query
         satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
@@ -140,8 +148,8 @@ class TestBodyMotionProblem:
         )
 
         query = an(
-            set_of(
-                [motion_sym, effect_sym, task_sym], satisfies_request, causes_opening
+            set_of(motion_sym, effect_sym, task_sym).where(
+                satisfies_request, causes_opening
             )
         )
         results = list(query.evaluate())
@@ -154,15 +162,16 @@ class TestBodyMotionProblem:
             f"Which satisfies the request {results[0].data[request_key].task_type} \n"
         )
 
-    def test_query_motion_if_drawers_open(self, apartment_world: World):
+    def test_query_motion_if_drawers_open(self, mutable_model_world):
+        apartment_world = mutable_model_world
         effects, motions, open_task, close_task, drawers = self._extend_world(
             apartment_world
         )
 
         # Define Krrood symbols
-        task_sym = let(TaskRequest, domain=[open_task, close_task])
-        effect_sym = let(Effect, domain=effects)
-        motion_sym = let(Motion, domain=motions)
+        task_sym = variable(TaskRequest, domain=[open_task, close_task])
+        effect_sym = variable(Effect, domain=effects)
+        motion_sym = variable(Motion, domain=motions)
 
         # Define Predicates for the query
         satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
@@ -173,14 +182,13 @@ class TestBodyMotionProblem:
         # Query for motions that can be causes in the current world based on defined task requests, effects
         # and the world state. Only OpenedEffects should be available, as all drawers are closed
         query = an(
-            set_of(
-                [causes_opening.motion, effect_sym, task_sym],
+            set_of(motion_sym, effect_sym, task_sym).where(
                 satisfies_request,
                 causes_opening,
             )
         )
         results = list(query.evaluate())
-
+        print(len(results))
         # assert that all entries are "open"
         assert all([res.data[task_sym].task_type == "open" for res in results])
         print("first query done with task type ", results[0].data[task_sym].task_type)
@@ -192,30 +200,26 @@ class TestBodyMotionProblem:
 
         # query again
         results = list(query.evaluate())
-
+        print(len(results))
+        print(len(drawers))
         assert all([res.data[task_sym].task_type == "close" for res in results])
         print("second query done with task type ", results[0].data[task_sym].task_type)
 
-    def test_query_motion_satisfying_task_request2(self, apartment_world: World):
-        effects, motions, open_task, close_task, drawers = self._extend_world(
-            apartment_world
-        )
+    def test_query_motion_satisfying_task_request2(self, mutable_model_world: World):
+        world = mutable_model_world
+        effects, motions, open_task, close_task, drawers = self._extend_world(world)
 
-        effect_sym = let(Effect, domain=effects)
-        task_sym = let(TaskRequest, domain=[open_task, close_task])
-        motion_sym = let(Motion, domain=motions)
+        task_sym = variable(TaskRequest, domain=[open_task, close_task])
+        effect_sym = variable(Effect, domain=effects)
+        motion_sym = variable(Motion, domain=motions)
 
-        query = an(
-            set_of(
-                [task_sym.task_type, effect_sym.name, motion_sym.trajectory],
-                SatisfiesRequest(task=task_sym, effect=effect_sym),
-                Causes(
-                    effect=effect_sym, motion=motion_sym, environment=apartment_world
-                ),
-            )
-        )
+        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
+
+        query = an(entity(motion_sym).where(satisfies_request, causes_opening))
 
         results = list(query.evaluate())
-        motion: Motion = results[0]
+        # motion: Motion = results[0]
         print(len(results))
-        print(motion)
+        # print(motion)
+        assert len(results) == len(drawers)
