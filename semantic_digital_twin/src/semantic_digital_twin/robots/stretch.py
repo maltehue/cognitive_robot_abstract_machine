@@ -10,6 +10,7 @@ from .abstract_robot import (
     Camera,
     Torso,
     JointState,
+    Base,
 )
 from .robot_mixins import HasNeck, SpecifiesLeftRightArm, HasArms
 from ..datastructures.prefixed_name import PrefixedName
@@ -146,6 +147,17 @@ class Stretch(AbstractRobot, HasArms, HasNeck):
                 _world=world,
             )
             stretch.add_torso(torso)
+
+            # create Base
+            base = Base(
+                name=PrefixedName("base", prefix=stretch.name.name),
+                root=world.get_body_by_name("base_link"),
+                tip=world.get_body_by_name("base_link"),
+                _world=world,
+                main_axis=Vector3(0, 1, 0, world.get_body_by_name("base_link")),
+            )
+
+            stretch.add_base(base)
 
             # Create states
             arm_park = JointState(

@@ -11,6 +11,7 @@ from .abstract_robot import (
     Torso,
     FieldOfView,
     JointState,
+    Base,
 )
 from .robot_mixins import HasNeck, SpecifiesLeftRightArm
 from ..datastructures.prefixed_name import PrefixedName
@@ -148,6 +149,15 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
                 _world=world,
             )
             tiago.add_torso(torso)
+
+            base = Base(
+                name=PrefixedName("base", prefix=tiago.name.name),
+                root=world.get_body_by_name("base_link"),
+                tip=world.get_body_by_name("base_link"),
+                _world=world,
+            )
+
+            tiago.add_base(base)
 
             # Create states
             left_arm_park = JointState(

@@ -370,6 +370,11 @@ class Base(KinematicChain):
     The base of a robot
     """
 
+    main_axis: Vector3 = field(default=Vector3(1, 0, 0), kw_only=True)
+    """
+    Axis along which the robot manipulates
+    """
+
     @property
     def bounding_box(self) -> BoundingBox:
         bounding_boxes = [
@@ -386,6 +391,10 @@ class Base(KinematicChain):
         )
         return bb_collection.bounding_box()
 
+    def assign_to_robot(self, robot: AbstractRobot):
+        self._robot = robot
+        self.main_axis.reference_frame = self._robot.root
+
     def __hash__(self):
         return hash((self.name, self.root, self.tip))
 
@@ -401,7 +410,7 @@ class JointState:
     The identifier for this joint state.
     """
 
-    joint_names: List[Body]
+    joint_names: List[Connection]
     """
     Names of the joints in this state
     """
@@ -437,8 +446,7 @@ class JointState:
         :param world: The world in which the robot is located.
         """
         for joint_name, joint_position in zip(self.joint_names, self.joint_positions):
-            dof = list(world.get_connection_by_name(joint_name).dofs)[0]
-            world.state[dof.id].position = joint_position
+            joint_name.position = joint_position
         world.notify_state_change()
 
     def assign_to_robot(self, robot: AbstractRobot):

@@ -17,6 +17,7 @@ from giskardpy.motion_statechart.goals.templates import Sequence
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
+from giskardpy.motion_statechart.tasks.pointing import Pointing
 from krrood.entity_query_language.predicate import Predicate
 from pycram.utils import link_pose_for_joint_config
 from ..robots.abstract_robot import AbstractRobot
@@ -27,6 +28,7 @@ from ..semantic_annotations.task_effect_motion import (
     OpenedEffect,
     ClosedEffect,
 )
+from ..spatial_types import Vector3
 from ..world import World
 
 
@@ -143,6 +145,15 @@ class CanExecute(Predicate):
         # 2. Test execution for each gripper
         for gripper in self.robot.manipulators:
             msc = MotionStatechart()
+
+            # Facing the direction
+            point = Pointing(
+                root_link=self.robot._world.root,
+                tip_link=self.robot.root,
+                pointing_axis=self.robot.base.main_axis,
+                goal_point=handle_trajectory[0].to_spatial_type().to_position(),
+            )
+            msc.add_node(point)
 
             # Create CartesianPose tasks for each waypoint
             waypoints = []

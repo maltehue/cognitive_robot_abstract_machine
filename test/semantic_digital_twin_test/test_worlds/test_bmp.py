@@ -411,6 +411,11 @@ class TestBodyMotionProblem:
         world.get_body_by_name("base_footprint").parent_connection.origin = (
             HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
         )
+        robot = PR2.from_world(world)
+        for j in robot.joint_states:
+            if j.state_type == "Park":
+                j.apply_to_world(world)
+
         return world
 
     def get_stretch_world(self):
@@ -506,6 +511,12 @@ class TestBodyMotionProblem:
         world.get_body_by_name("base_link").parent_connection.origin = (
             HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
         )
+
+        robot = Stretch.from_world(world)
+        for j in robot.joint_states:
+            if j.state_type == "Park":
+                j.apply_to_world(world)
+
         return world
 
     def get_tiago_world(self):
@@ -601,6 +612,12 @@ class TestBodyMotionProblem:
         world.get_body_by_name("base_footprint").parent_connection.origin = (
             HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
         )
+
+        robot = Tiago.from_world(world)
+        for j in robot.joint_states:
+            if j.state_type == "Park":
+                j.apply_to_world(world)
+
         return world
 
     def test_query_motion_satisfying_task_request2(self):
@@ -644,7 +661,7 @@ class TestBodyMotionProblem:
 
         task_sym = variable(TaskRequest, domain=[open_task])
         effect_sym = variable(Effect, domain=effects)
-        motion_sym = variable(Motion, domain=motions[0])
+        motion_sym = variable(Motion, domain=motions)
 
         satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
