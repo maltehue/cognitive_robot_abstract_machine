@@ -144,13 +144,16 @@ class CanExecute(Predicate):
 
         # 1. Transform trajectory to handle coordinates (PoseStamped sequence)
         handle_trajectory = []
-        for position in self.motion.trajectory[3:]:
+        for position in self.motion.trajectory[2:]:
             joint_config = {self.motion.actuator.name.name: position}
             # Calculate the global pose of the target body for the given joint position
             pose = link_pose_for_joint_config(
                 target_body, joint_config, self.robot._world
             )
             handle_trajectory.append(pose)
+
+        # 1.1 take first half of the handle trajectory points and invert them to be used as an approach movement
+        approach_trajectory = handle_trajectory[: len(handle_trajectory) // 2][::-1]
 
         self.robot._world.state.data = initial_state_data
         self.robot._world.notify_state_change()
@@ -162,8 +165,18 @@ class CanExecute(Predicate):
             msc = MotionStatechart()
 
             # Create CartesianPose tasks for each waypoint
-            waypoints = []
             root = self.robot._world.root
+            approach_waypoints = []
+            for i, pose in enumerate(approach_trajectory):
+                goal = CartesianPose(
+                    root_link=root,
+                    tip_link=gripper.tool_frame,
+                    goal_pose=pose.to_spatial_type(),
+                    name=f"approach_waypoint_{i}",
+                )
+                approach_waypoints.append(goal)
+
+            waypoints = []
             for i, pose in enumerate(handle_trajectory):
                 goal = CartesianPose(
                     root_link=root,
@@ -174,8 +187,10 @@ class CanExecute(Predicate):
                 waypoints.append(goal)
 
             # Use Sequence to wire waypoints together
-            sequence_goal = Sequence(nodes=waypoints, name="trajectory_sequence")
-            msc.add_node(sequence_goal)
+            full_trajectory_sequence = Sequence(
+                nodes=approach_waypoints + waypoints, name="full_trajectory_sequence"
+            )
+            msc.add_node(full_trajectory_sequence)
 
             collision_node = CollisionAvoidance(
                 collision_entries=[
@@ -198,7 +213,7 @@ class CanExecute(Predicate):
             msc.add_node(collision_node)
 
             # The MSC ends when the sequence is done
-            msc.add_node(EndMotion.when_true(sequence_goal))
+            msc.add_node(EndMotion.when_true(full_trajectory_sequence))
             # Simulate execution in the world
             executor = Executor(
                 world=self.robot._world, collision_checker=CollisionCheckerLib.bpb
