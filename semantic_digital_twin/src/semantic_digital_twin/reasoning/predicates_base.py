@@ -9,18 +9,29 @@ from typing import Optional
 from dataclasses import dataclass, field
 
 from giskardpy.executor import Executor
-from giskardpy.model.collision_matrix_manager import CollisionRequest
+from giskardpy.model.collision_matrix_manager import (
+    CollisionRequest,
+    CollisionAvoidanceTypes,
+)
 from giskardpy.model.collision_world_syncer import CollisionCheckerLib
 from giskardpy.motion_statechart.data_types import LifeCycleValues
 from giskardpy.motion_statechart.goals.collision_avoidance import CollisionAvoidance
 from giskardpy.motion_statechart.goals.templates import Sequence
-from giskardpy.motion_statechart.graph_node import EndMotion
+from giskardpy.motion_statechart.graph_node import EndMotion, CancelMotion
+from giskardpy.motion_statechart.monitors.monitors import LocalMinimumReached
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
+from giskardpy.qp.exceptions import (
+    HardConstraintsViolatedException,
+    InfeasibleException,
+)
+from krrood.entity_query_language.entity import entity, variable
+from krrood.entity_query_language.entity_result_processors import an
 from giskardpy.motion_statechart.tasks.pointing import Pointing
 from krrood.entity_query_language.predicate import Predicate
 from pycram.utils import link_pose_for_joint_config
 from ..robots.abstract_robot import AbstractRobot
+from ..semantic_annotations.semantic_annotations import Drawer
 from ..semantic_annotations.task_effect_motion import (
     TaskRequest,
     Effect,
@@ -128,13 +139,14 @@ class CanExecute(Predicate):
         if not self.motion.trajectory:
             return False
 
+        initial_state_data = self.robot._world.state.data.copy()
         # The child of the connection (actuator) is typically the movable part (e.g., drawer container)
 
         target_body = self.motion.motion_model.msc.nodes[0].tip_link
 
         # 1. Transform trajectory to handle coordinates (PoseStamped sequence)
         handle_trajectory = []
-        for position in self.motion.trajectory:
+        for position in self.motion.trajectory[2:]:
             joint_config = {self.motion.actuator.name.name: position}
             # Calculate the global pose of the target body for the given joint position
             pose = link_pose_for_joint_config(
@@ -142,7 +154,15 @@ class CanExecute(Predicate):
             )
             handle_trajectory.append(pose)
 
+        # 1.1 take first half of the handle trajectory points and invert them to be used as an approach movement
+        approach_trajectory = handle_trajectory[: len(handle_trajectory) // 2][::-1]
+
+        self.robot._world.state.data = initial_state_data
+        self.robot._world.notify_state_change()
+
         # 2. Test execution for each gripper
+        result = False
+        initial_state_data = self.robot._world.state.data.copy()
         for gripper in self.robot.manipulators:
             msc = MotionStatechart()
 
@@ -156,8 +176,18 @@ class CanExecute(Predicate):
             msc.add_node(point)
 
             # Create CartesianPose tasks for each waypoint
-            waypoints = []
             root = self.robot._world.root
+            approach_waypoints = []
+            for i, pose in enumerate(approach_trajectory):
+                goal = CartesianPose(
+                    root_link=root,
+                    tip_link=gripper.tool_frame,
+                    goal_pose=pose.to_spatial_type(),
+                    name=f"approach_waypoint_{i}",
+                )
+                approach_waypoints.append(goal)
+
+            waypoints = []
             for i, pose in enumerate(handle_trajectory):
                 goal = CartesianPose(
                     root_link=root,
@@ -168,33 +198,56 @@ class CanExecute(Predicate):
                 waypoints.append(goal)
 
             # Use Sequence to wire waypoints together
-            sequence_goal = Sequence(nodes=waypoints, name="trajectory_sequence")
-            msc.add_node(sequence_goal)
+            full_trajectory_sequence = Sequence(
+                nodes=approach_waypoints + waypoints, name="full_trajectory_sequence"
+            )
+            msc.add_node(full_trajectory_sequence)
 
             collision_node = CollisionAvoidance(
-                collision_entries=[CollisionRequest.avoid_all_collision()],
+                collision_entries=[
+                    CollisionRequest.avoid_all_collision(distance=0.01),
+                    CollisionRequest(
+                        type_=CollisionAvoidanceTypes.ALLOW_COLLISION,
+                        body_group1=gripper.bodies,
+                        body_group2=list(
+                            list(
+                                an(
+                                    entity(
+                                        drawer := variable(Drawer, domain=None)
+                                    ).where(drawer.handle.body == target_body)
+                                ).evaluate()
+                            )[0].bodies
+                        ),
+                    ),
+                ],
             )
             msc.add_node(collision_node)
 
             # The MSC ends when the sequence is done
-            msc.add_node(EndMotion.when_true(sequence_goal))
+            msc.add_node(EndMotion.when_true(full_trajectory_sequence))
             # Simulate execution in the world
             executor = Executor(
                 world=self.robot._world, collision_checker=CollisionCheckerLib.bpb
             )
+
             executor.compile(msc)
 
-            with self.robot._world.reset_state_context():
-                # Tick the executor until the motion ends or times out
-                try:
-                    executor.tick_until_end(timeout=400)
-                except TimeoutError as e:
-                    # If timeout is reached, the motion is considered not executable
-                    pass
+            # Tick the executor until the motion ends or times out
+            try:
+                executor.tick_until_end(timeout=400)
+            except TimeoutError as e:
+                # If timeout is reached, the motion is considered not executable
+                pass
+            except HardConstraintsViolatedException:
+                pass
+            except InfeasibleException:
+                pass
 
-                # If the sequence goal reached the DONE state, this gripper can execute the motion
-                # if sequence_goal.life_cycle_state == LifeCycleValues.DONE:
-                if msc.is_end_motion():
-                    return True
+            # if sequence_goal.life_cycle_state == LifeCycleValues.DONE:
+            result = msc.is_end_motion()
+            self.robot._world.state.data = initial_state_data
+            self.robot._world.notify_state_change()
+            if result:
+                break
 
-        return False
+        return result
