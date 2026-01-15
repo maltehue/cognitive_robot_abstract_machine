@@ -746,6 +746,47 @@ class TestBodyMotionProblem:
         # print(motion)
         # assert len(results) == len(drawers)
 
+    def test_query_task_and_effect_satisfying_motion_pr2(self):
+        world = self.get_world()
+        if not rclpy.ok():
+            rclpy.init()
+        node = rclpy.create_node("viz_node")
+        VizMarkerPublisher(world=world, node=node, throttle_state_updates=5)
+
+        effects, _, open_task, close_task, drawers = self._extend_world(world)
+
+        # Define a motion
+        motion = Motion(
+            trajectory=[0.0, 0.1, 0.2, 0.3, 0.4],
+            actuator=drawers[0].container.body.parent_connection,
+        )
+
+        # Define Krrood symbols
+        task_sym = variable(TaskRequest, domain=[open_task, close_task])
+        effect_sym = variable(Effect, domain=effects)
+        motion_sym = variable(Motion, domain=[motion])
+
+        # Define Predicates for the query
+        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
+        robot = PR2.from_world(world)
+        can_execute = CanExecute(motion=motion_sym, robot=robot)
+
+        query = an(
+            set_of(motion_sym, effect_sym, task_sym).where(
+                satisfies_request, causes_opening, can_execute
+            )
+        )
+        results = list(query.evaluate())
+
+        motion_key, effect_key, request_key = list(results[0].data.keys())
+        print(
+            f"The trajectory {results[0].data[motion_key].trajectory} \n"
+            f"on the DoF {results[0].data[motion_key].actuator.name} \n"
+            f"can be caused by effect {results[0].data[effect_key].name} \n"
+            f"Which satisfies the request {results[0].data[request_key].task_type} \n"
+        )
+
     def test_what_needs_to_be_done(self):
         world = self.get_world()
         if not rclpy.ok():
