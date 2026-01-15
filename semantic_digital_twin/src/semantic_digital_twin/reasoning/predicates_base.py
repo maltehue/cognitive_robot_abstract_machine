@@ -25,13 +25,13 @@ from giskardpy.qp.exceptions import (
     HardConstraintsViolatedException,
     InfeasibleException,
 )
-from krrood.entity_query_language.entity import entity, variable
+from krrood.entity_query_language.entity import entity, variable, variable_from, or_
 from krrood.entity_query_language.entity_result_processors import an
 from giskardpy.motion_statechart.tasks.pointing import Pointing
-from krrood.entity_query_language.predicate import Predicate
+from krrood.entity_query_language.predicate import Predicate, HasType, HasTypes
 from pycram.utils import link_pose_for_joint_config
 from ..robots.abstract_robot import AbstractRobot
-from ..semantic_annotations.semantic_annotations import Drawer
+from ..semantic_annotations.semantic_annotations import Drawer, Door
 from ..semantic_annotations.task_effect_motion import (
     TaskRequest,
     Effect,
@@ -219,8 +219,13 @@ class CanExecute(Predicate):
                             list(
                                 an(
                                     entity(
-                                        drawer := variable(Drawer, domain=None)
-                                    ).where(drawer.handle.body == target_body)
+                                        drawer := variable_from(
+                                            domain=target_body._semantic_annotations
+                                        )
+                                    ).where(
+                                        HasTypes(drawer, (Drawer, Door)),
+                                        drawer.handle.body == target_body,
+                                    )
                                 ).evaluate()
                             )[0].bodies
                         ),

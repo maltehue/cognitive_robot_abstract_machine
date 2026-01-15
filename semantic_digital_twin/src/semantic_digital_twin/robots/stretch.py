@@ -154,7 +154,7 @@ class Stretch(AbstractRobot, HasArms, HasNeck):
                 root=world.get_body_by_name("base_link"),
                 tip=world.get_body_by_name("base_link"),
                 _world=world,
-                main_axis=Vector3(0, 1, 0, world.get_body_by_name("base_link")),
+                main_axis=Vector3(0, -1, 0, world.get_body_by_name("base_link")),
             )
 
             stretch.add_base(base)

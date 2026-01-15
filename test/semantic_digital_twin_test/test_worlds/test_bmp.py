@@ -33,6 +33,7 @@ from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Drawer,
     Container,
     Milk,
+    Door,
 )
 from semantic_digital_twin.semantic_annotations.task_effect_motion import (
     OpenedEffect,
@@ -85,40 +86,69 @@ class TestBodyMotionProblem:
 
         return RunMSCModel(msc=msc, actuator=actuator, timeout=500)
 
-    def _extend_world(self, world: World):
+    def _extend_world(
+        self, world: World, only_drawers: bool = False, only_doors: bool = False
+    ):
         with world.modify_world():
             world_reasoner = WorldReasoner(world)
             world_reasoner.reason()
 
-        drawers = world.get_semantic_annotations_by_type(Drawer)
+        drawers = [] if only_doors else world.get_semantic_annotations_by_type(Drawer)
+
+        doors = [] if only_drawers else world.get_semantic_annotations_by_type(Door)
+
+        annotations = drawers + doors
 
         # Define effects for the drawers
         effects = []
         motions = []
-        property_getter = lambda obj: obj.container.body.parent_connection.position
-        for drawer in drawers:
+        drawer_property_getter = (
+            lambda obj: obj.container.body.parent_connection.position
+        )
+        door_property_getter = lambda obj: obj.body.parent_connection.position
+        for annotation in annotations:
             effect_open = OpenedEffect(
-                target_object=drawer, goal_value=0.3, property_getter=property_getter
+                target_object=annotation,
+                goal_value=0.3,
+                property_getter=(
+                    drawer_property_getter
+                    if isinstance(annotation, Drawer)
+                    else door_property_getter
+                ),
             )
             close_effect = ClosedEffect(
-                target_object=drawer,
+                target_object=annotation,
                 goal_value=0.0,
-                property_getter=property_getter,
+                property_getter=(
+                    drawer_property_getter
+                    if isinstance(annotation, Drawer)
+                    else door_property_getter
+                ),
             )
             effects.append(effect_open)
             effects.append(close_effect)
+
+            act = (
+                annotation.container.body.parent_connection
+                if isinstance(annotation, Drawer)
+                else annotation.body.parent_connection
+            )
             close_motion = Motion(
                 trajectory=[],
-                actuator=drawer.container.body.parent_connection,
+                actuator=act,
                 motion_model=self._get_effect_execution_model_for_open_goal(
-                    drawer.handle.body, drawer.container.body.parent_connection, 0.0
+                    annotation.handle.body,
+                    act,
+                    act.active_dofs[0].lower_limits.position,
                 ),
             )
             open_motion = Motion(
                 trajectory=[],
-                actuator=drawer.container.body.parent_connection,
+                actuator=act,
                 motion_model=self._get_effect_execution_model_for_open_goal(
-                    drawer.handle.body, drawer.container.body.parent_connection, 0.3
+                    annotation.handle.body,
+                    act,
+                    act.active_dofs[0].upper_limits.position,
                 ),
             )
             motions.append(open_motion)
@@ -497,7 +527,7 @@ class TestBodyMotionProblem:
 
             for body in robot.bodies_with_collisions:
                 collision_config = CollisionCheckingConfig(
-                    buffer_zone_distance=0.1, violated_distance=0.0
+                    buffer_zone_distance=0.005, violated_distance=0.0
                 )
                 body.set_static_collision_config(collision_config)
 
@@ -644,7 +674,7 @@ class TestBodyMotionProblem:
 
             for body in robot.bodies_with_collisions:
                 collision_config = CollisionCheckingConfig(
-                    buffer_zone_distance=0.1, violated_distance=0.0
+                    buffer_zone_distance=0.005, violated_distance=0.0
                 )
                 body.set_static_collision_config(collision_config)
 
@@ -714,7 +744,9 @@ class TestBodyMotionProblem:
         node = rclpy.create_node("viz_node")
         VizMarkerPublisher(world=world, node=node, throttle_state_updates=10)
 
-        effects, motions, open_task, close_task, drawers = self._extend_world(world)
+        effects, motions, open_task, close_task, drawers = self._extend_world(
+            world, only_doors=True
+        )
 
         task_sym = variable(TaskRequest, domain=[open_task])
         effect_sym = variable(Effect, domain=effects)
