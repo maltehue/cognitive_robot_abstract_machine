@@ -107,9 +107,14 @@ class TestBodyMotionProblem:
         )
         door_property_getter = lambda obj: obj.body.parent_connection.position
         for annotation in annotations:
+            act = (
+                annotation.container.body.parent_connection
+                if isinstance(annotation, Drawer)
+                else annotation.body.parent_connection
+            )
             effect_open = OpenedEffect(
                 target_object=annotation,
-                goal_value=0.3,
+                goal_value=act.active_dofs[0].upper_limits.position,
                 property_getter=(
                     drawer_property_getter
                     if isinstance(annotation, Drawer)
@@ -118,7 +123,7 @@ class TestBodyMotionProblem:
             )
             close_effect = ClosedEffect(
                 target_object=annotation,
-                goal_value=0.0,
+                goal_value=act.active_dofs[0].lower_limits.position,
                 property_getter=(
                     drawer_property_getter
                     if isinstance(annotation, Drawer)
@@ -128,11 +133,6 @@ class TestBodyMotionProblem:
             effects.append(effect_open)
             effects.append(close_effect)
 
-            act = (
-                annotation.container.body.parent_connection
-                if isinstance(annotation, Drawer)
-                else annotation.body.parent_connection
-            )
             close_motion = Motion(
                 trajectory=[],
                 actuator=act,
@@ -539,7 +539,7 @@ class TestBodyMotionProblem:
 
         world.merge_world(apartment_world)
         world.get_body_by_name("base_link").parent_connection.origin = (
-            HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
+            HomogeneousTransformationMatrix.from_xyz_rpy(1.5, 2, 0)
         )
 
         robot = Stretch.from_world(world)
@@ -641,7 +641,7 @@ class TestBodyMotionProblem:
 
         world.merge_world(apartment_world)
         world.get_body_by_name("base_footprint").parent_connection.origin = (
-            HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
+            HomogeneousTransformationMatrix.from_xyz_rpy(1.5, 2, 0)
         )
 
         robot = Tiago.from_world(world)
@@ -688,9 +688,11 @@ class TestBodyMotionProblem:
         if not rclpy.ok():
             rclpy.init()
         node = rclpy.create_node("viz_node")
-        VizMarkerPublisher(world=world, node=node, throttle_state_updates=5)
+        VizMarkerPublisher(world=world, node=node, throttle_state_updates=15)
 
-        effects, motions, open_task, close_task, drawers = self._extend_world(world)
+        effects, motions, open_task, close_task, drawers = self._extend_world(
+            world, only_doors=True
+        )
 
         task_sym = variable(TaskRequest, domain=[open_task])
         effect_sym = variable(Effect, domain=effects)
@@ -709,6 +711,7 @@ class TestBodyMotionProblem:
 
         results = list(query.evaluate())
         # motion: Motion = results[0]
+        print(results)
         print(len(results))
         # print(motion)
         # assert len(results) == len(drawers)
