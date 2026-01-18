@@ -29,6 +29,7 @@ from krrood.entity_query_language.entity import entity, variable, variable_from,
 from krrood.entity_query_language.entity_result_processors import an
 from giskardpy.motion_statechart.tasks.pointing import Pointing
 from krrood.entity_query_language.predicate import Predicate, HasType, HasTypes
+from pycram.datastructures.pose import PyCramQuaternion
 from pycram.utils import link_pose_for_joint_config
 from ..robots.abstract_robot import AbstractRobot
 from ..semantic_annotations.semantic_annotations import Drawer, Door
@@ -152,6 +153,8 @@ class CanExecute(Predicate):
             pose = link_pose_for_joint_config(
                 target_body, joint_config, self.robot._world
             )
+            if "sink_area_sink" in [b.name.name for b in self.robot._world.bodies]:
+                pose.rotate_by_quaternion([0, 0, 1, 0])
             handle_trajectory.append(pose)
 
         # 1.1 take first half of the handle trajectory points and invert them to be used as an approach movement

@@ -98,6 +98,8 @@ class TestBodyMotionProblem:
         doors = [] if only_drawers else world.get_semantic_annotations_by_type(Door)
 
         annotations = drawers + doors
+        print(f"len annotations: {len(annotations)}")
+        print(f"len drawers: {len(drawers)}")
 
         # Define effects for the drawers
         effects = []
@@ -155,8 +157,8 @@ class TestBodyMotionProblem:
             motions.append(close_motion)
 
         # Define simple TaskRequests
-        open_task = TaskRequest(task_type="open", name="open_drawer")
-        close_task = TaskRequest(task_type="close", name="close_drawer")
+        open_task = TaskRequest(task_type="open", name="open_container")
+        close_task = TaskRequest(task_type="close", name="close_container")
         return effects, motions, open_task, close_task, drawers
 
     def test_query_motion_satisfying_task_request1(self, mutable_model_world):
@@ -316,7 +318,21 @@ class TestBodyMotionProblem:
             apartment_world.add_semantic_annotation(milk_view)
         return apartment_world
 
-    def get_world(self):
+    def get_kitchen_world(self):
+        kitchen_world = URDFParser.from_file(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../..",
+                "pycram",
+                "resources",
+                "worlds",
+                "kitchen.urdf",
+            )
+        ).parse()
+
+        return kitchen_world
+
+    def get_world(self, use_kitchen=False):
         urdf_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "..",
@@ -445,11 +461,16 @@ class TestBodyMotionProblem:
                 collision_config
             )
 
-        apartment_world = self.get_apartment_world()
+        # apartment_world = self.get_apartment_world()
+        apartment_world = (
+            self.get_kitchen_world() if use_kitchen else self.get_apartment_world()
+        )
 
         world.merge_world(apartment_world)
         world.get_body_by_name("base_footprint").parent_connection.origin = (
-            HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
+            HomogeneousTransformationMatrix.from_xyz_rpy(
+                *([0, 0, 0] if use_kitchen else [1.5, 2, 0])
+            )
         )
         robot = PR2.from_world(world)
         for j in robot.joint_states:
@@ -460,7 +481,7 @@ class TestBodyMotionProblem:
 
         return world
 
-    def get_stretch_world(self):
+    def get_stretch_world(self, use_kitchen=False):
         urdf_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "..",
@@ -531,25 +552,30 @@ class TestBodyMotionProblem:
 
             for body in robot.bodies_with_collisions:
                 collision_config = CollisionCheckingConfig(
-                    buffer_zone_distance=0.005, violated_distance=0.0
+                    buffer_zone_distance=0.1, violated_distance=0.0
                 )
                 body.set_static_collision_config(collision_config)
 
-        apartment_world = self.get_apartment_world()
+        # apartment_world = self.get_apartment_world()
+        apartment_world = (
+            self.get_kitchen_world() if use_kitchen else self.get_apartment_world()
+        )
 
         world.merge_world(apartment_world)
         world.get_body_by_name("base_link").parent_connection.origin = (
-            HomogeneousTransformationMatrix.from_xyz_rpy(1.5, 2, 0)
+            HomogeneousTransformationMatrix.from_xyz_rpy(
+                *([0, 0, 0] if use_kitchen else [1.5, 2, 0])
+            )
         )
 
         robot = Stretch.from_world(world)
         for j in robot.joint_states:
-            if j.state_type == "Park":
+            if j.state_type == "Park":  # or j.state_type == "Open":
                 j.apply_to_world(world)
 
         return world
 
-    def get_tiago_world(self):
+    def get_tiago_world(self, use_kitchen=False):
         urdf_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "..",
@@ -637,26 +663,40 @@ class TestBodyMotionProblem:
                 )
                 body.set_static_collision_config(collision_config)
 
-        apartment_world = self.get_apartment_world()
+        apartment_world = (
+            self.get_kitchen_world() if use_kitchen else self.get_apartment_world()
+        )
 
         world.merge_world(apartment_world)
         world.get_body_by_name("base_footprint").parent_connection.origin = (
-            HomogeneousTransformationMatrix.from_xyz_rpy(1.5, 2, 0)
+            HomogeneousTransformationMatrix.from_xyz_rpy(
+                *([0, 0, 0] if use_kitchen else [1.5, 2, 0])
+            )
         )
 
         robot = Tiago.from_world(world)
         for j in robot.joint_states:
-            if j.state_type == "Park":
+            if j.state_type == "Park":  # or j.state_type == "Open":
                 j.apply_to_world(world)
 
         return world
 
+    def present_results(self, results, robot: AbstractRobot):
+        for r in results:
+            task, motion, effect = r.values()
+            print("-" * 20)
+            print(f"Task: {task}")
+            print(f"Robot: {robot.name}")
+            print(
+                f"Effect: {effect.__class__.__name__}  for target: {effect.target_object.__class__.__name__}(name={effect.target_object.name} body={effect.target_object.body.name if isinstance(effect.target_object, Door) else effect.target_object.container.body.name} handle={effect.target_object.handle.body.name})"
+            )
+
     def test_query_motion_satisfying_task_request2(self):
-        world = self.get_world()
+        world = self.get_world(use_kitchen=True)
         if not rclpy.ok():
             rclpy.init()
-        node = rclpy.create_node("viz_node")
-        VizMarkerPublisher(world=world, node=node, throttle_state_updates=10)
+        # node = rclpy.create_node("viz_node")
+        # VizMarkerPublisher(world=world, node=node, throttle_state_updates=10)
 
         effects, motions, open_task, close_task, drawers = self._extend_world(
             world, only_doors=True
@@ -672,26 +712,27 @@ class TestBodyMotionProblem:
         can_execute = CanExecute(motion=motion_sym, robot=robot)
 
         query = an(
-            set_of(task_sym, motion_sym).where(
+            set_of(task_sym, motion_sym, effect_sym).where(
                 satisfies_request, causes_opening, can_execute
             )
         )
 
         results = list(query.evaluate())
         # motion: Motion = results[0]
+        self.present_results(results, robot)
         print(len(results))
         # print(motion)
         # assert len(results) == len(drawers)
 
     def test_query_motion_satisfying_task_request_stretch(self):
-        world = self.get_stretch_world()
+        world = self.get_stretch_world(use_kitchen=False)
         if not rclpy.ok():
             rclpy.init()
-        node = rclpy.create_node("viz_node")
-        VizMarkerPublisher(world=world, node=node, throttle_state_updates=15)
+        # node = rclpy.create_node("viz_node")
+        # VizMarkerPublisher(world=world, node=node, throttle_state_updates=10)
 
         effects, motions, open_task, close_task, drawers = self._extend_world(
-            world, only_doors=True
+            world,
         )
 
         task_sym = variable(TaskRequest, domain=[open_task])
@@ -704,26 +745,28 @@ class TestBodyMotionProblem:
         can_execute = CanExecute(motion=motion_sym, robot=robot)
 
         query = an(
-            set_of(task_sym, motion_sym).where(
+            set_of(task_sym, motion_sym, effect_sym).where(
                 satisfies_request, causes_opening, can_execute
             )
         )
 
         results = list(query.evaluate())
         # motion: Motion = results[0]
-        print(results)
+        self.present_results(results, robot)
         print(len(results))
         # print(motion)
         # assert len(results) == len(drawers)
 
     def test_query_motion_satisfying_task_request_tiago(self):
-        world = self.get_tiago_world()
+        world = self.get_tiago_world(use_kitchen=True)
         if not rclpy.ok():
             rclpy.init()
-        node = rclpy.create_node("viz_node")
-        VizMarkerPublisher(world=world, node=node, throttle_state_updates=5)
+        # node = rclpy.create_node("viz_node")
+        # VizMarkerPublisher(world=world, node=node, throttle_state_updates=15)
 
-        effects, motions, open_task, close_task, drawers = self._extend_world(world)
+        effects, motions, open_task, close_task, drawers = self._extend_world(
+            world,  # only_doors=True
+        )
 
         task_sym = variable(TaskRequest, domain=[open_task])
         effect_sym = variable(Effect, domain=effects)
@@ -735,13 +778,14 @@ class TestBodyMotionProblem:
         can_execute = CanExecute(motion=motion_sym, robot=robot)
 
         query = an(
-            set_of(task_sym, motion_sym).where(
+            set_of(task_sym, motion_sym, effect_sym).where(
                 satisfies_request, causes_opening, can_execute
             )
         )
 
         results = list(query.evaluate())
         # motion: Motion = results[0]
+        self.present_results(results, robot)
         print(len(results))
         # print(motion)
         # assert len(results) == len(drawers)
