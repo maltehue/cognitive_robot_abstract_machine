@@ -121,6 +121,15 @@ class SatisfiesRequest(Predicate):
     def _effect_satisfies_task(task: TaskRequest, effect: Effect) -> bool:
         # Placeholder logic
         task_type = (task.task_type or "").lower()
+        if not "open" in task.name and not "close" in task.name:
+            target_name = (
+                effect.target_object.body.name.name
+                if isinstance(effect.target_object, Door)
+                else effect.target_object.container.body.name.name
+            )
+            if not target_name == task.name:
+                return False
+
         if task_type == "open":
             return isinstance(effect, OpenedEffect)
         if task_type == "close":

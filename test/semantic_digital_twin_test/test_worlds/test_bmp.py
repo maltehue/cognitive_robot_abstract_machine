@@ -428,6 +428,7 @@ class TestBodyMotionProblem:
                     buffer_zone_distance=0.005,
                     violated_distance=0.0,
                     max_avoided_bodies=4,
+                    disabled=True,
                 )
                 connection.set_static_collision_config_for_direct_child_bodies(
                     collision_config
@@ -566,6 +567,16 @@ class TestBodyMotionProblem:
                 )
                 body.set_static_collision_config(collision_config)
 
+            for joint_name in frozen_joints:
+                c: ActiveConnection = world.get_connection_by_name(joint_name)
+                collision_config = CollisionCheckingConfig(
+                    buffer_zone_distance=0.005,
+                    violated_distance=0.0,
+                    max_avoided_bodies=4,
+                    disabled=True,
+                )
+                c.set_static_collision_config_for_direct_child_bodies(collision_config)
+
         # apartment_world = self.get_apartment_world()
         apartment_world = (
             self.get_kitchen_world() if use_kitchen else self.get_apartment_world()
@@ -673,6 +684,16 @@ class TestBodyMotionProblem:
                 )
                 body.set_static_collision_config(collision_config)
 
+            for joint_name in frozen_joints:
+                c: ActiveConnection = world.get_connection_by_name(joint_name)
+                collision_config = CollisionCheckingConfig(
+                    buffer_zone_distance=0.005,
+                    violated_distance=0.0,
+                    max_avoided_bodies=4,
+                    disabled=True,
+                )
+                c.set_static_collision_config_for_direct_child_bodies(collision_config)
+
         apartment_world = (
             self.get_kitchen_world() if use_kitchen else self.get_apartment_world()
         )
@@ -705,14 +726,17 @@ class TestBodyMotionProblem:
         world = self.get_world(use_kitchen=True)
         if not rclpy.ok():
             rclpy.init()
-        # node = rclpy.create_node("viz_node")
-        # VizMarkerPublisher(world=world, node=node, throttle_state_updates=10)
+        node = rclpy.create_node("viz_node")
+        VizMarkerPublisher(world=world, node=node, throttle_state_updates=20)
 
         effects, motions, open_task, close_task, drawers = self._extend_world(
-            world, only_doors=True
+            world, only_doors=False
         )
 
-        task_sym = variable(TaskRequest, domain=[open_task])
+        task_sym = variable(
+            TaskRequest,
+            domain=[TaskRequest(task_type="open", name="oven_area_oven_door")],
+        )
         effect_sym = variable(Effect, domain=effects)
         motion_sym = variable(Motion, domain=motions)
 
@@ -733,13 +757,33 @@ class TestBodyMotionProblem:
         print(len(results))
         # print(motion)
         # assert len(results) == len(drawers)
+        names = []
+        for r in results:
+            task, motion, effect = r.values()
+            names.append(
+                effect.target_object.body.name.name
+                if isinstance(effect.target_object, Door)
+                else effect.target_object.container.body.name.name
+            )
+        diff = set(
+            [
+                (
+                    a.target_object.body.name.name
+                    if isinstance(a.target_object, Door)
+                    else a.target_object.container.body.name.name
+                )
+                for a in effects
+            ]
+        ).difference(set(names))
+        print(diff)
+        print(len(diff))
 
     def test_query_motion_satisfying_task_request_stretch(self):
-        world = self.get_stretch_world(use_kitchen=False)
+        world = self.get_stretch_world(use_kitchen=True)
         if not rclpy.ok():
             rclpy.init()
-        # node = rclpy.create_node("viz_node")
-        # VizMarkerPublisher(world=world, node=node, throttle_state_updates=10)
+        node = rclpy.create_node("viz_node")
+        VizMarkerPublisher(world=world, node=node, throttle_state_updates=10)
 
         effects, motions, open_task, close_task, drawers = self._extend_world(
             world,
@@ -766,13 +810,33 @@ class TestBodyMotionProblem:
         print(len(results))
         # print(motion)
         # assert len(results) == len(drawers)
+        names = []
+        for r in results:
+            task, motion, effect = r.values()
+            names.append(
+                effect.target_object.body.name.name
+                if isinstance(effect.target_object, Door)
+                else effect.target_object.container.body.name.name
+            )
+        diff = set(
+            [
+                (
+                    a.target_object.body.name.name
+                    if isinstance(a.target_object, Door)
+                    else a.target_object.container.body.name.name
+                )
+                for a in effects
+            ]
+        ).difference(set(names))
+        print(diff)
+        print(len(diff))
 
     def test_query_motion_satisfying_task_request_tiago(self):
         world = self.get_tiago_world(use_kitchen=True)
         if not rclpy.ok():
             rclpy.init()
-        # node = rclpy.create_node("viz_node")
-        # VizMarkerPublisher(world=world, node=node, throttle_state_updates=15)
+        node = rclpy.create_node("viz_node")
+        VizMarkerPublisher(world=world, node=node, throttle_state_updates=15)
 
         effects, motions, open_task, close_task, drawers = self._extend_world(
             world,  # only_doors=True
@@ -799,6 +863,26 @@ class TestBodyMotionProblem:
         print(len(results))
         # print(motion)
         # assert len(results) == len(drawers)
+        names = []
+        for r in results:
+            task, motion, effect = r.values()
+            names.append(
+                effect.target_object.body.name.name
+                if isinstance(effect.target_object, Door)
+                else effect.target_object.container.body.name.name
+            )
+        diff = set(
+            [
+                (
+                    a.target_object.body.name.name
+                    if isinstance(a.target_object, Door)
+                    else a.target_object.container.body.name.name
+                )
+                for a in effects
+            ]
+        ).difference(set(names))
+        print(diff)
+        print(len(diff))
 
     def test_query_task_and_effect_satisfying_motion_pr2(self):
         world = self.get_world()
