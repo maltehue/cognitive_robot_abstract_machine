@@ -295,6 +295,7 @@ def test_compressed_copy_can_be_plotted(pr2_world_setup: World):
     end = EndMotion()
     msc.add_node(end)
     end.start_condition = cart_goal.observation_variable
+    msc.add_node(CancelMotion.when_true(cart_goal))
 
     msc._expand_goals(BuildContext.empty())
     json_data = msc.create_structure_copy().to_json()
@@ -303,7 +304,8 @@ def test_compressed_copy_can_be_plotted(pr2_world_setup: World):
 
     msc_copy = MotionStatechart.from_json(new_json_data)
     msc_copy._add_transitions()
-    assert isinstance(msc_copy.nodes[-1], EndMotion)
+    assert isinstance(msc_copy.nodes[-2], EndMotion)
+    assert isinstance(msc_copy.nodes[-1], CancelMotion)
     msc_copy.draw("muh.pdf")
 
 
