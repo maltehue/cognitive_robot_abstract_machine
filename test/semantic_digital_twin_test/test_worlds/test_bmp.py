@@ -1,4 +1,5 @@
 import os
+import random
 from copy import deepcopy
 import time
 
@@ -171,6 +172,57 @@ class TestBodyMotionProblem:
         close_task = TaskRequest(task_type="close", name="close_container")
         return effects, motions, open_task, close_task, drawers
 
+    def _extend_world2(self, world: World):
+        with world.modify_world():
+            world_reasoner = WorldReasoner(world)
+            world_reasoner.reason()
+        drawers = world.get_semantic_annotations_by_type(Drawer)
+
+        doors = world.get_semantic_annotations_by_type(Door)
+
+        annotations = drawers + doors
+        drawer_property_getter = (
+            lambda obj: obj.container.body.parent_connection.position
+        )
+        door_property_getter = lambda obj: obj.body.parent_connection.position
+
+        effects = []
+        motions = []
+        for a in annotations:
+            act = (
+                a.container.body.parent_connection
+                if isinstance(a, Drawer)
+                else a.body.parent_connection
+            )
+            max_value = act.active_dofs[0].upper_limits.position
+            if isinstance(a, Door):
+                max_value /= 2
+            open_effect = OpenedEffect(
+                target_object=a,
+                goal_value=max_value,
+                property_getter=(
+                    drawer_property_getter
+                    if isinstance(a, Drawer)
+                    else door_property_getter
+                ),
+            )
+            effects.append(open_effect)
+
+            open_motion = Motion(
+                trajectory=[],
+                actuator=act,
+                motion_model=self._get_effect_execution_model_for_open_goal(
+                    a.handle.body,
+                    act,
+                    act.active_dofs[0].upper_limits.position,
+                ),
+            )
+            motions.append(open_motion)
+
+            open_task = TaskRequest(task_type="open", name="open_container")
+
+        return effects, motions, open_task, None, drawers
+
     def test_query_motion_satisfying_task_request1(self, mutable_model_world):
         world = mutable_model_world
         effects, motions, open_task, close_task, _ = self._extend_world(world)
@@ -191,6 +243,46 @@ class TestBodyMotionProblem:
             )
         )
         results = list(query.evaluate())
+
+        motion_key, effect_key, request_key = list(results[0].data.keys())
+        print(
+            f"A solution to fulfill the request {results[0].data[request_key].task_type} \n"
+            f"is to achieve effect {results[0].data[effect_key].name} by executing the motion \n"
+            f"trajectory {results[0].data[motion_key].trajectory} \n"
+            f"on the DoF {results[0].data[motion_key].actuator.name}"
+        )
+
+    def test_query_motion_satisfying_task_request_not_all(self, mutable_model_world):
+        world = mutable_model_world
+        effects, motions, open_task, close_task, _ = self._extend_world2(world)
+
+        for drawer in world.get_semantic_annotations_by_type(Drawer):
+            if random.randint(0, 5) == 4:
+                max_position = drawer.container.body.parent_connection.active_dofs[
+                    0
+                ].upper_limits.position
+                drawer.container.body.parent_connection.position = max_position
+                print(f"drawer {drawer.name} moved to position {max_position}")
+
+        print(f"len of effects: {len(effects)}, len of motions: {len(motions)}")
+
+        # Define Krrood symbols
+        task_sym = variable(TaskRequest, domain=[open_task, close_task])
+        effect_sym = variable(Effect, domain=effects)
+        motion_sym = variable(Motion, domain=motions)
+
+        # Define Predicates for the query
+        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
+
+        query = an(
+            set_of(motion_sym, effect_sym, task_sym).where(
+                satisfies_request,
+                causes_opening,
+            )
+        )
+        results = list(query.evaluate())
+        print(len(results))
 
         motion_key, effect_key, request_key = list(results[0].data.keys())
         print(
