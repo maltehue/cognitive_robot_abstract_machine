@@ -53,6 +53,7 @@ class TfPublisherModelCallback(ModelChangeCallback):
         self.init_tf_message()
 
     def update_connections_to_expression(self):
+        self.connections_to_expression.clear()
         for connection in self.world.connections:
             if (
                 connection.parent in self.ignored_kinematic_structure_entities

@@ -38,6 +38,7 @@ from semantic_digital_twin.world_description.world_entity import (
     Body,
     CollisionCheckingConfig,
 )
+
 ###############################
 ### Fixture Usage Guide #######
 ###############################
@@ -155,6 +156,10 @@ def cylinder_bot_world():
 
 @pytest.fixture(scope="session")
 def pr2_world_setup():
+    """
+    Builds this tree:
+    map -> odom_combined -> "pr2 urdf tree"
+    """
     urdf_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..",
@@ -168,8 +173,15 @@ def pr2_world_setup():
     PR2.from_world(world_with_pr2)
     with world_with_pr2.modify_world():
         pr2_root = world_with_pr2.root
+
+        map = Body(name=PrefixedName("map"))
         localization_body = Body(name=PrefixedName("odom_combined"))
-        world_with_pr2.add_kinematic_structure_entity(localization_body)
+
+        map_C_localization = Connection6DoF.create_with_dofs(
+            world_with_pr2, map, localization_body
+        )
+        world_with_pr2.add_connection(map_C_localization)
+
         c_root_bf = OmniDrive.create_with_dofs(
             parent=localization_body, child=pr2_root, world=world_with_pr2
         )
@@ -402,15 +414,21 @@ def kitchen_world():
 
 @pytest.fixture(scope="session")
 def pr2_apartment_world(pr2_world_setup, apartment_world_setup):
+    """
+    Builds this tree:
+    map -> odom_combined -> pr2 urdf tree
+        -> apartment urdf
+    """
     pr2_copy = deepcopy(pr2_world_setup)
+    PR2.from_world(pr2_copy)  # semantic annotations are lost on copy
+
     apartment_copy = deepcopy(apartment_world_setup)
 
-    apartment_copy.merge_world(pr2_copy)
-    apartment_copy.get_body_by_name("base_footprint").parent_connection.origin = (
+    pr2_copy.merge_world(apartment_copy)
+    pr2_copy.get_body_by_name("base_footprint").parent_connection.origin = (
         HomogeneousTransformationMatrix.from_xyz_rpy(1.3, 2, 0)
     )
-    PR2.from_world(apartment_copy)
-    return apartment_copy
+    return pr2_copy
 
 
 @pytest.fixture(scope="session")
