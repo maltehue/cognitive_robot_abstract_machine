@@ -34,6 +34,7 @@ from krrood.adapters.json_serializer import (
     to_json,
     from_json,
 )
+from krrood.class_diagrams.attribute_introspector import DataclassOnlyIntrospector
 from krrood.entity_query_language.predicate import Symbol
 from krrood.symbolic_math.symbolic_math import Matrix
 from .geometry import TriangleMesh
@@ -128,25 +129,17 @@ class WorldEntityWithID(WorldEntity, SubclassJSONSerializer):
         super().add_to_world(world)
 
     def to_json(self) -> Dict[str, Any]:
-        result = {**super().to_json()}
-        for field_ in fields(self):
-            if self.skip_field(field_):
-                continue
-            value = getattr(self, field_.name)
+        result = super().to_json()
+        introspector = DataclassOnlyIntrospector()
+        for field_ in introspector.discover(self.__class__):
+            value = getattr(self, field_.public_name)
 
             if isinstance(value, (list, set)):
                 current_result = [self._item_to_json(item) for item in value]
             else:
                 current_result = self._item_to_json(value)
-            result[field_.name] = current_result
+            result[field_.public_name] = current_result
         return result
-
-    def skip_field(self, field_: Field) -> bool:
-        return (
-            field_.name.startswith("_")
-            or field_.name.startswith("__")
-            or not field_.init
-        )
 
     @classmethod
     def _item_to_json(cls, item: Any):

@@ -345,7 +345,6 @@ class Foo:
 
 
 def test_dataclass_with_default_factory():
-
     foo = Foo()
     data = to_json(foo)
     result = from_json(data)

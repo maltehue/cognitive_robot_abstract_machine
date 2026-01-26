@@ -5,7 +5,7 @@ import importlib
 import inspect
 import uuid
 from abc import ABC
-from dataclasses import dataclass, fields, Field, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from dataclasses import field
 from types import NoneType
 from typing import List, Optional
@@ -21,6 +21,7 @@ from .exceptions import (
     ClassNotSerializableError,
     JSON_TYPE_NAME,
 )
+from ..class_diagrams.attribute_introspector import DataclassOnlyIntrospector
 from ..ormatic.dao import HasGeneric
 from ..singleton import SingletonMeta
 from ..utils import get_full_class_name, recursive_subclasses, inheritance_path_length
@@ -457,29 +458,20 @@ class DataclassJSONSerializer(ExternalClassJSONSerializer[None]):
     @classmethod
     def to_json(cls, obj) -> Dict[str, Any]:
         result = {JSON_TYPE_NAME: get_full_class_name(type(obj))}
-        for field_ in fields(obj):
-            if cls.skip_field(field_):
-                continue
-            value = getattr(obj, field_.name)
+        introspector = DataclassOnlyIntrospector()
+        for field_ in introspector.discover(cls):
+            value = getattr(obj, field_.public_name)
 
             if isinstance(value, (list, set)):
                 current_result = [to_json(item) for item in value]
             else:
                 current_result = to_json(value)
-            result[field_.name] = current_result
+            result[field_.public_name] = current_result
         return result
 
     @classmethod
     def matches_generic_type(cls, clazz: Type) -> bool:
         return is_dataclass(clazz)
-
-    @staticmethod
-    def skip_field(field_: Field) -> bool:
-        return (
-            field_.name.startswith("_")
-            or field_.name.startswith("__")
-            or not field_.init
-        )
 
     @classmethod
     def from_json(cls, data: Dict[str, Any], clazz: Type, **kwargs) -> Self:
