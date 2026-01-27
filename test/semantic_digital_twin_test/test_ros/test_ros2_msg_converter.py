@@ -209,11 +209,11 @@ def test_convert_box_shape(cylinder_bot_world):
 
 def test_convert_cylinder_shape(cylinder_bot_world):
     cylinder = Cylinder(
-        width=1,
-        height=2,
+        width=1.0,
+        height=2.0,
         color=Color(),
         origin=HomogeneousTransformationMatrix.from_xyz_rpy(
-            1, 2, 3, reference_frame=cylinder_bot_world.get_body_by_name("map")
+            1.0, 2.0, 3.0, reference_frame=cylinder_bot_world.get_body_by_name("map")
         ),
     )
     shape = SemDTToRos2Converter.convert(cylinder)
@@ -227,10 +227,10 @@ def test_convert_cylinder_shape(cylinder_bot_world):
 
 def test_convert_sphere_shape(cylinder_bot_world):
     sphere = Sphere(
-        radius=1,
+        radius=1.0,
         color=Color(),
         origin=HomogeneousTransformationMatrix.from_xyz_rpy(
-            1, 2, 3, reference_frame=cylinder_bot_world.get_body_by_name("map")
+            1.0, 2.0, 3.0, reference_frame=cylinder_bot_world.get_body_by_name("map")
         ),
     )
     shape = SemDTToRos2Converter.convert(sphere)

@@ -47,7 +47,9 @@ class TestActionDesignatorGrounding(ApartmentWorldTestCase):
         test_world = deepcopy(self.world)
         test_robot = PR2.from_world(test_world)
         grasp_description = GraspDescription(
-            ApproachDirection.FRONT, VerticalAlignment.NoAlignment, False
+            ApproachDirection.FRONT,
+            VerticalAlignment.NoAlignment,
+            test_robot.left_arm.manipulator,
         )
         description = PickUpActionDescription(
             test_world.get_body_by_name("milk.stl"), [Arms.LEFT], [grasp_description]

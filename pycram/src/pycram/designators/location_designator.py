@@ -79,7 +79,7 @@ from ..pose_validator import (
     pose_sequence_reachability_validator,
 )
 from ..robot_description import ViewManager
-from ..utils import translate_pose_along_local_axis, link_pose_for_joint_config
+from ..utils import link_pose_for_joint_config
 
 logger = logging.getLogger("pycram")
 
@@ -105,94 +105,6 @@ class Location(LocationDesignatorDescription):
         :return: A resolved designator
         """
         return self.pose
-
-
-def _create_target_sequence(
-    grasp_description: GraspDescription,
-    target: Union[PoseStamped, Body],
-    robot: AbstractRobot,
-    object_in_hand: Body,
-    reachable_arm: Arms,
-    world: World,
-    rotation_agnostic: bool = False,
-) -> List[PoseStamped]:
-    """
-    Creates the sequence of poses that need to be reachable for the robot to grasp the target.
-    For pickup this would be retract pose, target pose and lift pose.
-    For place this would be lift pose, target pose and retract pose.
-
-
-    :param grasp_description: Grasp description to be used for grasping
-    :param target: The target of reachability, either a pose or an object
-    :param robot: The robot that should be checked for reachability
-    :param object_in_hand: An object that is held if any
-    :param reachable_arm: The arm which should be checked for reachability
-    :return: A list of poses that need to be reachable in this order
-    """
-    end_effector = ViewManager.get_end_effector_view(reachable_arm, robot)
-
-    grasp_quaternion = grasp_description.calculate_grasp_orientation(
-        end_effector.front_facing_orientation.to_np()
-    )
-    approach_axis = end_effector.front_facing_axis
-
-    target_pose = (
-        deepcopy(target)
-        if isinstance(target, PoseStamped)
-        else grasp_description.get_grasp_pose(end_effector, target)
-    )
-    # target.get_grasp_pose(end_effector, grasp_description)
-
-    if object_in_hand:
-        if rotation_agnostic:
-            robot_rotation = PoseStamped.from_spatial_type(
-                robot.root.global_pose
-            ).orientation
-            target_pose.orientation = robot_rotation
-            approach_direction = GraspDescription(
-                grasp_description.approach_direction,
-                VerticalAlignment.NoAlignment,
-                False,
-            )
-            side_grasp = np.array(
-                grasp_description.calculate_grasp_orientation(
-                    end_effector.front_facing_orientation.to_np()
-                )
-            )
-            side_grasp *= np.array([-1, -1, -1, 1])
-            target_pose.rotate_by_quaternion(side_grasp.tolist())
-
-        target_pose = PoseStamped.from_spatial_type(
-            world.transform(
-                object_in_hand.global_pose,
-                target_pose.frame_id,
-            )
-        )
-
-        # TODO: Find a good way to handle the approach offsets
-        # approach_offset_cm = object_in_hand.get_approach_offset()
-        approach_offset_cm = 0.1
-    else:
-
-        target_pose.rotate_by_quaternion(grasp_quaternion)
-        approach_offset_cm = (
-            0.1  # if isinstance(target, PoseStamped) else target.get_approach_offset()
-        )
-
-    lift_pose = deepcopy(target_pose)
-    lift_pose.position.z += 0.1
-
-    retract_pose = translate_pose_along_local_axis(
-        target_pose, approach_axis.to_np()[:3], -approach_offset_cm
-    )
-
-    target_sequence = (
-        [lift_pose, target_pose, retract_pose]
-        if object_in_hand
-        else [retract_pose, target_pose, lift_pose]
-    )
-
-    return target_sequence
 
 
 @dataclass
@@ -400,20 +312,19 @@ class CostmapLocation(LocationDesignatorDescription):
                     [params_box.grasp_descriptions]
                     if params_box.grasp_descriptions
                     else GraspDescription.calculate_grasp_descriptions(
-                        test_robot, target
+                        (
+                            test_robot.left_arm.manipulator
+                            if params_box.reachable_arm == Arms.LEFT
+                            else test_robot.right_arm.manipulator
+                        ),
+                        target,
                     )
                 )
 
                 for grasp_desc in grasp_descriptions:
 
-                    target_sequence = _create_target_sequence(
-                        grasp_desc,
-                        target,
-                        test_robot,
-                        object_in_hand,
-                        params_box.reachable_arm,
-                        params_box.rotation_agnostic,
-                    )
+                    target_sequence = grasp_desc._pose_sequence(target, object_in_hand)
+
                     ee = ViewManager.get_arm_view(params_box.reachable_arm, test_robot)
                     is_reachable = pose_sequence_reachability_validator(
                         target_sequence,
@@ -638,10 +549,10 @@ class AccessingLocation(LocationDesignatorDescription):
 
                 for arm_chain in test_robot.manipulator_chains:
                     grasp = GraspDescription(
-                        ApproachDirection.FRONT, VerticalAlignment.NoAlignment, False
-                    ).calculate_grasp_orientation(
-                        arm_chain.manipulator.front_facing_orientation.to_np()
-                    )
+                        ApproachDirection.FRONT,
+                        VerticalAlignment.NoAlignment,
+                        arm_chain.manipulator,
+                    ).grasp_orientation()
                     current_target_sequence = [
                         deepcopy(pose) for pose in target_sequence
                     ]
@@ -1578,21 +1489,18 @@ class ProbabilisticCostmapLocation(LocationDesignatorDescription):
                     [params_box.grasp_descriptions]
                     if params_box.grasp_descriptions
                     else GraspDescription.calculate_grasp_descriptions(
-                        test_robot, target_pose
+                        (
+                            test_robot.left_arm.manipulator
+                            if params_box.reachable_arm == Arms.LEFT
+                            else test_robot.right_arm.manipulator
+                        ),
+                        target_pose,
                     )
                 )
 
                 for grasp_desc in grasp_descriptions:
 
-                    target_sequence = _create_target_sequence(
-                        grasp_desc,
-                        target,
-                        test_robot,
-                        params_box.object_in_hand,
-                        params_box.reachable_arm,
-                        self.test_world,
-                        rotation_agnostic=params_box.rotation_agnostic,
-                    )
+                    target_sequence = grasp_desc._pose_sequence(target_pose)
                     ee = ViewManager.get_arm_view(params_box.reachable_arm, test_robot)
                     is_reachable = pose_sequence_reachability_validator(
                         target_sequence,
@@ -1763,21 +1671,18 @@ class GiskardLocation(LocationDesignatorDescription):
                     [params["grasp_description"]]
                     if params["grasp_description"]
                     else GraspDescription.calculate_grasp_descriptions(
-                        test_robot, params["target_pose"]
+                        (
+                            test_robot.left_arm.manipulator
+                            if params["arm"] == Arms.LEFT
+                            else test_robot.right_arm.manipulator
+                        ),
+                        params["target_pose"],
                     )
                 )
 
                 for grasp_desc in grasp_descriptions:
 
-                    target_sequence = _create_target_sequence(
-                        grasp_desc,
-                        params["target_pose"],
-                        test_robot,
-                        None,
-                        params["arm"],
-                        test_world,
-                        False,
-                    )
+                    target_sequence = grasp_desc._pose_sequence(params["target_pose"])
 
                     test_robot.root.parent_connection.origin = (
                         candidate.to_spatial_type()
