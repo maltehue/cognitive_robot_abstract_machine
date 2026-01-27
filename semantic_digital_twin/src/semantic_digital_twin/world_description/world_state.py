@@ -297,6 +297,10 @@ class WorldState(MutableMapping):
         ]
         return positions + velocities + accelerations + jerks
 
+    @property
+    def position_float_variables(self) -> List[FloatVariable]:
+        return [v.variables.position for v in self._world.degrees_of_freedom]
+
     def _apply_control_commands(
         self, commands: np.ndarray, dt: float, derivative: Derivatives
     ):

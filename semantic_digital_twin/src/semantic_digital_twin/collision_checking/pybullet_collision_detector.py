@@ -1,3 +1,4 @@
+import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, Tuple, DefaultDict, List, Set, Optional
 
@@ -22,39 +23,40 @@ class BulletCollisionDetector(CollisionDetector):
     kineverse_world: bpb.KineverseWorld = field(
         default_factory=bpb.KineverseWorld, init=False
     )
-    body_to_bpb_obj: Dict[Body, bpb.CollisionObject] = field(
+    body_to_bullet_object: Dict[Body, bpb.CollisionObject] = field(
         default_factory=dict, init=False
     )
+    # ordered_bullet_objects: List[bpb.CollisionObject] = field(default_factory=list)
+
     query: Optional[
         DefaultDict[PrefixedName, Set[Tuple[bpb.CollisionObject, float]]]
     ] = field(default=None, init=False)
 
     def sync_world_model(self) -> None:
         self.reset_cache()
-        get_middleware().logdebug("hard sync")
+        self.clear()
+        self.body_to_bullet_object = {}
+        for body in self.world.bodies_with_enabled_collision:
+            self.add_body(body)
+        # self.ordered_bullet_objects = list(self.body_to_bullet_object.values())
+
+    def tmp_folder(self):
+        return tempfile.NamedTemporaryFile(dir="/tmp", delete=False).name
+
+    def clear(self):
         for o in self.kineverse_world.collision_objects:
             self.kineverse_world.remove_collision_object(o)
-        self.body_to_bpb_obj = {}
-        self.objects_in_order = []
-
-        for body in sorted(
-            self.world.bodies_with_enabled_collision, key=lambda b: b.id
-        ):
-            self.add_body(body)
-            self.objects_in_order.append(self.body_to_bpb_obj[body])
 
     def sync_world_state(self) -> None:
         bpb.batch_set_transforms(
-            self.objects_in_order,
-            self.world.compute_forward_kinematics_of_all_collision_bodies(),
+            self.kineverse_world.collision_objects,
+            self.get_all_collision_fks(),
         )
 
     def add_body(self, body: Body):
-        if not body.has_collision() or body.get_collision_config().disabled:
-            return
-        o = create_shape_from_link(link=body, tmp_folder=self.tmp_folder)
+        o = create_shape_from_link(body=body)
         self.kineverse_world.add_collision_object(o)
-        self.body_to_bpb_obj[body] = o
+        self.body_to_bullet_object[body] = o
 
     def reset_cache(self):
         self.query = None
@@ -65,8 +67,8 @@ class BulletCollisionDetector(CollisionDetector):
         if self.query is None:
             self.query = {
                 (
-                    self.body_to_bpb_obj[check.body_a],
-                    self.body_to_bpb_obj[check.body_b],
+                    self.body_to_bullet_object[check.body_a],
+                    self.body_to_bullet_object[check.body_b],
                 ): check.distance
                 + buffer
                 for check in collision_matrix

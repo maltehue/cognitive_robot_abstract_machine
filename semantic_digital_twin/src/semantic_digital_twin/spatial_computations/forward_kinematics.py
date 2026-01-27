@@ -40,7 +40,6 @@ class ForwardKinematicsManager(ModelChangeCallback):
 
     world: World
 
-    compiled_collision_fks: CompiledFunction = field(init=False)
     compiled_all_fks: CompiledFunction = field(init=False)
 
     forward_kinematics_for_all_bodies: np.ndarray = field(init=False)
@@ -85,39 +84,16 @@ class ForwardKinematicsManager(ModelChangeCallback):
         """
         Compiles forward kinematics expressions for fast evaluation.
         """
-        self.compile_map_T_kse()
-        self.compile_collision_fks()
-
-    def get_world_state_position_variables(self) -> List[FloatVariable]:
-        return [v.variables.position for v in self.world.degrees_of_freedom]
-
-    def compile_collision_fks(self):
-        collision_fks = []
-        for body in sorted(
-            self.world.bodies_with_enabled_collision, key=lambda b: b.id
-        ):
-            if body == self.world.root:
-                continue
-            collision_fks.append(self.root_T_kse_expression_cache[body.id])
-        collision_fks = Matrix.vstack(collision_fks)
-
-        self.compiled_collision_fks = collision_fks.compile(
-            parameters=VariableParameters.from_lists(
-                self.get_world_state_position_variables()
-            )
-        )
-        self.compiled_all_fks.bind_args_to_memory_view(0, self.world.state.positions)
-
-    def compile_map_T_kse(self):
         all_fks = Matrix.vstack(
             [
                 self.root_T_kse_expression_cache[body.id]
                 for body in self.world.kinematic_structure_entities
             ]
         )
+
         self.compiled_all_fks = all_fks.compile(
             parameters=VariableParameters.from_lists(
-                self.get_world_state_position_variables()
+                self.world.state.position_float_variables
             )
         )
         self.compiled_all_fks.bind_args_to_memory_view(0, self.world.state.positions)
@@ -132,7 +108,6 @@ class ForwardKinematicsManager(ModelChangeCallback):
         """
         self.compute_np.cache_clear()
         self.forward_kinematics_for_all_bodies = self.compiled_all_fks.evaluate()
-        self.collision_fks = self.compiled_collision_fks.evaluate()
 
     @copy_lru_cache()
     def compose_expression(
@@ -145,7 +120,8 @@ class ForwardKinematicsManager(ModelChangeCallback):
             It determines the endpoint of the forward kinematics calculation.
         :return: An expression representing the computed forward kinematics of the tip KinematicStructureEntity relative to the root KinematicStructureEntity.
         """
-
+        if root == self.world.root:
+            return self.root_T_kse_expression_cache[tip.id]
         fk = HomogeneousTransformationMatrix()
         root_chain, tip_chain = self.world.compute_split_chain_of_connections(root, tip)
         connection: Connection

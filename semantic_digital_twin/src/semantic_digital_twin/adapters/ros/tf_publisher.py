@@ -70,8 +70,11 @@ class TfPublisherModelCallback(ModelChangeCallback):
 
     def compile_tf_expression(self):
         tf = Matrix.vstack([pose for pose in self.connections_to_expression.values()])
-        params = [v.variables.position for v in self.world.degrees_of_freedom]
-        self.compiled_tf = tf.compile(parameters=VariableParameters.from_lists(params))
+        self.compiled_tf = tf.compile(
+            parameters=VariableParameters.from_lists(
+                self.world.state.position_float_variables
+            )
+        )
         if self.compiled_tf.is_result_empty():
             return
         self.compiled_tf.bind_args_to_memory_view(0, self.world.state.positions)

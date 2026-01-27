@@ -5,13 +5,15 @@ from dataclasses import dataclass, field
 from itertools import chain
 from uuid import UUID
 
-from typing_extensions import Tuple, Set, List, Optional, Iterable, TYPE_CHECKING, Dict
-
 import numpy as np
+from typing_extensions import Tuple, List, Optional, Iterable, TYPE_CHECKING
 
-from krrood.symbolic_math.symbolic_math import Matrix, VariableParameters
+from krrood.symbolic_math.symbolic_math import (
+    Matrix,
+    VariableParameters,
+    CompiledFunction,
+)
 from ..callbacks.callback import ModelChangeCallback
-from ..spatial_types import HomogeneousTransformationMatrix
 from ..world_description.connections import ActiveConnection
 from ..world_description.world_entity import Body
 
@@ -160,53 +162,46 @@ class Collision:
 
 
 @dataclass
-class CollisionWorldModelUpdater(ModelChangeCallback):
+class CollisionDetectorModelUpdater(ModelChangeCallback):
     collision_detector: CollisionDetector
     world: World = field(init=False)
+    compiled_collision_fks: CompiledFunction = field(init=False)
 
     def __post_init__(self):
         self.world = self.collision_detector.world
 
     def _notify(self):
         self.collision_detector.sync_world_model()
+        self.compile_collision_fks()
 
-    def update_forward_kinematic_computer(self):
-        self.collision_detector.update_forward_kinematic_computer()
-
-    def compile(self) -> None:
-        """
-        Compiles forward kinematics expressions for fast evaluation.
-        """
+    def compile_collision_fks(self):
         collision_fks = []
+        world_root = self.world.root
         for body in sorted(
             self.world.bodies_with_enabled_collision, key=lambda b: b.id
         ):
-            if body == self.world.root:
+            if body == world_root:
                 continue
-            collision_fks.append(self.child_body_to_fk_expr[body.id])
+            collision_fks.append(
+                self.world.compose_forward_kinematics_expression(world_root, body)
+            )
         collision_fks = Matrix.vstack(collision_fks)
-        params = [v.variables.position for v in self.world.degrees_of_freedom]
+
         self.compiled_collision_fks = collision_fks.compile(
-            parameters=VariableParameters.from_lists(params)
+            parameters=VariableParameters.from_lists(
+                self.world.state.position_float_variables
+            )
+        )
+        self.compiled_collision_fks.bind_args_to_memory_view(
+            0, self.world.state.positions
         )
 
-    def recompile(self):
-        self.child_body_to_fk_expr: Dict[UUID, HomogeneousTransformationMatrix] = {
-            self.world.root.id: HomogeneousTransformationMatrix()
-        }
-        self.world._travel_branch(self.world.root, self)
-        self.compile()
-
-    def compute_forward_kinematics_of_all_collision_bodies(self) -> np.ndarray:
-        """
-        Computes a 4 by X matrix, with the forward kinematics of all collision bodies stacked on top each other.
-        The entries are sorted by name of body.
-        """
-        return self._forward_kinematic_manager.collision_fks
+    def compute(self) -> np.ndarray:
+        return self.compiled_collision_fks.evaluate()
 
 
 @dataclass
-class CollisionWorldStateUpdater(ModelChangeCallback):
+class CollisionDetectorStateUpdater(ModelChangeCallback):
     collision_detector: CollisionDetector
     world: World = field(init=False)
 
@@ -224,16 +219,24 @@ class CollisionDetector(abc.ABC):
     """
 
     world: World
-    world_model_updater: CollisionWorldModelUpdater = field(init=False)
-    world_state_updater: CollisionWorldStateUpdater = field(init=False)
+    world_model_updater: CollisionDetectorModelUpdater = field(init=False)
+    world_state_updater: CollisionDetectorStateUpdater = field(init=False)
 
     def __post_init__(self):
-        self.world_model_updater = CollisionWorldModelUpdater(
-            world=self.world, collision_detector=self
+        self.world_model_updater = CollisionDetectorModelUpdater(
+            collision_detector=self
         )
-        self.world_state_updater = CollisionWorldStateUpdater(
-            world=self.world, collision_detector=self
+        self.world_state_updater = CollisionDetectorStateUpdater(
+            collision_detector=self
         )
+        self.world_model_updater.notify()
+        self.world_state_updater.notify()
+
+    def get_all_collision_fks(self):
+        return self.world_model_updater.compiled_collision_fks._out
+
+    def get_collision_fk(self, body_id: UUID):
+        pass
 
     @abc.abstractmethod
     def sync_world_model(self) -> None:

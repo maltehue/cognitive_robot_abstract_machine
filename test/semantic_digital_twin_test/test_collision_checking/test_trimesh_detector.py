@@ -3,6 +3,9 @@ import itertools
 import pytest
 
 from semantic_digital_twin.collision_checking.collision_detector import CollisionCheck
+from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
+    BulletCollisionDetector,
+)
 from semantic_digital_twin.collision_checking.trimesh_collision_detector import (
     TrimeshCollisionDetector,
 )
@@ -10,9 +13,12 @@ from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.testing import world_setup_simple
 
 
-def test_simple_collision(world_setup_simple):
+@pytest.mark.parametrize(
+    "collision_detector", [TrimeshCollisionDetector, BulletCollisionDetector]
+)
+def test_simple_collision(world_setup_simple, collision_detector):
     world, body1, body2, body3, body4 = world_setup_simple
-    tcd = TrimeshCollisionDetector(world)
+    tcd = collision_detector(world)
     collision = tcd.check_collision_between_bodies(body1, body2)
     assert collision
     assert {collision.body_a, collision.body_b} == {body1, body2}
