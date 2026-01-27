@@ -4,6 +4,9 @@ from dataclasses import dataclass, field, InitVar
 
 from typing_extensions import Optional
 
+from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
+    BulletCollisionDetector,
+)
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import (
     AbstractRobot,
@@ -14,9 +17,6 @@ from semantic_digital_twin.world_description.world_state_trajectory_plotter impo
     WorldStateTrajectoryPlotter,
 )
 from .data_types.exceptions import NoQPControllerConfigException
-from semantic_digital_twin.collision_checking.better_pybullet_syncer import (
-    BulletCollisionDetector,
-)
 from semantic_digital_twin.collision_checking.collision_world_syncer import (
     CollisionWorldSynchronizer,
     CollisionCheckerLib,
@@ -151,11 +151,9 @@ class Executor:
 
     def __post_init__(self, collision_checker: CollisionCheckerLib):
         if collision_checker == CollisionCheckerLib.bpb:
-            collision_detector = BulletCollisionDetector(
-                _world=self.world, tmp_folder=self.tmp_folder
-            )
+            collision_detector = BulletCollisionDetector(world=self.world)
         else:
-            collision_detector = NullCollisionDetector(_world=self.world)
+            collision_detector = NullCollisionDetector(world=self.world)
 
         self.collision_scene = CollisionWorldSynchronizer(
             world=self.world,

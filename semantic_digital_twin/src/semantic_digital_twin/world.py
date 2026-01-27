@@ -529,6 +529,7 @@ class World:
     def __post_init__(self):
         self._collision_pair_manager = CollisionPairManager(self)
         self.state = WorldState(_world=self)
+        self._forward_kinematic_manager = ForwardKinematicsManager(self)
 
     def __hash__(self):
         return hash((id(self), self._model_manager.version))
@@ -1478,7 +1479,7 @@ class World:
         for model changes.
         """
         self._model_manager.update_model_version_and_notify_callbacks()
-        self._compile_forward_kinematics_expressions()
+        # self._compile_forward_kinematics_expressions()
         self.notify_state_change()
 
         for callback in self.state.state_change_callbacks:
@@ -1754,17 +1755,6 @@ class World:
         return shortest_paths[0]
 
     # %% Forward Kinematics
-    def _compile_forward_kinematics_expressions(self) -> None:
-        """
-        Traverse the kinematic structure and compile forward kinematics expressions for fast evaluation.
-        """
-
-        if self.is_empty():
-            return
-        if self._forward_kinematic_manager is None:
-            self._forward_kinematic_manager = ForwardKinematicsManager(self)
-        self._forward_kinematic_manager.recompile()
-
     def compute_forward_kinematics(
         self, root: KinematicStructureEntity, tip: KinematicStructureEntity
     ) -> HomogeneousTransformationMatrix:
@@ -1807,13 +1797,6 @@ class World:
         """
         return self._forward_kinematic_manager.compute_np(root, tip).copy()
 
-    def compute_forward_kinematics_of_all_collision_bodies(self) -> np.ndarray:
-        """
-        Computes a 4 by X matrix, with the forward kinematics of all collision bodies stacked on top each other.
-        The entries are sorted by name of body.
-        """
-        return self._forward_kinematic_manager.collision_fks
-
     def update_forward_kinematics(self) -> None:
         """
         Recompile and recompute forward kinematics of the world.
@@ -1824,7 +1807,7 @@ class World:
             crashes if its not the case. Also using this in a method that is called a lot, it may cause performance
             issues because of unnecessary recompilations.
         """
-        self._forward_kinematic_manager.recompile()
+        self._forward_kinematic_manager._notify()
         self._forward_kinematic_manager.recompute()
 
     # %% Inverse Kinematics

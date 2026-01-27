@@ -3,10 +3,15 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from itertools import chain
-from typing_extensions import Tuple, Set, List, Optional, Iterable, TYPE_CHECKING
+from uuid import UUID
+
+from typing_extensions import Tuple, Set, List, Optional, Iterable, TYPE_CHECKING, Dict
 
 import numpy as np
 
+from krrood.symbolic_math.symbolic_math import Matrix, VariableParameters
+from ..callbacks.callback import ModelChangeCallback
+from ..spatial_types import HomogeneousTransformationMatrix
 from ..world_description.connections import ActiveConnection
 from ..world_description.world_entity import Body
 
@@ -155,12 +160,80 @@ class Collision:
 
 
 @dataclass
+class CollisionWorldModelUpdater(ModelChangeCallback):
+    collision_detector: CollisionDetector
+    world: World = field(init=False)
+
+    def __post_init__(self):
+        self.world = self.collision_detector.world
+
+    def _notify(self):
+        self.collision_detector.sync_world_model()
+
+    def update_forward_kinematic_computer(self):
+        self.collision_detector.update_forward_kinematic_computer()
+
+    def compile(self) -> None:
+        """
+        Compiles forward kinematics expressions for fast evaluation.
+        """
+        collision_fks = []
+        for body in sorted(
+            self.world.bodies_with_enabled_collision, key=lambda b: b.id
+        ):
+            if body == self.world.root:
+                continue
+            collision_fks.append(self.child_body_to_fk_expr[body.id])
+        collision_fks = Matrix.vstack(collision_fks)
+        params = [v.variables.position for v in self.world.degrees_of_freedom]
+        self.compiled_collision_fks = collision_fks.compile(
+            parameters=VariableParameters.from_lists(params)
+        )
+
+    def recompile(self):
+        self.child_body_to_fk_expr: Dict[UUID, HomogeneousTransformationMatrix] = {
+            self.world.root.id: HomogeneousTransformationMatrix()
+        }
+        self.world._travel_branch(self.world.root, self)
+        self.compile()
+
+    def compute_forward_kinematics_of_all_collision_bodies(self) -> np.ndarray:
+        """
+        Computes a 4 by X matrix, with the forward kinematics of all collision bodies stacked on top each other.
+        The entries are sorted by name of body.
+        """
+        return self._forward_kinematic_manager.collision_fks
+
+
+@dataclass
+class CollisionWorldStateUpdater(ModelChangeCallback):
+    collision_detector: CollisionDetector
+    world: World = field(init=False)
+
+    def __post_init__(self):
+        self.world = self.collision_detector.world
+
+    def _notify(self):
+        self.collision_detector.sync_world_state()
+
+
+@dataclass
 class CollisionDetector(abc.ABC):
     """
     Abstract class for collision detectors.
     """
 
-    _world: World
+    world: World
+    world_model_updater: CollisionWorldModelUpdater = field(init=False)
+    world_state_updater: CollisionWorldStateUpdater = field(init=False)
+
+    def __post_init__(self):
+        self.world_model_updater = CollisionWorldModelUpdater(
+            world=self.world, collision_detector=self
+        )
+        self.world_state_updater = CollisionWorldStateUpdater(
+            world=self.world, collision_detector=self
+        )
 
     @abc.abstractmethod
     def sync_world_model(self) -> None:

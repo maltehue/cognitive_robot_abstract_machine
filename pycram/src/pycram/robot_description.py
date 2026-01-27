@@ -20,6 +20,7 @@ from itertools import product
 from scipy.spatial.transform import Rotation as R
 from typing_extensions import List, Dict, Union, Optional, TypeVar
 
+from semantic_digital_twin.utils import suppress_stdout_stderr
 from .datastructures.dataclasses import (
     VirtualMobileBaseJoints,
     ManipulatorData,
@@ -43,7 +44,6 @@ from .helper import (
     get_robot_description_path,
 )
 from .tf_transformations import quaternion_multiply
-from .utils import suppress_stdout_stderr
 
 from urdf_parser_py.urdf import URDF as URDFObject
 

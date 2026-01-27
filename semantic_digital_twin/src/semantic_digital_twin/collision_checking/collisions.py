@@ -358,6 +358,7 @@ class Collisions:
         return item in self.self_collisions or item in self.external_collisions
 
 
+@dataclass
 class NullCollisionDetector(CollisionDetector):
     def sync_world_model(self) -> None:
         pass
