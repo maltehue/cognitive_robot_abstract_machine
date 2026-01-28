@@ -21,7 +21,7 @@ collision_detectors = [BulletCollisionDetector, TrimeshCollisionDetector]
 
 @pytest.mark.parametrize("collision_detector", collision_detectors)
 def test_simple_collision(world_setup_simple, collision_detector):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     tcd = collision_detector(world)
     collision = tcd.check_collision_between_bodies(body1, body2)
     assert collision
@@ -30,7 +30,7 @@ def test_simple_collision(world_setup_simple, collision_detector):
 
 @pytest.mark.parametrize("collision_detector", collision_detectors)
 def test_contact_distance(world_setup_simple, collision_detector):
-    world, box, cylinder, sphere, mesh = world_setup_simple
+    world, box, cylinder, sphere, mesh, compound = world_setup_simple
     cylinder.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
         1, 0, 0
     )
@@ -38,23 +38,67 @@ def test_contact_distance(world_setup_simple, collision_detector):
     collision = tcd.check_collision_between_bodies(cylinder, sphere, distance=10)
     assert collision
 
-    assert collision.body_a == cylinder
-    assert collision.body_b == sphere
+    if collision.body_a == cylinder:
+        map_P_cylinder = collision.map_P_pa
+        map_P_sphere = collision.map_P_pb
+        assert collision.body_b == sphere
+    else:
+        map_P_sphere = collision.map_P_pa
+        map_P_cylinder = collision.map_P_pb
+        assert collision.body_b == cylinder
+        assert collision.body_a == sphere
 
-    assert np.isclose(collision.map_P_pa[0], 0.75, atol=1e-5)
-    assert np.isclose(collision.map_P_pa[1], 0.0, atol=1e-5)
-    assert np.isclose(collision.map_P_pa[2], 0.0, atol=1e-5)
+    assert np.isclose(map_P_cylinder[0], 0.75, atol=1e-5)
+    assert np.isclose(map_P_cylinder[1], 0.0, atol=1e-5)
+    assert np.isclose(map_P_cylinder[2], 0.0, atol=1e-5)
 
-    assert np.isclose(collision.map_P_pb[0], 0.1, atol=1e-5)
-    assert np.isclose(collision.map_P_pb[1], 0.0, atol=1e-5)
-    assert np.isclose(collision.map_P_pb[2], 0.0, atol=1e-5)
+    assert np.isclose(map_P_sphere[0], 0.1, atol=1e-5)
+    assert np.isclose(map_P_sphere[1], 0.0, atol=1e-5)
+    assert np.isclose(map_P_sphere[2], 0.0, atol=1e-5)
 
     assert np.isclose(collision.contact_distance, 0.65)
 
 
 @pytest.mark.parametrize("collision_detector", collision_detectors)
+@pytest.mark.parametrize("directions", [[1, 0, 0], [0, 1, 0]])
+def test_contact_distance_compound_front(
+    world_setup_simple, collision_detector, directions
+):
+    world, box, cylinder, sphere, mesh, compound = world_setup_simple
+    sphere.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
+        directions[0], directions[1], directions[2]
+    )
+    tcd = collision_detector(world)
+    collision_compound = tcd.check_collision_between_bodies(
+        sphere, compound, distance=10
+    )
+    collision_box = tcd.check_collision_between_bodies(sphere, box, distance=10)
+
+    if collision_box.body_a == sphere:
+        map_P_sphere1 = collision_box.map_P_pa
+        map_P_box = collision_box.map_P_pb
+    else:
+        map_P_box = collision_box.map_P_pa
+        map_P_sphere1 = collision_box.map_P_pb
+
+    if collision_compound.body_a == sphere:
+        map_P_sphere2 = collision_compound.map_P_pa
+        map_P_compound = collision_compound.map_P_pb
+    else:
+        map_P_compound = collision_compound.map_P_pa
+        map_P_sphere2 = collision_compound.map_P_pb
+
+    assert np.allclose(map_P_sphere1, map_P_sphere2, atol=1e-3)
+    assert np.allclose(map_P_compound, map_P_box, atol=1e-3)
+
+    assert np.isclose(
+        collision_compound.contact_distance, collision_box.contact_distance
+    )
+
+
+@pytest.mark.parametrize("collision_detector", collision_detectors)
 def test_no_collision(world_setup_simple, collision_detector):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     body1.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
         1, 1, 1
     )
@@ -65,7 +109,7 @@ def test_no_collision(world_setup_simple, collision_detector):
 
 @pytest.mark.skip(reason="Not my krrood_test not my problem.")
 def test_collision_matrix(world_setup_simple):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     tcd = TrimeshCollisionDetector(world)
     collisions = tcd.check_collisions(
         CollisionMatrix(
@@ -83,13 +127,16 @@ def test_collision_matrix(world_setup_simple):
 
 @pytest.mark.parametrize("collision_detector", collision_detectors)
 def test_all_collisions(world_setup_simple, collision_detector):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     tcd = collision_detector(world)
+    body3.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
+        -10, -10, 10
+    )
     body4.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
         10, 10, 10
     )
-    body3.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
-        -10, -10, 10
+    body5.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
+        -10, -10, -10
     )
 
     collisions = tcd.check_collisions(

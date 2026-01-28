@@ -79,6 +79,9 @@ class CollisionMatrix:
         for collision in self.collision_checks:
             collision.sort_bodies()
 
+    def __hash__(self):
+        return hash(id(self))
+
     @classmethod
     def create_all_checks(cls, distance: float, world: World) -> Self:
         return CollisionMatrix(

@@ -1,5 +1,6 @@
 import tempfile
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from typing import Dict, Tuple, DefaultDict, List, Set, Optional
 
@@ -28,9 +29,9 @@ class BulletCollisionDetector(CollisionDetector):
     )
     ordered_bullet_objects: List[bpb.CollisionObject] = field(default_factory=list)
 
-    query: Optional[
-        DefaultDict[PrefixedName, Set[Tuple[bpb.CollisionObject, float]]]
-    ] = field(default=None, init=False)
+    query: Optional[Dict[Tuple[bpb.CollisionObject, bpb.CollisionObject], float]] = (
+        field(default=None, init=False)
+    )
 
     buffer: float = field(default=0.05, init=False)
 
@@ -60,19 +61,21 @@ class BulletCollisionDetector(CollisionDetector):
     def reset_cache(self):
         self.query = None
 
+    def __hash__(self):
+        return hash(id(self))
+
+    @lru_cache(maxsize=100)
     def collision_matrix_to_bullet_query(
         self, collision_matrix: CollisionMatrix
-    ) -> DefaultDict[PrefixedName, Set[Tuple[bpb.CollisionObject, float]]]:
-        if self.query is None:
-            self.query = {
-                (
-                    self.body_to_bullet_object[check.body_a],
-                    self.body_to_bullet_object[check.body_b],
-                ): check.distance
-                + self.buffer
-                for check in collision_matrix.collision_checks
-            }
-        return self.query
+    ) -> Optional[Dict[Tuple[bpb.CollisionObject, bpb.CollisionObject], float]]:
+        return {
+            (
+                self.body_to_bullet_object[check.body_a],
+                self.body_to_bullet_object[check.body_b],
+            ): check.distance
+            + self.buffer
+            for check in collision_matrix.collision_checks
+        }
 
     def check_collisions(
         self, collision_matrix: CollisionMatrix

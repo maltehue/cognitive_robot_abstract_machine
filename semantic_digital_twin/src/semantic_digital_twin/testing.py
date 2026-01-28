@@ -89,7 +89,7 @@ def world_setup_simple():
             [
                 Box(
                     origin=HomogeneousTransformationMatrix.from_xyz_rpy(),
-                    scale=Scale(0.25, 0.25, 0.25),
+                    scale=Scale(0.2, 0.2, 0.2),
                 )
             ]
         ),
@@ -129,12 +129,28 @@ def world_setup_simple():
             ]
         ),
     )
+    body5 = Body(
+        name=PrefixedName("compound", prefix="test"),
+        collision=ShapeCollection(
+            [
+                Box(
+                    origin=HomogeneousTransformationMatrix.from_xyz_rpy(x=0.05),
+                    scale=Scale(0.1, 0.2, 0.2),
+                ),
+                Box(
+                    origin=HomogeneousTransformationMatrix.from_xyz_rpy(x=-0.05),
+                    scale=Scale(0.1, 0.2, 0.2),
+                ),
+            ]
+        ),
+    )
 
     with world.modify_world():
         world.add_kinematic_structure_entity(body1)
         world.add_kinematic_structure_entity(body2)
         world.add_kinematic_structure_entity(body3)
         world.add_kinematic_structure_entity(body4)
+        world.add_kinematic_structure_entity(body5)
 
         c_root_body1 = Connection6DoF.create_with_dofs(
             parent=root, child=body1, world=world
@@ -148,12 +164,16 @@ def world_setup_simple():
         c_root_body4 = Connection6DoF.create_with_dofs(
             parent=root, child=body4, world=world
         )
+        c_root_body5 = Connection6DoF.create_with_dofs(
+            parent=root, child=body5, world=world
+        )
 
         world.add_connection(c_root_body1)
         world.add_connection(c_root_body2)
         world.add_connection(c_root_body3)
         world.add_connection(c_root_body4)
-    return world, body1, body2, body3, body4
+        world.add_connection(c_root_body5)
+    return world, body1, body2, body3, body4, body5
 
 
 @pytest.fixture
