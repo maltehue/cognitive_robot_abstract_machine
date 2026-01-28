@@ -1,21 +1,16 @@
 import tempfile
 from dataclasses import dataclass, field
+
 from typing import Dict, Tuple, DefaultDict, List, Set, Optional
 
 import giskardpy_bullet_bindings as bpb
 
-from giskardpy.middleware import get_middleware
-from semantic_digital_twin.collision_checking.bpb_wrapper import (
-    create_shape_from_link,
-    create_collision,
-)
-from semantic_digital_twin.collision_checking.collision_detector import (
-    CollisionDetector,
-    CollisionCheck,
-)
-from semantic_digital_twin.collision_checking.collisions import GiskardCollision
-from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.world_description.world_entity import Body
+
+from .bpb_wrapper import create_shape_from_link, create_collision
+from .collision_detector import CollisionDetector, CollisionCheck
+from .collisions import GiskardCollision
+from ..datastructures.prefixed_name import PrefixedName
+from ..world_description.world_entity import Body
 
 
 @dataclass

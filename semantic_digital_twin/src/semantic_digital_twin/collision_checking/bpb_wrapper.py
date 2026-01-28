@@ -1,12 +1,18 @@
+import hashlib
+import json
 import logging
 import os
 import tempfile
+from pathlib import Path
 from typing import List, Tuple, Optional
 from uuid import UUID
 
 import giskardpy_bullet_bindings as pb
+import numpy as np
 import trimesh
 from pkg_resources import resource_filename
+from platformdirs import user_cache_dir
+from trimesh import Trimesh
 
 from giskardpy.utils.utils import create_path
 from .collisions import GiskardCollision
@@ -20,12 +26,51 @@ from ..world_description.geometry import (
     Scale,
     TriangleMesh,
     FileMesh,
+    Mesh,
 )
 from ..world_description.world_entity import Body
 
 logger = logging.getLogger(__name__)
 
 CollisionObject = pb.CollisionObject
+
+
+PKG_NAME = __package__.split(".", 1)[0]
+
+CACHE_DIR = Path(user_cache_dir(PKG_NAME)) / "convex_decompositions"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cache_key(mesh_bytes: bytes, params: dict, algo_version: str) -> str:
+    h = hashlib.sha256()
+    h.update(mesh_bytes)
+    h.update(json.dumps(params, sort_keys=True).encode())
+    h.update(algo_version.encode())
+    return h.hexdigest()
+
+
+def trimesh_quantized_hash(mesh, decimals: int = 6, digest_size: int = 16) -> str:
+    """
+    Hash tolerant to tiny float differences by rounding vertices.
+    Still order-sensitive (vertex/face order changes -> different hash).
+    """
+    h = hashlib.blake2b(digest_size=digest_size)
+
+    v = np.asarray(mesh.vertices, dtype=np.float64)
+    f = np.ascontiguousarray(mesh.faces)
+
+    vq = np.round(v, decimals=decimals)
+    vq = np.ascontiguousarray(vq)
+
+    h.update(str(vq.shape).encode("utf-8"))
+    h.update(str(vq.dtype).encode("utf-8"))
+    h.update(vq.tobytes())
+
+    h.update(str(f.shape).encode("utf-8"))
+    h.update(str(f.dtype).encode("utf-8"))
+    h.update(f.tobytes())
+
+    return h.hexdigest()
 
 
 def create_collision(pb_collision: pb.Collision, world: World) -> GiskardCollision:
@@ -63,7 +108,7 @@ def create_cylinder_shape(
     # Weird thing: The default URDF loader in bullet instantiates convex meshes. Idk why.
     file_name = resource_filename("giskardpy", "../../resources/meshes/cylinder.obj")
     return load_convex_mesh_shape(
-        pkg_filename=file_name,
+        file_name=file_name,
         tmp_folder=tmp_folder,
         single_shape=True,
         scale=Scale(diameter, diameter, height),
@@ -92,14 +137,14 @@ def create_shape_from_geometry(geometry: Shape, tmp_folder: str) -> pb.Collision
         with open(f.name, "w") as fd:
             fd.write(trimesh.exchange.obj.export_obj(geometry.mesh))
         shape = load_convex_mesh_shape(
-            pkg_filename=f.name,
+            file_name=f.name,
             tmp_folder=tmp_folder,
             single_shape=False,
             scale=geometry.scale,
         )
     elif isinstance(geometry, FileMesh):
         shape = load_convex_mesh_shape(
-            pkg_filename=geometry.filename,
+            file_name=geometry.filename,
             tmp_folder=tmp_folder,
             single_shape=False,
             scale=geometry.scale,
@@ -128,53 +173,47 @@ def create_compound_shape(
     return out
 
 
+def cache_file(file_name: str):
+    # key = cache_key(mesh_bytes, params, algo_version)
+    return f"{CACHE_DIR} / {file_name}"
+
+
 def load_convex_mesh_shape(
-    pkg_filename: str, tmp_folder: str, single_shape: bool, scale: Scale
+    mesh: Mesh, single_shape: bool, scale: Scale
 ) -> pb.ConvexShape:
-    if not pkg_filename.endswith(".obj"):
-        obj_pkg_filename = convert_to_decomposed_obj_and_save_in_tmp(
-            file_name=pkg_filename, tmp_folder=tmp_folder
-        )
+    if not mesh.mesh.is_convex:
+        obj_pkg_filename = convert_to_decomposed_obj_and_save_in_tmp(mesh=mesh.mesh)
     else:
-        obj_pkg_filename = pkg_filename
+        obj_pkg_filename = mesh.file_name
     return pb.load_convex_shape(
-        get_middleware().resolve_iri(obj_pkg_filename),
+        obj_pkg_filename,
         single_shape=single_shape,
         scaling=pb.Vector3(scale.x, scale.y, scale.z),
     )
 
 
+def clear_cache():
+    for file in CACHE_DIR.iterdir():
+        file.unlink()
+
+
 def convert_to_decomposed_obj_and_save_in_tmp(
-    file_name: str, tmp_folder: str, log_path="/tmp/giskardpy/vhacd.log"
+    mesh: Trimesh, log_path="/tmp/giskardpy/vhacd.log"
 ) -> str:
-    hopefully_unique_name = "_".join(file_name.split("/")[-4:])
-    resolved_old_path = get_middleware().resolve_iri(file_name)
-    short_file_name = file_name.split("/")[-1].split(".")[0]
-    obj_file_name = os.path.join(hopefully_unique_name, f"{short_file_name}.obj")
-    new_path_original = os.path.join(tmp_folder, obj_file_name)
-    if not os.path.exists(new_path_original):
-        mesh = trimesh.load(resolved_old_path, force="mesh")
+    file_hash = trimesh_quantized_hash(mesh)
+    obj_file_name = str(CACHE_DIR / f"{file_hash}.obj")
+    if not os.path.exists(obj_file_name):
         obj_str = trimesh.exchange.obj.export_obj(mesh)
-
-        create_path(new_path_original)
-        with open(new_path_original, "w") as f:
+        create_path(obj_file_name)
+        with open(obj_file_name, "w") as f:
             f.write(obj_str)
-
-        logging.info(f"Converted {file_name} to obj and saved in {new_path_original}.")
-    new_path = new_path_original
-
-    new_path_decomposed = new_path_original.replace(".obj", "_decomposed.obj")
-    if not os.path.exists(new_path_decomposed):
-        mesh = trimesh.load(new_path_original, force="mesh")
-        if not trimesh.convex.is_convex(mesh):
-            logging.info(f"{file_name} is not convex, applying vhacd.")
+        if not mesh.is_convex:
             with suppress_stdout_stderr():
-                pb.vhacd(new_path_original, new_path_decomposed, log_path)
-            new_path = new_path_decomposed
-    else:
-        new_path = new_path_decomposed
-
-    return new_path
+                pb.vhacd(obj_file_name, obj_file_name, log_path)
+            logging.info(f'Saved convex decomposition to "{obj_file_name}".')
+        else:
+            logging.info(f'Saved obj to "{obj_file_name}".')
+    return obj_file_name
 
 
 def create_object(
