@@ -4,6 +4,9 @@ from dataclasses import dataclass, field, InitVar
 
 from typing_extensions import Optional
 
+from semantic_digital_twin.collision_checking.collision_detector import (
+    NullCollisionDetector,
+)
 from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
     BulletCollisionDetector,
 )
@@ -21,7 +24,6 @@ from semantic_digital_twin.collision_checking.collision_world_syncer import (
     CollisionWorldSynchronizer,
     CollisionCheckerLib,
 )
-from semantic_digital_twin.collision_checking.collisions import NullCollisionDetector
 from .motion_statechart.auxilary_variable_manager import (
     AuxiliaryVariableManager,
     AuxiliaryVariable,

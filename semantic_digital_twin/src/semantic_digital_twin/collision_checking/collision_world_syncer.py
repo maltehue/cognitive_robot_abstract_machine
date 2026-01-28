@@ -13,7 +13,6 @@ from semantic_digital_twin.collision_checking.collision_matrix_manager import (
     CollisionMatrixManager,
 )
 from semantic_digital_twin.collision_checking.collisions import (
-    NullCollisionDetector,
     Collisions,
 )
 from giskardpy.motion_statechart.auxilary_variable_manager import (
@@ -24,6 +23,7 @@ from giskardpy.motion_statechart.auxilary_variable_manager import (
 from semantic_digital_twin.collision_checking.collision_detector import (
     CollisionDetector,
     CollisionCheck,
+    NullCollisionDetector,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot

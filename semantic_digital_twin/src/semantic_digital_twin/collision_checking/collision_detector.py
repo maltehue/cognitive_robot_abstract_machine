@@ -261,3 +261,20 @@ class CollisionDetector(abc.ABC):
         """
         Reset any caches the collision checker may have.
         """
+
+
+@dataclass
+class NullCollisionDetector(CollisionDetector):
+    def sync_world_model(self) -> None:
+        pass
+
+    def sync_world_state(self) -> None:
+        pass
+
+    def check_collisions(
+        self, collision_matrix: CollisionMatrix
+    ) -> CollisionCheckingResult:
+        return CollisionCheckingResult()
+
+    def reset_cache(self):
+        pass

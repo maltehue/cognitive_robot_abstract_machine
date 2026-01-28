@@ -356,20 +356,3 @@ class Collisions:
 
     def __contains__(self, item):
         return item in self.self_collisions or item in self.external_collisions
-
-
-@dataclass
-class NullCollisionDetector(CollisionDetector):
-    def sync_world_model(self) -> None:
-        pass
-
-    def sync_world_state(self) -> None:
-        pass
-
-    def check_collisions(
-        self, collision_matrix: Optional[Set[CollisionCheck]] = None
-    ) -> List[GiskardCollision]:
-        return []
-
-    def reset_cache(self):
-        pass
