@@ -5,7 +5,7 @@ import pytest
 
 from giskardpy.executor import Executor
 from semantic_digital_twin.collision_checking.collision_matrix_manager import (
-    CollisionRequest,
+    CollisionRule,
     CollisionAvoidanceTypes,
 )
 from giskardpy.motion_statechart.context import BuildContext
@@ -69,7 +69,7 @@ def test_TrueMonitor():
 
 def test_CollisionRequest(pr2_world_setup: World):
     robot = pr2_world_setup.get_semantic_annotations_by_type(AbstractRobot)[0]
-    collision_request = CollisionRequest(
+    collision_request = CollisionRule(
         type_=CollisionAvoidanceTypes.AVOID_COLLISION,
         distance=0.2,
         body_group1=robot.bodies,
@@ -80,7 +80,7 @@ def test_CollisionRequest(pr2_world_setup: World):
     new_json_data = json.loads(json_str)
     tracker = WorldEntityWithIDKwargsTracker.from_world(pr2_world_setup)
     kwargs = tracker.create_kwargs()
-    collision_request_copy = CollisionRequest.from_json(new_json_data, **kwargs)
+    collision_request_copy = CollisionRule.from_json(new_json_data, **kwargs)
     assert collision_request_copy.type_ == collision_request.type_
     assert collision_request_copy.distance == collision_request.distance
     assert collision_request_copy.body_group1 == collision_request.body_group1

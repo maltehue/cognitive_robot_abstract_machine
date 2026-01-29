@@ -10,7 +10,7 @@ from line_profiler import profile
 
 import krrood.symbolic_math.symbolic_math as sm
 from semantic_digital_twin.collision_checking.collision_matrix_manager import (
-    CollisionMatrixManager,
+    CollisionManager,
 )
 from semantic_digital_twin.collision_checking.collisions import (
     Collisions,
@@ -48,7 +48,7 @@ class CollisionWorldSynchronizer:
     robots: Set[AbstractRobot]
 
     collision_detector: CollisionDetector = None
-    matrix_manager: CollisionMatrixManager = field(init=False)
+    matrix_manager: CollisionManager = field(init=False)
 
     collision_matrix: Set[CollisionCheck] = field(default_factory=set)
 
@@ -66,9 +66,7 @@ class CollisionWorldSynchronizer:
     collision_list_sizes: int = 1000
 
     def __post_init__(self):
-        self.matrix_manager = CollisionMatrixManager(
-            world=self.world, robots=self.robots
-        )
+        self.matrix_manager = CollisionManager(world=self.world, robots=self.robots)
 
     def __hash__(self):
         return hash(id(self))

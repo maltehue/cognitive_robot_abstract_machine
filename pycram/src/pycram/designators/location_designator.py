@@ -29,7 +29,7 @@ from typing_extensions import List, Union, Iterable, Optional, Iterator, Tuple
 
 from giskardpy.executor import Executor
 from semantic_digital_twin.collision_checking.collision_matrix_manager import (
-    CollisionRequest,
+    CollisionRule,
 )
 from giskardpy.motion_statechart.goals.collision_avoidance import (
     CollisionAvoidance,
@@ -1615,7 +1615,7 @@ class GiskardLocation(LocationDesignatorDescription):
         :return: The Giskard executor for the pose sequence
         """
         # Temp workaround until we fix multiple formats
-        giskard_coll_request = CollisionRequest(
+        giskard_coll_request = CollisionRule(
             body_group1=robot_view.bodies_with_collisions,
             body_group2=list(
                 set(world.bodies_with_enabled_collision)

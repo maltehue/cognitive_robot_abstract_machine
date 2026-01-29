@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from itertools import combinations
+
+from typing_extensions import Tuple, TYPE_CHECKING, Self
+
+from ..world_description.world_entity import Body
+
+if TYPE_CHECKING:
+    from ..world import World
+
+
+@dataclass
+class CollisionCheck:
+    body_a: Body
+    """
+    First body in the collision check.
+    """
+    body_b: Body
+    """
+    Second body in the collision check.
+    """
+    distance: float
+    """
+    Minimum distance to check for collisions.
+    """
+
+    @classmethod
+    def create_and_validate(cls, body_a: Body, body_b: Body, distance: float) -> Self:
+        self = cls(body_a=body_a, body_b=body_b, distance=distance)
+        if self.distance < 0:
+            raise ValueError(f"Distance must be positive, got {self.distance}")
+
+        if self.body_a == self.body_b:
+            raise ValueError(
+                f'Cannot create collision check between the same body "{self.body_a.name}"'
+            )
+
+        if not self.body_a.has_collision():
+            raise ValueError(f"Body {self.body_a.name} has no collision geometry")
+
+        if not self.body_b.has_collision():
+            raise ValueError(f"Body {self.body_b.name} has no collision geometry")
+        return self
+
+    def __hash__(self):
+        return hash((self.body_a, self.body_b))
+
+    def __eq__(self, other: CollisionCheck):
+        return self.body_a == other.body_a and self.body_b == other.body_b
+
+    def bodies(self) -> Tuple[Body, Body]:
+        return self.body_a, self.body_b
+
+    def sort_bodies(self):
+        if self.body_a.id > self.body_b.id:
+            self.body_a, self.body_b = self.body_b, self.body_a
+
+
+@dataclass
+class CollisionMatrix:
+    collision_checks: set[CollisionCheck] = field(default_factory=set)
+
+    def __post_init__(self):
+        self.sort_bodies()
+
+    def sort_bodies(self):
+        for collision in self.collision_checks:
+            collision.sort_bodies()
+
+    def __hash__(self):
+        return hash(id(self))
+
+    @classmethod
+    def create_all_checks(cls, distance: float, world: World) -> Self:
+        return CollisionMatrix(
+            collision_checks={
+                CollisionCheck(body_a=body_a, body_b=body_b, distance=distance)
+                for body_a, body_b in combinations(
+                    world.bodies_with_enabled_collision, 2
+                )
+            }
+        )
+
+    def add_collision_checks(self, collision_checks: set[CollisionCheck]):
+        self.collision_checks.update(collision_checks)
+
+    def remove_collision_checks(self, collision_checks: set[CollisionCheck]):
+        self.collision_checks.difference_update(collision_checks)
+
+
+@dataclass
+class CollisionRule(ABC):
+    """
+    Base class for collision rules.
+    They modify collision matrices by adding or removing collision checks.
+    """
+
+    @abstractmethod
+    def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix):
+        pass

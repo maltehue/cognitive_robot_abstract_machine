@@ -8,7 +8,7 @@ import krrood.symbolic_math.symbolic_math as sm
 from giskardpy.data_types.exceptions import GiskardException
 from giskardpy.middleware import get_middleware
 from semantic_digital_twin.collision_checking.collision_matrix_manager import (
-    CollisionRequest,
+    CollisionRule,
 )
 from giskardpy.motion_statechart.context import BuildContext
 from giskardpy.motion_statechart.data_types import DefaultWeights
@@ -428,7 +428,7 @@ class SelfCollisionAvoidance(Goal):
 
 @dataclass(eq=False, repr=False)
 class CollisionAvoidance(Goal):
-    collision_entries: List[CollisionRequest] = field(default_factory=list)
+    collision_entries: List[CollisionRule] = field(default_factory=list)
 
     def expand(self, context: BuildContext) -> None:
         context.collision_scene.matrix_manager.parse_collision_requests(

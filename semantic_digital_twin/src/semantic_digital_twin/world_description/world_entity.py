@@ -220,18 +220,6 @@ class WorldEntityWithID(WorldEntity, SubclassJSONSerializer):
 
 @dataclass
 class CollisionCheckingConfig:
-    buffer_zone_distance: Optional[float] = None
-    """
-    Distance defining a buffer zone around the entity. The buffer zone represents a soft boundary where
-    proximity should be monitored but minor violations are acceptable.
-    """
-
-    violated_distance: float = 0.0
-    """
-    Critical distance threshold that must not be violated. Any proximity below this threshold represents
-    a severe collision risk requiring immediate attention.
-    """
-
     disabled: Optional[bool] = None
     """
     Flag to enable/disable collision checking for this entity. When True, all collision checks are ignored.

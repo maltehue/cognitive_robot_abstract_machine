@@ -10,7 +10,7 @@ import pytest
 from giskardpy.data_types.exceptions import DuplicateNameException
 from giskardpy.executor import Executor, SimulationPacer
 from semantic_digital_twin.collision_checking.collision_matrix_manager import (
-    CollisionRequest,
+    CollisionRule,
 )
 from semantic_digital_twin.collision_checking.collision_world_syncer import (
     CollisionCheckerLib,
@@ -2435,7 +2435,7 @@ class TestCollisionAvoidance:
                     ),
                 ),
                 CollisionAvoidance(
-                    collision_entries=[CollisionRequest.avoid_all_collision()],
+                    collision_entries=[CollisionRule.avoid_all_collision()],
                 ),
                 local_min := LocalMinimumReached(),
             ]
@@ -2540,9 +2540,7 @@ class TestCollisionAvoidance:
                                 ),
                             ),
                             CollisionAvoidance(
-                                collision_entries=[
-                                    CollisionRequest.avoid_all_collision()
-                                ],
+                                collision_entries=[CollisionRule.avoid_all_collision()],
                             ),
                         ]
                     ),

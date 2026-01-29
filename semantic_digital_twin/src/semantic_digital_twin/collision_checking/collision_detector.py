@@ -1,96 +1,28 @@
 from __future__ import annotations
 
 import abc
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from itertools import combinations
+from itertools import combinations, combinations_with_replacement
 from uuid import UUID
 
 import numpy as np
+from lxml import etree
+from typing_extensions import List, Dict, Any
 from typing_extensions import Tuple, TYPE_CHECKING, Self
 
+from krrood.adapters.json_serializer import SubclassJSONSerializer, to_json, from_json
 from krrood.symbolic_math.symbolic_math import (
     Matrix,
     VariableParameters,
     CompiledFunction,
 )
+from ..adapters.world_entity_kwargs_tracker import WorldEntityWithIDKwargsTracker
 from ..callbacks.callback import ModelChangeCallback, StateChangeCallback
-from ..world_description.world_entity import Body
+from ..world_description.world_entity import Body, CollisionCheckingConfig
 
 if TYPE_CHECKING:
     from ..world import World
-
-
-@dataclass
-class CollisionCheck:
-    body_a: Body
-    """
-    First body in the collision check.
-    """
-    body_b: Body
-    """
-    Second body in the collision check.
-    """
-    distance: float
-    """
-    Minimum distance to check for collisions.
-    """
-
-    @classmethod
-    def create_and_validate(cls, body_a: Body, body_b: Body, distance: float) -> Self:
-        self = cls(body_a=body_a, body_b=body_b, distance=distance)
-        if self.distance < 0:
-            raise ValueError(f"Distance must be positive, got {self.distance}")
-
-        if self.body_a == self.body_b:
-            raise ValueError(
-                f'Cannot create collision check between the same body "{self.body_a.name}"'
-            )
-
-        if not self.body_a.has_collision():
-            raise ValueError(f"Body {self.body_a.name} has no collision geometry")
-
-        if not self.body_b.has_collision():
-            raise ValueError(f"Body {self.body_b.name} has no collision geometry")
-        return self
-
-    def __hash__(self):
-        return hash((self.body_a, self.body_b))
-
-    def __eq__(self, other: CollisionCheck):
-        return self.body_a == other.body_a and self.body_b == other.body_b
-
-    def bodies(self) -> Tuple[Body, Body]:
-        return self.body_a, self.body_b
-
-    def sort_bodies(self):
-        if self.body_a.id > self.body_b.id:
-            self.body_a, self.body_b = self.body_b, self.body_a
-
-
-@dataclass
-class CollisionMatrix:
-    collision_checks: set[CollisionCheck] = field(default_factory=set)
-
-    def __post_init__(self):
-        self.sort_bodies()
-
-    def sort_bodies(self):
-        for collision in self.collision_checks:
-            collision.sort_bodies()
-
-    def __hash__(self):
-        return hash(id(self))
-
-    @classmethod
-    def create_all_checks(cls, distance: float, world: World) -> Self:
-        return CollisionMatrix(
-            collision_checks={
-                CollisionCheck(body_a=body_a, body_b=body_b, distance=distance)
-                for body_a, body_b in combinations(
-                    world.bodies_with_enabled_collision, 2
-                )
-            }
-        )
 
 
 @dataclass
@@ -242,9 +174,9 @@ class Collision:
         return Collision.from_parts(
             body_a=self.original_body_b,
             body_b=self.original_body_a,
-            map_P_pa=self.map_P_pb,
-            map_P_pb=self.map_P_pa,
-            map_V_n=-self.map_V_n,
+            root_P_pa=self.root_P_pb,
+            root_P_pb=self.root_P_pa,
+            root_V_n=-self.root_V_n,
             contact_distance=self.contact_distance,
         )
 
