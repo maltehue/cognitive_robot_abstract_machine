@@ -175,7 +175,7 @@ class LocationDesignatorDescription(DesignatorDescription, PartialDesignator):
         self._last_result = None
 
     @property
-    def last_result(self) -> Iterable[PoseStamped]:
+    def last_result(self) -> Iterator[PoseStamped]:
         yield self._last_result
 
     def ground(self) -> PoseStamped:
