@@ -33,10 +33,11 @@ world = URDFParser.from_file(apartment).parse()
 
 ```
 
-For the RVIZ2 way, ROS2 is needed. A caveat of this approach is that you have to manage the lifecycle of a ROS2 node yourself.
+For the RVIZ2 way, ROS2 and the TFPublisher is needed. A caveat of this approach is that you have to manage the lifecycle of a ROS2 node yourself.
 We recommend to put the spinning into sperate threads and just shutdown the thread when exiting the system.
 
 ```{code-cell} ipython3
+from semantic_digital_twin.adapters.ros.tf_publisher import TFPublisher
 from semantic_digital_twin.adapters.ros.visualization.viz_marker import VizMarkerPublisher
 import threading
 import rclpy
@@ -46,6 +47,7 @@ node = rclpy.create_node("semantic_digital_twin")
 thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
 thread.start()
 
+tf_publisher = TFPublisher(world=world, node=node)
 viz = VizMarkerPublisher(world=world, node=node)
 ```
 
