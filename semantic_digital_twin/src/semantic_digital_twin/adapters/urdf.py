@@ -129,6 +129,8 @@ class URDFParser:
      `ROS_PACKAGE_PATH` to a colon-separated list of package paths, which will be used as the package resolver.
     """
 
+    static_package_prefix: Optional[str] = None
+
     def __post_init__(self):
         self.urdf = hacky_urdf_parser_fix(self.urdf)
         self.parsed = urdfpy.URDF.from_xml_string(self.urdf)
@@ -335,7 +337,7 @@ class URDFParser:
                         origin=origin_transform,
                         filename=self.parse_file_path(geom.geometry.filename),
                         scale=Scale(*(geom.geometry.scale or (1, 1, 1))),
-                    )
+                    ).to_triangle_mesh()
                 )
         return ShapeCollection(res, reference_frame=body)
 
@@ -372,4 +374,8 @@ class URDFParser:
             file_path = file_path.replace("package://" + package_name, package_path)
         if "file://" in file_path:
             file_path = file_path.replace("file://", "./")
+
+        if self.static_package_prefix is not None:
+            file_path = os.path.join(self.static_package_prefix, file_path.lstrip("/"))
+
         return file_path
