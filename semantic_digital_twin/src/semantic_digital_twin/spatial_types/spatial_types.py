@@ -870,6 +870,15 @@ class Point3(sm.SymbolicMathType, SpatialType, SubclassJSONSerializer):
             reference_frame=reference_frame,
         )
 
+    @classmethod
+    def create_with_variables(cls, name: str) -> Self:
+        return cls(
+            x=sm.FloatVariable(name=f"{name}.x"),
+            y=sm.FloatVariable(name=f"{name}.y"),
+            z=sm.FloatVariable(name=f"{name}.z"),
+            reference_frame=None,
+        )
+
     def to_json(self) -> Dict[str, Any]:
         if not self.is_constant():
             raise SpatialTypeNotJsonSerializable(self)
@@ -1153,6 +1162,15 @@ class Vector3(sm.SymbolicMathType, SpatialType, SubclassJSONSerializer):
         v = cls(x=x, y=y, z=z, reference_frame=reference_frame)
         v.scale(1, unsafe=True)
         return v
+
+    @classmethod
+    def create_with_variables(cls, name: str) -> Self:
+        return cls(
+            x=sm.FloatVariable(name=f"{name}.x"),
+            y=sm.FloatVariable(name=f"{name}.y"),
+            z=sm.FloatVariable(name=f"{name}.z"),
+            reference_frame=None,
+        )
 
     @property
     def x(self) -> sm.Scalar:

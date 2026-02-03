@@ -13,6 +13,7 @@ from semantic_digital_twin.collision_checking.collision_detector import (
     CollisionCheckingResult,
     Collision,
 )
+from semantic_digital_twin.collision_checking.collision_manager import CollisionConsumer
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.spatial_types import Vector3, Point3
 from semantic_digital_twin.world import World
@@ -23,59 +24,51 @@ from semantic_digital_twin.world_description.world_entity import (
 
 
 @dataclass
-class CollisionExpressionManager:
-    external_monitored_links: dict[Body, int] = field(default_factory=dict)
-    self_monitored_links: dict[tuple[Body, Body], int] = field(default_factory=dict)
+class ExternalCollisionResults:
+    """
+    Maps bodies to any
+    """
 
-    external_collision_data: np.ndarray = field(
-        default_factory=lambda: np.zeros(0, dtype=float)
-    )
-    self_collision_data: np.ndarray = field(
-        default_factory=lambda: np.zeros(0, dtype=float)
-    )
+    def add_collision(self, collision: Collision): ...
 
-    def monitor_link_for_external(self, body: Body, idx: int):
+
+@dataclass
+class ExternalCollisionExpressionManager(CollisionConsumer):
+    """
+    Owns symbols and buffer
+    """
+
+    registered_bodies: dict[Body, int] = field(default_factory=dict)
+
+    collision_data: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=float))
+
+    def clear(self):
+        pass
+
+    def process_collision_results(self, collision: CollisionCheckingResult):
+        """
+        Takes collisions, checks if they are external and inserts them
+        into the buffer at the right place.
+        """
+        # 1. check if collision is external
+        # 2. check if body is registered
+        # 2.1 maybe flip collision, if body_b is registered.
+        # 3. transform collision into group frames
+        # 4. insert collision into buffer
+
+    def register_body(self, body: Body, idx: int):
+        """
+        Register a body
+        """
         self.external_monitored_links[body] = max(
             idx, self.external_monitored_links.get(body, 0)
         )
 
-    def set_collision_result(self, collision_result: CollisionCheckingResult):
-        self.external_collision_data = collision_result[
-            : len(self.external_monitored_links)
-        ]
-        self.self_collision_data = collision_result[
-            len(self.external_monitored_links) :
-        ]
+    def get_external_collision_variables(self) -> list[FloatVariable]:
+        """
 
-    def transform_external_collision(
-        self, collision: Collision, world: World
-    ) -> GiskardCollision:
-        body_a = collision.original_body_a
-        movable_joint = body_a.parent_connection
-
-        while movable_joint != world.root:
-            if is_joint_movable(movable_joint):
-                break
-            movable_joint = movable_joint.parent.parent_connection
-        else:
-            raise Exception(
-                f"{body_a.name} has no movable parent connection "
-                f"and should't have collision checking enabled."
-            )
-        new_a = movable_joint.child
-        collision.body_a = new_a
-        if collision.map_P_pa is not None:
-            new_a_T_map = world.compute_forward_kinematics_np(new_a, world.root)
-            collision.fixed_parent_of_a_P_pa = new_a_T_map @ collision.map_P_pa
-        else:
-            new_a_T_a = world.compute_forward_kinematics_np(
-                new_a, collision.original_body_a
-            )
-            collision.fixed_parent_of_a_P_pa = new_a_T_a @ collision.a_P_pa
-
-        return collision
-
-    def get_external_collision_symbol(self) -> list[FloatVariable]:
+        :return: A list of all external collision variables for registered bodies.
+        """
         symbols = []
         for body, max_idx in self.external_monitored_links.items():
             for idx in range(max_idx + 1):
@@ -106,29 +99,32 @@ class CollisionExpressionManager:
             self.external_collision_data = np.zeros(len(symbols), dtype=float)
         return symbols
 
+    def get_external_collision_data(self) -> np.ndarray:
+        """
+
+        :return: A numpy array containing the external collision data,
+                 corresponding to the symbols returned by get_external_collision_variables.
+        """
+
     @lru_cache
     def external_map_V_n_symbol(self, body: Body, idx: int) -> Vector3:
-        return create_vector3(
-            name=PrefixedName(f"closest_point({body.name})[{idx}].map_V_n.x"),
-            provider=lambda n=body, i=idx: self.closest_points.get_external_collisions(
-                n
-            )[i].map_V_n,
+        return Vector3.create_with_variables(
+            f"closest_point({body.name})[{idx}].map_V_n"
         )
 
     @lru_cache
     def external_new_a_P_pa_symbol(self, body: Body, idx: int) -> Point3:
-        return create_point(
-            name=PrefixedName(f"closest_point({body.name})[{idx}].new_a_P_pa"),
-            provider=lambda n=body, i=idx: self.closest_points.get_external_collisions(
-                n
-            )[i].fixed_parent_of_a_P_pa,
+        return Point3.create_with_variables(
+            f"closest_point({body.name})[{idx}].new_a_P_pa"
         )
 
     @lru_cache
-    def get_variable_buffer_zone_distance(self, body: Body) -> FloatVariable: ...
+    def get_variable_buffer_zone_distance(self, body: Body) -> FloatVariable:
+        return FloatVariable(name=f"buffer_zone_distance({body.name})")
 
     @lru_cache
-    def get_variable_violated_distance(self, body: Body) -> FloatVariable: ...
+    def get_variable_violated_distance(self, body: Body) -> FloatVariable:
+        return FloatVariable(name=f"violated_distance({body.name})")
 
     @lru_cache
     def external_contact_distance_symbol(

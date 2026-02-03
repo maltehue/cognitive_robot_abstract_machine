@@ -378,3 +378,8 @@ class AmbiguousNameError(ValueError):
 
 class UnresolvedNameError(ValueError):
     """Raised when no semantic annotation class matches a given name."""
+
+
+@dataclass
+class YouFoundABugError(DataclassException):
+    """Raised error occur that shouldn't"""

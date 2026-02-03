@@ -21,6 +21,7 @@ from giskardpy.motion_statechart.graph_node import (
     Task,
 )
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from semantic_digital_twin.collision_checking.collision_manager import CollisionGroup
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.spatial_types import Vector3, HomogeneousTransformationMatrix
@@ -57,14 +58,14 @@ class ExternalCollisionAvoidanceTask(Task):
     Can result in insolvable QPs if multiple of these constraints are violated.
     """
 
-    connection: ActiveConnection = field(kw_only=True)
+    collision_group: CollisionGroup = field(kw_only=True)
     max_velocity: float = field(default=0.2, kw_only=True)
     idx: int = field(default=0, kw_only=True)
     max_avoided_bodies: int = field(default=1, kw_only=True)
 
     @property
     def tip(self) -> KinematicStructureEntity:
-        return self.connection.child
+        return self.collision_group.root
 
     def create_weight(self, context: BuildContext) -> sm.Scalar:
         """
@@ -231,9 +232,7 @@ class ExternalCollisionAvoidance(Goal):
         task.pause_condition = distance_monitor.observation_variable
 
     def build(self, context: BuildContext) -> NodeArtifacts:
-        context.collision_expression_manager.monitor_link_for_external(
-            self._main_body, self.idx
-        )
+        context.collision_expression_manager.register_body(self._main_body, self.idx)
         return NodeArtifacts()
 
 
