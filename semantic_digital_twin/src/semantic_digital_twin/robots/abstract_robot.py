@@ -487,6 +487,7 @@ class AbstractRobot(Agent, ABC):
             robot._setup_collision_rules()
             robot._setup_velocity_limits()
             robot._setup_hardware_interfaces()
+            robot._setup_joint_states()
         return robot
 
     @abstractmethod
@@ -500,6 +501,9 @@ class AbstractRobot(Agent, ABC):
 
     @abstractmethod
     def _setup_hardware_interfaces(self): ...
+
+    @abstractmethod
+    def _setup_joint_states(self): ...
 
     @property
     def drive(self) -> Optional[OmniDrive]:
