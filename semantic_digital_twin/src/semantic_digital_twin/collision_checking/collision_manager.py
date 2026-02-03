@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     pass
 
 
-@dataclass
+@dataclass(repr=False)
 class CollisionGroup:
     """
     Bodies in this group are viewed as a single body.
@@ -31,6 +31,9 @@ class CollisionGroup:
 
     root: KinematicStructureEntity
     bodies: set[Body] = field(default_factory=set)
+
+    def __repr__(self) -> str:
+        return f"CollisionGroup(root={self.root.name}, bodies={[b.name for b in self.bodies]})"
 
 
 @dataclass
@@ -51,9 +54,7 @@ class CollisionManager(ModelChangeCallback):
         default_factory=lambda: [DefaultMaxAvoidedCollisions()]
     )
 
-    collision_groups: dict[KinematicStructureEntity, CollisionGroup] = field(
-        default_factory=dict
-    )
+    collision_groups: list[CollisionGroup] = field(default_factory=list, init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -71,13 +72,13 @@ class CollisionManager(ModelChangeCallback):
         self.update_collision_groups()
 
     def get_collision_group(self, body: Body) -> CollisionGroup:
-        for group in self.collision_groups.values():
+        for group in self.collision_groups:
             if body in group.bodies or body == group.root:
                 return group
         raise Exception(f"No collision group found for {body}")
 
     def update_collision_groups(self):
-        self.collision_groups = {}
+        self.collision_groups = []
         for parent, childs in rustworkx.bfs_successors(
             self.world.kinematic_structure, self.world.root.index
         ):
@@ -85,17 +86,22 @@ class CollisionManager(ModelChangeCallback):
                 collision_group = self.get_collision_group(parent)
             except Exception:
                 collision_group = CollisionGroup(parent)
-                self.collision_groups[parent] = collision_group
+                self.collision_groups.append(collision_group)
             for child in childs:
                 parent_C_child = self.world.get_connection(parent, child)
-                if not parent_C_child.is_controlled and child.has_collision():
+                if not parent_C_child.is_controlled:
                     collision_group.bodies.add(child)
-        for group in list(self.collision_groups.values()):
-            if (
-                len(group.bodies) == 0
-                and not group.root in self.world.bodies_with_collision
-            ):
-                del self.collision_groups[group.root]
+
+        for group in self.collision_groups:
+            group.bodies = set(
+                b for b in group.bodies if b in self.world.bodies_with_collision
+            )
+
+        self.collision_groups = [
+            group
+            for group in self.collision_groups
+            if len(group.bodies) > 0 or group.root in self.world.bodies_with_collision
+        ]
 
     def get_max_avoided_bodies(self, body: Body) -> int:
         for rule in reversed(self.max_avoided_bodies_rules):

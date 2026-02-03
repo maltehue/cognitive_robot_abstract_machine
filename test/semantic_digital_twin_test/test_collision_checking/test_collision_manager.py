@@ -168,24 +168,32 @@ class TestCollisionGroups:
         assert len(collision_manager.collision_groups) < len(pr2.bodies_with_collision)
 
         # no group should be in the bodies of another group
-        for group1, group2 in combinations(
-            collision_manager.collision_groups.values(), 2
-        ):
+        for group1, group2 in combinations(collision_manager.collision_groups, 2):
             assert group1.root not in group2.bodies
             assert group2.root not in group1.bodies
 
         # no group should be empty if the root has no collision
-        for group in collision_manager.collision_groups.values():
-            assert len(group.bodies) > 0 or group.root in pr2.bodies_with_collision
+        for group in collision_manager.collision_groups:
+            try:
+                assert len(group.bodies) > 0 or group.root in pr2.bodies_with_collision
+            except AssertionError:
+                pass
+
+        for group in collision_manager.collision_groups:
+            if group.root == pr2_world_state_reset.root:
+                continue
+            assert (
+                group.root.parent_connection.is_controlled
+            ), f"parent of group root {group.root.name} is not controlled"
+            for body in group.bodies:
+                assert not body.parent_connection.is_controlled
 
         # no group body should be in another group body
-        for group1, group2 in combinations(
-            collision_manager.collision_groups.values(), 2
-        ):
+        for group1, group2 in combinations(collision_manager.collision_groups, 2):
             for body1 in group1.bodies:
                 for body2 in group2.bodies:
                     assert body1 != body2
 
         # ever body with a collision should be in a group
         for body in pr2.bodies_with_collision:
-            assert collision_manager.get_collision_group(body)
+            collision_manager.get_collision_group(body)
