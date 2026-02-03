@@ -11,6 +11,7 @@ from typing_extensions import Optional
 
 from krrood.ormatic.dao import AlternativeMapping
 from ..datastructures.prefixed_name import PrefixedName
+from ..mixin import HasSimulatorProperties
 from ..spatial_types import (
     RotationMatrix,
     Vector3,
@@ -56,21 +57,14 @@ class WorldMapping(AlternativeMapping[World]):
             for entity in self.kinematic_structure_entities:
                 result.add_kinematic_structure_entity(entity)
             for dof in self.degrees_of_freedom:
-                d = DegreeOfFreedom(
-                    name=dof.name,
-                    limits=DegreeOfFreedomLimits(
-                        lower=dof.limits.lower,
-                        upper=dof.limits.upper,
-                    ),
-                    id=dof.id,
-                )
-                result.add_degree_of_freedom(d)
+                result.add_degree_of_freedom(dof)
             for connection in self.connections:
                 result.add_connection(connection)
             for semantic_annotation in self.semantic_annotations:
                 result.add_semantic_annotation(semantic_annotation)
             result.delete_orphaned_dofs()
             result.state = self.state
+            result.state._world = result
 
         return result
 
@@ -239,25 +233,9 @@ class PoseMapping(AlternativeMapping[Pose]):
 
 
 @dataclass
-class DegreeOfFreedomLimitsMapping(AlternativeMapping[DegreeOfFreedomLimits]):
-    lower: List[float]
-    upper: List[float]
-
-    @classmethod
-    def from_domain_object(cls, obj: DegreeOfFreedomLimits):
-        return cls(
-            lower=obj.lower.data,
-            upper=obj.upper.data,
-        )
-
-    def to_domain_object(self) -> DegreeOfFreedomLimits:
-        return DegreeOfFreedomLimits(
-            lower=DerivativeMap(data=self.lower), upper=DerivativeMap(data=self.upper)
-        )
-
-
-@dataclass
-class DegreeOfFreedomMapping(AlternativeMapping[DegreeOfFreedom]):
+class DegreeOfFreedomMapping(
+    AlternativeMapping[DegreeOfFreedom], HasSimulatorProperties
+):
     name: PrefixedName
     limits: DegreeOfFreedomLimits
     id: UUID

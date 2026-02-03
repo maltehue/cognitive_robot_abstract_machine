@@ -297,6 +297,7 @@ class CostmapLocation(LocationDesignatorDescription):
                     continue
 
                 if not (params_box.reachable_for or params_box.visible_for):
+                    self._last_result = pose_candidate
                     yield pose_candidate
                     continue
 
@@ -307,6 +308,7 @@ class CostmapLocation(LocationDesignatorDescription):
                     continue
 
                 if not params_box.reachable_for:
+                    self._last_result = pose_candidate
                     yield pose_candidate
                     continue
 
@@ -335,12 +337,14 @@ class CostmapLocation(LocationDesignatorDescription):
                         test_world,
                     )
                     if is_reachable:
-                        yield GraspPose(
+                        pose = GraspPose(
                             pose_candidate.pose,
                             pose_candidate.header,
                             arm=params_box.reachable_arm,
                             grasp_description=grasp_desc,
                         )
+                        self._last_result = pose
+                        yield pose
 
 
 class AccessingLocation(LocationDesignatorDescription):
