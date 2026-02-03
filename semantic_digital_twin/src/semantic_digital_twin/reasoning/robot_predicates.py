@@ -56,7 +56,7 @@ def robot_in_collision(
         {
             CollisionCheck(robot_body, collision_body, threshold, robot._world)
             for robot_body, collision_body in itertools.product(
-                robot.bodies_with_collisions, possible_collisions_bodies
+                robot.bodies_with_collision, possible_collisions_bodies
             )
         }
     )

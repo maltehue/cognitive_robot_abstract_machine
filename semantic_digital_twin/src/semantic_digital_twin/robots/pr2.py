@@ -55,7 +55,7 @@ class PR2(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             AvoidAllCollisions(
                 buffer_zone_distance=0.1,
                 violated_distance=0.0,
-                bodies=self.bodies_with_collisions,
+                bodies=self.bodies_with_collision,
             )
         )
 
@@ -63,14 +63,14 @@ class PR2(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             AvoidAllCollisions(
                 buffer_zone_distance=0.05,
                 violated_distance=0.0,
-                bodies=[self.left_arm.bodies_with_collisions],
+                bodies=[self.left_arm.bodies_with_collision],
             )
         )
         self._world.collision_manager.low_priority_rules.append(
             AvoidAllCollisions(
                 buffer_zone_distance=0.05,
                 violated_distance=0.0,
-                bodies=[self.right_arm.bodies_with_collisions],
+                bodies=[self.right_arm.bodies_with_collision],
             )
         )
         self._world.collision_manager.low_priority_rules.append(

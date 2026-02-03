@@ -17,10 +17,10 @@ from .collision_rules import (
     AllowNonRobotCollisions,
 )
 from ..callbacks.callback import ModelChangeCallback
-from ..world_description.connections import ActiveConnection
+from ..world_description.world_entity import Body, KinematicStructureEntity
 
 if TYPE_CHECKING:
-    from ..world_description.world_entity import Body, KinematicStructureEntity
+    pass
 
 
 @dataclass
@@ -91,7 +91,10 @@ class CollisionManager(ModelChangeCallback):
                 if not parent_C_child.is_controlled and child.has_collision():
                     collision_group.bodies.add(child)
         for group in list(self.collision_groups.values()):
-            if len(group.bodies) == 0:
+            if (
+                len(group.bodies) == 0
+                and not group.root in self.world.bodies_with_collision
+            ):
                 del self.collision_groups[group.root]
 
     def get_max_avoided_bodies(self, body: Body) -> int:

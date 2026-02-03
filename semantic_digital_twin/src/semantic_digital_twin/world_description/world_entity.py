@@ -644,7 +644,7 @@ class RootedSemanticAnnotation(SemanticAnnotation):
         ]
 
     @property
-    def bodies_with_collisions(self) -> List[Body]:
+    def bodies_with_collision(self) -> List[Body]:
         return [x for x in self.bodies if x.has_collision()]
 
 

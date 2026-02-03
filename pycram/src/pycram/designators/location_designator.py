@@ -1620,10 +1620,9 @@ class GiskardLocation(LocationDesignatorDescription):
         """
         # Temp workaround until we fix multiple formats
         giskard_coll_request = CollisionRule(
-            body_group1=robot_view.bodies_with_collisions,
+            body_group1=robot_view.bodies_with_collision,
             body_group2=list(
-                set(world.bodies_with_collision)
-                - set(robot_view.bodies_with_collisions)
+                set(world.bodies_with_collision) - set(robot_view.bodies_with_collision)
             ),
             distance=0.1,
         )

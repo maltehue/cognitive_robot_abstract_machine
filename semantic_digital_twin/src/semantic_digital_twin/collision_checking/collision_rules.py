@@ -128,7 +128,7 @@ class AllowNonRobotCollisions(HighPriorityAllowCollisionRule):
         robot_bodies: set[Body] = {
             body
             for robot in world.get_semantic_annotations_by_type(AbstractRobot)
-            for body in robot.bodies_with_collisions
+            for body in robot.bodies_with_collision
         }
 
         # Bodies with collisions that are NOT part of a robot

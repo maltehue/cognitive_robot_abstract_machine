@@ -56,8 +56,8 @@ class TestCollisionRules:
 
     def test_AllowNonRobotCollisions(self, pr2_apartment_world):
         pr2 = pr2_apartment_world.get_semantic_annotations_by_type(PR2)[0]
-        pr2_body1 = pr2.bodies_with_collisions[0]
-        pr2_body2 = pr2.bodies_with_collisions[2]
+        pr2_body1 = pr2.bodies_with_collision[0]
+        pr2_body2 = pr2.bodies_with_collision[2]
 
         apartment_body1 = pr2_apartment_world.get_body_by_name("handle_cab3_door_top")
         apartment_body2 = pr2_apartment_world.get_body_by_name("cabinet6_drawer_top")
@@ -165,7 +165,7 @@ class TestCollisionGroups:
         assert len(collision_manager.collision_groups) > 0
 
         # there should be fewer groups than bodies with collisions
-        assert len(collision_manager.collision_groups) < len(pr2.bodies_with_collisions)
+        assert len(collision_manager.collision_groups) < len(pr2.bodies_with_collision)
 
         # no group should be in the bodies of another group
         for group1, group2 in combinations(
@@ -174,9 +174,9 @@ class TestCollisionGroups:
             assert group1.root not in group2.bodies
             assert group2.root not in group1.bodies
 
-        # no group should be empty
+        # no group should be empty if the root has no collision
         for group in collision_manager.collision_groups.values():
-            assert len(group.bodies) > 0
+            assert len(group.bodies) > 0 or group.root in pr2.bodies_with_collision
 
         # no group body should be in another group body
         for group1, group2 in combinations(
@@ -187,5 +187,5 @@ class TestCollisionGroups:
                     assert body1 != body2
 
         # ever body with a collision should be in a group
-        for body in pr2.bodies_with_collisions:
+        for body in pr2.bodies_with_collision:
             assert collision_manager.get_collision_group(body)

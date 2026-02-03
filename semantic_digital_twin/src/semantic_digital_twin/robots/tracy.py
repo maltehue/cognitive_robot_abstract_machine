@@ -43,7 +43,7 @@ class Tracy(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
         )
         self.world.load_collision_srdf(path_to_srdf)
 
-        for body in self.robot.bodies_with_collisions:
+        for body in self.robot.bodies_with_collision:
             collision_config = CollisionCheckingConfig(
                 buffer_zone_distance=0.03, violated_distance=0.0
             )

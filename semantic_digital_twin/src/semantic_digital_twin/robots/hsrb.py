@@ -49,7 +49,7 @@ class HSRB(AbstractRobot, HasArms, HasNeck):
         self.collision_rules.append(
             SelfCollisionMatrixRule.from_collision_srdf(srdf_path)
         )
-        for body in self.robot.bodies_with_collisions:
+        for body in self.robot.bodies_with_collision:
             collision_config = CollisionCheckingConfig(
                 buffer_zone_distance=0.05, violated_distance=0.0
             )

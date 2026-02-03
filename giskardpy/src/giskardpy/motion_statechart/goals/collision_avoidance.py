@@ -470,8 +470,8 @@ class CollisionAvoidance(Goal):
         robot: AbstractRobot
         # collect bodies from the same connection to the main body pair
         for robot in context.world.get_semantic_annotations_by_type(AbstractRobot):
-            for body_a_original in robot.bodies_with_collisions:
-                for body_b_original in robot.bodies_with_collisions:
+            for body_a_original in robot.bodies_with_collision:
+                for body_b_original in robot.bodies_with_collision:
                     if (
                         (
                             body_a_original,
