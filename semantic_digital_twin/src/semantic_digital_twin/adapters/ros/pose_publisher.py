@@ -124,7 +124,9 @@ class PosePublisher(StateChangeCallback):
                         )
                     ),
                     color=ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0),
-                    header=Header(frame_id="map"),
+                    header=Header(
+                        frame_id=str(self.world.root.name),
+                    ),
                 )
             )
         return marker_array
@@ -149,7 +151,7 @@ class PosePublisher(StateChangeCallback):
         m.action = Marker.ADD
         m.type = Marker.ARROW
         m.id = _id
-        m.header.frame_id = "map"
+        m.header.frame_id = str(self.world.root.name)
         m.pose = pose
         m.lifetime = Duration(
             sec=round(self.end_time - time.time()) if self.lifetime > 0 else 0

@@ -22,9 +22,7 @@ class ViewManager:
         return arm.manipulator
 
     @staticmethod
-    def get_arm_view(
-        arm: Arms, robot_view: AbstractRobot
-    ) -> Optional[Tuple[KinematicChain]]:
+    def get_arm_view(arm: Arms, robot_view: AbstractRobot) -> Optional[KinematicChain]:
         """
         Get the arm view for a given arm and robot view.
 
@@ -32,12 +30,26 @@ class ViewManager:
         :param robot_view: The robot view to search in.
         :return: The Manipulator object representing the arm.
         """
+        all_arms = ViewManager.get_all_arm_views(arm, robot_view)
+        return all_arms[0]
+
+    @staticmethod
+    def get_all_arm_views(
+        arm: Arms, robot_view: AbstractRobot
+    ) -> Optional[Tuple[KinematicChain]]:
+        """
+        Get all possible arm views for a given arm and robot view.
+
+        :param arm: The arm to get the view for.
+        :param robot_view: The robot view to search in.
+        :return: The Manipulator object representing the arm.
+        """
         if len(robot_view.arms) == 1:
-            return robot_view.arms[0]
+            return (robot_view.arms[0],)
         elif arm == Arms.LEFT:
-            return robot_view.left_arm
+            return (robot_view.left_arm,)
         elif arm == Arms.RIGHT:
-            return robot_view.right_arm
+            return (robot_view.right_arm,)
         elif arm == Arms.BOTH:
             return robot_view.arms
         return None
