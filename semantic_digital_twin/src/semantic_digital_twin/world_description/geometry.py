@@ -379,7 +379,7 @@ class TriangleMesh(Mesh):
     """
 
     @property
-    def file_name(self) -> str:
+    def filename(self) -> str:
         return self.file.name
 
     @cached_property

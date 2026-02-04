@@ -37,6 +37,47 @@ from semantic_digital_twin.world_description.world_entity import Body
 
 
 class TestCollisionRules:
+    def test_get_distances(self, pr2_world_state_reset):
+        pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+        collision_manager = pr2_world_state_reset.collision_manager
+
+        body = pr2_world_state_reset.get_body_by_name("base_link")
+
+        # PR2 has a rule for base_link: buffer=0.2, violated=0.05
+        # It's added to low_priority_rules
+        assert collision_manager.get_buffer_zone_distance(body) == 0.2
+        assert collision_manager.get_violated_distance(body) == 0.05
+
+        # Test with a body that only has the general PR2 rule (buffer=0.1, violated=0.0)
+        body2 = pr2_world_state_reset.get_body_by_name("torso_lift_link")
+        assert collision_manager.get_buffer_zone_distance(body2) == 0.1
+        assert collision_manager.get_violated_distance(body2) == 0.0
+
+        # Add a high priority rule to override
+        override_rule = AvoidAllCollisions(
+            buffer_zone_distance=0.5, violated_distance=0.1, bodies=[body]
+        )
+        collision_manager.high_priority_rules.append(override_rule)
+
+        assert collision_manager.get_buffer_zone_distance(body) == 0.5
+        assert collision_manager.get_violated_distance(body) == 0.1
+
+    def test_get_distances_no_rule(self, cylinder_bot_world):
+        collision_manager = cylinder_bot_world.collision_manager
+        # cylinder_bot_world usually has some bodies
+        body = cylinder_bot_world.bodies_with_collision[0]
+
+        # By default, cylinder_bot_world might not have rules for all bodies
+        # if they are not explicitly added.
+        # Let's see if there is any rule.
+        # Clear rules to be sure
+        collision_manager.low_priority_rules = []
+        collision_manager.normal_priority_rules = []
+        collision_manager.high_priority_rules = []
+
+        with pytest.raises(ValueError):
+            collision_manager.get_buffer_zone_distance(body)
+
     def test_AvoidCollisionBetweenGroups(self, pr2_world_state_reset):
         pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
 
@@ -124,7 +165,8 @@ class TestCollisionRules:
     def test_pr2_collision_config(self, pr2_world_state_reset):
         pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
         collision_manager = pr2_world_state_reset.collision_manager
-        collision_matrix = collision_manager.create_collision_matrix()
+        collision_manager.update_collision_matrix()
+        collision_matrix = collision_manager.collision_matrix
         rule: HighPriorityAllowCollisionRule
         for rule in collision_manager.high_priority_rules:
             assert (
@@ -158,7 +200,8 @@ class TestCollisionRules:
     def test_AllowCollisionForAdjacentPairs(self, pr2_world_state_reset):
         pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
         collision_manager = pr2_world_state_reset.collision_manager
-        expected_collision_matrix = collision_manager.create_collision_matrix()
+        collision_manager.update_collision_matrix()
+        expected_collision_matrix = collision_manager.collision_matrix
 
         hard_ware_interface_cache = {}
 
@@ -167,14 +210,16 @@ class TestCollisionRules:
                 hard_ware_interface_cache[dof.name] = dof.has_hardware_interface
                 dof.has_hardware_interface = False
 
-        empty_collision_matrix = collision_manager.create_collision_matrix()
+        collision_manager.update_collision_matrix()
+        empty_collision_matrix = collision_manager.collision_matrix
         assert len(empty_collision_matrix.collision_checks) == 0
 
         with pr2_world_state_reset.modify_world():
             for dof in pr2_world_state_reset.degrees_of_freedom:
                 dof.has_hardware_interface = hard_ware_interface_cache[dof.name]
 
-        assert collision_manager.create_collision_matrix() == expected_collision_matrix
+        collision_manager.update_collision_matrix()
+        assert collision_manager.collision_matrix == expected_collision_matrix
 
 
 class TestCollisionGroups:

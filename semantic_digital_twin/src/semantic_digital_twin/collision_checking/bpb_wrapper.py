@@ -151,7 +151,7 @@ def load_convex_mesh_shape(
     if not mesh.mesh.is_convex:
         obj_pkg_filename = convert_to_decomposed_obj_and_save_in_tmp(mesh=mesh.mesh)
     else:
-        obj_pkg_filename = mesh.file_name
+        obj_pkg_filename = mesh.filename
     return pb.load_convex_shape(
         obj_pkg_filename,
         single_shape=single_shape,

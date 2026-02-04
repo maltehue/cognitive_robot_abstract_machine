@@ -244,7 +244,7 @@ class MarkerPublisherBase(ABC):
         # Geometry-specific handling
         if isinstance(geom, MeshVisualShape):
             marker.type = Marker.MESH_RESOURCE
-            marker.mesh_resource = "file://" + geom.file_name
+            marker.mesh_resource = "file://" + geom.filename
             marker.scale = Vector3(
                 **dict(zip(["x", "y", "z"], geom.scale or (1.0, 1.0, 1.0)))
             )

@@ -20,6 +20,7 @@ from .collision_rules import (
     Updatable,
     AllowCollisionForAdjacentPairs,
     AllowNonRobotCollisions,
+    AvoidCollisionRule,
 )
 from ..callbacks.callback import ModelChangeCallback
 from ..world_description.world_entity import Body, KinematicStructureEntity
@@ -181,9 +182,27 @@ class CollisionManager(ModelChangeCallback):
                 return max_avoided_bodies
         raise Exception(f"No rule found for {body}")
 
-    def get_buffer_zone_distance(self, body: Body) -> float: ...
+    def get_buffer_zone_distance(self, body: Body) -> float:
+        """
+        Returns the buffer-zone distance for the body by scanning rules from highest to lowest priority.
+        """
+        for rule in reversed(self.rules):
+            if isinstance(rule, AvoidCollisionRule):
+                value = rule.buffer_zone_distance_for(body)
+                if value is not None:
+                    return value
+        raise ValueError(f"No buffer-zone rule found for {body}")
 
-    def get_violated_violated_distance(self, body: Body) -> float: ...
+    def get_violated_distance(self, body: Body) -> float:
+        """
+        Returns the violated distance for the body by scanning rules from highest to lowest priority.
+        """
+        for rule in reversed(self.rules):
+            if isinstance(rule, AvoidCollisionRule):
+                value = rule.violated_distance_for(body)
+                if value is not None:
+                    return value
+        raise ValueError(f"No violated-distance rule found for {body}")
 
     @property
     def rules(self) -> List[CollisionRule]:

@@ -37,11 +37,35 @@ class AvoidCollisionRule(CollisionRule):
     a severe collision risk requiring immediate attention.
     """
 
+    def applies_to(self, body: Body) -> bool:
+        """
+        Returns True if the rule configures collision distances for the given body.
+        """
+        raise NotImplementedError
+
+    def buffer_zone_distance_for(self, body: Body) -> float | None:
+        """
+        Returns the configured buffer-zone distance for the body or None if not applicable.
+        """
+        return self.buffer_zone_distance if self.applies_to(body) else None
+
+    def violated_distance_for(self, body: Body) -> float | None:
+        """
+        Returns the configured violated distance for the body or None if not applicable.
+        """
+        return self.violated_distance if self.applies_to(body) else None
+
 
 @dataclass
 class AvoidCollisionBetweenGroups(AvoidCollisionRule):
     body_group1: List[Body] = field(default_factory=list)
     body_group2: List[Body] = field(default_factory=list)
+
+    def applies_to(self, body: Body) -> bool:
+        """
+        Returns True if the body is a member of any group handled by this rule.
+        """
+        return body in self.body_group1 or body in self.body_group2
 
     def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix):
         collision_checks = set()
@@ -59,6 +83,12 @@ class AvoidCollisionBetweenGroups(AvoidCollisionRule):
 @dataclass
 class AvoidAllCollisions(AvoidCollisionRule):
     bodies: List[Body] = field(default_factory=list)
+
+    def applies_to(self, body: Body) -> bool:
+        """
+        Returns True if the body is managed by this rule.
+        """
+        return body in self.bodies
 
     def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix):
         collision_checks = set()
