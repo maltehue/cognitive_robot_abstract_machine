@@ -15,6 +15,7 @@ from semantic_digital_twin.collision_checking.collision_manager import (
     CollisionGroupConsumer,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.spatial_types import Vector3, Point3
 from semantic_digital_twin.world_description.world_entity import (
     Body,
@@ -37,9 +38,32 @@ class ExternalCollisionExpressionManager(CollisionGroupConsumer):
     Owns symbols and buffer
     """
 
+    robot: AbstractRobot
+    """
+    The robot to compute collisions for.
+    """
+
     registered_bodies: dict[Body, int] = field(default_factory=dict)
+    """
+    Maps bodies to the index of point_on_body_a in the collision buffer.
+    """
 
     collision_data: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=float))
+    """
+    All collision data in a single numpy array.
+    Repeats blocks of size block_size.
+    """
+
+    block_size: int = field(default=12, init=False)
+    """
+    block layout:
+        12 per collision
+        point_on_body_a,  (3)
+        contact_distance, (1)
+        contract_normal,  (3)
+        buffer_distance,  (1)
+        violated_distance (1)
+    """
 
     def on_reset(self):
         pass
@@ -52,18 +76,46 @@ class ExternalCollisionExpressionManager(CollisionGroupConsumer):
         Takes collisions, checks if they are external and inserts them
         into the buffer at the right place.
         """
-        # 1. check if collision is external
-        # 2. check if body is registered
-        # 2.1 maybe flip collision, if body_b is registered.
+        for collision in collision.contacts:
+            # 1. check if collision is external
+            if collision.body_a not in self.registered_bodies and collision.body_b in self.registered_bodies:
+                collision = collision.reverse()
+            else:
+                # neither body_a nor body_b are registered, so collision doesn't belong to this robot.
+                continue
+            group1 = self.get_collision_group(collision.body_a)
+            group1_T_root = group1.root.global_pose.inverse().to_np()
+            group1_P_pa = group1_T_root @ collision.root_P_pa
+            data = np.concatenate(
+                (
+                    group1_P_pa,
+                    group2_P_pb,
+                    collision.root_V_n,
+                    collision.contact_distance,
+                    max(
+                        self.get_buffer_zone_distance(collision.body_a),
+                        self.get_buffer_zone_distance(collision.body_b),
+                    ),
+                    max(
+                        self.get_violated_violated_distance(collision.body_a),
+                        self.get_violated_violated_distance(collision.body_b),
+                    ),
+                )
+            )
         # 3. transform collision into group frames
         # 4. insert collision into buffer
 
-    def register_body(self, body: Body, idx: int):
+    def insert_data_block(self, body, idx, group1_P_point_on_a, ) -> np.ndarray:
+
+    def register_body(self, body: Body, number_of_potential_collisions: int):
         """
         Register a body
         """
-        self.external_monitored_links[body] = max(
-            idx, self.external_monitored_links.get(body, 0)
+        self.registered_bodies[body] = len(self.collision_data)
+        self.collision_data = np.resize(
+            self.collision_data,
+            self.collision_data.shape[0]
+            + self.block_size * number_of_potential_collisions,
         )
 
     def get_external_collision_variables(self) -> list[FloatVariable]:
