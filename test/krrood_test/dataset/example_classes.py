@@ -682,3 +682,7 @@ class GenericClass(Generic[T]):
 @dataclass
 class GenericClassAssociation:
     associated_value: GenericClass[float]
+    associated_value_list: List[GenericClass[Position]]
+
+    associated_value_not_parametrized: GenericClass
+    associated_value_not_parametrized_list: List[GenericClass]

@@ -48,6 +48,15 @@ class Base(DeclarativeBase):
 
 
 # Association tables for many-to-many relationships
+genericclassassociationdao_associated_value_not_parametrized_list_association = Table(
+    "genericclassassociationdao_associated_value_not_parametrized_list_association",
+    Base.metadata,
+    Column(
+        "source_genericclassassociationdao_id",
+        ForeignKey("GenericClassAssociationDAO.database_id"),
+    ),
+    Column("target_genericclassdao_id", ForeignKey("GenericClassDAO.database_id")),
+)
 parentalternativelymappedmappingdao_entities_association = Table(
     "parentalternativelymappedmappingdao_entities_association",
     Base.metadata,
@@ -249,6 +258,28 @@ class GenericClassAssociationDAO(
 
     database_id: Mapped[builtins.int] = mapped_column(
         Integer, primary_key=True, use_existing_column=True
+    )
+
+    associated_value_not_parametrized_id: Mapped[int] = mapped_column(
+        ForeignKey("GenericClassDAO.database_id", use_alter=True),
+        nullable=True,
+        use_existing_column=True,
+    )
+
+    associated_value_not_parametrized: Mapped[GenericClassDAO] = relationship(
+        "GenericClassDAO",
+        uselist=False,
+        foreign_keys=[associated_value_not_parametrized_id],
+        post_update=True,
+    )
+    associated_value_not_parametrized_list: Mapped[builtins.list[GenericClassDAO]] = (
+        relationship(
+            "GenericClassDAO",
+            secondary="genericclassassociationdao_associated_value_not_parametrized_list_association",
+            primaryjoin="GenericClassAssociationDAO.database_id == genericclassassociationdao_associated_value_not_parametrized_list_association.c.source_genericclassassociationdao_id",
+            secondaryjoin="GenericClassDAO.database_id == genericclassassociationdao_associated_value_not_parametrized_list_association.c.target_genericclassdao_id",
+            cascade="save-update, merge",
+        )
     )
 
 

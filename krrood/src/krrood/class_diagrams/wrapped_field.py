@@ -8,8 +8,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, Field, MISSING
 from datetime import datetime
 from functools import cached_property, lru_cache
-from types import NoneType
+from types import NoneType, GenericAlias
 from copy import copy
+from typing import Generic, _GenericAlias
 
 from typing_extensions import (
     get_type_hints,
@@ -225,6 +226,15 @@ class WrappedField:
             and self.field.default_factory == MISSING
         )
 
+    @cached_property
+    def is_instantiation_of_generic_class(self) -> bool:
+        """
+        Check if a type hint is a full parameterization of a generic class.
+        For example, `GenericClass[int]` is a full parameterization, but `GenericClass` is not.
+
+        :return: True if the type hint is a full parameterization of a generic class.
+        """
+        return (type(self.type_endpoint) is _GenericAlias) and issubclass(self.type_endpoint.__origin__, Generic)
 
 @lru_cache(maxsize=None)
 def manually_search_for_class_name(target_class_name: str) -> Type:
