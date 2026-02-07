@@ -732,10 +732,14 @@ def test_polymorphic_enum(session, database):
 
 
 def test_generic_class(session, database):
+
+    assert issubclass(GenericClass_floatDAO, GenericClassDAO)
+    assert issubclass(GenericClass_PositionDAO, GenericClassDAO)
+
     assert GenericClassAssociationDAO.associated_value
-    generic_position = GenericClass(Position(1, 2, 3))
+    generic_position = GenericClass[Position](Position(1, 2, 3))
     obj = GenericClassAssociation(
-        associated_value=GenericClass(1),
+        associated_value=GenericClass[float](1),
         associated_value_list=[generic_position, generic_position],
         associated_value_not_parametrized=generic_position,
         associated_value_not_parametrized_list=[GenericClass(2)],

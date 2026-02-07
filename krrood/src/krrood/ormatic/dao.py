@@ -199,8 +199,12 @@ class ToDataAccessObjectState(DataAccessObjectState[ToDataAccessObjectWorkItem])
         :param source_object: The object being converted.
         :return: The source object or the result of alternative mapping.
         """
-        if issubclass(dao_clazz.original_class(), AlternativeMapping):
-            return dao_clazz.original_class().to_dao(source_object, state=self)
+        original_class = dao_clazz.original_class()
+        # Handle GenericAlias which cannot be used with issubclass in some python versions
+        # or might not be what we want to check for AlternativeMapping anyway.
+        origin = get_origin(original_class) or original_class
+        if inspect.isclass(origin) and issubclass(origin, AlternativeMapping):
+            return original_class.to_dao(source_object, state=self)
         return source_object
 
     def register(self, source_object: Any, dao_instance: DataAccessObject) -> None:
@@ -641,7 +645,8 @@ class DataAccessObject(HasGeneric[T]):
             setattr(self, relationship.key, None)
             return
 
-        dao_instance = self._get_or_queue_dao(value, state)
+        expected_type = relationship.mapper.class_.original_class()
+        dao_instance = self._get_or_queue_dao(value, state, expected_type)
         setattr(self, relationship.key, dao_instance)
 
     def _extract_collection_relationship(
@@ -658,17 +663,24 @@ class DataAccessObject(HasGeneric[T]):
         :param state: The conversion state.
         """
         source_collection = getattr(source_object, relationship.key)
-        dao_collection = [self._get_or_queue_dao(v, state) for v in source_collection]
+        expected_type = relationship.mapper.class_.original_class()
+        dao_collection = [
+            self._get_or_queue_dao(v, state, expected_type) for v in source_collection
+        ]
         setattr(self, relationship.key, type(source_collection)(dao_collection))
 
     def _get_or_queue_dao(
-        self, source_object: Any, state: ToDataAccessObjectState
+        self,
+        source_object: Any,
+        state: ToDataAccessObjectState,
+        expected_type: Optional[Type] = None,
     ) -> DataAccessObject:
         """
         Resolve a source object to a DAO, queuing it if necessary.
 
         :param source_object: The object to resolve.
         :param state: The conversion state.
+        :param expected_type: The expected domain type.
         :return: The corresponding DAO instance.
         """
         # Check if already built
@@ -676,7 +688,7 @@ class DataAccessObject(HasGeneric[T]):
         if existing is not None:
             return existing
 
-        dao_clazz = get_dao_class(type(source_object))
+        dao_clazz = get_dao_class(type(source_object), expected_type)
         if dao_clazz is None:
             raise NoDAOFoundDuringParsingError(source_object, type(self), None)
 
@@ -1186,13 +1198,21 @@ def _get_clazz_by_original_clazz(
 
 
 @lru_cache(maxsize=None)
-def get_dao_class(original_clazz: Type) -> Optional[Type[DataAccessObject]]:
+def get_dao_class(
+    original_clazz: Type, expected_type: Optional[Type] = None
+) -> Optional[Type[DataAccessObject]]:
     """
     Retrieve the DAO class for a domain class.
 
     :param original_clazz: The domain class.
+    :param expected_type: The expected domain type (from relationship).
     :return: The corresponding DAO class or None.
     """
+    if expected_type is not None:
+        dao = _get_clazz_by_original_clazz(DataAccessObject, expected_type)
+        if dao is not None:
+            return dao
+
     alternative_mapping = get_alternative_mapping(original_clazz)
     if alternative_mapping is not None:
         original_clazz = alternative_mapping

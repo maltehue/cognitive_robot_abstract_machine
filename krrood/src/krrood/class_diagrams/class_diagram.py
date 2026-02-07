@@ -768,6 +768,15 @@ class ClassDiagram:
             node = WrappedSpecializedGeneric(next_type)
             self.add_node(node)
 
+            # Add explicit inheritance from the origin class
+            origin = get_origin(next_type)
+            if origin:
+                try:
+                    source_node = self.get_wrapped_class(origin)
+                    self.add_relation(Inheritance(source=source_node, target=node))
+                except ClassIsUnMappedInClassDiagram:
+                    pass
+
             # Check if the new node has fields that point to other specialized generics
             for wrapped_field in node.fields:
                 if wrapped_field.is_instantiation_of_generic_class:

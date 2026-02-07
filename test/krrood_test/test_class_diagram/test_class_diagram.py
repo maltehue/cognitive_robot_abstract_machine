@@ -79,6 +79,9 @@ def test_underspecified_classes():
 def test_create_nodes_for_specialized_generic():
     classes = [Position, GenericClassAssociation, GenericClass]
     diagram = ClassDiagram(classes)
+
+    wrapped_generic_class = diagram.get_wrapped_class(GenericClass)
+
     generic_float: WrappedSpecializedGeneric = diagram.get_wrapped_class(
         GenericClass[float]
     )
@@ -92,3 +95,17 @@ def test_create_nodes_for_specialized_generic():
     assert len(generic_position.fields) == 1
     position_field = generic_position.fields[0]
     assert position_field.type_endpoint is Position
+
+    # get the inheritance relations that point to generic_float
+    inheritance_relations_for_generic_float = [
+        r for r in diagram.inheritance_relations if r.target is generic_float
+    ]
+    assert len(inheritance_relations_for_generic_float) == 1
+    assert inheritance_relations_for_generic_float[0].source is wrapped_generic_class
+
+    # get the inheritance relations that point to generic_position
+    inheritance_relations_for_generic_position = [
+        r for r in diagram.inheritance_relations if r.target is generic_position
+    ]
+    assert len(inheritance_relations_for_generic_position) == 1
+    assert inheritance_relations_for_generic_position[0].source is wrapped_generic_class

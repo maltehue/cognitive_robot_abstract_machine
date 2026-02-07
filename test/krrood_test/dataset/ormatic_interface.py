@@ -229,45 +229,6 @@ cabinetdao_drawers_association = Table(
 )
 
 
-class GenericClass_floatDAO(
-    Base, DataAccessObject[test.krrood_test.dataset.example_classes.GenericClass[float]]
-):
-
-    __tablename__ = "GenericClass_floatDAO"
-
-    database_id: Mapped[builtins.int] = mapped_column(
-        Integer, primary_key=True, use_existing_column=True
-    )
-
-    value: Mapped[builtins.float] = mapped_column(use_existing_column=True)
-
-
-class GenericClass_PositionDAO(
-    Base,
-    DataAccessObject[
-        test.krrood_test.dataset.example_classes.GenericClass[
-            test.krrood_test.dataset.example_classes.Position
-        ]
-    ],
-):
-
-    __tablename__ = "GenericClass_PositionDAO"
-
-    database_id: Mapped[builtins.int] = mapped_column(
-        Integer, primary_key=True, use_existing_column=True
-    )
-
-    value_id: Mapped[int] = mapped_column(
-        ForeignKey("PositionDAO.database_id", use_alter=True),
-        nullable=True,
-        use_existing_column=True,
-    )
-
-    value: Mapped[PositionDAO] = relationship(
-        "PositionDAO", uselist=False, foreign_keys=[value_id], post_update=True
-    )
-
-
 class CallableWrapperDAO(
     Base, DataAccessObject[test.krrood_test.dataset.example_classes.CallableWrapper]
 ):
@@ -298,6 +259,57 @@ class GenericClassDAO(
     database_id: Mapped[builtins.int] = mapped_column(
         Integer, primary_key=True, use_existing_column=True
     )
+
+    polymorphic_type: Mapped[str] = mapped_column(
+        String(255), nullable=False, use_existing_column=True
+    )
+
+    __mapper_args__ = {
+        "polymorphic_on": "polymorphic_type",
+        "polymorphic_identity": "GenericClassDAO",
+    }
+
+
+class GenericClass_floatDAO(
+    GenericClassDAO,
+    DataAccessObject[test.krrood_test.dataset.example_classes.GenericClass[float]],
+):
+
+    __tablename__ = "GenericClass_floatDAO"
+
+    database_id: Mapped[builtins.int] = mapped_column(
+        ForeignKey(GenericClassDAO.database_id),
+        primary_key=True,
+        use_existing_column=True,
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": "GenericClass_floatDAO",
+        "inherit_condition": database_id == GenericClassDAO.database_id,
+    }
+
+
+class GenericClass_PositionDAO(
+    GenericClassDAO,
+    DataAccessObject[
+        test.krrood_test.dataset.example_classes.GenericClass[
+            test.krrood_test.dataset.example_classes.Position
+        ]
+    ],
+):
+
+    __tablename__ = "GenericClass_PositionDAO"
+
+    database_id: Mapped[builtins.int] = mapped_column(
+        ForeignKey(GenericClassDAO.database_id),
+        primary_key=True,
+        use_existing_column=True,
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": "GenericClass_PositionDAO",
+        "inherit_condition": database_id == GenericClassDAO.database_id,
+    }
 
 
 class GenericClassAssociationDAO(
@@ -669,19 +681,17 @@ class PrimaryBaseDAO(
 
 
 class MultipleInheritanceDAO(
-    PrimaryBaseDAO,
+    MixinDAO,
     DataAccessObject[test.krrood_test.dataset.example_classes.MultipleInheritance],
 ):
 
     __tablename__ = "MultipleInheritanceDAO"
 
     database_id: Mapped[builtins.int] = mapped_column(
-        ForeignKey(PrimaryBaseDAO.database_id),
-        primary_key=True,
-        use_existing_column=True,
+        ForeignKey(MixinDAO.database_id), primary_key=True, use_existing_column=True
     )
 
-    mixin_attribute: Mapped[builtins.str] = mapped_column(
+    primary_attribute: Mapped[builtins.str] = mapped_column(
         String(255), use_existing_column=True
     )
     extra_attribute: Mapped[builtins.str] = mapped_column(
@@ -690,7 +700,7 @@ class MultipleInheritanceDAO(
 
     __mapper_args__ = {
         "polymorphic_identity": "MultipleInheritanceDAO",
-        "inherit_condition": database_id == PrimaryBaseDAO.database_id,
+        "inherit_condition": database_id == MixinDAO.database_id,
     }
 
 

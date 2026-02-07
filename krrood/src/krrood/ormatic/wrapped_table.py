@@ -251,13 +251,38 @@ class WrappedTable:
         """
         Resolve the parent DAO table for this table.
 
-        This first tries to use a direct inheritance relation. If that is not
-        available and this table is an alternative mapping, it resolves the
-        parent through the original classes' inheritance and maps back to the
+        This first tries to use a direct inheritance relation from the class diagram.
+        If that is not available, it tries to find a parent via MRO.
+        If that is not available and this table is an alternative mapping, it resolves
+        the parent through the original classes' inheritance and maps back to the
         correct DAO table.
 
         :return: The parent ``WrappedTable`` or ``None`` if there is no parent.
         """
+        # Try finding parent via inheritance graph in class diagram
+        try:
+            inheritance_parents = (
+                self.ormatic.class_dependency_graph._dependency_graph.predecessors(
+                    self.wrapped_clazz.index
+                )
+            )
+            for parent_wrapped in inheritance_parents:
+                # Check if this parent has a wrapped table and if the relation is Inheritance
+                # We need to check the actual relation object
+                edge_data = (
+                    self.ormatic.class_dependency_graph._dependency_graph.get_edge_data(
+                        parent_wrapped.index, self.wrapped_clazz.index
+                    )
+                )
+                from krrood.class_diagrams.class_diagram import Inheritance
+
+                if (
+                    isinstance(edge_data, Inheritance)
+                    and parent_wrapped in self.ormatic.wrapped_tables
+                ):
+                    return self.ormatic.wrapped_tables[parent_wrapped]
+        except (AttributeError, KeyError):
+            pass
 
         direct_parent = self._find_direct_parent_wrapped()
         if direct_parent is not None:
