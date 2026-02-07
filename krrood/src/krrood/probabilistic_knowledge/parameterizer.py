@@ -1,6 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
+from typing import assert_never
+
+from sqlalchemy import inspect, Column
+from sqlalchemy.orm import Relationship
 from typing_extensions import List, Optional, Dict
 
 from probabilistic_model.probabilistic_circuit.rx.helper import fully_factorized
@@ -10,8 +14,10 @@ from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
 from random_events.set import Set
 from random_events.variable import Continuous, Integer, Symbolic, Variable
 
-from krrood.class_diagrams.class_diagram import WrappedClass
+from krrood.adapters.json_serializer import list_like_classes
+from krrood.class_diagrams.class_diagram import WrappedClass, ClassDiagram
 from krrood.class_diagrams.wrapped_field import WrappedField
+from krrood.ormatic.dao import DataAccessObject, get_dao_class
 
 SKIPPED_FIELD_TYPES = (datetime,)
 
@@ -137,3 +143,108 @@ class Parameterizer:
                 v: 1.0 for v in distribution_variables if isinstance(v, Continuous)
             },
         )
+
+
+@dataclass
+class DAOParameterizer:
+
+    def parameterize_dao(self, dao: DataAccessObject, prefix: str) -> List[Variable]:
+        """
+        Create variables for all fields of a WrappedClass.
+
+        :return: A list of random event variables.
+        """
+
+        variables_by_name: Dict[str, Variable] = {}
+        original_class = dao.original_class()
+        class_diagram = ClassDiagram([original_class])
+        mapper = inspect(dao).mapper
+
+        for column in mapper.columns:
+            attribute_name = self.column_attribute_name(column)
+            if not attribute_name:
+                continue
+            for wrapped_field in class_diagram.get_wrapped_class(original_class).fields:
+                if wrapped_field.public_name != attribute_name:
+                    continue
+
+                type_endpoint = wrapped_field.type_endpoint
+                if type_endpoint in SKIPPED_FIELD_TYPES:
+                    return []
+
+                # If its optional, we dont care. My assumption for now is, that the plan resolves this
+                if wrapped_field.is_optional:
+                    continue
+
+                if (
+                    wrapped_field.is_one_to_one_relationship
+                    and not wrapped_field.is_enum
+                ):
+                    assert_never(wrapped_field)
+
+                if wrapped_field.is_one_to_many_relationship:
+                    assert_never(wrapped_field)
+
+                var = self.create_variable_from_wrapped_field(
+                    wrapped_field, prefix, attribute_name
+                )
+                variables_by_name.setdefault(var.name, var)
+
+        for relationship in mapper.relationships:
+            attribute_name = relationship.key
+
+            for wrapped_field in class_diagram.get_wrapped_class(original_class).fields:
+                if (
+                    wrapped_field.public_name != attribute_name
+                    or wrapped_field.is_optional
+                    or getattr(dao, attribute_name) is not None
+                ):
+                    continue
+                dao_class = get_dao_class(wrapped_field.type_endpoint)
+                variables = self.parameterize_dao(
+                    dao=dao_class(),
+                    prefix=f"{prefix}.{attribute_name}",
+                )
+                for var in variables:
+                    variables_by_name.setdefault(var.name, var)
+
+        return list(variables_by_name.values())
+
+    def column_attribute_name(self, column: Column) -> Optional[str]:
+        if (
+            column.key == "polymorphic_type"
+            or column.primary_key
+            or column.foreign_keys
+        ):
+            return None
+
+        return column.name
+
+    def create_variable_from_wrapped_field(
+        self, wrapped_field: WrappedField, prefix: str, field_name: str
+    ) -> Optional[Variable]:
+        """
+        Create a random event variable from a WrappedField based on its type.
+
+        :return: A random event variable or raise error if the type is not supported.
+        """
+        endpoint_type = wrapped_field.type_endpoint
+
+        name = f"{prefix}.{field_name}"
+
+        if wrapped_field.is_enum:
+            return Symbolic(name, Set.from_iterable(list(endpoint_type)))
+
+        elif endpoint_type is int:
+            return Integer(name)
+
+        elif endpoint_type is float:
+            return Continuous(name)
+
+        elif endpoint_type is bool:
+            return Symbolic(name, Set.from_iterable([True, False]))
+
+        else:
+            raise NotImplementedError(
+                f"No conversion between {endpoint_type} and random_events.Variable is known."
+            )
