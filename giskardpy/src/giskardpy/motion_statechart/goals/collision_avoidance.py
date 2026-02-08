@@ -16,11 +16,12 @@ from giskardpy.motion_statechart.graph_node import (
 )
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from krrood.symbolic_math.symbolic_math import Scalar
-from semantic_digital_twin.collision_checking.collision_expressions import (
-    ExternalCollisionVariableManager,
-)
 from semantic_digital_twin.collision_checking.collision_manager import CollisionGroup
 from semantic_digital_twin.collision_checking.collision_matrix import CollisionRule
+from semantic_digital_twin.collision_checking.collision_variable_managers import (
+    SelfCollisionVariableManager,
+    ExternalCollisionVariableManager,
+)
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.spatial_types import Vector3, HomogeneousTransformationMatrix
@@ -232,31 +233,31 @@ class ExternalCollisionAvoidance(Goal):
 
 @dataclass(eq=False, repr=False)
 class SelfCollisionDistanceMonitor(MotionStatechartNode):
-    body_a: Body = field(kw_only=True)
-    body_b: Body = field(kw_only=True)
+    collision_group_a: CollisionGroup = field(kw_only=True)
+    collision_group_b: CollisionGroup = field(kw_only=True)
+    max_velocity: float = field(default=0.2, kw_only=True)
     collision_index: int = field(default=0, kw_only=True)
+    self_collision_manager: SelfCollisionVariableManager = field(kw_only=True)
 
     def build(self, context: BuildContext) -> NodeArtifacts:
         artifacts = NodeArtifacts()
 
-        artifacts.observation = (
-            context.collision_expression_manager.self_contact_distance_symbol(
-                self.body_a, self.body_b, self.collision_index
-            )
-            > 50
-        )
+        artifacts.observation = self.self_collision_manager.get_contact_distance_symbol(
+            self.collision_group_a.root,
+            self.collision_group_b.root,
+            self.collision_index,
+        ) > Scalar(50)
 
         return artifacts
 
 
 @dataclass(eq=False, repr=False)
 class SelfCollisionAvoidanceTask(Task):
-    body_a: Body = field(kw_only=True)
-    body_b: Body = field(kw_only=True)
+    collision_group_a: CollisionGroup = field(kw_only=True)
+    collision_group_b: CollisionGroup = field(kw_only=True)
     max_velocity: float = field(default=0.2, kw_only=True)
     collision_index: int = field(default=0, kw_only=True)
-    max_avoided_bodies: int = field(default=1, kw_only=True)
-    buffer_zone_distance: float = field(kw_only=True)
+    self_collision_manager: SelfCollisionVariableManager = field(kw_only=True)
 
     def build(self, context: BuildContext) -> NodeArtifacts:
         artifacts = NodeArtifacts()
@@ -351,32 +352,38 @@ class SelfCollisionAvoidanceTask(Task):
 
 @dataclass(eq=False, repr=False)
 class SelfCollisionAvoidance(Goal):
-    body_a: Body = field(kw_only=True)
-    body_b: Body = field(kw_only=True)
+    robot: AbstractRobot = field(kw_only=True)
     max_velocity: float = field(default=0.2, kw_only=True)
-    index: int = field(default=0, kw_only=True)
-    max_avoided_bodies: int = field(default=1, kw_only=True)
-    buffer_zone_distance: float = field(kw_only=True)
 
     def expand(self, context: BuildContext) -> None:
-        distance_monitor = SelfCollisionDistanceMonitor(
-            name=PrefixedName("collision distance", str(self.name)),
-            body_a=self.body_a,
-            body_b=self.body_b,
-            index=self.collision_index,
+        self_collision_manager = SelfCollisionVariableManager(
+            context.float_variable_data
         )
-        self.add_node(distance_monitor)
+        context.collision_manager.add_collision_consumer(self_collision_manager)
+        for body in self.robot.bodies_with_collision:
+            if context.collision_manager.get_max_avoided_bodies(body):
+                self_collision_manager.register_body(body)
 
-        task = SelfCollisionAvoidanceTask(
-            name=PrefixedName(f"task", str(self.name)),
-            body_a=self.body_a,
-            body_b=self.body_b,
-            max_velocity=self.max_velocity,
-            index=self.collision_index,
-            max_avoided_bodies=self.max_avoided_bodies,
-            buffer_zone_distance=self.buffer_zone_distance,
-        )
-        self.add_node(task)
+        for group in self_collision_manager.active_groups:
+            max_avoided_bodies = group.get_max_avoided_bodies(context.collision_manager)
+            for index in range(max_avoided_bodies):
+                distance_monitor = SelfCollisionDistanceMonitor(
+                    name=f"{self.name}/monitor{index}",
+                    collision_group=group,
+                    collision_index=index,
+                    self_collision_manager=self_collision_manager,
+                )
+                self.add_node(distance_monitor)
+
+                task = SelfCollisionAvoidanceTask(
+                    name=f"{self.name}/task{index}",
+                    collision_group=group,
+                    max_velocity=self.max_velocity,
+                    collision_index=index,
+                    self_collision_manager=self_collision_manager,
+                )
+                self.add_node(task)
+                task.pause_condition = distance_monitor.observation_variable
 
         task.pause_condition = distance_monitor.observation_variable
 

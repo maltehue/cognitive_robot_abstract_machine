@@ -48,7 +48,7 @@ class CollisionGroup:
         return item == self.root or item in self.bodies
 
     def __hash__(self):
-        return hash((self.root, tuple(sorted(self.bodies))))
+        return hash((self.root, tuple(sorted(self.bodies, key=lambda b: b.id))))
 
     def get_max_avoided_bodies(self, collision_manager: CollisionManager):
         max_avoided_bodies = []

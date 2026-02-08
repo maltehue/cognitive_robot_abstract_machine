@@ -26,7 +26,7 @@ from semantic_digital_twin.robots.stretch import Stretch
 from semantic_digital_twin.robots.tiago import Tiago
 from semantic_digital_twin.robots.tracy import Tracy
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Vector3
 from semantic_digital_twin.utils import rclpy_installed, tracy_installed
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
@@ -34,8 +34,14 @@ from semantic_digital_twin.world_description.connections import (
     DiffDrive,
     FixedConnection,
     Connection6DoF,
+    RevoluteConnection,
 )
-from semantic_digital_twin.world_description.geometry import Box, Scale, Cylinder
+from semantic_digital_twin.world_description.geometry import (
+    Box,
+    Scale,
+    Cylinder,
+    Sphere,
+)
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import (
     Body,
@@ -167,15 +173,80 @@ def cylinder_bot_world():
 
 
 @pytest.fixture()
+def self_collision_bot_world():
+    world = World()
+    with world.modify_world():
+        robot = Body(
+            name=PrefixedName("base_footprint"),
+            collision=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+            visual=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+        )
+        l_shoulder = Body(
+            name=PrefixedName("l_shoulder"),
+            collision=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+            visual=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+        )
+        l_tip = Body(
+            name=PrefixedName("l_tip"),
+            collision=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+            visual=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+        )
+        r_shoulder = Body(
+            name=PrefixedName("r_shoulder"),
+            collision=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+            visual=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+        )
+        r_tip = Body(
+            name=PrefixedName("r_tip"),
+            collision=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+            visual=ShapeCollection(shapes=[Sphere(radius=0.1)]),
+        )
+
+        world.add_connection(
+            RevoluteConnection.create_with_dofs(
+                parent=robot,
+                child=l_shoulder,
+                axis=Vector3.Z(),
+                world=world,
+            )
+        )
+        world.add_connection(
+            RevoluteConnection.create_with_dofs(
+                parent=l_shoulder,
+                child=l_tip,
+                axis=Vector3.Z(),
+                world=world,
+            )
+        )
+
+        world.add_connection(
+            RevoluteConnection.create_with_dofs(
+                parent=robot,
+                child=r_shoulder,
+                axis=Vector3.Z(),
+                world=world,
+            )
+        )
+        world.add_connection(
+            RevoluteConnection.create_with_dofs(
+                parent=r_shoulder,
+                child=r_tip,
+                axis=Vector3.Z(),
+                world=world,
+            )
+        )
+        MinimalRobot.from_world(world)
+
+    return world
+
+
+@pytest.fixture()
 def cylinder_bot_diff_world():
     robot_world = World()
     with robot_world.modify_world():
         robot = Body(
             name=PrefixedName("bot"),
             collision=ShapeCollection(shapes=[Cylinder(width=0.1, height=0.5)]),
-            collision_config=CollisionCheckingConfig(
-                buffer_zone_distance=0.05, violated_distance=0.0, max_avoided_bodies=3
-            ),
         )
         robot_world.add_body(robot)
         MinimalRobot.from_world(robot_world)

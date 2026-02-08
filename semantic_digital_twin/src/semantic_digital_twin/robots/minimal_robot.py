@@ -9,6 +9,7 @@ from ..robots.abstract_robot import (
     AbstractRobot,
 )
 from ..world import World
+from ..world_description.connections import OmniDrive, ActiveConnection
 
 
 @dataclass
@@ -44,7 +45,9 @@ class MinimalRobot(AbstractRobot):
         self.tighten_dof_velocity_limits_of_1dof_connections(new_limits=vel_limits)
 
     def _setup_hardware_interfaces(self):
-        pass
+        for connection in self.connections:
+            if isinstance(connection, ActiveConnection):
+                connection.has_hardware_interface = True
 
     def _setup_joint_states(self):
         pass

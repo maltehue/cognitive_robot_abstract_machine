@@ -223,11 +223,11 @@ class SelfCollisionVariableManager(CollisionGroupConsumer):
 
     float_variable_data: FloatVariableData = field(default_factory=FloatVariableData)
 
-    registered_bodies: dict[KinematicStructureEntity, int] = field(
-        default_factory=dict, init=False
-    )
+    registered_body_combinations: dict[
+        tuple[KinematicStructureEntity, KinematicStructureEntity], int
+    ] = field(default_factory=dict, init=False)
     """
-    Maps bodies to the index of point_on_body_a in the collision buffer.
+    Maps body combinations to the index of point_on_body_a in the collision buffer.
     """
 
     active_groups: set[CollisionGroup] = field(default_factory=set, init=False)
@@ -273,48 +273,41 @@ class SelfCollisionVariableManager(CollisionGroupConsumer):
         into the buffer at the right place.
         """
         self.reset_collision_data()
-        closest_contacts: dict[Body, list[Collision]] = defaultdict(list)
+        closest_contacts: dict[tuple[Body, Body], list[Collision]] = defaultdict(list)
         for collision in collision.contacts:
+            reverse_key = (collision.body_b, collision.body_a)
             # 1. check if collision is external
-            if (
-                collision.body_a not in self.registered_bodies
-                and collision.body_b not in self.registered_bodies
-            ):
-                continue
-            if collision.body_a not in self.registered_bodies:
+            if reverse_key in self.registered_body_combinations:
                 collision = collision.reverse()
-            closest_contacts[collision.body_a].append(collision)
+                key = reverse_key
+            else:
+                key = (collision.body_a, collision.body_b)
+            if key not in self.registered_body_combinations:
+                continue
+            closest_contacts[key].append(collision)
 
-        for body_a, collisions in closest_contacts.items():
-            collisions = sorted(collisions, key=lambda c: c.contact_distance)
-            for i in range(
-                min(
-                    len(collisions),
-                    self.collision_manager.get_max_avoided_bodies(body_a),
-                )
-            ):
-                collision = collisions[i]
-                group1 = self.get_collision_group(collision.body_a)
-                group1_T_root = group1.root.global_pose.inverse().to_np()
-                group1_P_pa = group1_T_root @ collision.root_P_pa
-                self.insert_data_block(
-                    body=group1.root,
-                    idx=i,
-                    group1_P_point_on_a=group1_P_pa,
-                    root_V_contact_normal=collision.root_V_n,
-                    contact_distance=collision.contact_distance,
-                    buffer_distance=self.collision_manager.get_buffer_zone_distance(
-                        collision.body_a, collision.body_b
-                    ),
-                    violated_distance=self.collision_manager.get_violated_distance(
-                        collision.body_a, collision.body_b
-                    ),
-                )
+        for collisions in closest_contacts.values():
+            collision = sorted(collisions, key=lambda c: c.contact_distance)[0]
+            group1 = self.get_collision_group(collision.body_a)
+            group1_T_root = group1.root.global_pose.inverse().to_np()
+            group1_P_pa = group1_T_root @ collision.root_P_pa
+            self.insert_data_block(
+                body=group1.root,
+                group1_P_point_on_a=group1_P_pa,
+                group2_P_point_on_b=collision.root_P_pb,
+                group2_V_contact_normal=collision.root_V_n,
+                contact_distance=collision.contact_distance,
+                buffer_distance=self.collision_manager.get_buffer_zone_distance(
+                    collision.body_a, collision.body_b
+                ),
+                violated_distance=self.collision_manager.get_violated_distance(
+                    collision.body_a, collision.body_b
+                ),
+            )
 
     def insert_data_block(
         self,
         body: KinematicStructureEntity,
-        idx: int,
         group1_P_point_on_a: np.ndarray,
         group2_P_point_on_b: np.ndarray,
         group2_V_contact_normal: np.ndarray,
@@ -322,7 +315,7 @@ class SelfCollisionVariableManager(CollisionGroupConsumer):
         buffer_distance: float,
         violated_distance: float,
     ):
-        block_start_idx = self.registered_bodies[body] + idx * self.block_size
+        block_start_idx = self.registered_bodies[body] + self.block_size
 
         start_idx = block_start_idx + self._point_on_a_offset
         end_idx = block_start_idx + self._point_on_b_offset
@@ -351,21 +344,21 @@ class SelfCollisionVariableManager(CollisionGroupConsumer):
         end_index = start_index + self._reset_data.size
         self.float_variable_data.data[start_index:end_index] = self._reset_data
 
-    def register_body(self, body: Body):
+    def register_body_combination(self, body_a: Body, body_b: Body):
         """
         Register a body
         """
-        self.registered_bodies[body] = len(self.float_variable_data.data)
+        key = (body_a, body_b)
+        self.registered_body_combinations[key] = len(self.float_variable_data.data)
         if self._collision_data_start_index is None:
-            self._collision_data_start_index = self.registered_bodies[body]
-        for index in range(self.collision_manager.get_max_avoided_bodies(body)):
-            self.get_group1_P_point_on_a_symbol(body, index)
-            self.get_group2_P_point_on_b_symbol(body, index)
-            self.get_root_V_contact_normal_symbol(body, index)
-            self.get_contact_distance_symbol(body, index)
-            self.get_buffer_distance_symbol(body, index)
-            self.get_violated_distance_symbol(body, index)
-            self._reset_data = np.append(self._reset_data, self._single_reset_block)
+            self._collision_data_start_index = self.registered_body_combinations[key]
+        self.get_group1_P_point_on_a_symbol(body_a, body_b)
+        self.get_group2_P_point_on_b_symbol(body_a, body_b)
+        self.get_group2_V_contact_normal_symbol(body_a, body_b)
+        self.get_contact_distance_symbol(body_a, body_b)
+        self.get_buffer_distance_symbol(body_a, body_b)
+        self.get_violated_distance_symbol(body_a, body_b)
+        self._reset_data = np.append(self._reset_data, self._single_reset_block)
 
         for group in self.collision_groups:
             if body in group:
@@ -373,54 +366,66 @@ class SelfCollisionVariableManager(CollisionGroupConsumer):
 
     @lru_cache
     def get_group1_P_point_on_a_symbol(
-        self, body: KinematicStructureEntity, idx: int
+        self,
+        body_a: KinematicStructureEntity,
+        body_b: KinematicStructureEntity,
     ) -> Point3:
         point = Point3.create_with_variables(
-            name=f"group1_P_point_on_a({body.name}, {idx})",
+            name=f"group1_P_point_on_a({body_a.name}, {body_b.name})",
         )
         self.float_variable_data.add_variables_of_expression(point)
         return point
 
     @lru_cache
     def get_group2_P_point_on_b_symbol(
-        self, body: KinematicStructureEntity, idx: int
+        self,
+        body_a: KinematicStructureEntity,
+        body_b: KinematicStructureEntity,
     ) -> Point3:
         point = Point3.create_with_variables(
-            name=f"group2_P_point_on_b({body.name}, {idx})",
+            name=f"group2_P_point_on_b({body_a.name}, {body_b.name})",
         )
         self.float_variable_data.add_variables_of_expression(point)
         return point
 
     @lru_cache
     def get_group2_V_contact_normal_symbol(
-        self, body: KinematicStructureEntity, idx: int
+        self,
+        body_a: KinematicStructureEntity,
+        body_b: KinematicStructureEntity,
     ) -> Vector3:
         vector = Vector3.create_with_variables(
-            f"group2_V_contact_normal({body.name}, {idx})",
+            f"group2_V_contact_normal({body_a.name}, {body_b.name})",
         )
         self.float_variable_data.add_variables_of_expression(vector)
         return vector
 
     @lru_cache
     def get_contact_distance_symbol(
-        self, body: KinematicStructureEntity, idx: int
+        self,
+        body_a: KinematicStructureEntity,
+        body_b: KinematicStructureEntity,
     ) -> FloatVariable:
-        variable = FloatVariable(f"contact_distance({body.name}, {idx})")
+        variable = FloatVariable(f"contact_distance({body_a.name}, {body_b.name})")
         self.float_variable_data.add_variable(variable)
         return variable
 
     @lru_cache
     def get_buffer_distance_symbol(
-        self, body: KinematicStructureEntity, idx: int
+        self,
+        body_a: KinematicStructureEntity,
+        body_b: KinematicStructureEntity,
     ) -> FloatVariable:
-        variable = FloatVariable(f"buffer_distance({body.name}, {idx})")
+        variable = FloatVariable(f"buffer_distance({body_a.name}, {body_b.name})")
         self.float_variable_data.add_variable(variable)
         return variable
 
     @lru_cache
     def get_violated_distance_symbol(
-        self, body: KinematicStructureEntity, idx: int
+        self,
+        body_a: KinematicStructureEntity,
+        body_b: KinematicStructureEntity,
     ) -> FloatVariable:
-        variable = FloatVariable(f"violated_distance({body.name}, {idx})")
+        variable = FloatVariable(f"violated_distance({body_a.name}, {body_b.name})")
         self.float_variable_data.add_variable(variable)
         return variable
