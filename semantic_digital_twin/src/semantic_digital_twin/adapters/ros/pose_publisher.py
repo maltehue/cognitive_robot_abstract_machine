@@ -56,7 +56,7 @@ class PosePublisher(StateChangeCallback):
     """
     fixed_frame: str = field(init=False)
     """
-    Fixed frame of the pose publisher. Is the stringified name of the root body of the world.
+    The frame in which the marker are published, is set to world root
     """
 
     def _notify(self):
@@ -129,7 +129,9 @@ class PosePublisher(StateChangeCallback):
                         )
                     ),
                     color=ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0),
-                    header=Header(frame_id=self.fixed_frame),
+                    header=Header(
+                        frame_id=self.fixed_frame,
+                    ),
                 )
             )
         return marker_array
