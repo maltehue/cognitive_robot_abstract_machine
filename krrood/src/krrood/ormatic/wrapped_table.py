@@ -155,6 +155,9 @@ class WrappedTable:
     """
 
     mapper_args: Dict[str, str] = field(default_factory=dict, init=False)
+    """
+    Keyword Arguments for the sqlalchemy mapper
+    """
 
     primary_key_name: str = "database_id"
     """
@@ -682,7 +685,7 @@ class WrappedTable:
 
         # create association table name
         association_table_name = (
-            f"{self.tablename.lower()}_{wrapped_field.field.name}_association"
+            f"{self.tablename}_{wrapped_field.field.name}_association"
         )
 
         # create foreign key names for the association table
