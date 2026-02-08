@@ -11,6 +11,7 @@ from typing_extensions import (
     Optional,
     Self,
     DefaultDict,
+    List,
 )
 
 from ..datastructures.definitions import JointStateType
