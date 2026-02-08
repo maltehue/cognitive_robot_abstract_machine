@@ -73,10 +73,10 @@ from krrood.entity_query_language.failures import NonPositiveLimitValue
 
 body = variable(type_=Body, domain=world.bodies)
 query = an(entity(body).where(contains(body.name, "Handle")))
-print(list(query.evaluate())) # -> 2 results (all handle bodies)
-print(list(query.evaluate(limit=2))) # -> 2 results
-print(list(query.evaluate(limit=1))) # -> 1 result
-print(list(query.evaluate(limit=3))) # -> 2 results (only 2 total results available, limit is not a hard limit but a maximum)
+print(len(list(query.evaluate()))) # -> 2 results (all handle bodies)
+print(len(list(query.evaluate(limit=2)))) # -> 2 results
+print(len(list(query.evaluate(limit=1)))) # -> 1 result
+print(len(list(query.evaluate(limit=3)))) # -> 2 results (only 2 total results available, limit is not a hard limit but a maximum)
 try:
     list(query.evaluate(limit=0))
 except NonPositiveLimitValue as e:
