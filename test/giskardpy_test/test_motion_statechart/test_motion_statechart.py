@@ -31,6 +31,7 @@ from giskardpy.motion_statechart.goals.cartesian_goals import (
 from giskardpy.motion_statechart.goals.collision_avoidance import (
     CollisionAvoidance,
     ExternalCollisionAvoidance,
+    SelfCollisionAvoidance,
 )
 from giskardpy.motion_statechart.goals.open_close import Open, Close
 from giskardpy.motion_statechart.goals.templates import Sequence, Parallel
@@ -105,6 +106,7 @@ from semantic_digital_twin.collision_checking.collision_matrix import (
 )
 from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidCollisionBetweenGroups,
+    AvoidAllCollisions,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import Manipulator, AbstractRobot
@@ -2601,7 +2603,7 @@ class TestOpenClose:
 
 
 class TestCollisionAvoidance:
-    def test_collision_avoidance(self, cylinder_bot_world: World, rclpy_node):
+    def test_external_collision_avoidance(self, cylinder_bot_world: World, rclpy_node):
         TFPublisher(world=cylinder_bot_world, node=rclpy_node)
         VizMarkerPublisher(world=cylinder_bot_world, node=rclpy_node, use_visuals=False)
         robot = cylinder_bot_world.get_semantic_annotations_by_type(AbstractRobot)[0]
@@ -2658,6 +2660,59 @@ class TestCollisionAvoidance:
         collisions = kin_sim.context.world.collision_manager.compute_collisions()
         assert len(collisions.contacts) == 1
         assert collisions.contacts[0].contact_distance > 0.049
+
+    def test_self_collision_avoidance(
+        self, self_collision_bot_world: World, rclpy_node
+    ):
+        TFPublisher(world=self_collision_bot_world, node=rclpy_node)
+        VizMarkerPublisher(
+            world=self_collision_bot_world, node=rclpy_node, use_visuals=False
+        )
+        robot = self_collision_bot_world.get_semantic_annotations_by_type(
+            AbstractRobot
+        )[0]
+
+        collision_manager = self_collision_bot_world.collision_manager
+        collision_manager.temporary_rules.extend(
+            [
+                AvoidAllCollisions(
+                    buffer_zone_distance=0.2,
+                    violated_distance=0.23,
+                    bodies=self_collision_bot_world.bodies_with_collision,
+                ),
+            ]
+        )
+        collision_manager.max_avoided_bodies_rules.append(
+            MaxAvoidedCollisionsOverride(2, {robot.root})
+        )
+
+        msc = MotionStatechart()
+        msc.add_nodes(
+            [
+                SelfCollisionAvoidance(robot=robot),
+                local_min := LocalMinimumReached(),
+            ]
+        )
+        msc.add_node(EndMotion.when_true(local_min))
+
+        json_data = msc.to_json()
+        json_str = json.dumps(json_data)
+        new_json_data = json.loads(json_str)
+
+        tracker = WorldEntityWithIDKwargsTracker.from_world(self_collision_bot_world)
+        kwargs = tracker.create_kwargs()
+        msc_copy = MotionStatechart.from_json(new_json_data, **kwargs)
+
+        kin_sim = Executor.create_from_parts(
+            world=self_collision_bot_world, pacer=SimulationPacer(real_time_factor=1.0)
+        )
+        kin_sim.compile(motion_statechart=msc_copy)
+
+        msc_copy.draw("muh.pdf")
+        kin_sim.tick_until_end(500)
+        collisions = kin_sim.context.world.collision_manager.compute_collisions()
+        assert len(collisions.contacts) == 1
+        assert collisions.contacts[0].contact_distance > 0.199
 
     def test_hard_constraints_violated(self, cylinder_bot_world: World):
         root = cylinder_bot_world.root
