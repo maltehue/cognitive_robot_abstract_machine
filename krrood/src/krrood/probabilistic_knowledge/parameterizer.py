@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import assert_never, Any, Tuple
 
@@ -30,6 +30,9 @@ SKIPPED_FIELD_TYPES = (datetime,)
 @dataclass
 class Parameterizer:
 
+    variables: List[Variable] = field(default_factory=list)
+    simple_event: SimpleEvent = field(default_factory=lambda: SimpleEvent({}))
+
     def parameterize_dao(
         self, dao: DataAccessObject, prefix: str
     ) -> Tuple[List[Variable], Optional[SimpleEvent]]:
@@ -43,9 +46,6 @@ class Parameterizer:
         wrapped_class = WrappedClass(original_class)
         mapper = inspect(dao).mapper
 
-        variables = []
-        simple_event = SimpleEvent({})
-
         for wrapped_field in wrapped_class.fields:
             if wrapped_field.type_endpoint in SKIPPED_FIELD_TYPES:
                 continue
@@ -56,26 +56,20 @@ class Parameterizer:
                 for val, var in zip(vals, vars):
                     if var is None:
                         continue
-                    variables.append(var)
+                    self.variables.append(var)
                     if val is None:
                         continue
 
                     event = self._create_simple_event_singleton_from_set_attribute(
                         var, val
                     )
-                    simple_event.update(event)
+                    self.simple_event.update(event)
 
             for relationship in mapper.relationships:
-                relationship_variables, relationship_event = self._process_relationship(
-                    relationship, wrapped_field, dao, prefix
-                )
-                if relationship_variables is not None:
-                    variables.extend(relationship_variables)
-                if relationship_event is not None:
-                    simple_event.update(relationship_event)
+                self._process_relationship(relationship, wrapped_field, dao, prefix)
 
-        simple_event.fill_missing_variables(variables)
-        return variables, simple_event
+        self.simple_event.fill_missing_variables(self.variables)
+        return self.variables, self.simple_event
 
     def _process_column(
         self,

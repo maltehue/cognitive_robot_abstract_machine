@@ -12,6 +12,7 @@ from pycram.plan import PlanNode, Plan, ActionDescriptionNode, ActionNode, Motio
 from pycram.process_module import simulated_robot
 from pycram.robot_plans import *
 from semantic_digital_twin.adapters.urdf import URDFParser
+from pycram.orm.ormatic_interface import *
 
 
 @pytest.fixture(scope="session")

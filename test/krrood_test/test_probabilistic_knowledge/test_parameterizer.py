@@ -128,31 +128,35 @@ class TestDAOParameterizer(unittest.TestCase):
                 val = getattr(pose.orientation, parts[2])
             self.assertEqual(event[var].simple_sets[0].lower, val)
 
-    def test_parameterize_dao_with_optional(self):
+    def test_parameterize_dao_set_value(self):
         optional = OptionalTestCase(1)
         optional_dao = to_dao(optional)
         variables, event = self.parameterizer.parameterize_dao(optional_dao, "optional")
 
-        self.assertEqual(len(variables), 1)
+        self.assertEqual(1, len(variables))
 
+    def test_parameterize_dao_none_value(self):
         optional = OptionalTestCase(None)
         optional_dao = to_dao(optional)
         variables, event = self.parameterizer.parameterize_dao(optional_dao, "optional")
 
         self.assertEqual(len(variables), 1)
 
+    def test_parameterize_dao_set_value_set_optional(self):
         optional = OptionalTestCase(1, Position(1.0, 2.0, 3.0))
         optional_dao = to_dao(optional)
         variables, event = self.parameterizer.parameterize_dao(optional_dao, "optional")
 
         self.assertEqual(len(variables), 4)
 
+    def test_parameterize_dao_none_value_underspecified_optional(self):
         optional = OptionalTestCase(None, Position(1.0, None, 3.0))
         optional_dao = to_dao(optional)
         variables, event = self.parameterizer.parameterize_dao(optional_dao, "optional")
 
         self.assertEqual(len(variables), 4)
 
+    def test_parameterize_dao_set_value_set_relationship(self):
         optional = OptionalTestCase(
             1, list_of_orientations=[Orientation(0.0, 0.0, 0.0, 1.0)]
         )
@@ -161,6 +165,7 @@ class TestDAOParameterizer(unittest.TestCase):
 
         self.assertEqual(len(variables), 5)
 
+    def test_parameterize_dao_set_value_underspecified_relationship(self):
         optional = OptionalTestCase(
             1, list_of_orientations=[Orientation(0.0, 0.0, None, 1.0)]
         )
@@ -169,7 +174,15 @@ class TestDAOParameterizer(unittest.TestCase):
 
         self.assertEqual(len(variables), 5)
 
+    def test_parameterize_dao_set_value_set_builtin(self):
         optional = OptionalTestCase(1, list_of_values=[0])
+        optional_dao = to_dao(optional)
+        variables, event = self.parameterizer.parameterize_dao(optional_dao, "optional")
+
+        self.assertEqual(len(variables), 2)
+
+    def test_parameterize_dao_set_value_underspecified_builtin(self):
+        optional = OptionalTestCase(1, list_of_values=[None])
         optional_dao = to_dao(optional)
         variables, event = self.parameterizer.parameterize_dao(optional_dao, "optional")
 
