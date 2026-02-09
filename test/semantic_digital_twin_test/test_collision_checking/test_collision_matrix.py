@@ -18,7 +18,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AllowCollisionBetweenGroups,
     AllowNonRobotCollisions,
     AvoidAllCollisions,
-    HighPriorityAllowCollisionRule,
+    AllowCollisionRule,
 )
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
@@ -184,7 +184,7 @@ class TestCollisionRules:
         collision_manager = pr2_world_state_reset.collision_manager
         collision_manager.update_collision_matrix()
         collision_matrix = collision_manager.collision_matrix
-        rule: HighPriorityAllowCollisionRule
+        rule: AllowCollisionRule
         for rule in collision_manager.ignore_collision_rules:
             assert (
                 rule.allowed_collision_pairs & collision_matrix.collision_checks

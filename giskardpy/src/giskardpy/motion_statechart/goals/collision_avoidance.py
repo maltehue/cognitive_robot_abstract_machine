@@ -175,24 +175,23 @@ class ExternalCollisionAvoidanceTask(CollisionAvoidanceTask):
     def build(self, context: BuildContext) -> NodeArtifacts:
         artifacts = NodeArtifacts()
 
-        map_T_a = context.world.compose_forward_kinematics_expression(
+        root_T_group_a = context.world.compose_forward_kinematics_expression(
             context.world.root, self.tip
         )
 
-        map_V_pa = (map_T_a @ self.group_a_P_point_on_a).to_vector3()
+        root_V_point_on_a = (root_T_group_a @ self.group_a_P_point_on_a).to_vector3()
 
         # the position distance is not accurate, but the derivative is still correct
-        dist = self.root_V_contact_normal @ map_V_pa
+        a_projected_on_normal = self.root_V_contact_normal @ root_V_point_on_a
 
         lower_limit = self.buffer_zone_distance - self.contact_distance
 
         artifacts.constraints.add_inequality_constraint(
-            name=self.name,
             reference_velocity=self.max_velocity,
             lower_error=lower_limit,
             upper_error=float("inf"),
             weight=self.create_weight(context),
-            task_expression=dist,
+            task_expression=a_projected_on_normal,
             lower_slack_limit=-float("inf"),
             upper_slack_limit=self.create_upper_slack(
                 context=context,
@@ -312,26 +311,28 @@ class SelfCollisionAvoidanceTask(CollisionAvoidanceTask):
     def build(self, context: BuildContext) -> NodeArtifacts:
         artifacts = NodeArtifacts()
 
-        b_T_a = context.world.compose_forward_kinematics_expression(
+        group_b_T_group_a = context.world.compose_forward_kinematics_expression(
             self.collision_group_a.root, self.collision_group_b.root
         )
-        pb_T_b = HomogeneousTransformationMatrix.from_point_rotation_matrix(
-            point=self.group_b_P_point_on_b
-        ).inverse()
 
-        pb_V_pa = (pb_T_b @ b_T_a @ self.group_a_P_point_on_a).to_vector3()
+        group_b_P_point_on_a = group_b_T_group_a @ self.group_a_P_point_on_a
 
-        dist = self.group_b_V_contact_normal @ pb_V_pa
+        group_b_V_point_on_b_to_point_on_a = (
+            self.group_b_P_point_on_b - group_b_P_point_on_a
+        )
+
+        a_projected_on_normal = (
+            self.group_b_V_contact_normal @ group_b_V_point_on_b_to_point_on_a
+        )
 
         lower_limit = self.buffer_zone_distance - self.contact_distance
 
         artifacts.constraints.add_inequality_constraint(
-            name=self.name,
             reference_velocity=self.max_velocity,
             lower_error=lower_limit,
             upper_error=float("inf"),
             weight=DefaultWeights.WEIGHT_COLLISION_AVOIDANCE,
-            task_expression=dist,
+            task_expression=a_projected_on_normal,
             lower_slack_limit=-float("inf"),
             upper_slack_limit=self.create_upper_slack(
                 context=context,
@@ -359,9 +360,12 @@ class SelfCollisionAvoidance(Goal):
             self_collision_manager.collision_groups, 2
         ):
             self_collision_manager.register_body_combination(group_a.root, group_b.root)
+            (group_a, group_b) = self_collision_manager.body_pair_to_group_pair(
+                group_a.root, group_b.root
+            )
 
             distance_monitor = SelfCollisionDistanceMonitor(
-                name=f"{self.name}/{group_a, group_b}/monitor",
+                name=f"{self.name}/{group_a.root.name.name, group_b.root.name.name}/monitor",
                 collision_group_a=group_a,
                 collision_group_b=group_b,
                 self_collision_manager=self_collision_manager,
@@ -369,7 +373,7 @@ class SelfCollisionAvoidance(Goal):
             self.add_node(distance_monitor)
 
             task = SelfCollisionAvoidanceTask(
-                name=f"{self.name}/{group_a, group_b}/task",
+                name=f"{self.name}/{group_a.root.name.name, group_b.root.name.name}/task",
                 collision_group_a=group_a,
                 collision_group_b=group_b,
                 max_velocity=self.max_velocity,

@@ -2,6 +2,7 @@ import json
 import time
 from dataclasses import dataclass
 from math import radians
+from time import sleep
 from typing import Type
 
 import numpy as np
@@ -103,10 +104,12 @@ from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
 from semantic_digital_twin.collision_checking.collision_matrix import (
     CollisionRule,
     MaxAvoidedCollisionsOverride,
+    CollisionMatrix,
 )
 from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidCollisionBetweenGroups,
     AvoidAllCollisions,
+    AllowAllCollisions,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import Manipulator, AbstractRobot
@@ -2664,6 +2667,7 @@ class TestCollisionAvoidance:
     def test_self_collision_avoidance(
         self, self_collision_bot_world: World, rclpy_node
     ):
+        sleep(10)
         TFPublisher(world=self_collision_bot_world, node=rclpy_node)
         VizMarkerPublisher(
             world=self_collision_bot_world, node=rclpy_node, use_visuals=False
@@ -2671,14 +2675,23 @@ class TestCollisionAvoidance:
         robot = self_collision_bot_world.get_semantic_annotations_by_type(
             AbstractRobot
         )[0]
+        l_tip = self_collision_bot_world.get_kinematic_structure_entity_by_name("l_tip")
+        r_tip = self_collision_bot_world.get_kinematic_structure_entity_by_name("r_tip")
+        l_thumb = self_collision_bot_world.get_kinematic_structure_entity_by_name(
+            "l_thumb"
+        )
+        r_thumb = self_collision_bot_world.get_kinematic_structure_entity_by_name(
+            "r_thumb"
+        )
 
         collision_manager = self_collision_bot_world.collision_manager
         collision_manager.temporary_rules.extend(
             [
-                AvoidAllCollisions(
-                    buffer_zone_distance=0.2,
-                    violated_distance=0.23,
-                    bodies=self_collision_bot_world.bodies_with_collision,
+                AvoidCollisionBetweenGroups(
+                    buffer_zone_distance=0.25,
+                    violated_distance=0.0,
+                    body_group_a={l_tip, l_thumb},
+                    body_group_b={r_tip, r_thumb},
                 ),
             ]
         )
@@ -2711,8 +2724,9 @@ class TestCollisionAvoidance:
         msc_copy.draw("muh.pdf")
         kin_sim.tick_until_end(500)
         collisions = kin_sim.context.world.collision_manager.compute_collisions()
-        assert len(collisions.contacts) == 19
-        assert collisions.contacts[0].contact_distance > 0.199
+        assert len(collisions.contacts) == 1
+        for contact in collisions.contacts:
+            assert contact.contact_distance > 0.249
 
     def test_hard_constraints_violated(self, cylinder_bot_world: World):
         root = cylinder_bot_world.root

@@ -127,7 +127,7 @@ class Updatable(Protocol):
 
 
 @dataclass
-class HighPriorityAllowCollisionRule(CollisionRule, ABC):
+class AllowCollisionRule(CollisionRule, ABC):
     allowed_collision_pairs: set[CollisionCheck] = field(default_factory=set)
     allowed_collision_bodies: set[Body] = field(default_factory=set)
 
@@ -150,7 +150,12 @@ class HighPriorityAllowCollisionRule(CollisionRule, ABC):
 
 
 @dataclass
-class AllowNonRobotCollisions(HighPriorityAllowCollisionRule):
+class AllowAllCollisions(AllowCollisionRule):
+    def _update(self, world: World): ...
+
+
+@dataclass
+class AllowNonRobotCollisions(AllowCollisionRule):
 
     def _update(self, world: World):
         """
@@ -176,7 +181,7 @@ class AllowNonRobotCollisions(HighPriorityAllowCollisionRule):
 
 
 @dataclass
-class AllowCollisionForAdjacentPairs(HighPriorityAllowCollisionRule):
+class AllowCollisionForAdjacentPairs(AllowCollisionRule):
 
     def _update(self, world: World):
         for body_a, body_b in combinations(world.bodies_with_collision, 2):
@@ -191,7 +196,7 @@ class AllowCollisionForAdjacentPairs(HighPriorityAllowCollisionRule):
 
 
 @dataclass
-class SelfCollisionMatrixRule(HighPriorityAllowCollisionRule):
+class SelfCollisionMatrixRule(AllowCollisionRule):
 
     def _update(self, world: World): ...
 
