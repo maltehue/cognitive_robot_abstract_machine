@@ -386,7 +386,9 @@ class TriangleMesh(Mesh):
     def file(
         self, dirname: str = "/tmp", file_type: str = "obj"
     ) -> tempfile._TemporaryFileWrapper:
-        f = tempfile.NamedTemporaryFile(dir=dirname, delete=False)
+        f = tempfile.NamedTemporaryFile(
+            dir=dirname, suffix=f".{file_type}", delete=False
+        )
         if file_type == "obj":
             self.mesh.export(f.name, file_type="obj")
             old_mtl_file = "material.mtl"

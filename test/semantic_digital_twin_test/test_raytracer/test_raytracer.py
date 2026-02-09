@@ -8,7 +8,7 @@ from semantic_digital_twin.testing import world_setup_simple
 
 
 def test_create_segmentation_mask(world_setup_simple):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     rt = RayTracer(world)
     rt.update_scene()
 
@@ -40,7 +40,7 @@ def test_create_segmentation_mask(world_setup_simple):
 
 
 def test_create_depth_map(world_setup_simple):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     rt = RayTracer(world)
     rt.update_scene()
 
@@ -65,7 +65,7 @@ def test_create_depth_map(world_setup_simple):
 
 
 def test_ray_test(world_setup_simple):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     rt = RayTracer(world)
     rt.update_scene()
 
@@ -83,7 +83,7 @@ def test_ray_test(world_setup_simple):
 
 
 def test_ray_test_batch(world_setup_simple):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     world.get_connection(world.root, body1).origin = np.array(
         [[1, 0, 0, 1], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
     )
@@ -110,7 +110,7 @@ def test_ray_test_batch(world_setup_simple):
 
 
 def test_min_distance(world_setup_simple):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     world.get_connection(world.root, body1).origin = np.array(
         [[1, 0, 0, 0.5], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
     )
@@ -131,7 +131,7 @@ def test_min_distance(world_setup_simple):
 
 
 def test_max_distance(world_setup_simple):
-    world, body1, body2, body3, body4 = world_setup_simple
+    world, body1, body2, body3, body4, body5 = world_setup_simple
     world.get_connection(world.root, body1).origin = np.array(
         [[1, 0, 0, 1.5], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
     )

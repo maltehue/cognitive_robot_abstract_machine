@@ -20,52 +20,63 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidAllCollisions,
     AllowCollisionRule,
 )
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
 from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.world_description.geometry import Sphere
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
+from semantic_digital_twin.world_description.world_entity import Body
 
 
 class TestCollisionRules:
     def test_get_distances(self, pr2_world_state_reset):
+        with pr2_world_state_reset.modify_world():
+            env = Body(
+                name=PrefixedName("env"),
+                collision=ShapeCollection([Sphere(radius=0.5)]),
+            )
+            root_C_env = FixedConnection(pr2_world_state_reset.root, env)
+            pr2_world_state_reset.add_connection(root_C_env)
+
         pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
         collision_manager = pr2_world_state_reset.collision_manager
 
-        body = pr2_world_state_reset.get_body_by_name("base_link")
+        base_link = pr2_world_state_reset.get_body_by_name("base_link")
+        torso_lift_link = pr2_world_state_reset.get_body_by_name("torso_lift_link")
+        head_pan_link = pr2_world_state_reset.get_body_by_name("head_pan_link")
 
         # PR2 has a rule for base_link: buffer=0.2, violated=0.05
         # It's added to low_priority_rules
-        assert collision_manager.get_buffer_zone_distance(body) == 0.2
-        assert collision_manager.get_violated_distance(body) == 0.05
+        assert collision_manager.get_buffer_zone_distance(base_link, env) == 0.2
+        assert collision_manager.get_violated_distance(base_link, env) == 0.05
 
         # Test with a body that only has the general PR2 rule (buffer=0.1, violated=0.0)
-        body2 = pr2_world_state_reset.get_body_by_name("torso_lift_link")
-        assert collision_manager.get_buffer_zone_distance(body2) == 0.1
-        assert collision_manager.get_violated_distance(body2) == 0.0
+        assert collision_manager.get_buffer_zone_distance(torso_lift_link, env) == 0.1
+        assert collision_manager.get_violated_distance(torso_lift_link, env) == 0.0
 
         # Add a high priority rule to override
         override_rule = AvoidAllCollisions(
-            buffer_zone_distance=0.5, violated_distance=0.1, bodies=[body]
+            buffer_zone_distance=0.5, violated_distance=0.1, bodies=[base_link]
         )
         collision_manager.ignore_collision_rules.append(override_rule)
 
-        assert collision_manager.get_buffer_zone_distance(body) == 0.5
-        assert collision_manager.get_violated_distance(body) == 0.1
+        assert collision_manager.get_buffer_zone_distance(base_link, env) == 0.5
+        assert collision_manager.get_violated_distance(base_link, env) == 0.1
 
     def test_get_distances_no_rule(self, cylinder_bot_world):
         collision_manager = cylinder_bot_world.collision_manager
-        # cylinder_bot_world usually has some bodies
-        body = cylinder_bot_world.bodies_with_collision[0]
 
-        # By default, cylinder_bot_world might not have rules for all bodies
-        # if they are not explicitly added.
-        # Let's see if there is any rule.
-        # Clear rules to be sure
+        body = cylinder_bot_world.bodies_with_collision[0]
+        body2 = cylinder_bot_world.bodies_with_collision[1]
+
         collision_manager.default_rules = []
         collision_manager.temporary_rules = []
         collision_manager.ignore_collision_rules = []
 
         with pytest.raises(ValueError):
-            collision_manager.get_buffer_zone_distance(body)
+            collision_manager.get_buffer_zone_distance(body, body2)
 
     def test_AvoidCollisionBetweenGroups(self, pr2_world_state_reset):
         pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
