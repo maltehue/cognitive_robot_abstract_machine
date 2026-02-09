@@ -24,6 +24,7 @@ from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
     ProbabilisticCircuit,
 )
 
+
 @dataclass
 class Parameterizer:
     """
@@ -68,7 +69,9 @@ class Parameterizer:
         self.simple_event.fill_missing_variables(self.variables)
         return self.variables, self.simple_event
 
-    def _update_variables_and_event(self, variables: List[Variable], attribute_values: List[Any]):
+    def _update_variables_and_event(
+        self, variables: List[Variable], attribute_values: List[Any]
+    ):
         """
         Update the variables and simple event based on the given variables and attribute values.
 
@@ -128,7 +131,7 @@ class Parameterizer:
         attribute_name = relationship.key
 
         # %% Skip attributes that are not of interest.
-        if not self.is_attribute_of_interest(attribute_name, dao, wrapped_field):
+        if not self._is_attribute_of_interest(attribute_name, dao, wrapped_field):
             return
 
         attribute_dao = getattr(dao, attribute_name)
@@ -169,10 +172,10 @@ class Parameterizer:
 
         :return: A tuple containing a list of variables and a list of corresponding attribute values.
         """
-        attribute_name = self.column_attribute_name(column)
+        attribute_name = self._column_attribute_name(column)
 
         # %% Skip attributes that are not of interest.
-        if not self.is_attribute_of_interest(attribute_name, dao, wrapped_field):
+        if not self._is_attribute_of_interest(attribute_name, dao, wrapped_field):
             return [], []
 
         attribute = getattr(dao, attribute_name)
@@ -197,7 +200,7 @@ class Parameterizer:
         else:
             assert_never(wrapped_field)
 
-    def is_attribute_of_interest(
+    def _is_attribute_of_interest(
         self,
         attribute_name: Optional[str],
         dao: DataAccessObject,
@@ -222,7 +225,7 @@ class Parameterizer:
             and not (wrapped_field.is_optional and getattr(dao, attribute_name) is None)
         )
 
-    def column_attribute_name(self, column: Column) -> Optional[str]:
+    def _column_attribute_name(self, column: Column) -> Optional[str]:
         """
         Get the attribute name corresponding to a SQLAlchemy Column, if it is not a primary key, foreign key, or polymorphic type.
 
