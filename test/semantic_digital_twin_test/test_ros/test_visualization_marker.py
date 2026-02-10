@@ -57,7 +57,7 @@ def test_visualization_marker(rclpy_node, cylinder_bot_world):
         sleep(0.1)
     else:
         assert False, "Callback timed out"
-    assert len(callback.last_msg.markers) == 2
+    assert len(callback.last_msg.markers) == 3
     assert callback.last_msg.markers[0].ns == "environment"
     assert callback.last_msg.markers[0].type == Marker.CYLINDER
 
