@@ -9,7 +9,7 @@ from semantic_digital_twin.collision_checking.collision_detector import (
     CollisionCheckingResult,
     ClosestPoints,
 )
-from semantic_digital_twin.collision_checking.collision_manager import (
+from semantic_digital_twin.collision_checking.collision_groups import (
     CollisionGroupConsumer,
     CollisionGroup,
 )

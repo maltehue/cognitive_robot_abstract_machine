@@ -6,7 +6,7 @@ import pytest
 from semantic_digital_twin.collision_checking.collision_detector import (
     CollisionCheckingResult,
 )
-from semantic_digital_twin.collision_checking.collision_manager import (
+from semantic_digital_twin.collision_checking.collision_groups import (
     CollisionGroupConsumer,
 )
 from semantic_digital_twin.collision_checking.collision_matrix import (

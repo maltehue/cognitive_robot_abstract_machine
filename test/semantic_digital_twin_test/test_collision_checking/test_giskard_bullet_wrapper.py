@@ -6,10 +6,10 @@ import trimesh
 from pkg_resources import resource_filename
 
 from semantic_digital_twin.adapters.mesh import STLParser
-from semantic_digital_twin.collision_checking.bpb_wrapper import (
-    CACHE_DIR,
+from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
     clear_cache,
     convert_to_decomposed_obj_and_save_in_tmp,
+    CACHE_DIR,
 )
 from semantic_digital_twin.world_description.world_entity import Body
 

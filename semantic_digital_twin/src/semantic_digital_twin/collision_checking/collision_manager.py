@@ -3,7 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from rustworkx import rustworkx
 from typing_extensions import List, TYPE_CHECKING
 
 from .collision_detector import (
@@ -23,46 +22,10 @@ from .collision_rules import (
     AvoidCollisionRule,
 )
 from ..callbacks.callback import ModelChangeCallback
-from ..world_description.world_entity import Body, KinematicStructureEntity
+from ..world_description.world_entity import Body
 
 if TYPE_CHECKING:
     from ..world import World
-
-
-@dataclass(repr=False, eq=False)
-class CollisionGroup:
-    """
-    Bodies in this group are viewed as a single body.
-    """
-
-    root: KinematicStructureEntity
-    bodies: set[Body] = field(default_factory=set)
-
-    def __repr__(self) -> str:
-        return f"CollisionGroup(root={self.root.name}, bodies={[b.name for b in self.bodies]})"
-
-    def __str__(self) -> str:
-        return str(self.root.name)
-
-    def __eq__(self, other) -> bool:
-        return self.root == other.root
-
-    def __contains__(self, item):
-        return item == self.root or item in self.bodies
-
-    def __hash__(self):
-        return hash((self.root, tuple(sorted(self.bodies, key=lambda b: b.id))))
-
-    def get_max_avoided_bodies(self, collision_manager: CollisionManager):
-        max_avoided_bodies = []
-        if isinstance(self.root, Body):
-            max_avoided_bodies.append(
-                collision_manager.get_max_avoided_bodies(self.root)
-            )
-        max_avoided_bodies.extend(
-            collision_manager.get_max_avoided_bodies(b) for b in self.bodies
-        )
-        return max(max_avoided_bodies, default=1)
 
 
 @dataclass
@@ -96,44 +59,6 @@ class CollisionConsumer(ABC):
         """
         Called when the collision matrix is updated.
         """
-
-
-@dataclass
-class CollisionGroupConsumer(CollisionConsumer, ABC):
-    collision_groups: list[CollisionGroup] = field(default_factory=list, init=False)
-
-    def on_world_model_update(self, world: World):
-        self.update_collision_groups(world)
-
-    def update_collision_groups(self, world: World):
-        self.collision_groups = [CollisionGroup(world.root)]
-        for parent, childs in rustworkx.bfs_successors(
-            world.kinematic_structure, world.root.index
-        ):
-            collision_group = self.get_collision_group(parent)
-            for child in childs:
-                parent_C_child = world.get_connection(parent, child)
-                if parent_C_child.is_controlled:
-                    self.collision_groups.append(CollisionGroup(child))
-                else:
-                    collision_group.bodies.add(child)
-
-        for group in self.collision_groups:
-            group.bodies = set(
-                b for b in group.bodies if b in world.bodies_with_collision
-            )
-
-        self.collision_groups = [
-            group
-            for group in self.collision_groups
-            if len(group.bodies) > 0 or group.root in world.bodies_with_collision
-        ]
-
-    def get_collision_group(self, body: KinematicStructureEntity) -> CollisionGroup:
-        for group in self.collision_groups:
-            if body in group.bodies or body == group.root:
-                return group
-        raise Exception(f"No collision group found for {body}")
 
 
 @dataclass
