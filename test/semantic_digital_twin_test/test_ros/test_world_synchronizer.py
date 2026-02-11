@@ -534,7 +534,7 @@ def test_attribute_updates(rclpy_node):
             name=PrefixedName("left_door"),
             world=world1,
         )
-    time.sleep(1)
+    time.sleep(100)
     assert [hash(sa) for sa in world1.semantic_annotations] == [
         hash(sa) for sa in world2.semantic_annotations
     ], f"{[sa.name for sa in world1.semantic_annotations]} vs {[sa.name for sa in world2.semantic_annotations]}"

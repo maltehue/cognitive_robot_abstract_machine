@@ -278,7 +278,7 @@ class ModelSynchronizer(
         ]
         for callback in running_callbacks:
             callback.pause()
-        with self.world.modify_world():
+        with self.world.modify_world(msg.meta_data.world_id):
             msg.modifications.apply(self.world)
         for callback in running_callbacks:
             callback.resume()
