@@ -156,6 +156,11 @@ class WorldModelUpdateContextManager:
     First time flag.
     """
 
+    origin_world_id: Optional[UUID] = None
+    """
+    The world id of the world before entering this context. Should only be set by synchronizers
+    """
+
     def __enter__(self):
         if self.world.world_is_being_modified:
             self.first = False
@@ -176,7 +181,7 @@ class WorldModelUpdateContextManager:
             )
             self.world.get_world_model_manager().current_model_modification_block = None
             if exc_type is None:
-                self.world._notify_model_change()
+                self.world._notify_model_change(self.origin_world_id)
             self.world.world_is_being_modified = False
 
 
@@ -436,7 +441,9 @@ class WorldModelManager:
     Callbacks to be called when the model of the world changes.
     """
 
-    def update_model_version_and_notify_callbacks(self) -> None:
+    def update_model_version_and_notify_callbacks(
+        self, origin_world_id: Optional[UUID] = None
+    ) -> None:
         """
         Notifies the system of a model change and updates necessary states, caches,
         and forward kinematics expressions while also triggering registered callbacks
@@ -444,7 +451,7 @@ class WorldModelManager:
         """
         self.version += 1
         for callback in self.model_change_callbacks:
-            callback.notify()
+            callback.notify(origin_world_id=origin_world_id)
 
 
 _LRU_CACHE_SIZE: int = 2048
@@ -1492,24 +1499,26 @@ class World(HasSimulatorProperties):
         return new_world
 
     # %% Change Notifications
-    def notify_state_change(self) -> None:
+    def notify_state_change(self, origin_world_id: Optional[UUID] = None) -> None:
         """
         If you have changed the state of the world, call this function to trigger necessary events and increase
         the state version.
         """
         if not self.is_empty():
             self._forward_kinematic_manager.recompute()
-        self.state._notify_state_change()
+        self.state._notify_state_change(origin_world_id=origin_world_id)
 
-    def _notify_model_change(self) -> None:
+    def _notify_model_change(self, origin_world_id: Optional[UUID] = None) -> None:
         """
         Notifies the system of a model change and updates the necessary states, caches,
         and forward kinematics expressions while also triggering registered callbacks
         for model changes.
         """
-        self._model_manager.update_model_version_and_notify_callbacks()
+        self._model_manager.update_model_version_and_notify_callbacks(
+            origin_world_id=origin_world_id
+        )
         self._compile_forward_kinematics_expressions()
-        self.notify_state_change()
+        self.notify_state_change(origin_world_id=origin_world_id)
 
         for callback in self.state.state_change_callbacks:
             callback.update_previous_world_state()
@@ -1994,8 +2003,12 @@ class World(HasSimulatorProperties):
     def load_collision_srdf(self, file_path: str):
         self._collision_pair_manager.load_collision_srdf(file_path)
 
-    def modify_world(self) -> WorldModelUpdateContextManager:
-        return WorldModelUpdateContextManager(world=self)
+    def modify_world(
+        self, origin_world_id: Optional[UUID] = None
+    ) -> WorldModelUpdateContextManager:
+        return WorldModelUpdateContextManager(
+            world=self, origin_world_id=origin_world_id
+        )
 
     def reset_state_context(self) -> ResetStateContextManager:
         return ResetStateContextManager(self)

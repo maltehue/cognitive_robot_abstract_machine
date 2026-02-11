@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 from typing_extensions import TYPE_CHECKING, Callable, Dict
@@ -38,17 +39,17 @@ class Callback(ABC):
     Flag that indicates if the callback is paused.
     """
 
-    def notify(self):
+    def notify(self, origin_world_id: Optional[UUID] = None):
         """
         Notify the callback of a change in the world.
         """
         if self._is_paused:
             pass
         else:
-            self._notify()
+            self._notify(origin_world_id=origin_world_id)
 
     @abstractmethod
-    def _notify(self):
+    def _notify(self, origin_world_id: Optional[UUID] = None):
         """
         Notify the callback of a change in the world.
         Override this method to implement custom behaviors.

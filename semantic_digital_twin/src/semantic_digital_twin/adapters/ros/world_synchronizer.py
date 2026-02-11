@@ -144,10 +144,13 @@ class SynchronizerOnCallback(Synchronizer, Callback, ABC):
     The messages that the callback did not trigger due to being paused.
     """
 
-    def _notify(self):
+    def _notify(self, origin_world_id: Optional[UUID] = None):
         """
         Wrapper method around world_callback that checks if this time the callback should be triggered.
         """
+        if origin_world_id == self.world._id:
+            return
+
         self.world_callback()
 
     def _subscription_callback(self, msg):
@@ -334,7 +337,7 @@ class ModelReloadSynchronizer(Synchronizer):
         )
         new_world = self.session.scalars(query).one().from_dao()
         self._replace_world(new_world)
-        self.world._notify_model_change()
+        self.world._notify_model_change(msg.meta_data.world_id)
 
     def _replace_world(self, new_world: World):
         """
