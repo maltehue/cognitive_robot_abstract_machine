@@ -253,8 +253,7 @@ class TestCollisionRules:
 class TestCollisionGroups:
 
     @dataclass
-    class MochCollisionGroupConsumer(CollisionGroupConsumer):
-        def on_reset(self): ...
+    class MockCollisionGroupConsumer(CollisionGroupConsumer):
         def on_compute_collisions(self, collision_results: CollisionCheckingResult): ...
         def on_collision_matrix_update(self): ...
 
@@ -266,7 +265,7 @@ class TestCollisionGroups:
         robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
         collision_manager = world.collision_manager
         collision_manager.collision_consumers = [
-            collision_group_consumer := self.MochCollisionGroupConsumer()
+            collision_group_consumer := self.MockCollisionGroupConsumer()
         ]
         world._notify_model_change()
 

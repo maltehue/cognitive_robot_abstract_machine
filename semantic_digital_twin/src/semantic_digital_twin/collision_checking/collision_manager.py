@@ -70,12 +70,6 @@ class CollisionConsumer(ABC):
     collision_manager: CollisionManager = field(init=False)
 
     @abstractmethod
-    def on_reset(self):
-        """
-        Called when the collision matrix changes.
-        """
-
-    @abstractmethod
     def on_compute_collisions(self, collision_results: CollisionCheckingResult):
         """
         Called when collision checking is finished.
@@ -130,19 +124,32 @@ class CollisionGroupConsumer(CollisionConsumer, ABC):
 @dataclass
 class CollisionManager(ModelChangeCallback):
     """
-    Manages collision rules and turn them into collision matrices.
+    This class is intended as the primary interface for collision checking.
+    It manages collision rules, owns the collision checker, and manages collision consumers using an observer pattern.
+    This class is a world model callback and will update the collision detector's scene and collision matrix on world model changes.
+
+    Collision matrices are updated using rules in the following order:
     1. apply default rules
     2. apply temporary rules
     3. apply ignore-collision rules
         this is usually allow collisions, like the self collision matrix
+    Within these lists, rules that are later in the list overwrite rules that are earlier in the list.
     """
 
-    collision_checker: CollisionDetector
+    collision_detector: CollisionDetector
+    """
+    The collision detector implementation used for computing closest points between bodies.
+    """
+
     collision_matrix: CollisionMatrix = field(init=False)
+    """
+    The collision matrix describing for which body pairs the collision detector should check for closest points.
+    """
 
     default_rules: List[CollisionRule] = field(default_factory=list)
     """
     Rules that are applied to the collision matrix before temporary rules.
+    They are intended for the most general rules, like default distance thresholds.
     Any other rules will overwrite these.
     """
     temporary_rules: List[CollisionRule] = field(default_factory=list)
@@ -150,23 +157,33 @@ class CollisionManager(ModelChangeCallback):
     Rules that are applied to the collision matrix after default rules.
     These are intended for task specific rules.
     """
-    ignore_collision_rules: List[CollisionRule] = field(default_factory=list)
+    ignore_collision_rules: List[CollisionRule] = field(
+        default_factory=lambda: [
+            AllowCollisionForAdjacentPairs(),
+            AllowNonRobotCollisions(),
+        ]
+    )
     """
     Rules that are applied to the collision matrix to ignore collisions.
     The permanently allow collisions and cannot be overwritten by other rules.
+    
+    By default we allow collisions between non-robot bodies and between adjacent bodies.
     """
 
     max_avoided_bodies_rules: List[MaxAvoidedCollisionsRule] = field(
         default_factory=lambda: [DefaultMaxAvoidedCollisions()]
     )
+    """
+    Rules that determine the maximum number of collisions considered for avoidance tasks between two bodies.
+    """
 
     collision_consumers: list[CollisionConsumer] = field(default_factory=list)
+    """
+    Objects that are notified about changes in the collision matrix.
+    """
 
     def __post_init__(self):
         super().__post_init__()
-        self.ignore_collision_rules.extend(
-            [AllowNonRobotCollisions(), AllowCollisionForAdjacentPairs()]
-        )
         self._notify()
 
     def _notify(self):
@@ -178,19 +195,36 @@ class CollisionManager(ModelChangeCallback):
         for consumer in self.collision_consumers:
             consumer.on_world_model_update(self.world)
 
-    def reset_temporary_rules(self):
-        self.temporary_rules = []
+    def add_temporary_rule(self, rule: CollisionRule):
+        """
+        Adds a rule to the temporary collision rules.
+        """
+        self.temporary_rules.append(rule)
+
+    def clear_temporary_rules(self):
+        """
+        Call this before starting a new task.
+        """
+        self.temporary_rules.clear()
 
     def add_collision_consumer(self, consumer: CollisionConsumer):
+        """
+        Adds a collision consumer to the list of consumers.
+        It will be notified when:
+        - when the collision matrix is updated
+        - with the world, when its model updates
+        - with the results of `compute_collisions` when it is called.
+        """
         self.collision_consumers.append(consumer)
         consumer.collision_manager = self
         consumer.on_world_model_update(self.world)
 
-    def reset_consumers(self):
-        for consumer in self.collision_consumers:
-            consumer.on_reset()
-
     def update_collision_matrix(self, buffer: float = 0.05):
+        """
+        Creates a new collision matrix based on the current rules and applies it to the collision detector.
+        :param buffer: A buffer is added to the collision matrix distance thresholds.
+            This is useful when you want to react to collisions before they go below the threshold.
+        """
         self.collision_matrix = CollisionMatrix()
         for rule in self.default_rules:
             rule.apply_to_collision_matrix(self.collision_matrix)
@@ -204,8 +238,14 @@ class CollisionManager(ModelChangeCallback):
             self.collision_matrix.apply_buffer(buffer)
 
     def compute_collisions(self, buffer: float = 0.05) -> CollisionCheckingResult:
+        """
+        Computes collisions based on the current collision matrix.
+        :param buffer: A buffer is added to the collision matrix distance thresholds.
+            This is useful when you want to react to collisions before they go below the threshold.
+        :return: Result of the collision checking.
+        """
         self.update_collision_matrix(buffer)
-        collision_results = self.collision_checker.check_collisions(
+        collision_results = self.collision_detector.check_collisions(
             self.collision_matrix
         )
         for consumer in self.collision_consumers:

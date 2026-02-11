@@ -67,9 +67,6 @@ class ExternalCollisionVariableManager(CollisionGroupConsumer):
     def __hash__(self):
         return hash(id(self))
 
-    def on_reset(self):
-        pass
-
     def on_collision_matrix_update(self):
         pass
 
@@ -262,9 +259,6 @@ class SelfCollisionVariableManager(CollisionGroupConsumer):
 
     def __hash__(self):
         return hash(id(self))
-
-    def on_reset(self):
-        pass
 
     def on_collision_matrix_update(self):
         pass

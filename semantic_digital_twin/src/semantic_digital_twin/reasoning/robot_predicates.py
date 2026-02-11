@@ -56,7 +56,7 @@ def robot_in_collision(
     for rule in robot._world.collision_manager.ignore_collision_rules:
         rule.apply_to_collision_matrix(collision_matrix)
 
-    collisions = robot._world.collision_manager.collision_checker.check_collisions(
+    collisions = robot._world.collision_manager.collision_detector.check_collisions(
         collision_matrix
     )
 
