@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import threading
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -42,6 +43,7 @@ from .exceptions import (
     MissingWorldModificationContextError,
     WorldEntityWithIDNotFoundError,
     MissingReferenceFrameError,
+    MismatchingSynchronizationPolicies,
 )
 from .mixin import HasSimulatorProperties
 from .robots.abstract_robot import AbstractRobot
@@ -162,35 +164,47 @@ class WorldModelUpdateContextManager:
     """
 
     def __enter__(self):
-        self.world.world_is_being_modified = True
-        self.world._model_manager._active_world_model_update_context_manager_ids.append(
-            self._id
-        )
+        model_manager = self.world._model_manager
+        model_manager._world_lock.acquire()
+        if model_manager._current_modifications_will_be_published is None:
+            model_manager._current_modifications_will_be_published = (
+                self.publish_changes
+            )
 
-        # print(len(self.world._active_world_model_manager_ids))
+        if (
+            not model_manager._current_modifications_will_be_published
+            == self.publish_changes
+        ):
+            raise MismatchingSynchronizationPolicies(
+                model_manager._current_modifications_will_be_published,
+                self.publish_changes,
+            )
+
+        self.world.world_is_being_modified = True
+        model_manager._active_world_model_update_context_manager_ids.append(self._id)
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if (
-            len(
-                self.world._model_manager._active_world_model_update_context_manager_ids
+        self.world.delete_orphaned_dofs()
+        model_manager = self.world._model_manager
+        model_manager._active_world_model_update_context_manager_ids.remove(self._id)
+
+        if not model_manager._active_world_model_update_context_manager_ids:
+            model_manager.model_modification_blocks.append(
+                model_manager.current_model_modification_block
             )
-            == 1
-        ):
-            self.world.delete_orphaned_dofs()
-        self.world._model_manager._active_world_model_update_context_manager_ids.remove(
-            self._id
-        )
-        if not self.world._model_manager._active_world_model_update_context_manager_ids:
-            self.world.get_world_model_manager().model_modification_blocks.append(
-                self.world.get_world_model_manager().current_model_modification_block
-            )
-            self.world.get_world_model_manager().current_model_modification_block = (
+            model_manager.current_model_modification_block = (
                 WorldModelModificationBlock()
             )
             if exc_type is None:
-                self.world._notify_model_change(self.publish_changes)
+                self.world._notify_model_change(publish_changes=self.publish_changes)
+
             self.world.world_is_being_modified = False
+            model_manager._current_modifications_will_be_published = None
+
+        # keep outside the if block, as it needs to be released as many times as it was acquired
+        model_manager._world_lock.release()
 
 
 class AtomicWorldModificationNotAtomic(Exception):
@@ -455,9 +469,21 @@ class WorldModelManager:
     List of active world model managers currently modifying this world
     """
 
-    def update_model_version_and_notify_callbacks(
-        self, publish_changes: bool = True
-    ) -> None:
+    _current_modifications_will_be_published: Optional[bool] = field(
+        init=False, default=None
+    )
+    """
+    Indicates if the current modifications will be published via a synchronizer. If None, then there are no active contexts.
+    """
+
+    _world_lock: threading.RLock = field(
+        default_factory=threading.RLock, init=False, repr=False
+    )
+    """
+    Lock used to prevent multiple threads from modifying the world at the same time.
+    """
+
+    def update_model_version_and_notify_callbacks(self, **kwargs) -> None:
         """
         Notifies the system of a model change and updates necessary states, caches,
         and forward kinematics expressions while also triggering registered callbacks
@@ -465,7 +491,7 @@ class WorldModelManager:
         """
         self.version += 1
         for callback in self.model_change_callbacks:
-            callback.notify(publish_changes=publish_changes)
+            callback.notify(**kwargs)
 
 
 _LRU_CACHE_SIZE: int = 2048
@@ -1516,26 +1542,26 @@ class World(HasSimulatorProperties):
         return new_world
 
     # %% Change Notifications
-    def notify_state_change(self, publish_changes: bool = True) -> None:
+    def notify_state_change(self, publish_changes: bool = True, **kwargs) -> None:
         """
         If you have changed the state of the world, call this function to trigger necessary events and increase
         the state version.
         """
         if not self.is_empty():
             self._forward_kinematic_manager.recompute()
-        self.state._notify_state_change(publish_changes=publish_changes)
+        self.state._notify_state_change(publish_changes=publish_changes, **kwargs)
 
-    def _notify_model_change(self, publish_changes: bool = True) -> None:
+    def _notify_model_change(self, publish_changes: bool = True, **kwargs) -> None:
         """
         Notifies the system of a model change and updates the necessary states, caches,
         and forward kinematics expressions while also triggering registered callbacks
         for model changes.
         """
         self._model_manager.update_model_version_and_notify_callbacks(
-            publish_changes=publish_changes
+            publish_changes=publish_changes, **kwargs
         )
         self._compile_forward_kinematics_expressions()
-        self.notify_state_change(publish_changes=publish_changes)
+        self.notify_state_change(publish_changes=publish_changes, **kwargs)
 
         for callback in self.state.state_change_callbacks:
             callback.update_previous_world_state()

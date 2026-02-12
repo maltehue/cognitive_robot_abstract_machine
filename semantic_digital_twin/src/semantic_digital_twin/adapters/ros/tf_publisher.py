@@ -55,7 +55,7 @@ class TfPublisherModelCallback(ModelChangeCallback):
     compiled_tf: CompiledFunction = field(init=False)
     """Compiled function for evaluating the tf expressions."""
 
-    def _notify(self, publish_changes: bool = True):
+    def _notify(self, **kwargs):
         self.update_connections_to_expression()
         self.compile_tf_expression()
         self.init_tf_message()
@@ -197,7 +197,7 @@ class TFPublisher(StateChangeCallback):
             ignored_kinematic_structure_entities=ignored_bodies,
         )
 
-    def _notify(self, publish_changes: bool = True):
+    def _notify(self, **kwargs):
         if self.world.state.version % self.throttle_state_updates != 0:
             return
         self.tf_model_cb.update_tf_message()

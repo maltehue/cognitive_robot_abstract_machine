@@ -135,10 +135,11 @@ class SynchronizerOnCallback(Synchronizer, Callback, ABC):
     The messages that the callback did not trigger due to being paused.
     """
 
-    def _notify(self, publish_changes: bool = True):
+    def _notify(self, **kwargs):
         """
         Wrapper method around world_callback that checks if this time the callback should be triggered.
         """
+        publish_changes = kwargs["publish_changes"]
         if not publish_changes:
             return
 
@@ -168,6 +169,8 @@ class SynchronizerOnCallback(Synchronizer, Callback, ABC):
         """
         Applies the missed messages to the world.
         """
+        if not self.missed_messages:
+            return
         with self.world.modify_world(publish_changes=False):
             for msg in self.missed_messages:
                 self.apply_message(msg)

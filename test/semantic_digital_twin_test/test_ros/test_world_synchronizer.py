@@ -22,7 +22,10 @@ from semantic_digital_twin.adapters.ros.world_synchronizer import (
 )
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.exceptions import MissingWorldModificationContextError
+from semantic_digital_twin.exceptions import (
+    MissingWorldModificationContextError,
+    MismatchingSynchronizationPolicies,
+)
 from semantic_digital_twin.orm.ormatic_interface import Base, WorldMappingDAO
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Handle,
@@ -783,6 +786,49 @@ def test_world_simultaneous_synchronization_stress_test(
     w1_ids, w2_ids = wait_for_sync_kse(w1, w2)
     assert len(w1.kinematic_structure_entities) == len(w2.kinematic_structure_entities)
     assert w1_ids == w2_ids
+
+    synchronizer_1.close()
+    synchronizer_2.close()
+
+
+def test_nested_modify_world_publish_changes_true_false(rclpy_node):
+    w1 = World(name="w1")
+    w2 = World(name="w2")
+
+    synchronizer_1 = ModelSynchronizer(
+        node=rclpy_node,
+        world=w1,
+    )
+    synchronizer_2 = ModelSynchronizer(
+        node=rclpy_node,
+        world=w2,
+    )
+
+    with w1.modify_world():
+        new_body = Body(name=PrefixedName("b3"))
+        w1.add_kinematic_structure_entity(new_body)
+
+    time.sleep(0.2)
+
+    assert len(w1.kinematic_structure_entities) == len(w2.kinematic_structure_entities)
+
+    with pytest.raises(MismatchingSynchronizationPolicies):
+        with w1.modify_world():
+            handle = Handle.create_with_new_body_in_world(PrefixedName("handle"), w1)
+
+            with w1.modify_world(publish_changes=False):
+                handle = Handle.create_with_new_body_in_world(
+                    PrefixedName("handle"), w1
+                )
+
+    with pytest.raises(MismatchingSynchronizationPolicies):
+        with w1.modify_world(publish_changes=False):
+            handle = Handle.create_with_new_body_in_world(PrefixedName("handle"), w1)
+
+            with w1.modify_world(publish_changes=True):
+                handle = Handle.create_with_new_body_in_world(
+                    PrefixedName("handle"), w1
+                )
 
     synchronizer_1.close()
     synchronizer_2.close()

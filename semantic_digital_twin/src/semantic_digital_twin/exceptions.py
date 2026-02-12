@@ -262,6 +262,27 @@ class MissingWorldModificationContextError(UsageError):
 
 
 @dataclass
+class MismatchingSynchronizationPolicies(UsageError):
+    """
+    Raised when trying to enter a world modification context with a different publish_changes policy than the currently active world modification context.
+    """
+
+    active_model_manager_policy: bool
+    """
+    The publish_changes policy of the currently active world modification context.
+    """
+    proposed_policy: bool
+    """
+    The publish_changes policy of the world modification context that is being entered.
+    """
+
+    def __post_init__(self):
+        RuntimeError(
+            f"Cannot enter context with publish_changes={self.proposed_policy} when the currently active modification context has publish_changes={self.active_model_manager_policy}. Make sure to not nest contexts with different publish_changes policies."
+        )
+
+
+@dataclass
 class DuplicateWorldEntityError(UsageError):
     world_entities: List[WorldEntity]
 
