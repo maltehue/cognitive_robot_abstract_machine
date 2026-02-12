@@ -55,18 +55,18 @@ def test_generate_drawers_from_query(handles_and_containers_world):
     fixed_connection = variable(FixedConnection, domain=world.connections)
     prismatic_connection = variable(PrismaticConnection, domain=world.connections)
     drawers = variable(Drawer, domain=None, inferred=True)
-    condition = an(entity(drawers).where(
+    query = an(entity(drawers).where(
             container == fixed_connection.parent,
             handle == fixed_connection.child,
             container == prismatic_connection.child,
         ))
 
-    with condition:
+    with query:
         Add(drawers, inference(Drawer)(handle=handle, container=container))
 
-    condition.visualize()
+    query.visualize()
 
-    solutions = condition.evaluate()
+    solutions = query.evaluate()
     all_solutions = list(solutions)
 
     assert (
@@ -403,7 +403,7 @@ def test_rule_tree_with_multiple_alternatives_better_rule_tree_optimized(
                 ),
             )
 
-    # query._render_tree_()
+    # query.visualize()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."

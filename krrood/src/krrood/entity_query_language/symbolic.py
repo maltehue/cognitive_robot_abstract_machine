@@ -238,8 +238,7 @@ class SymbolicExpression(ABC):
         :param limit: The maximum number of results to return. If None, return all results.
         """
         SymbolGraph().remove_dead_instances()
-        # results = map(self._process_result_, self._evaluate_())
-        results = self._evaluate_self_and_conclusions_()
+        results = map(self._process_result_, (res for res in self._evaluate_() if res.is_true))
         if limit is None:
             yield from results
         elif not isinstance(limit, int) or limit <= 0:
@@ -249,14 +248,6 @@ class SymbolicExpression(ABC):
                 yield result
                 if res_num == limit:
                     return
-
-    def _evaluate_self_and_conclusions_(self):
-        for result in self._evaluate_():
-            if result.is_false:
-                continue
-            for conclusion in self._conclusion_:
-                result = next(conclusion._evaluate_(result.bindings, parent=self))
-            yield self._process_result_(result)
 
     def visualize(
             self,
@@ -430,14 +421,11 @@ class SymbolicExpression(ABC):
         """
         :return: The root of the symbolic expression graph that contains conditions, or None if no conditions found.
         """
-        condition_root = self._root_
-        if isinstance(condition_root, (LogicalOperator, DomainMapping, Variable)):
-            return condition_root
-        while condition_root._children_:
-            condition_root = condition_root._children_[0]
-            if isinstance(condition_root, (LogicalOperator, DomainMapping, Variable)):
-                return condition_root
-        return None
+        all_expressions = self._node_.get_topologically_sorted_descendants()
+        for expression in all_expressions:
+            if isinstance(expression, Filter):
+                return expression.condition
+        return self._root_
 
     @property
     def _root_(self) -> SymbolicExpression:
@@ -1377,9 +1365,9 @@ class GroupedBy(AbstractDataSource, UnaryExpression):
     specific variables. This is useful for aggregating results separately for each group.
     """
 
-    _child_: AbstractDataSource
+    _child_: Product
     """
-    The child of the group-by operation.
+    The child of the grouped-by operation.
     """
     aggregators: Tuple[Aggregator, ...]
     """

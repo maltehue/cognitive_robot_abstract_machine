@@ -47,6 +47,9 @@ class RWXNode:
         else:
             return self._name
 
+    def get_topologically_sorted_descendants(self) -> List[Any]:
+        return [self._graph[n].data for n in rx.topological_sort(self._graph)]
+
     # Non-primary connect: add edge without changing primary parent pointer
     def add_parent(self, parent: RWXNode, edge_weight=None):
         # Avoid self-loops
