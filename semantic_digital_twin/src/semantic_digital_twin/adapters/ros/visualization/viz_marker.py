@@ -98,7 +98,6 @@ class VizMarkerPublisher(ModelChangeCallback):
             return body.visual.shapes if body.visual.shapes else body.collision.shapes
         raise ValueError(f"Unsupported shape_source: {self.shape_source!r}")
 
-
     def _notify(self, **kwargs):
         self.markers = MarkerArray()
         for body in self.world.bodies:
@@ -106,10 +105,6 @@ class VizMarkerPublisher(ModelChangeCallback):
             if not shapes:
                 continue
             marker_ns = str(body.name)
-            if self.shape_source is ShapeSource.VISUAL_WITH_COLLISION_BACKUP and len(body.visual) > 0:
-                shapes = body.visual.shapes
-            else:
-                shapes = body.collision.shapes
             for i, shape in enumerate(shapes):
                 marker = SemDTToRos2Converter.convert(shape)
                 marker.frame_locked = True
