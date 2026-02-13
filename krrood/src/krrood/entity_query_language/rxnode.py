@@ -21,20 +21,23 @@ class ColorLegend:
 @dataclass
 class RWXNode:
     _name: str
+    _graph: rx.PyDAG
     weight: str = field(default="")
     data: Optional[Any] = field(default=None)
     _primary_parent_id: Optional[int] = None
     color: ColorLegend = field(default_factory=ColorLegend)
+
     # Grouping/boxing options
     wrap_subtree: bool = field(default=False)
     wrap_facecolor: Optional[str] = field(default=None)
     wrap_edgecolor: Optional[str] = field(default=None)
     wrap_alpha: float = field(default=0.08)
+
     # Visual emphasis options
     enclosed: bool = field(default=False)
-    id: int = field(init=False)
-    _graph: ClassVar[rx.PyDAG] = rx.PyDAG()
     enclosed_name: ClassVar[str] = "enclosed"
+
+    id: int = field(init=False)
 
     def __post_init__(self):
         # store self as node data to keep a 1:1 mapping
@@ -49,7 +52,11 @@ class RWXNode:
 
     def get_topologically_sorted_descendants(self) -> List[Any]:
         root_descendants = rx.descendants(self._graph, self.root.id)
-        return [self._graph[n].data for n in rx.topological_sort(self._graph) if n in root_descendants]
+        return [
+            self._graph[n].data
+            for n in rx.topological_sort(self._graph)
+            if n in root_descendants
+        ]
 
     # Non-primary connect: add edge without changing primary parent pointer
     def add_parent(self, parent: RWXNode, edge_weight=None):

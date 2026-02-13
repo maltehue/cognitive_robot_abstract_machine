@@ -32,7 +32,9 @@ from typing_extensions import (
     Type,
     Tuple,
     TYPE_CHECKING,
-    Hashable, Iterable, Optional,
+    Hashable,
+    Iterable,
+    Optional,
 )
 
 if TYPE_CHECKING:
@@ -59,12 +61,6 @@ class IDGenerator:
         """
         self._counter += 1
         return self._counter
-
-
-def lazy_iterate_dicts(dict_of_iterables):
-    """Generator that yields dicts with one value from each iterable"""
-    for values in zip(*dict_of_iterables.values()):
-        yield dict(zip(dict_of_iterables.keys(), values))
 
 
 def generate_combinations(generators_dict):

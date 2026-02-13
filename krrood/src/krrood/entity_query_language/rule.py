@@ -34,7 +34,6 @@ def refinement(*conditions: ConditionType) -> SymbolicExpression[T]:
     new_conditions_root = ExceptIf(
         SymbolicExpression._current_parent_in_context_stack_(), new_branch
     )
-    new_branch._node_.weight = RDREdge.Refinement
     new_conditions_root._parent_ = prev_parent
     return new_conditions_root.right
 
@@ -98,7 +97,6 @@ def alternative_or_next(
         raise ValueError(
             f"Invalid type: {type_}, expected one of: {RDREdge.Alternative}, {RDREdge.Next}"
         )
-    new_branch._node_.weight = type_
     new_conditions_root._parent_ = prev_parent
     if isinstance(prev_parent, BinaryExpression):
         prev_parent.right = new_conditions_root

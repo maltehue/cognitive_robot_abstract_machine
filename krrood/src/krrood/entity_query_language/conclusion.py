@@ -32,18 +32,15 @@ class Conclusion(SymbolicExpression, ABC):
     value: Any
 
     def __post_init__(self):
-        super().__post_init__()
 
         self.var, self.value = self._update_children_(self.var, self.value)
 
         self.value._is_inferred_ = True
 
-        self._node_.weight = RDREdge.Then
-
         current_parent = SymbolicExpression._current_parent_in_context_stack_()
         if current_parent is None:
             current_parent = self._conditions_root_
-        self._node_.parent = current_parent._node_
+        self._parent_ = current_parent
         self._parent_._add_conclusion_(self)
 
     @cached_property
