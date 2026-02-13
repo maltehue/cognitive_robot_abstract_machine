@@ -2832,6 +2832,108 @@ class TestCollisionAvoidance:
         with pytest.raises(HardConstraintsViolatedException):
             kin_sim.tick_until_end()
 
+    def test_avoid_collision_go_around_corner(self, pr2_world_state_reset, rclpy_node):
+        TFPublisher(world=pr2_world_state_reset, node=rclpy_node)
+        VizMarkerPublisher(world=pr2_world_state_reset, node=rclpy_node)
+        r_tip = pr2_world_state_reset.get_kinematic_structure_entity_by_name(
+            "r_gripper_tool_frame"
+        )
+        robot = pr2_world_state_reset.get_semantic_annotations_by_type(AbstractRobot)[0]
+
+        with pr2_world_state_reset.modify_world():
+            box = Body(
+                name=PrefixedName("box"),
+                visual=ShapeCollection(shapes=[Box(scale=Scale(1, 1, 1))]),
+                collision=ShapeCollection(shapes=[Box(scale=Scale(1, 1, 1))]),
+            )
+            root_C_box = FixedConnection(
+                parent=pr2_world_state_reset.root,
+                child=box,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=1.2, z=0.3, reference_frame=pr2_world_state_reset.root
+                ),
+            )
+            pr2_world_state_reset.add_connection(root_C_box)
+
+        msc = MotionStatechart()
+        msc.add_node(
+            Sequence(
+                [
+                    SetSeedConfiguration(
+                        seed_configuration=JointState.from_str_dict(
+                            {
+                                "r_elbow_flex_joint": -1.29610152504,
+                                "r_forearm_roll_joint": -0.0301682323805,
+                                "r_shoulder_lift_joint": 1.20324921318,
+                                "r_shoulder_pan_joint": -0.73456435706,
+                                "r_upper_arm_roll_joint": -0.70790051778,
+                                "r_wrist_flex_joint": -0.10001,
+                                "r_wrist_roll_joint": 0.258268529825,
+                                "l_elbow_flex_joint": -1.29610152504,
+                                "l_forearm_roll_joint": 0.0301682323805,
+                                "l_shoulder_lift_joint": 1.20324921318,
+                                "l_shoulder_pan_joint": 0.73456435706,
+                                "l_upper_arm_roll_joint": 0.70790051778,
+                                "l_wrist_flex_joint": -0.1001,
+                                "l_wrist_roll_joint": -0.258268529825,
+                                "torso_lift_joint": 0.2,
+                                "head_pan_joint": 0,
+                                "head_tilt_joint": 0,
+                                "l_gripper_l_finger_joint": 0.55,
+                                "r_gripper_l_finger_joint": 0.55,
+                            },
+                            world=pr2_world_state_reset,
+                        )
+                    ),
+                    Parallel(
+                        [
+                            CartesianPose(
+                                root_link=pr2_world_state_reset.root,
+                                tip_link=r_tip,
+                                goal_pose=HomogeneousTransformationMatrix.from_xyz_axis_angle(
+                                    x=0.8,
+                                    y=-0.38,
+                                    z=0.84,
+                                    axis=Vector3.Y(),
+                                    angle=np.pi / 2.0,
+                                    reference_frame=pr2_world_state_reset.root,
+                                ),
+                                weight=DefaultWeights.WEIGHT_ABOVE_CA,
+                            ),
+                            ExternalCollisionAvoidance(robot=robot),
+                        ]
+                    ),
+                ]
+            )
+        )
+        msc.add_node(local_min := LocalMinimumReached())
+        msc.add_node(EndMotion.when_true(local_min))
+
+        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim.compile(motion_statechart=msc)
+
+        kin_sim.tick_until_end(500)
+
+        # pr2_world_state_reset.check_cpi_geq(
+        #     pr2_world_state_reset.get_l_gripper_links(), 0.05
+        # )
+        # pr2_world_state_reset.check_cpi_leq(
+        #     [
+        #         GiskardBlackboard().executor.world.get_kinematic_structure_entity_by_name(
+        #             "r_gripper_l_finger_tip_link"
+        #         )
+        #     ],
+        #     0.04,
+        # )
+        # pr2_world_state_reset.check_cpi_leq(
+        #     [
+        #         GiskardBlackboard().executor.world.get_kinematic_structure_entity_by_name(
+        #             "r_gripper_r_finger_tip_link"
+        #         )
+        #     ],
+        #     0.04,
+        # )
+
 
 def test_constraint_collection(pr2_world_state_reset: World):
     """
