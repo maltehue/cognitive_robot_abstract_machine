@@ -89,7 +89,7 @@ class AttributeChainResolver:
         extractor = VariableTypeExtractor()
         node = attribute
         while isinstance(node, Attribute):
-            node = node._child_
+            node = node._child__
         var, _ = extractor.extract(node)
         return var or node
 
@@ -103,7 +103,7 @@ class AttributeChainResolver:
         extractor = VariableTypeExtractor()
         node = attribute
         while isinstance(node, Attribute):
-            node = node._child_
+            node = node._child__
         _, node_type = extractor.extract(node)
         return get_dao_class(node_type) if node_type is not None else None
 
@@ -391,7 +391,7 @@ class EQLTranslator:
     @property
     def root_condition(self) -> SymbolicExpression:
         """Get the root condition from the query."""
-        return self.eql_query._child_._child_
+        return self.eql_query._child_._child__
 
     def translate(self) -> None:
         """Translate the EQL query to SQL."""
@@ -683,7 +683,7 @@ class EQLTranslator:
         node = query
         while isinstance(node, Attribute):
             names.append(node._attribute_name_)
-            node = node._child_
+            node = node._child__
         return list(reversed(names))
 
     def _extract_base_class(self, query: Attribute) -> Optional[type]:
@@ -695,7 +695,7 @@ class EQLTranslator:
         """
         node = query
         while isinstance(node, Attribute):
-            node = node._child_
+            node = node._child__
 
         base_class = node._type_
         if base_class is None:

@@ -215,11 +215,14 @@ class SymbolicExpression(ABC):
 
     @lru_cache
     def _get_expression_by_id_(self, id_: int) -> SymbolicExpression:
-        return next(
-            expression
-            for expression in self._all_expressions_
-            if expression._binding_id_ == id_
-        )
+        try:
+            return next(
+                expression
+                for expression in self._all_expressions_
+                if expression._id_ == id_
+            )
+        except StopIteration:
+            raise ValueError(f"Expression with ID {id_} not found.")
 
     @property
     def _is_false_(self) -> bool:
@@ -303,10 +306,10 @@ class SymbolicExpression(ABC):
                         for v in expression._parents_[0]._selected_variables_
                     ]:
                         child_node.enclosed = True
-                child_node.add_parent(node)
+                child_node.parent = node
             return node
 
-        node = build_subgraph(self)
+        node = build_subgraph(self._root_)
 
         node.visualize(
             figsize=figsize,
@@ -319,21 +322,51 @@ class SymbolicExpression(ABC):
             label_max_chars_per_line=label_max_chars_per_line,
         )
 
+    def _replace_child_(
+        self, old_child: SymbolicExpression, new_child: SymbolicExpression
+    ):
+        """
+        Replace a child expression with a new child expression.
+
+        :param old_child: The old child expression.
+        :param new_child: The new child expression.
+        """
+        child_idx = self._children_.index(old_child)
+        self._children_[child_idx] = new_child
+        new_child._parent_ = self
+        old_child._remove_parent_(self)
+        self._replace_child_field_(old_child, new_child)
+
+    @abstractmethod
+    def _replace_child_field_(
+        self, old_child: SymbolicExpression, new_child: SymbolicExpression
+    ):
+        """
+        Replace a child field with a new child expression.
+
+        :param old_child: The old child expression.
+        :param new_child: The new child expression.
+        """
+        pass
+
+    def _remove_parent_(self, parent: SymbolicExpression):
+        self._parents_.remove(parent)
+        if parent is self._parent__:
+            self._parent_ = None
+
     def _update_children_(
         self, *children: SymbolicExpression
     ) -> Tuple[SymbolicExpression, ...]:
         """
         Update multiple children expressions of this symbolic expression.
         """
-        children: Dict[int, SymbolicExpression] = dict(enumerate(children))
+        children = dict(enumerate(children))
         for k, v in children.items():
             if not isinstance(v, SymbolicExpression):
                 children[k] = Literal(v)
         for k, v in children.items():
             # With graph structure, do not copy nodes; just connect an edge.
             v._parent_ = self
-            v._on_parent_update_(self)
-            self._children_.append(v)
         return tuple(children.values())
 
     def _on_parent_update_(self, parent: SymbolicExpression) -> None:
@@ -383,11 +416,11 @@ class SymbolicExpression(ABC):
             sources = sources or {}
             if self._binding_id_ in sources:
                 yield OperationResult(sources, self._is_false_, self)
-                return
-            yield from map(
-                self._evaluate_conclusions_and_update_bindings_,
-                self._evaluate__(sources),
-            )
+            else:
+                yield from map(
+                    self._evaluate_conclusions_and_update_bindings_,
+                    self._evaluate__(sources),
+                )
         finally:
             self._eval_parent_ = previous_parent
 
@@ -459,17 +492,20 @@ class SymbolicExpression(ABC):
             return
 
         if value is None and self._parent__ is not None:
+            if self._id_ in [v._id_ for v in self._parent__._children_]:
+                self._parent__._children_.remove(self)
             self._parents_.remove(self._parent__)
 
         self._parent__ = value
 
-        if value is not None and value not in self._parents_:
+        if value is not None and value._id_ not in [v._id_ for v in self._parents_]:
             self._parents_.append(value)
+            self._on_parent_update_(value)
 
-        if value is not None and hasattr(value, "_child_"):
-            value._child_ = self
+        if value is not None and self._id_ not in [v._id_ for v in value._children_]:
+            value._children_.append(self)
 
-    @cached_property
+    @property
     def _conditions_root_(self) -> Optional[SymbolicExpression]:
         """
         :return: The root of the symbolic expression graph that contains conditions, or None if no conditions found.
@@ -628,20 +664,13 @@ class UnaryExpression(SymbolicExpression, ABC):
     """
 
     def __post_init__(self):
-        self._update_child_()
+        self._child_ = self._update_children_(self._child_)[0]
 
-    def _update_child_(
-        self,
-        child: Optional[SymbolicExpression] = None,
+    def _replace_child_field_(
+        self, old_child: SymbolicExpression, new_child: SymbolicExpression
     ):
-        """
-        Update the child expression of this symbolic expression by correctly attaching its node in the graph to this
-         expression node and updating the child attribute reference.
-
-        :param child: The new child expression of this symbolic expression. If None, use the current child expression.
-        """
-        child = child or self._child_
-        self._child_ = self._update_children_(child)[0]
+        if self._child_ is old_child:
+            self._child_ = new_child
 
     @cached_property
     def _all_variable_instances_(self) -> List[Selectable]:
@@ -659,16 +688,29 @@ class MultiArityExpression(SymbolicExpression, ABC):
     expressions).
     """
 
-    children: Tuple[SymbolicExpression, ...] = field(default_factory=tuple)
+    _operation_children_: Tuple[SymbolicExpression, ...] = field(default_factory=tuple)
     """
     The children expressions of this symbolic expression.
     """
 
     def __post_init__(self):
-        self.update_children(*self.children)
+        self.update_children(*self._operation_children_)
+
+    def _replace_child_field_(
+        self, old_child: SymbolicExpression, new_child: SymbolicExpression
+    ):
+        try:
+            old_child_index = self._operation_children_.index(old_child)
+            self._operation_children_ = (
+                self._operation_children_[:old_child_index]
+                + (new_child,)
+                + self._operation_children_[old_child_index + 1 :]
+            )
+        except ValueError:
+            pass
 
     def update_children(self, *children: SymbolicExpression) -> None:
-        self.children = self._update_children_(*children)
+        self._operation_children_ = self._update_children_(*children)
 
     @cached_property
     def _all_variable_instances_(self) -> List[Selectable]:
@@ -677,7 +719,7 @@ class MultiArityExpression(SymbolicExpression, ABC):
         This is useful for accessing the leaves of the symbolic expression tree.
         """
         variables = []
-        for child in self.children:
+        for child in self._operation_children_:
             variables.extend(child._all_variable_instances_)
         return variables
 
@@ -699,6 +741,14 @@ class BinaryExpression(SymbolicExpression, ABC):
 
     def __post_init__(self):
         self.left, self.right = self._update_children_(self.left, self.right)
+
+    def _replace_child_field_(
+        self, old_child: SymbolicExpression, new_child: SymbolicExpression
+    ):
+        if self.left is old_child:
+            self.left = new_child
+        elif self.right is old_child:
+            self.right = new_child
 
     @cached_property
     def _all_variable_instances_(self) -> List[Selectable]:
@@ -740,7 +790,7 @@ class Product(AbstractDataSource, MultiArityExpression):
         yield from (
             OperationResult(bindings, False, self)
             for bindings in chain_evaluate_variables(
-                self.children, sources, parent=self
+                self._operation_children_, sources, parent=self
             )
         )
 
@@ -847,6 +897,67 @@ class Having(Filter, BinaryExpression):
             )
             if annotated_result.is_true
         )
+
+
+@dataclass(eq=False, repr=False)
+class OrderedBy(BinaryExpression, DerivedExpression):
+    """
+    Represents an ordered by clause in a query. This orders the results of query according to the values of the
+    specified variable.
+    """
+
+    right: Selectable
+    """
+    The variable to order by.
+    """
+    descending: bool = False
+    """
+    Whether to order the results in descending order.
+    """
+    key: Optional[Callable] = None
+    """
+    A function to extract the key from the variable value.
+    """
+
+    @property
+    def _original_expression_(self) -> SymbolicExpression:
+        """
+        The original expression that this expression was derived from.
+        """
+        return self.left
+
+    @property
+    def variable(self) -> Selectable:
+        """
+        The variable to order by.
+        """
+        return self.right
+
+    def _evaluate__(self, sources: Bindings) -> Iterator[OperationResult]:
+        results = list(self.left._evaluate_(sources, parent=self))
+        yield from sorted(
+            results,
+            key=self.apply_key,
+            reverse=self.descending,
+        )
+
+    def apply_key(self, result: OperationResult) -> Any:
+        """
+        Apply the key function to the variable to extract the reference value to order the results by.
+        """
+        var = self.variable
+        var_id = var._binding_id_
+        if var_id not in result:
+            result[var_id] = next(var._evaluate_(result.bindings, self)).value
+        variable_value = result.bindings[var_id]
+        if self.key:
+            return self.key(variable_value)
+        else:
+            return variable_value
+
+    @property
+    def _name_(self) -> str:
+        return f"OrderedBy({self.variable._name_})"
 
 
 @dataclass(eq=False, repr=False)
@@ -1268,19 +1379,10 @@ class ResultQuantifier(UnaryExpression, DerivedExpression, ABC):
     (e.g., An, The).
     """
 
-    _child_: QueryObjectDescriptor
-    """
-    A child of a result quantifier. It must be a QueryObjectDescriptor.
-    """
     _quantification_constraint_: Optional[ResultQuantificationConstraint] = None
     """
     The quantification constraint that must be satisfied by the result quantifier if present.
     """
-
-    def __post_init__(self):
-        if not isinstance(self._child_, QueryObjectDescriptor):
-            raise InvalidEntityType(type(self._child_), [QueryObjectDescriptor])
-        super().__post_init__()
 
     @property
     def _original_expression_(self) -> SymbolicExpression:
@@ -1385,26 +1487,6 @@ class The(ResultQuantifier):
             raise MultipleSolutionFound(self)
 
 
-@dataclass(frozen=True)
-class OrderByParams:
-    """
-    Parameters for ordering the results of a query object descriptor.
-    """
-
-    variable: Selectable
-    """
-    The variable to order by.
-    """
-    descending: bool = False
-    """
-    Whether to order the results in descending order.
-    """
-    key: Optional[Callable] = None
-    """
-    A function to extract the key from the variable value.
-    """
-
-
 GroupBindings = Dict[GroupKey, OperationResult]
 """
 A dictionary for grouped bindings which maps a group key to its corresponding bindings.
@@ -1431,13 +1513,6 @@ class GroupedBy(AbstractDataSource, UnaryExpression):
     The variables to group the results by their values.
     """
 
-    @property
-    def query_descriptor(self) -> SymbolicExpression:
-        """
-        The query object descriptor that is being grouped.
-        """
-        return self._child_
-
     def _evaluate__(self, sources: Bindings = None) -> Iterator[OperationResult]:
         """
         Generate results grouped by the specified variables in the grouped_by clause.
@@ -1447,9 +1522,7 @@ class GroupedBy(AbstractDataSource, UnaryExpression):
         """
 
         if len(self.aggregators_of_grouped_by_variables_that_are_not_count) > 0:
-            raise UnsupportedAggregationOfAGroupedByVariable(
-                self.query_descriptor, self
-            )
+            raise UnsupportedAggregationOfAGroupedByVariable(self)
 
         groups, group_key_count = self.get_groups_and_group_key_count(sources)
 
@@ -1474,7 +1547,7 @@ class GroupedBy(AbstractDataSource, UnaryExpression):
         groups = defaultdict(lambda: OperationResult({}, False, self))
         group_key_count = defaultdict(lambda: 0)
 
-        for res in self.query_descriptor._evaluate_(sources, parent=self):
+        for res in self._child_._evaluate_(sources, parent=self):
 
             group_key = tuple(
                 ensure_hashable(res[var._binding_id_])
@@ -1680,7 +1753,9 @@ class WhereBuilder(TruthAnnotatorBuilder):
             self.aggregators_and_non_aggregators_in_conditions
         )
         if aggregators:
-            raise AggregatorInWhereConditionsError(self.query_descriptor, aggregators)
+            raise AggregatorInWhereConditionsError(
+                aggregators, descriptor=self.query_descriptor
+            )
 
     @cached_property
     def expression(self) -> Where:
@@ -1711,7 +1786,7 @@ class HavingBuilder(TruthAnnotatorBuilder):
         )
         if non_aggregators:
             raise NonAggregatorInHavingConditionsError(
-                self.query_descriptor, non_aggregators
+                non_aggregators, descriptor=self.query_descriptor
             )
 
     @cached_property
@@ -1767,10 +1842,10 @@ class GroupedByBuilder(ExpressionBuilder):
             for v in non_aggregated_variables
         ):
             raise NonAggregatedSelectedVariablesError(
-                self.query_descriptor,
                 self,
                 non_aggregated_variables,
                 aggregators,
+                descriptor=self.query_descriptor,
             )
 
     @lru_cache
@@ -1848,11 +1923,33 @@ class QuantifierBuilder(ExpressionBuilder):
         """
         if self.type is An:
             return self.type(
-                self.query_descriptor,
+                self.query_descriptor._expression_,
                 _quantification_constraint_=self.quantification_constraint,
             )
         else:
-            return self.type(self.query_descriptor)
+            return self.type(self.query_descriptor._expression_)
+
+
+@dataclass(eq=False)
+class OrderedByBuilder(ExpressionBuilder):
+    variable: Selectable
+    """
+    The variable to order by.
+    """
+    descending: bool = False
+    """
+    Whether to order the results in descending order.
+    """
+    key: Optional[Callable] = None
+    """
+    A function to extract the key from the variable value.
+    """
+
+    @cached_property
+    def expression(self) -> SymbolicExpression:
+        return OrderedBy(
+            self.query_descriptor, self.variable, self.descending, self.key
+        )
 
 
 @dataclass(eq=False, repr=False)
@@ -1871,10 +1968,6 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
     )
     """
     The variables that are selected by the query object descriptor.
-    """
-    _order_by: Optional[OrderByParams] = field(default=None, init=False)
-    """
-    Parameters for ordering the results of the query object descriptor.
     """
     _distinct_on: Tuple[Selectable, ...] = field(default=(), init=False)
     """
@@ -1899,6 +1992,10 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
     _having_builder: Optional[HavingBuilder] = field(init=False, default=None)
     """
     The builder for the `Having` expression of the query object descriptor.
+    """
+    _ordered_by_builder_: Optional[OrderedByBuilder] = field(default=None, init=False)
+    """
+    The builder for the `OrderedBy` expression if present.
     """
     _quantifier_builder_: Optional[QuantifierBuilder] = field(default=None, init=False)
     """
@@ -1980,7 +2077,7 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
             self._having_builder.conditions += conditions
         return self
 
-    def order_by(
+    def ordered_by(
         self,
         variable: TypingUnion[Selectable[T], Any],
         descending: bool = False,
@@ -1993,7 +2090,9 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
         :param descending: Whether to order the results in descending order.
         :param key: A function to extract the key from the variable value.
         """
-        self._order_by = OrderByParams(variable, descending, key)
+        self._ordered_by_builder_ = OrderedByBuilder(
+            self, variable, descending=descending, key=key
+        )
         return self
 
     def distinct(
@@ -2068,22 +2167,25 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
         if self._group_ and self._grouped_by_builder_ is None:
             self._grouped_by_builder_ = GroupedByBuilder(self)
 
-        root_child = None
+        children = []
         if self._having_builder is not None:
             self._having_builder.grouped_by = self._grouped_by_builder_.expression
-            root_child = self._having_builder.expression
+            children.append(self._having_builder.expression)
         elif self._grouped_by_builder_ is not None:
-            root_child = self._grouped_by_builder_.expression
+            children.append(self._grouped_by_builder_.expression)
         elif self._where_builder_ is not None:
-            root_child = self._where_builder_.expression
+            children.append(self._where_builder_.expression)
 
-        if root_child is not None:
-            self._child_.update_children(
-                root_child, *self._selected_not_inferred_variables_
-            )
-        else:
-            self._child_.update_children(*self._selected_not_inferred_variables_)
+        children.extend(self._selected_not_inferred_variables_)
 
+        self._child_.update_children(*children)
+
+        return self
+
+    @cached_property
+    def _expression_(self) -> SymbolicExpression:
+        if self._ordered_by_builder_ is not None:
+            return self._ordered_by_builder_.expression
         return self
 
     @cached_property
@@ -2107,12 +2209,7 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
             yield OperationResult(sources, False, self)
             return
 
-        results_generator = self._generate_results_(sources)
-
-        if self._order_by:
-            yield from self._order_(results_generator)
-        else:
-            yield from results_generator
+        yield from self._generate_results_(sources)
 
         if self._seen_results is not None:
             self._seen_results.clear()
@@ -2150,33 +2247,6 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
             for result in self._apply_results_mapping_(
                 self._get_constrained_values_(sources)
             )
-        )
-
-    def _order_(
-        self, results: Iterator[OperationResult] = None
-    ) -> List[OperationResult]:
-        """
-        Order the results by the given order variable.
-
-        :param results: The results to be ordered.
-        :return: The ordered results.
-        """
-
-        def key(result: OperationResult) -> Any:
-            var = self._order_by.variable
-            var_id = var._binding_id_
-            if var_id not in result:
-                result[var_id] = next(var._evaluate_(result.bindings, self)).value
-            variable_value = result.bindings[var_id]
-            if self._order_by.key:
-                return self._order_by.key(variable_value)
-            else:
-                return variable_value
-
-        return sorted(
-            results,
-            key=key,
-            reverse=self._order_by.descending,
         )
 
     @cached_property
@@ -2293,10 +2363,6 @@ class QueryObjectDescriptor(UnaryExpression, ABC):
         :return: The bindings after applying the constraints of the child.
         """
 
-        if not self._child_:
-            yield sources
-            return
-
         for result in self._child_._evaluate_(sources, parent=self):
 
             if self._any_selected_variable_is_inferred_and_unbound_(result.bindings):
@@ -2364,12 +2430,12 @@ class SetOf(QueryObjectDescriptor):
 
 
 @dataclass(eq=False, repr=False)
-class SetOfSelectable(CanBehaveLikeAVariable[T]):
+class SetOfSelectable(UnaryExpression, CanBehaveLikeAVariable[T]):
     """
     A selected variable from the SetOf operation selected variables.
     """
 
-    _set_of_: SetOf
+    _child_: SetOf
     """
     The SetOf operation from which `_selected_var_` was selected.
     """
@@ -2379,8 +2445,14 @@ class SetOfSelectable(CanBehaveLikeAVariable[T]):
     """
 
     def __post_init__(self):
-        self._child_ = self._set_of_
         self._var_ = self
+
+    @property
+    def _set_of_(self) -> SetOf:
+        """
+        The SetOf operation from which `_selected_var_` was selected.
+        """
+        return self._child_
 
     def _evaluate__(
         self,
@@ -2475,13 +2547,14 @@ class Variable(CanBehaveLikeAVariable[T]):
 
         self._var_ = self
 
-        # has to be after super init because this needs the node of this variable to be initialized first.
         self._update_child_vars_from_kwargs_()
 
     def _update_domain_(self, domain):
         """
         Set the domain and ensure it is a lazy re-enterable iterable.
         """
+        if isinstance(domain, CanBehaveLikeAVariable):
+            self._update_children_(domain)
         if isinstance(domain, (ReEnterableLazyIterable, CanBehaveLikeAVariable)):
             self._domain_ = domain
             return
@@ -2499,6 +2572,14 @@ class Variable(CanBehaveLikeAVariable[T]):
             else:
                 self._child_vars_[k] = Literal(v, name=k)
         self._update_children_(*self._child_vars_.values())
+
+    def _replace_child_field_(
+        self, old_child: SymbolicExpression, new_child: SymbolicExpression
+    ):
+        for k, v in self._child_vars_.items():
+            if v is old_child:
+                self._child_vars_[k] = new_child
+                break
 
     def _evaluate__(
         self,
@@ -2668,15 +2749,22 @@ class Literal(Variable[T]):
 
 
 @dataclass(eq=False, repr=False)
-class Concatenate(CanBehaveLikeAVariable[T]):
+class Concatenate(MultiArityExpression, CanBehaveLikeAVariable[T]):
     """
     Concatenation of two or more variables.
     """
 
-    _variables_: List[Selectable[T]] = field(default_factory=list)
+    _operation_children_: Tuple[Selectable[T], ...]
     """
-    The variables to concatenate.
+    The children of the concatenate operation.
     """
+
+    @property
+    def _variables_(self) -> Tuple[Selectable[T], ...]:
+        """
+        The variables to concatenate.
+        """
+        return self._operation_children_
 
     def __post_init__(self):
         self._update_children_(*self._variables_)
@@ -2699,13 +2787,6 @@ class Concatenate(CanBehaveLikeAVariable[T]):
             return self._plot_color__
         else:
             return ColorLegend("Concatenate", "#949292")
-
-    @property
-    def _all_variable_instances_(self) -> List[Variable]:
-        all_vars = []
-        for var in self._variables_:
-            all_vars.extend(var._all_variable_instances_)
-        return all_vars
 
     @property
     def _name_(self):
@@ -2925,11 +3006,6 @@ class Flatten(DomainMapping):
     one solution per inner element while preserving the original bindings (e.g., the View instance),
     similar to UNNEST in SQL.
     """
-
-    def __post_init__(self):
-        if not isinstance(self._child_, SymbolicExpression):
-            self._child_ = Literal(self._child_)
-        super().__post_init__()
 
     def _apply_mapping_(self, value: Iterable[Any]) -> Iterable[Any]:
         yield from value

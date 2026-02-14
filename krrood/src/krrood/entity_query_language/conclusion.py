@@ -43,6 +43,14 @@ class Conclusion(SymbolicExpression, ABC):
         self._parent_ = current_parent
         self._parent_._add_conclusion_(self)
 
+    def _replace_child_field_(
+        self, old_child: SymbolicExpression, new_child: SymbolicExpression
+    ):
+        if self.var is old_child:
+            self.var = new_child
+        elif self.value is old_child:
+            self.value = new_child
+
     @cached_property
     def _all_variable_instances_(self) -> List[Selectable]:
         return self.var._all_variable_instances_ + self.value._all_variable_instances_

@@ -5,9 +5,9 @@ This module defines some custom exception types used by the entity_query_languag
 from __future__ import annotations
 
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from typing_extensions import TYPE_CHECKING, Type, Any, List, Tuple
+from typing_extensions import TYPE_CHECKING, Type, Any, List, Tuple, Optional
 
 from ..utils import DataclassException
 
@@ -221,7 +221,7 @@ class AggregationUsageError(UsageError):
     For further details, see :doc:`/krrood/doc/eql/result_processors`.
     """
 
-    descriptor: QueryObjectDescriptor
+    descriptor: Optional[QueryObjectDescriptor] = field(default=None, kw_only=True)
     """
     The query object descriptor that contains the aggregation.
     """
@@ -246,19 +246,6 @@ class UnsupportedAggregationOfAGroupedByVariable(AggregationUsageError):
             f"{self.grouped_by.aggregators_of_grouped_by_variables_that_are_not_count} in the grouped_by operation"
             f" {self.grouped_by}"
         )
-        super().__post_init__()
-
-
-@dataclass
-class HavingUsedBeforeWhereError(AggregationUsageError):
-    """
-    raised when having is used before where.
-
-    For further details, see :doc:`/krrood/doc/eql/result_processors`.
-    """
-
-    def __post_init__(self):
-        self.message = f"HAVING is used before WHERE in the query object descriptor {self.descriptor}"
         super().__post_init__()
 
 

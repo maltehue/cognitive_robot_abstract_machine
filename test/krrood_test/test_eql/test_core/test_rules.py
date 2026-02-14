@@ -25,10 +25,10 @@ def test_generate_drawers_from_direct_condition(handles_and_containers_world):
     prismatic_connection = variable(PrismaticConnection, domain=world.connections)
     drawers = variable(Drawer, domain=[])
     condition = and_(
-            container == fixed_connection.parent,
-            handle == fixed_connection.child,
-            container == prismatic_connection.child,
-        )
+        container == fixed_connection.parent,
+        handle == fixed_connection.child,
+        container == prismatic_connection.child,
+    )
 
     with condition:
         Add(drawers, inference(Drawer)(handle=handle, container=container))
@@ -37,8 +37,8 @@ def test_generate_drawers_from_direct_condition(handles_and_containers_world):
 
     assert condition._conditions_root_ is condition
 
-    solutions = condition.evaluate()
-    all_solutions = list(solutions)
+    solutions_gen = condition.evaluate()
+    all_solutions = list(solutions_gen)
 
     assert (
         len(all_solutions) == 2
@@ -57,11 +57,13 @@ def test_generate_drawers_from_query(handles_and_containers_world):
     fixed_connection = variable(FixedConnection, domain=world.connections)
     prismatic_connection = variable(PrismaticConnection, domain=world.connections)
     drawers = variable(Drawer, domain=None, inferred=True)
-    query = an(entity(drawers).where(
+    query = an(
+        entity(drawers).where(
             container == fixed_connection.parent,
             handle == fixed_connection.child,
             container == prismatic_connection.child,
-        ))
+        )
+    )
 
     with query:
         Add(drawers, inference(Drawer)(handle=handle, container=container))
@@ -99,6 +101,7 @@ def test_rule_tree_with_a_refinement(doors_and_drawers_world):
         with refinement(body.size > 1):
             Add(drawers_and_doors, inference(Door)(handle=handle, body=body))
 
+    query.visualize()
     # query._render_tree_()
 
     all_solutions = list(query.evaluate())
@@ -405,7 +408,7 @@ def test_rule_tree_with_multiple_alternatives_better_rule_tree_optimized(
                 ),
             )
 
-    # query.visualize()
+    query.visualize()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."

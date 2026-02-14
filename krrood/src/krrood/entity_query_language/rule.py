@@ -30,11 +30,8 @@ def refinement(*conditions: ConditionType) -> SymbolicExpression[T]:
     new_branch = chained_logic(AND, *conditions)
     current_node = SymbolicExpression._current_parent_in_context_stack_()
     prev_parent = current_node._parent_
-    current_node._parent_ = None
-    new_conditions_root = ExceptIf(
-        SymbolicExpression._current_parent_in_context_stack_(), new_branch
-    )
-    new_conditions_root._parent_ = prev_parent
+    new_conditions_root = ExceptIf(current_node, new_branch)
+    prev_parent._replace_child_(current_node, new_conditions_root)
     return new_conditions_root.right
 
 
@@ -88,7 +85,6 @@ def alternative_or_next(
     ):
         current_node = current_node._parent_
     prev_parent = current_node._parent_
-    current_node._parent_ = None
     if type_ == RDREdge.Alternative:
         new_conditions_root = Alternative(current_node, new_branch)
     elif type_ == RDREdge.Next:
@@ -97,7 +93,7 @@ def alternative_or_next(
         raise ValueError(
             f"Invalid type: {type_}, expected one of: {RDREdge.Alternative}, {RDREdge.Next}"
         )
-    new_conditions_root._parent_ = prev_parent
+    prev_parent._replace_child_(current_node, new_conditions_root)
     if isinstance(prev_parent, BinaryExpression):
         prev_parent.right = new_conditions_root
     return new_conditions_root.right

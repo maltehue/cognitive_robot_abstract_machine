@@ -793,7 +793,7 @@ def test_quantified_query(handles_and_containers_world):
 def test_order_by(handles_and_containers_world):
     names = ["Handle1", "Handle1", "Handle2", "Container1", "Container1", "Container3"]
     body_name = variable(str, domain=names)
-    query = an(entity(body_name).order_by(variable=body_name, descending=False))
+    query = an(entity(body_name).ordered_by(variable=body_name, descending=False))
     assert list(query.evaluate()) == sorted(names, reverse=False)
 
 
@@ -884,7 +884,7 @@ def test_order_by_key():
     body_name = variable(str, domain=names)
     key = lambda x: int(x[-1])
     query = an(
-        entity(body_name).order_by(
+        entity(body_name).ordered_by(
             variable=body_name,
             key=key,
             descending=True,
@@ -898,7 +898,7 @@ def test_distinct_with_order_by():
     values = [5, 1, 1, 2, 1, 4, 3, 3, 5]
     values_var = variable(int, domain=values)
     query = an(
-        entity(values_var).distinct().order_by(variable=values_var, descending=False)
+        entity(values_var).distinct().ordered_by(variable=values_var, descending=False)
     )
     results = list(query.evaluate())
     assert results == [1, 2, 3, 4, 5]
@@ -1068,7 +1068,7 @@ def test_same_domain_mapping(handles_and_containers_world):
 
 def test_order_by_not_evaluated_variable(handles_and_containers_world):
     body = variable(Body, domain=handles_and_containers_world.bodies)
-    query = an(entity(body).order_by(variable=body.name, descending=False))
+    query = an(entity(body).ordered_by(variable=body.name, descending=False))
     assert list(query.evaluate()) == sorted(
         handles_and_containers_world.bodies, key=lambda b: b.name, reverse=False
     )
@@ -1078,7 +1078,7 @@ def test_order_by_not_evaluated_variable(handles_and_containers_world):
 def test_ordering_the_query_by_the_query_itself(handles_and_containers_world):
     body = variable(Body, domain=handles_and_containers_world.bodies)
     query = entity(body).where(contains(body.name, "Handle"))
-    ordered_query = an(query.order_by(query.name[-1]))
+    ordered_query = an(query.ordered_by(query.name[-1]))
     ordered_query.visualize()
     assert list(ordered_query.evaluate()) == sorted(
         [b for b in handles_and_containers_world.bodies if "Handle" in b.name],

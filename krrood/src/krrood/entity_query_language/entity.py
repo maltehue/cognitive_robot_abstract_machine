@@ -130,7 +130,7 @@ def distinct(
     if isinstance(expression, QueryObjectDescriptor):
         return expression.distinct(*on)
     elif isinstance(expression, ResultQuantifier):
-        return expression._child_.distinct(*on)
+        return expression._child__.distinct(*on)
     elif isinstance(expression, Selectable):
         return entity(expression).distinct(*on)
     else:
@@ -143,7 +143,7 @@ def concatenate(
     """
     Concatenation of two or more variables.
     """
-    return Concatenate(_variables_=list(variables))
+    return Concatenate(_operation_children_=variables)
 
 
 def _get_domain_source_from_domain_and_type_values(
