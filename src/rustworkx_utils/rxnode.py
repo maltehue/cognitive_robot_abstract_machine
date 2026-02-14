@@ -15,6 +15,7 @@ from typing_extensions import Any
 @dataclass
 class RWXNode:
     name: str
+    graph: rx.PyDAG
     weight: str = field(default='')
     data: Optional[Any] = field(default=None)
     _primary_parent_id: Optional[int] = None
@@ -26,13 +27,11 @@ class RWXNode:
     wrap_alpha: float = field(default=0.08)
     # Visual emphasis options
     enclosed: bool = field(default=False)
-    id_: int = field(init=False)
-    _graph: ClassVar[rx.PyDAG] = rx.PyDAG()
     enclosed_name: ClassVar[str] = 'enclosed'
 
     def __post_init__(self):
         # store self as node data to keep a 1:1 mapping
-        self.id: int = self._graph.add_node(self)
+        self.id: int = self.graph.add_node(self)
 
     # Non-primary connect: add edge without changing primary parent pointer
     def add_parent(self, parent: "RWXNode", edge_weight=None):
@@ -40,44 +39,44 @@ class RWXNode:
         if parent is self:
             return
         # Do not add duplicate edges between the same two nodes
-        if self._graph.has_edge(parent.id, self.id):
+        if self.graph.has_edge(parent.id, self.id):
             return
         # Avoid creating cycles: PyDAG will raise if creates a cycle
-        self._graph.add_edge(parent.id, self.id, edge_weight if edge_weight is not None else self.weight)
+        self.graph.add_edge(parent.id, self.id, edge_weight if edge_weight is not None else self.weight)
 
     def remove(self):
-        self._graph.remove_node(self.id)
+        self.graph.remove_node(self.id)
 
     def remove_node(self, node: RWXNode):
-        self._graph.remove_node(node.id)
+        self.graph.remove_node(node.id)
 
     def remove_child(self, child: RWXNode):
         child.remove_parent(self)
 
     def remove_parent(self, parent: RWXNode):
-        self._graph.remove_edge(parent.id, self.id)
+        self.graph.remove_edge(parent.id, self.id)
 
     @property
     def ancestors(self) -> List[RWXNode]:
-        node_ids = rx.ancestors(self._graph, self.id)
-        return [self._graph[n_id] for n_id in node_ids]
+        node_ids = rx.ancestors(self.graph, self.id)
+        return [self.graph[n_id] for n_id in node_ids]
 
     @property
     def parents(self) -> List[RWXNode]:
         # In this environment rustworkx returns node data objects directly
-        return self._graph.predecessors(self.id)
+        return self.graph.predecessors(self.id)
 
     @property
     def parent(self) -> Optional["RWXNode"]:
         if self._primary_parent_id is None:
             return None
-        return self._graph[self._primary_parent_id]
+        return self.graph[self._primary_parent_id]
 
     @parent.setter
     def parent(self, value: Optional["RWXNode"]):
         if value is None:
             # detach current parent
-            self._graph.remove_edge(self._primary_parent_id, self.id)
+            self.graph.remove_edge(self._primary_parent_id, self.id)
             self._primary_parent_id = None
             return
         # Create edge and set as primary (no need to detach non-primary edges)
@@ -87,16 +86,16 @@ class RWXNode:
     @property
     def children(self) -> List["RWXNode"]:
         # In this environment rustworkx returns node data objects directly
-        return self._graph.successors(self.id)
+        return self.graph.successors(self.id)
 
     @property
     def descendants(self) -> List["RWXNode"]:
-        desc_ids = rx.descendants(self._graph, self.id)
-        return [self._graph[nid] for nid in desc_ids]
+        desc_ids = rx.descendants(self.graph, self.id)
+        return [self.graph[nid] for nid in desc_ids]
 
     @property
     def leaves(self) -> List["RWXNode"]:
-        return [n for n in [self] + self.descendants if self._graph.out_degree(n.id) == 0]
+        return [n for n in [self] + self.descendants if self.graph.out_degree(n.id) == 0]
 
     @property
     def root(self) -> "RWXNode":

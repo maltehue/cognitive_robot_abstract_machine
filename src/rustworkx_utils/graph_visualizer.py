@@ -87,7 +87,7 @@ class GraphVisualizer:
         sub_nodes = [root] + root.descendants
         sub_id_set = {n.id for n in sub_nodes}
         id_to_node = {n.id: n for n in sub_nodes}
-        rx_edges_all = list(self.node._graph.edge_list())
+        rx_edges_all = list(self.node.graph.edge_list())
         rx_edges = [(u, v) for (u, v) in rx_edges_all if u in sub_id_set and v in sub_id_set]
         preds: Dict[int, List[int]] = defaultdict(list)
         succs: Dict[int, List[int]] = defaultdict(list)
