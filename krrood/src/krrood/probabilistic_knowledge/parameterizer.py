@@ -4,10 +4,7 @@ import enum
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Union
 
-from random_events.interval import Bound
-from random_events.interval import SimpleInterval
 from random_events.product_algebra import SimpleEvent
 from random_events.set import Set
 from random_events.variable import Continuous, Integer, Symbolic, Variable
@@ -15,14 +12,14 @@ from sqlalchemy import inspect, Column
 from sqlalchemy.orm import Relationship
 from typing_extensions import List, Optional, assert_never, Any, Tuple, Type
 
-from ..adapters.json_serializer import list_like_classes
-from ..class_diagrams.class_diagram import WrappedClass
-from ..class_diagrams.wrapped_field import WrappedField
-from ..ormatic.dao import DataAccessObject, get_dao_class, to_dao
 from probabilistic_model.probabilistic_circuit.rx.helper import fully_factorized
 from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
     ProbabilisticCircuit,
 )
+from ..adapters.json_serializer import list_like_classes
+from ..class_diagrams.class_diagram import WrappedClass
+from ..class_diagrams.wrapped_field import WrappedField
+from ..ormatic.dao import DataAccessObject, get_dao_class, to_dao
 
 
 @dataclass
@@ -255,7 +252,7 @@ class Parameterizer:
         """
         Check if the correct attribute is being inspected, and if yes, if it should be included in the model
 
-        ..warning:: Included are only attributes that are not primary keys, foreign keys, and that are not optional with
+        ..info:: Included are only attributes that are not primary keys, foreign keys, and that are not optional with
         a None value. Additionally, attributes of type uuid.UUID and str are excluded.
 
         :param attribute_name: The name of the attribute to check.
@@ -291,7 +288,7 @@ class Parameterizer:
 
     def _create_variable_from_type(
         self,
-        field_type: Union[Type[enum.Enum], Type[bool], Type[int], Type[float]],
+        field_type: Type[enum.Enum] | Type[bool] | Type[int] | Type[float],
         name: str,
     ) -> Variable:
         """
