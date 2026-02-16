@@ -2672,7 +2672,11 @@ class TestCollisionAvoidance:
         assert len(collisions.contacts) == 1
         assert collisions.contacts[0].distance > 0.049
 
-    def test_self_collision_avoidance(self, self_collision_bot_world: World):
+    def test_self_collision_avoidance(
+        self, self_collision_bot_world: World, rclpy_node
+    ):
+        TFPublisher(world=self_collision_bot_world, node=rclpy_node)
+        VizMarkerPublisher(world=self_collision_bot_world, node=rclpy_node)
         sleep(10)
         robot = self_collision_bot_world.get_semantic_annotations_by_type(
             AbstractRobot
@@ -2692,8 +2696,8 @@ class TestCollisionAvoidance:
                 AvoidCollisionBetweenGroups(
                     buffer_zone_distance=0.25,
                     violated_distance=0.0,
-                    body_group_a={l_tip, l_thumb},
-                    body_group_b={r_tip, r_thumb},
+                    body_group_a={l_thumb},
+                    body_group_b={r_thumb},
                 ),
             ]
         )

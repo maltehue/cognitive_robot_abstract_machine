@@ -11,6 +11,7 @@ from giskardpy.motion_statechart.graph_node import (
     Goal,
     MotionStatechartNode,
     NodeArtifacts,
+    DebugExpression,
 )
 from giskardpy.motion_statechart.graph_node import (
     Task,
@@ -312,13 +313,13 @@ class SelfCollisionAvoidanceTask(CollisionAvoidanceTask):
         artifacts = NodeArtifacts()
 
         group_b_T_group_a = context.world.compose_forward_kinematics_expression(
-            self.collision_group_a.root, self.collision_group_b.root
+            self.collision_group_b.root, self.collision_group_a.root
         )
 
         group_b_P_point_on_a = group_b_T_group_a @ self.group_a_P_point_on_a
 
         group_b_V_point_on_b_to_point_on_a = (
-            self.group_b_P_point_on_b - group_b_P_point_on_a
+            group_b_P_point_on_a - self.group_b_P_point_on_b
         )
 
         a_projected_on_normal = (

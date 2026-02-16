@@ -357,9 +357,8 @@ class SelfCollisionVariableManager(CollisionGroupConsumer):
     def body_pair_to_group_pair(
         self, body_a: Body, body_b: Body
     ) -> tuple[CollisionGroup, CollisionGroup]:
-        group_a, group_b = self.get_collision_group(body_a), self.get_collision_group(
-            body_b
-        )
+        group_a = self.get_collision_group(body_a)
+        group_b = self.get_collision_group(body_b)
         if group_a.root.id < group_b.root.id:
             return group_a, group_b
         else:

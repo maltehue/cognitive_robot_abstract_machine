@@ -6,6 +6,7 @@ import threading
 from abc import ABC
 from dataclasses import field, dataclass, fields
 
+import numpy as np
 from typing_extensions import (
     Dict,
     Any,
@@ -18,28 +19,10 @@ from typing_extensions import (
 )
 
 import krrood.symbolic_math.symbolic_math as sm
-from giskardpy.motion_statechart.context import BuildContext, ExecutionContext
-from giskardpy.motion_statechart.data_types import (
-    LifeCycleValues,
-    ObservationStateValues,
-    TransitionKind,
-)
-from giskardpy.motion_statechart.exceptions import (
-    NotInMotionStatechartError,
-    EndMotionInGoalError,
-    InputNotExpressionError,
-    SelfInStartConditionError,
-    NonObservationVariableError,
-    NodeAlreadyBelongsToDifferentNodeError,
-)
-from giskardpy.motion_statechart.plotters.plot_specs import NodePlotSpec
-from giskardpy.qp.constraint_collection import ConstraintCollection
-from giskardpy.utils.utils import string_shortener
 from krrood.adapters.json_serializer import (
     SubclassJSONSerializer,
     JSON_TYPE_NAME,
     to_json,
-    DataclassJSONSerializer,
 )
 from krrood.symbolic_math.symbolic_math import FloatVariable, Scalar, trinary_logic_not
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
@@ -51,6 +34,19 @@ from semantic_digital_twin.spatial_types import (
     HomogeneousTransformationMatrix,
 )
 from semantic_digital_twin.world_description.geometry import Color
+from .context import BuildContext, ExecutionContext
+from .data_types import LifeCycleValues, ObservationStateValues, TransitionKind
+from .exceptions import (
+    NotInMotionStatechartError,
+    EndMotionInGoalError,
+    InputNotExpressionError,
+    SelfInStartConditionError,
+    NonObservationVariableError,
+    NodeAlreadyBelongsToDifferentNodeError,
+)
+from .plotters.plot_specs import NodePlotSpec
+from ..qp.constraint_collection import ConstraintCollection
+from ..utils.utils import string_shortener
 
 if TYPE_CHECKING:
     from giskardpy.motion_statechart.motion_statechart import (
@@ -323,6 +319,13 @@ class DebugExpression:
     """
     The color used when this expression is rendered in visualization tools.
     """
+
+    def __repr__(self) -> str:
+        return self.name
+
+    @property
+    def evaluated(self) -> np.ndarray:
+        return self.expression.evaluate()
 
 
 @dataclass
