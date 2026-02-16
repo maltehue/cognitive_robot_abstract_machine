@@ -54,21 +54,21 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             # Create left arm
             left_gripper_thumb = Finger(
                 name=PrefixedName("left_gripper_thumb", prefix=tiago.name.name),
-                root=world.get_body_by_name("gripper_left_link"),
-                tip=world.get_body_by_name("gripper_left_left_finger_link"),
+                root=world.get_body_by_name("gripper_left_base_link"),
+                tip=world.get_body_by_name("gripper_left_left_inner_finger_pad"),
                 _world=world,
             )
 
             left_gripper_finger = Finger(
                 name=PrefixedName("left_gripper_finger", prefix=tiago.name.name),
-                root=world.get_body_by_name("gripper_left_link"),
-                tip=world.get_body_by_name("gripper_left_right_finger_link"),
+                root=world.get_body_by_name("gripper_left_base_link"),
+                tip=world.get_body_by_name("gripper_left_right_inner_finger_pad"),
                 _world=world,
             )
 
             left_gripper = ParallelGripper(
                 name=PrefixedName("left_gripper", prefix=tiago.name.name),
-                root=world.get_body_by_name("gripper_left_link"),
+                root=world.get_body_by_name("gripper_left_base_link"),
                 tool_frame=world.get_body_by_name("gripper_left_grasping_frame"),
                 front_facing_orientation=Quaternion(0, 0, 0, 1),
                 front_facing_axis=Vector3(1, 0, 0),
@@ -79,7 +79,7 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             left_arm = Arm(
                 name=PrefixedName("left_arm", prefix=tiago.name.name),
                 root=world.get_body_by_name("torso_lift_link"),
-                tip=world.get_body_by_name("arm_left_7_link"),
+                tip=world.get_body_by_name("arm_left_tool_link"),
                 manipulator=left_gripper,
                 _world=world,
             )
@@ -89,22 +89,22 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             # Create right arm
             right_gripper_thumb = Finger(
                 name=PrefixedName("right_gripper_thumb", prefix=tiago.name.name),
-                root=world.get_body_by_name("gripper_right_link"),
-                tip=world.get_body_by_name("gripper_right_left_finger_link"),
+                root=world.get_body_by_name("gripper_right_base_link"),
+                tip=world.get_body_by_name("gripper_right_left_inner_finger_pad"),
                 _world=world,
             )
             right_gripper_finger = Finger(
                 name=PrefixedName("right_gripper_finger", prefix=tiago.name.name),
-                root=world.get_body_by_name("gripper_right_link"),
-                tip=world.get_body_by_name("gripper_right_right_finger_link"),
+                root=world.get_body_by_name("gripper_right_base_link"),
+                tip=world.get_body_by_name("gripper_right_right_inner_finger_pad"),
                 _world=world,
             )
             right_gripper = ParallelGripper(
                 name=PrefixedName("right_gripper", prefix=tiago.name.name),
-                root=world.get_body_by_name("gripper_right_link"),
+                root=world.get_body_by_name("gripper_right_base_link"),
                 tool_frame=world.get_body_by_name("gripper_right_grasping_frame"),
                 front_facing_orientation=Quaternion(0, 0, 0, 1),
-                front_facing_axis=Vector3(0, 0, 1),
+                front_facing_axis=Vector3(1, 0, 0),
                 thumb=right_gripper_thumb,
                 finger=right_gripper_finger,
                 _world=world,
@@ -112,7 +112,7 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             right_arm = Arm(
                 name=PrefixedName("right_arm", prefix=tiago.name.name),
                 root=world.get_body_by_name("torso_lift_link"),
-                tip=world.get_body_by_name("arm_right_7_link"),
+                tip=world.get_body_by_name("arm_right_tool_link"),
                 manipulator=right_gripper,
                 _world=world,
             )
@@ -121,8 +121,10 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
 
             # Create camera and neck
             camera = Camera(
-                name=PrefixedName("xtion_optical_frame", prefix=tiago.name.name),
-                root=world.get_body_by_name("xtion_optical_frame"),
+                name=PrefixedName(
+                    "head_front_camera_optical_frame", prefix=tiago.name.name
+                ),
+                root=world.get_body_by_name("head_front_camera_optical_frame"),
                 forward_facing_axis=Vector3(0, 0, 1),
                 field_of_view=FieldOfView(
                     horizontal_angle=0.99483, vertical_angle=0.75049
@@ -184,19 +186,18 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             right_arm.add_joint_state(right_arm_park)
 
             left_gripper_joints = [
-                world.get_connection_by_name("gripper_left_left_finger_joint"),
-                world.get_connection_by_name("gripper_left_right_finger_joint"),
+                world.get_connection_by_name("gripper_left_finger_joint"),
             ]
 
             left_gripper_open = JointState.from_mapping(
                 name=PrefixedName("left_gripper_open", prefix=tiago.name.name),
-                mapping=dict(zip(left_gripper_joints, [0.044, 0.044])),
+                mapping=dict(zip(left_gripper_joints, [0.05])),
                 state_type=GripperState.OPEN,
             )
 
             left_gripper_close = JointState.from_mapping(
                 name=PrefixedName("left_gripper_close", prefix=tiago.name.name),
-                mapping=dict(zip(left_gripper_joints, [0.0, 0.0])),
+                mapping=dict(zip(left_gripper_joints, [0.75])),
                 state_type=GripperState.CLOSE,
             )
 
@@ -204,19 +205,18 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             left_gripper.add_joint_state(left_gripper_open)
 
             right_gripper_joints = [
-                world.get_connection_by_name("gripper_right_left_finger_joint"),
-                world.get_connection_by_name("gripper_right_right_finger_joint"),
+                world.get_connection_by_name("gripper_right_finger_joint"),
             ]
 
             right_gripper_open = JointState.from_mapping(
                 name=PrefixedName("right_gripper_open", prefix=tiago.name.name),
-                mapping=dict(zip(right_gripper_joints, [0.044, 0.044])),
+                mapping=dict(zip(right_gripper_joints, [0.05])),
                 state_type=GripperState.OPEN,
             )
 
             right_gripper_close = JointState.from_mapping(
                 name=PrefixedName("right_gripper_close", prefix=tiago.name.name),
-                mapping=dict(zip(right_gripper_joints, [0.0, 0.0])),
+                mapping=dict(zip(right_gripper_joints, [0.75])),
                 state_type=GripperState.CLOSE,
             )
 
