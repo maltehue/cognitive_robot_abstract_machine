@@ -348,6 +348,7 @@ def world_with_urdf_factory(
             world=world_with_urdf,
         )
         world_with_urdf.add_connection(c_root_bf)
+        c_root_bf.has_hardware_interface = True
 
     return world_with_urdf
 

@@ -95,7 +95,7 @@ class ExternalCollisionDistanceMonitor(MotionStatechartNode):
 
         artifacts.observation = (
             self.external_collision_manager.get_contact_distance_symbol(
-                self.collision_group.root, self.collision_index
+                self.collision_group, self.collision_index
             )
             > Scalar(50)
         )
@@ -132,7 +132,7 @@ class ExternalCollisionAvoidanceTask(CollisionAvoidanceTask):
         for index in range(max_avoided_bodies):
             distance_variable = (
                 self.external_collision_manager.get_contact_distance_symbol(
-                    self.collision_group.root, index
+                    self.collision_group, index
                 )
             )
             is_active = distance_variable < 50
@@ -145,31 +145,31 @@ class ExternalCollisionAvoidanceTask(CollisionAvoidanceTask):
     @property
     def root_V_contact_normal(self) -> Vector3:
         return self.external_collision_manager.get_root_V_contact_normal_symbol(
-            self.tip, self.collision_index
+            self.collision_group, self.collision_index
         )
 
     @property
     def group_a_P_point_on_a(self) -> Point3:
         return self.external_collision_manager.get_group_a_P_point_on_a_symbol(
-            self.tip, self.collision_index
+            self.collision_group, self.collision_index
         )
 
     @property
     def contact_distance(self):
         return self.external_collision_manager.get_contact_distance_symbol(
-            self.tip, self.collision_index
+            self.collision_group, self.collision_index
         )
 
     @property
     def buffer_zone_distance(self):
         return self.external_collision_manager.get_buffer_distance_symbol(
-            self.tip, self.collision_index
+            self.collision_group, self.collision_index
         )
 
     @property
     def violated_distance(self):
         return self.external_collision_manager.get_violated_distance_symbol(
-            self.tip, self.collision_index
+            self.collision_group, self.collision_index
         )
 
     def build(self, context: BuildContext) -> NodeArtifacts:
@@ -221,9 +221,9 @@ class ExternalCollisionAvoidance(Goal):
         context.collision_manager.add_collision_consumer(external_collision_manager)
         for body in self.robot.bodies_with_collision:
             if context.collision_manager.get_max_avoided_bodies(body):
-                external_collision_manager.register_body(body)
+                external_collision_manager.register_group_of_body(body)
 
-        for group in external_collision_manager.active_groups:
+        for group in external_collision_manager.registered_groups:
             max_avoided_bodies = group.get_max_avoided_bodies(context.collision_manager)
             for index in range(max_avoided_bodies):
                 distance_monitor = ExternalCollisionDistanceMonitor(

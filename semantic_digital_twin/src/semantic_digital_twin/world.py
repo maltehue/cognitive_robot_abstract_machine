@@ -391,7 +391,6 @@ class World(HasSimulatorProperties):
     See `atomic_world_modification` for more information.
     """
 
-
     _id: UUID = field(init=False, default_factory=uuid.uuid4)
     """
     Unique identifier for this world instance.
@@ -1845,6 +1844,7 @@ class World(HasSimulatorProperties):
                 )
                 new_world.add_degree_of_freedom(new_dof)
                 new_world.state[dof.id] = self.state[dof.id].data
+                new_dof.has_hardware_interface = dof.has_hardware_interface
             for connection in self.connections:
                 new_connection = connection.copy_for_world(new_world)
                 new_world.add_connection(new_connection)

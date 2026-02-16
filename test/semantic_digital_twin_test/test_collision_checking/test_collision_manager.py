@@ -54,7 +54,7 @@ class TestExternalCollisionExpressionManager:
         collision_manager.add_collision_consumer(
             external_collisions := ExternalCollisionVariableManager(float_variable_data)
         )
-        external_collisions.register_body(robot.root)
+        external_collisions.register_group_of_body(robot.root)
         collision_manager.update_collision_matrix()
         collisions = collision_manager.compute_collisions()
 
