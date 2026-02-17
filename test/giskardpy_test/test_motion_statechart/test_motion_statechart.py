@@ -2520,7 +2520,7 @@ class TestTemplates:
         msc.add_node(EndMotion.when_true(parallel))
 
         kin_sim = Executor(
-            world=World(),
+            MotionStatechartContext(world=World()),
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -2545,7 +2545,7 @@ class TestTemplates:
         msc.add_node(EndMotion.when_true(parallel))
 
         kin_sim = Executor(
-            world=World(),
+            MotionStatechartContext(world=World()),
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()

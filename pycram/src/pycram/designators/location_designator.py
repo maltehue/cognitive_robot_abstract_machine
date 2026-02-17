@@ -12,7 +12,6 @@ from typing_extensions import List, Union, Iterable, Optional, Iterator, Tuple
 from giskardpy.executor import Executor
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.goals.collision_avoidance import (
-    CollisionAvoidance,
     ExternalCollisionAvoidance,
 )
 from giskardpy.motion_statechart.goals.templates import Sequence
