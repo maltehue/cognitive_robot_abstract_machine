@@ -163,7 +163,7 @@ class Stretch(AbstractRobot, HasArms, HasNeck):
         )
         self._world.collision_manager.add_default_rule(
             AvoidExternalCollisions(
-                buffer_zone_distance=0.5,
+                buffer_zone_distance=0.05,
                 violated_distance=0.0,
                 bodies=self.bodies_with_collision,
                 world=self._world,
