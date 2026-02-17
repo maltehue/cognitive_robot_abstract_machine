@@ -19,7 +19,6 @@ from .collision_matrix import (
     CollisionCheck,
 )
 from .collision_rules import (
-    Updatable,
     AllowCollisionForAdjacentPairs,
     AllowNonRobotCollisions,
     AvoidCollisionRule,
@@ -136,9 +135,6 @@ class CollisionManager(ModelChangeCallback):
     def _notify(self, **kwargs):
         if self.world.is_empty():
             return
-        for rule in self.rules:
-            if isinstance(rule, Updatable):
-                rule.update(self.world)
         for consumer in self.collision_consumers:
             consumer.on_world_model_update(self.world)
 
@@ -181,6 +177,8 @@ class CollisionManager(ModelChangeCallback):
         :param buffer: A buffer is added to the collision matrix distance thresholds.
             This is useful when you want to react to collisions before they go below the threshold.
         """
+        for rule in self.rules:
+            rule.update(self.world)
         self.collision_matrix = CollisionMatrix()
         for rule in self.default_rules:
             rule.apply_to_collision_matrix(self.collision_matrix)

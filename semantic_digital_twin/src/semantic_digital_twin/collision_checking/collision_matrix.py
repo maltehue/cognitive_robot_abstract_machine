@@ -117,8 +117,10 @@ class CollisionRule(ABC):
     """
 
     @abstractmethod
-    def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix):
-        pass
+    def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix): ...
+
+    @abstractmethod
+    def update(self, world: World): ...
 
 
 @dataclass

@@ -21,6 +21,8 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidAllCollisions,
     AllowCollisionRule,
     AvoidExternalCollisions,
+    AllowSelfCollisions,
+    AvoidSelfCollisions,
 )
 from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
     BulletCollisionDetector,
@@ -278,6 +280,18 @@ class TestCollisionRules:
 
         collision_manager.update_collision_matrix()
         assert collision_manager.collision_matrix == expected_collision_matrix
+
+    def test_allow_self_collision(self, pr2_world_state_reset):
+        robot = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+        collision_matrix = CollisionMatrix()
+        rule1 = AvoidSelfCollisions(robot=robot)
+        rule1.update(pr2_world_state_reset)
+        rule1.apply_to_collision_matrix(collision_matrix)
+        assert len(collision_matrix.collision_checks) > 0
+        rule2 = AllowSelfCollisions(robot=robot)
+        rule2.update(pr2_world_state_reset)
+        rule2.apply_to_collision_matrix(collision_matrix)
+        assert len(collision_matrix.collision_checks) == 0
 
 
 class TestCollisionGroups:
