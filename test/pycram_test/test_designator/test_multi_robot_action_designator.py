@@ -481,10 +481,8 @@ def test_facing(immutable_multiple_robot_apartment):
         assert milk_in_robot_frame.position.y == pytest.approx(0.0, abs=0.01)
 
 
-def test_transport(mutable_multiple_robot_apartment, rclpy_node):
-
+def test_transport(mutable_multiple_robot_apartment):
     world, robot_view, context = mutable_multiple_robot_apartment
-    context.ros_node = rclpy_node
 
     description = TransportActionDescription(
         world.get_body_by_name("milk.stl"),
