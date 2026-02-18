@@ -60,7 +60,7 @@ id_generator = IDGenerator()
 
 
 @dataclass(eq=False)
-class WorldEntity(Symbol, HasSimulatorProperties):
+class WorldEntity(Symbol):
     """
     A class representing an entity in the world.
 
@@ -88,6 +88,8 @@ class WorldEntity(Symbol, HasSimulatorProperties):
     def __post_init__(self):
         if self.name is None:
             self.name = PrefixedName(f"{self.__class__.__name__}_{hash(self)}")
+        if self._world is not None:
+            self.add_to_world(self._world)
 
     def __eq__(self, other):
         if not isinstance(other, type(self)):
@@ -227,7 +229,14 @@ class WorldEntityWithID(WorldEntity, SubclassJSONSerializer):
 
 
 @dataclass(eq=False)
-class KinematicStructureEntity(WorldEntityWithID, ABC):
+class SimulatedWorldEntity(WorldEntityWithID, HasSimulatorProperties):
+    """
+    A WorldEntity that has properties relevant for simulation.
+    """
+
+
+@dataclass(eq=False)
+class KinematicStructureEntity(SimulatedWorldEntity, ABC):
     """
     An entity that is part of the kinematic structure of the world.
     """
@@ -1001,7 +1010,7 @@ def _attr_values(
 
 
 @dataclass(eq=False)
-class Actuator(WorldEntityWithID):
+class Actuator(SimulatedWorldEntity):
     """
     Represents an actuator in the world model.
     """

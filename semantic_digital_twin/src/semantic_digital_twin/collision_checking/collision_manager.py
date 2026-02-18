@@ -3,10 +3,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Dict, Any
 
 from line_profiler.explicit_profiler import profile
 from typing_extensions import List, TYPE_CHECKING
 
+from krrood.adapters.json_serializer import to_json
 from .collision_detector import (
     CollisionMatrix,
     CollisionCheckingResult,
@@ -24,8 +26,10 @@ from .collision_rules import (
     AvoidCollisionRule,
     AllowCollisionRule,
 )
+from .pybullet_collision_detector import BulletCollisionDetector
 from ..callbacks.callback import ModelChangeCallback
 from ..world_description.world_entity import Body
+from ..world_description.world_modification import synchronized_attribute_modification
 
 if TYPE_CHECKING:
     from ..world import World
@@ -64,7 +68,7 @@ class CollisionConsumer(ABC):
         """
 
 
-@dataclass
+@dataclass(eq=False)
 class CollisionManager(ModelChangeCallback):
     """
     This class is intended as the primary interface for collision checking.
@@ -79,7 +83,7 @@ class CollisionManager(ModelChangeCallback):
     Within these lists, rules that are later in the list overwrite rules that are earlier in the list.
     """
 
-    collision_detector: CollisionDetector
+    collision_detector: CollisionDetector = field(kw_only=True)
     """
     The collision detector implementation used for computing closest points between bodies.
     """
@@ -133,31 +137,43 @@ class CollisionManager(ModelChangeCallback):
         self._notify()
 
     def _notify(self, **kwargs):
-        if self.world.is_empty():
+        if self._world.is_empty():
             return
         for consumer in self.collision_consumers:
-            consumer.on_world_model_update(self.world)
+            consumer.on_world_model_update(self._world)
 
     def has_consumers(self) -> bool:
         return len(self.collision_consumers) > 0
 
+    @synchronized_attribute_modification
     def add_default_rule(self, rule: CollisionRule):
         self.default_rules.append(rule)
 
+    @synchronized_attribute_modification
+    def extend_default_rules(self, rules: List[CollisionRule]):
+        self.default_rules.extend(rules)
+
+    @synchronized_attribute_modification
     def add_ignore_collision_rule(self, rule: AllowCollisionRule):
         self.ignore_collision_rules.append(rule)
 
+    @synchronized_attribute_modification
     def add_temporary_rule(self, rule: CollisionRule):
         """
         Adds a rule to the temporary collision rules.
         """
         self.temporary_rules.append(rule)
 
+    @synchronized_attribute_modification
     def clear_temporary_rules(self):
         """
         Call this before starting a new task.
         """
         self.temporary_rules.clear()
+
+    @synchronized_attribute_modification
+    def extend_max_avoided_bodies_rules(self, rules: List[MaxAvoidedCollisionsRule]):
+        self.max_avoided_bodies_rules.extend(rules)
 
     def add_collision_consumer(self, consumer: CollisionConsumer):
         """
@@ -169,7 +185,7 @@ class CollisionManager(ModelChangeCallback):
         """
         self.collision_consumers.append(consumer)
         consumer.collision_manager = self
-        consumer.on_world_model_update(self.world)
+        consumer.on_world_model_update(self._world)
 
     def update_collision_matrix(self, buffer: float = 0.05):
         """
@@ -180,7 +196,7 @@ class CollisionManager(ModelChangeCallback):
             This is useful when you want to react to collisions before they go below the threshold.
         """
         for rule in self.rules:
-            rule.update(self.world)
+            rule.update(self._world)
         self.collision_matrix = CollisionMatrix()
         for rule in self.default_rules:
             rule.apply_to_collision_matrix(self.collision_matrix)
@@ -260,3 +276,13 @@ class CollisionManager(ModelChangeCallback):
         :return: all rules in the order they are applied.
         """
         return self.default_rules + self.temporary_rules + self.ignore_collision_rules
+
+    def to_json(self) -> Dict[str, Any]:
+        return {
+            **super().to_json(),
+            "id": to_json(self.id),
+            "default_rules": to_json(self.default_rules),
+            "temporary_rules": to_json(self.temporary_rules),
+            "ignore_collision_rules": to_json(self.ignore_collision_rules),
+            "max_avoided_bodies_rules": to_json(self.max_avoided_bodies_rules),
+        }

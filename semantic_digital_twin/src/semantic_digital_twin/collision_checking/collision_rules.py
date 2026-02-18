@@ -3,15 +3,18 @@ from __future__ import annotations
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 from itertools import combinations
+from typing import Dict, Any
 
 from lxml import etree
 from typing_extensions import List, Protocol, TYPE_CHECKING, runtime_checkable, Self
 
+from krrood.adapters.json_serializer import SubclassJSONSerializer, to_json, from_json
 from .collision_matrix import (
     CollisionRule,
     CollisionMatrix,
     CollisionCheck,
 )
+from ..adapters.world_entity_kwargs_tracker import WorldEntityWithIDKwargsTracker
 from ..robots.abstract_robot import AbstractRobot
 
 if TYPE_CHECKING:
@@ -131,7 +134,7 @@ class AvoidAllCollisions(AvoidCollisionRule):
 
 
 @dataclass
-class AvoidExternalCollisions(AvoidCollisionRule):
+class AvoidExternalCollisions(AvoidCollisionRule, SubclassJSONSerializer):
     """
     Adds collision checks between all bodies managed by the rule and all bodies that do not belong to the robot.
     that are not managed by the rule.
@@ -159,6 +162,19 @@ class AvoidExternalCollisions(AvoidCollisionRule):
                     body_a=body_a, body_b=body_b, distance=self.buffer_zone_distance
                 )
                 self.added_collision_checks.add(collision_check)
+
+    def to_json(self) -> Dict[str, Any]:
+        return {
+            **super().to_json(),
+            "robot": to_json(self.robot.id),
+            "body_subset": to_json(self.body_subset),
+        }
+
+    @classmethod
+    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
+        tracker = WorldEntityWithIDKwargsTracker.from_kwargs(kwargs)
+        robot = tracker.get_world_entity_with_id(id=from_json(data["robot"]))
+        return cls(robot=robot, body_subset=from_json(data["body_subset"], **kwargs))
 
 
 @dataclass

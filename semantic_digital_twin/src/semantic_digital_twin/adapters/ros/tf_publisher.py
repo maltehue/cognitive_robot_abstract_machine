@@ -31,7 +31,7 @@ class TfPublisherModelCallback(ModelChangeCallback):
     Publishes the TF tree of the world.
     """
 
-    node: Node
+    node: Node = field(kw_only=True)
     """
     ros2 node used to publish tf messages
     """
@@ -122,10 +122,8 @@ class TFPublisher(StateChangeCallback):
     Puts a frame in every kinematic structure entity that is not in the ignored_bodies set.
     """
 
-    node: Node
+    node: Node = field(kw_only=True)
     """ros2 node used to publish tf messages"""
-    world: World
-    """World for which to publish tf messages."""
     ignored_kinematic_structure_entities: set[KinematicStructureEntity] = field(
         default_factory=set
     )
@@ -152,7 +150,7 @@ class TFPublisher(StateChangeCallback):
         sleep(0.2)
         self.tf_model_cb = TfPublisherModelCallback(
             node=self.node,
-            world=self.world,
+            _world=self._world,
             ignored_kinematic_structure_entities=self.ignored_kinematic_structure_entities,
         )
         self.tf_model_cb.notify()
@@ -169,7 +167,7 @@ class TFPublisher(StateChangeCallback):
         ignored_bodies = set(robot.bodies)
         return cls(
             node=node,
-            world=robot._world,
+            _world=robot._world,
             ignored_kinematic_structure_entities=ignored_bodies,
         )
 
@@ -196,12 +194,12 @@ class TFPublisher(StateChangeCallback):
         )
         return cls(
             node=node,
-            world=world,
+            _world=world,
             ignored_kinematic_structure_entities=ignored_bodies,
         )
 
     def _notify(self, **kwargs):
-        if self.world.state.version % self.throttle_state_updates != 0:
+        if self._world.state.version % self.throttle_state_updates != 0:
             return
         self.tf_model_cb.update_tf_message()
         self.tf_pub.publish(self.tf_model_cb.tf_message)

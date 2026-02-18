@@ -1,4 +1,5 @@
 import json
+import time
 
 import numpy as np
 from std_srvs.srv import Trigger
@@ -228,10 +229,12 @@ def test_pr2_collision_rules(rclpy_node, pr2_world_state_reset):
         world=pr2_world_copy,
     )
 
-    pr2_world_state_reset.collision_manager.add_temporary_rule(
-        AvoidExternalCollisions(robot=pr2)
-    )
+    with pr2_world_state_reset.modify_world():
+        pr2_world_state_reset.collision_manager.add_temporary_rule(
+            AvoidExternalCollisions(robot=pr2)
+        )
 
+    time.sleep(100)
     assert len(pr2_world_state_reset.collision_manager.rules) == len(
         pr2_world_copy.collision_manager.rules
     )
