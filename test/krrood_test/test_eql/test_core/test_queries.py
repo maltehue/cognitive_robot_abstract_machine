@@ -796,15 +796,15 @@ def test_limit(handles_and_containers_world):
     world = handles_and_containers_world
     body = variable(type_=Body, domain=world.bodies)
     query = an(entity(body).where(contains(body.name, "Handle")))
-    assert len(list(query.evaluate(limit=2))) == 2
-    assert len(list(query.evaluate(limit=1))) == 1
-    assert len(list(query.evaluate(limit=3))) == 3
+    assert len(list(query.limit(2).evaluate())) == 2
+    assert len(list(query.limit(1).evaluate())) == 1
+    assert len(list(query.limit(3).evaluate())) == 3
     with pytest.raises(NonPositiveLimitValue):
-        list(query.evaluate(limit=0))
+        list(query.limit(0).evaluate())
     with pytest.raises(NonPositiveLimitValue):
-        list(query.evaluate(limit=-1))
+        list(query.limit(-1).evaluate())
     with pytest.raises(NonPositiveLimitValue):
-        list(query.evaluate(limit="0"))
+        list(query.limit("0").evaluate())
 
 
 @pytest.fixture

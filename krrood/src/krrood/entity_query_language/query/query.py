@@ -54,6 +54,7 @@ from ..cache_data import (
 from ..failures import (
     UnsupportedNegation,
     TryingToModifyAnAlreadyBuiltQuery,
+    NonPositiveLimitValue,
 )
 from ..operators.aggregators import Aggregator
 from ..operators.set_operations import MultiArityExpressionThatPerformsACartesianProduct
@@ -145,13 +146,13 @@ class Query(MultiArityExpressionThatPerformsACartesianProduct, ABC):
 
         return wrapper
 
-    def evaluate(self, limit: Optional[int] = None) -> Iterator:
+    def evaluate(self) -> Iterator:
         """
         Wrap the query object descriptor in a ResultQuantifier expression and evaluate it,
          returning an iterator over the results.
         """
         self.build()
-        return self._expression_.evaluate(limit=limit)
+        return self._expression_.evaluate()
 
     @modifies_query_structure
     def where(self, *conditions: ConditionType) -> Self:
@@ -231,6 +232,20 @@ class Query(MultiArityExpressionThatPerformsACartesianProduct, ABC):
         self._grouped_by_builder_ = GroupedByBuilder(self, variables_to_group_by)
         return self
 
+    def limit(self, n: int) -> Self:
+        """
+        Limit the number of results to n.
+
+        :param n: The maximum number of results to return.
+        :return: This query object descriptor.
+        """
+        self._limit_ = n
+        if not isinstance(self._limit_, int) or self._limit_ <= 0:
+            raise NonPositiveLimitValue(self._limit_)
+        if self._built_:
+            self._expression_._limit_ = self._limit_
+        return self
+
     def _quantify_(
         self,
         quantifier_type: Type[ResultQuantifier] = An,
@@ -288,7 +303,7 @@ class Query(MultiArityExpressionThatPerformsACartesianProduct, ABC):
 
         self._quantifier_builder_.child = self._expression_
         self._expression_ = self._quantifier_builder_.expression
-
+        self._expression_._limit_ = self._limit_
         return self
 
     def _evaluate__(

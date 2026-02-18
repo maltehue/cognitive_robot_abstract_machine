@@ -29,7 +29,7 @@ from typing_extensions import (
     TYPE_CHECKING,
 )
 
-from ..failures import NoExpressionFoundForGivenID, NonPositiveLimitValue
+from ..failures import NoExpressionFoundForGivenID
 from ..utils import make_list, T, make_set
 from ...symbol_graph.symbol_graph import SymbolGraph
 
@@ -101,6 +101,10 @@ class SymbolicExpression(ABC):
     Useful when this expression is a builder that wires multiple components together to create the final expression.
     This defaults to Self.
     """
+    _limit_: Optional[int] = field(init=False, repr=False, default=None)
+    """
+    The maximum number of results to return during evaluation.
+    """
 
     def __post_init__(self):
         self._expression_ = self
@@ -144,26 +148,21 @@ class SymbolicExpression(ABC):
 
     def evaluate(
         self,
-        limit: Optional[int] = None,
     ) -> Iterator[TypingUnion[T, Dict[TypingUnion[T, SymbolicExpression], T]]]:
         """
         Evaluate the query and map the results to the correct output data structure.
         This is the exposed evaluation method for users.
-
-        :param limit: The maximum number of results to return. If None, return all results.
         """
         SymbolGraph().remove_dead_instances()
         results = map(
             self._process_result_, (res for res in self._evaluate_() if res.is_true)
         )
-        if limit is None:
+        if self._limit_ is None:
             yield from results
-        elif not isinstance(limit, int) or limit <= 0:
-            raise NonPositiveLimitValue(limit)
         else:
             for res_num, result in enumerate(results, 1):
                 yield result
-                if res_num == limit:
+                if res_num == self._limit_:
                     return
 
     def _replace_child_(

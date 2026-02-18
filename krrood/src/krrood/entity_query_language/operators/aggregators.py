@@ -56,12 +56,11 @@ class Aggregator(UnaryExpression, CanBehaveLikeAVariable[T], ABC):
         super().__post_init__()
         self._var_ = self
 
-    def evaluate(self, limit: Optional[int] = None) -> Iterator[T]:
+    def evaluate(self) -> Iterator[T]:
         """
         Wrap the aggregator in an entity and evaluate it (i.e., make a query with this aggregator as the selected
         expression and evaluate it.).
 
-        :param limit: The maximum number of results to return. If None, all results are returned.
         :return: An iterator over the aggregator results.
         """
         from ..query.query import Entity
