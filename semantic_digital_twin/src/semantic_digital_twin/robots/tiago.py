@@ -169,8 +169,7 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             AvoidExternalCollisions(
                 buffer_zone_distance=0.08,
                 violated_distance=0.03,
-                bodies=self.bodies_with_collision,
-                world=self._world,
+                robot=self,
             )
         )
         self._world.collision_manager.add_default_rule(
@@ -185,8 +184,8 @@ class Tiago(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
             AvoidExternalCollisions(
                 buffer_zone_distance=0.2,
                 violated_distance=0.1,
-                bodies=[self._world.get_body_by_name("base_link")],
-                world=self._world,
+                robot=self,
+                body_subset={self._world.get_body_by_name("base_link")},
             )
         )
 

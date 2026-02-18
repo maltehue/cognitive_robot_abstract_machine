@@ -15,11 +15,14 @@ from krrood.entity_query_language.entity import (
 from krrood.entity_query_language.entity_result_processors import an, the
 
 from ..collision_checking.collision_detector import ClosestPoints, CollisionCheck
+from ..collision_checking.collision_manager import CollisionManager
 from ..collision_checking.collision_matrix import CollisionMatrix
 from ..collision_checking.collision_rules import (
     AllowCollisionBetweenGroups,
     AvoidExternalCollisions,
+    AllowSelfCollisions,
 )
+from ..collision_checking.pybullet_collision_detector import BulletCollisionDetector
 from ..collision_checking.trimesh_collision_detector import TrimeshCollisionDetector
 from ..robots.abstract_robot import AbstractRobot, ParallelGripper
 from ..spatial_computations.raytracer import RayTracer
@@ -44,21 +47,24 @@ def robot_in_collision(
     if ignore_collision_with is None:
         ignore_collision_with = []
 
-    collision_matrix = CollisionMatrix()
-    AvoidExternalCollisions(
-        buffer_zone_distance=threshold,
-        bodies=robot.bodies_with_collision,
-        world=robot._world,
-    ).apply_to_collision_matrix(collision_matrix)
-    AllowCollisionBetweenGroups(
-        body_group_a=robot.bodies, body_group_b=ignore_collision_with
-    ).apply_to_collision_matrix(collision_matrix)
-    for rule in robot._world.collision_manager.ignore_collision_rules:
-        rule.apply_to_collision_matrix(collision_matrix)
+    world = robot._world
 
-    collisions = robot._world.collision_manager.collision_detector.check_collisions(
-        collision_matrix
+    world.collision_manager.clear_temporary_rules()
+    world.collision_manager.add_temporary_rule(
+        AvoidExternalCollisions(
+            buffer_zone_distance=threshold,
+            robot=robot,
+        )
     )
+    world.collision_manager.add_temporary_rule(AllowSelfCollisions(robot=robot))
+    world.collision_manager.add_temporary_rule(
+        AllowCollisionBetweenGroups(
+            body_group_a=robot.bodies, body_group_b=ignore_collision_with
+        )
+    )
+    world.collision_manager.update_collision_matrix()
+
+    collisions = world.collision_manager.compute_collisions()
 
     return collisions.contacts
 

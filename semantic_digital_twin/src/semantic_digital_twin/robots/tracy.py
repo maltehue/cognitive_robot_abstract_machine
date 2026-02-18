@@ -155,10 +155,7 @@ class Tracy(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
 
         self._world.collision_manager.add_default_rule(
             AvoidExternalCollisions(
-                buffer_zone_distance=0.05,
-                violated_distance=0.0,
-                bodies=self.bodies_with_collision,
-                world=self._world,
+                buffer_zone_distance=0.05, violated_distance=0.0, robot=self
             )
         )
         self._world.collision_manager.add_default_rule(

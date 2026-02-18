@@ -116,11 +116,21 @@ class CollisionRule(ABC):
     They modify collision matrices by adding or removing collision checks.
     """
 
+    _last_world_model_version: int = field(init=False, default=-1)
+    """
+    Used to prevent updating the collision matrix when the world model has not changed.
+    """
+
     @abstractmethod
     def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix): ...
 
+    def update(self, world: World):
+        if world._model_manager.version != self._last_world_model_version:
+            self._update(world)
+            self._last_world_model_version = world._model_manager.version
+
     @abstractmethod
-    def update(self, world: World): ...
+    def _update(self, world: World): ...
 
 
 @dataclass

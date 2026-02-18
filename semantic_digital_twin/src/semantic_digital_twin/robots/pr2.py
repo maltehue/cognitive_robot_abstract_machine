@@ -66,23 +66,20 @@ class PR2(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
         self._world.collision_manager.default_rules.extend(
             [
                 AvoidExternalCollisions(
-                    buffer_zone_distance=0.1,
-                    violated_distance=0.0,
-                    bodies=self.bodies_with_collision,
-                    world=self._world,
+                    buffer_zone_distance=0.1, violated_distance=0.0, robot=self
                 ),
                 AvoidExternalCollisions(
                     buffer_zone_distance=0.05,
                     violated_distance=0.0,
-                    bodies=self.left_arm.bodies_with_collision
+                    robot=self,
+                    body_subset=self.left_arm.bodies_with_collision
                     + self.right_arm.bodies_with_collision,
-                    world=self._world,
                 ),
                 AvoidExternalCollisions(
                     buffer_zone_distance=0.2,
                     violated_distance=0.05,
-                    bodies=[self._world.get_body_by_name("base_link")],
-                    world=self._world,
+                    robot=self,
+                    body_subset={self._world.get_body_by_name("base_link")},
                 ),
                 AvoidSelfCollisions(
                     buffer_zone_distance=0.05, violated_distance=0.0, robot=self

@@ -190,10 +190,7 @@ class HSRB(AbstractRobot, HasArms, HasNeck):
         )
         self._world.collision_manager.add_default_rule(
             AvoidExternalCollisions(
-                buffer_zone_distance=0.05,
-                violated_distance=0.0,
-                bodies=self.bodies_with_collision,
-                world=self._world,
+                buffer_zone_distance=0.05, violated_distance=0.0, robot=self
             )
         )
 
@@ -201,8 +198,8 @@ class HSRB(AbstractRobot, HasArms, HasNeck):
             AvoidExternalCollisions(
                 buffer_zone_distance=0.1,
                 violated_distance=0.03,
-                bodies=[self._world.get_body_by_name("base_link")],
-                world=self._world,
+                robot=self,
+                body_subset={self._world.get_body_by_name("base_link")},
             )
         )
         self._world.collision_manager.add_default_rule(

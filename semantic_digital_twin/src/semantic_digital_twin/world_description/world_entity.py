@@ -374,7 +374,7 @@ class Body(KinematicStructureEntity):
     The index of the entity in `_world.kinematic_structure`.
     """
 
-    inertial: Optional[Inertial] = field(default_factory=Inertial)
+    inertial: Optional[Inertial] = field(default_factory=Inertial, repr=False)
     """
     Inertia properties of the body.
     """

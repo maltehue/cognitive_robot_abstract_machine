@@ -144,7 +144,7 @@ class CollisionManager(ModelChangeCallback):
     def add_default_rule(self, rule: CollisionRule):
         self.default_rules.append(rule)
 
-    def add_ignore_collision_rule(self, rule: CollisionRule):
+    def add_ignore_collision_rule(self, rule: AllowCollisionRule):
         self.ignore_collision_rules.append(rule)
 
     def add_temporary_rule(self, rule: CollisionRule):
@@ -174,6 +174,8 @@ class CollisionManager(ModelChangeCallback):
     def update_collision_matrix(self, buffer: float = 0.05):
         """
         Creates a new collision matrix based on the current rules and applies it to the collision detector.
+        .. note:: This method is not called in `compute_collisions` because it is potentially expensive
+            and you quite often want to compute collisions without updating the collision matrix.
         :param buffer: A buffer is added to the collision matrix distance thresholds.
             This is useful when you want to react to collisions before they go below the threshold.
         """
@@ -194,22 +196,19 @@ class CollisionManager(ModelChangeCallback):
         self.get_violated_distance.cache_clear()
 
     def is_collision_checked(self, body_a: Body, body_b: Body) -> bool:
-        for rule in self.ignore_collision_rules:
-            if (
-                body_a in rule.allowed_collision_bodies
-                or body_b in rule.allowed_collision_bodies
-            ):
-                return False
-            if CollisionCheck(body_a, body_b) in rule.allowed_collision_pairs:
-                return False
-            if CollisionCheck(body_b, body_a) in rule.allowed_collision_pairs:
-                return False
-        return True
+        """
+        Checks if the collision matrix contains a collision check for the given bodies.
+        """
+        return (
+            CollisionCheck(body_a, body_b) in self.collision_matrix.collision_checks
+            or CollisionCheck(body_b, body_a) in self.collision_matrix.collision_checks
+        )
 
     @profile
     def compute_collisions(self) -> CollisionCheckingResult:
         """
         Computes collisions based on the current collision matrix.
+        .. note:: You may want to call `update_collision_matrix` before calling this method if rules or the world model have changed.
         :return: Result of the collision checking.
         """
         collision_results = self.collision_detector.check_collisions(
@@ -222,7 +221,7 @@ class CollisionManager(ModelChangeCallback):
     def get_max_avoided_bodies(self, body: Body) -> int:
         """
         Returns the maximum number of collisions `body` should avoid.
-        :param body:
+        :param body: The body to check.
         :return: Maximum number of collisions that are allowed between two bodies.
         """
         for rule in reversed(self.max_avoided_bodies_rules):

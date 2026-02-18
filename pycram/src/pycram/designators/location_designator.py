@@ -1645,9 +1645,7 @@ class GiskardLocation(LocationDesignatorDescription):
         world.collision_manager.clear_temporary_rules()
         world.collision_manager.add_temporary_rule(
             AvoidExternalCollisions(
-                bodies=robot_view.bodies_with_collision,
-                world=world,
-                buffer_zone_distance=0.1,
+                robot=robot_view, buffer_zone_distance=0.1, violated_distance=0.0
             )
         )
         msc = MotionStatechart()

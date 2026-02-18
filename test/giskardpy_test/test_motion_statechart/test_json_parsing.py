@@ -229,9 +229,9 @@ def test_executing_json_parsed_statechart():
     assert observation_copy == msc_copy.observation_state
 
 
-def test_cart_goal_simple(pr2_world_setup: World):
-    tip = pr2_world_setup.get_kinematic_structure_entity_by_name("base_footprint")
-    root = pr2_world_setup.get_kinematic_structure_entity_by_name("odom_combined")
+def test_cart_goal_simple(pr2_world_state_reset: World):
+    tip = pr2_world_state_reset.get_kinematic_structure_entity_by_name("base_footprint")
+    root = pr2_world_state_reset.get_kinematic_structure_entity_by_name("odom_combined")
     tip_goal = HomogeneousTransformationMatrix.from_xyz_quaternion(
         pos_x=-0.2, reference_frame=tip
     )
@@ -251,13 +251,13 @@ def test_cart_goal_simple(pr2_world_setup: World):
     json_str = json.dumps(json_data)
     new_json_data = json.loads(json_str)
 
-    tracker = WorldEntityWithIDKwargsTracker.from_world(pr2_world_setup)
+    tracker = WorldEntityWithIDKwargsTracker.from_world(pr2_world_state_reset)
     kwargs = tracker.create_kwargs()
     msc_copy = MotionStatechart.from_json(new_json_data, **kwargs)
 
     kin_sim = Executor(
         context=MotionStatechartContext(
-            world=pr2_world_setup,
+            world=pr2_world_state_reset,
             qp_controller_config=QPControllerConfig.create_with_simulation_defaults(),
         )
     )
@@ -265,13 +265,13 @@ def test_cart_goal_simple(pr2_world_setup: World):
     kin_sim.compile(motion_statechart=msc_copy)
     kin_sim.tick_until_end()
 
-    fk = pr2_world_setup.compute_forward_kinematics_np(root, tip)
+    fk = pr2_world_state_reset.compute_forward_kinematics_np(root, tip)
     assert np.allclose(fk, tip_goal, atol=cart_goal.threshold)
 
 
-def test_compressed_copy_can_be_plotted(pr2_world_setup: World):
-    tip = pr2_world_setup.get_kinematic_structure_entity_by_name("base_footprint")
-    root = pr2_world_setup.get_kinematic_structure_entity_by_name("odom_combined")
+def test_compressed_copy_can_be_plotted(pr2_world_state_reset: World):
+    tip = pr2_world_state_reset.get_kinematic_structure_entity_by_name("base_footprint")
+    root = pr2_world_state_reset.get_kinematic_structure_entity_by_name("odom_combined")
     tip_goal = HomogeneousTransformationMatrix.from_xyz_quaternion(
         pos_x=-0.2, reference_frame=tip
     )
@@ -350,9 +350,9 @@ def test_cancel_motion():
         kin_sim.tick_until_end()
 
 
-def test_unreachable_cart_goal(pr2_world_setup):
-    root = pr2_world_setup.root
-    tip = pr2_world_setup.get_kinematic_structure_entity_by_name("base_footprint")
+def test_unreachable_cart_goal(pr2_world_state_reset):
+    root = pr2_world_state_reset.root
+    tip = pr2_world_state_reset.get_kinematic_structure_entity_by_name("base_footprint")
     msc = MotionStatechart()
     msc.add_node(
         cart_goal := CartesianPose(
@@ -372,13 +372,13 @@ def test_unreachable_cart_goal(pr2_world_setup):
     json_str = json.dumps(json_data)
     new_json_data = json.loads(json_str)
 
-    tracker = WorldEntityWithIDKwargsTracker.from_world(pr2_world_setup)
+    tracker = WorldEntityWithIDKwargsTracker.from_world(pr2_world_state_reset)
     kwargs = tracker.create_kwargs()
     msc_copy = MotionStatechart.from_json(new_json_data, **kwargs)
 
     kin_sim = Executor(
         context=MotionStatechartContext(
-            world=pr2_world_setup,
+            world=pr2_world_state_reset,
             qp_controller_config=QPControllerConfig.create_with_simulation_defaults(),
         )
     )

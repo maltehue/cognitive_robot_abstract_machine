@@ -21,6 +21,10 @@ if TYPE_CHECKING:
 
 @dataclass
 class AvoidCollisionRule(CollisionRule, ABC):
+    """
+    Base class for collision rules that add collision checks to the collision matrix.
+    """
+
     buffer_zone_distance: float = field(default=0.05)
     """
     Distance defining a buffer zone around the entity. The buffer zone represents a soft boundary where
@@ -33,13 +37,16 @@ class AvoidCollisionRule(CollisionRule, ABC):
     a severe collision risk requiring immediate attention.
     """
 
-    added_collision_checks: set[CollisionCheck] = field(default_factory=set)
+    added_collision_checks: set[CollisionCheck] = field(default_factory=set, init=False)
 
     def applies_to(self, body_a: Body, body_b: Body) -> bool:
         """
         Returns True if the rule configures collision distances for the given body.
         """
-        raise NotImplementedError
+        return (
+            CollisionCheck(body_a, body_b) in self.added_collision_checks
+            or CollisionCheck(body_b, body_a) in self.added_collision_checks
+        )
 
     def buffer_zone_distance_for(self, body_a: Body, body_b: Body) -> float | None:
         """
@@ -59,8 +66,18 @@ class AvoidCollisionRule(CollisionRule, ABC):
 
 @dataclass
 class AllowCollisionRule(CollisionRule, ABC):
+    """
+    Base class for collision rules that remove collision checks from the collision matrix.
+    """
+
     allowed_collision_pairs: set[CollisionCheck] = field(default_factory=set)
+    """
+    Set of collision checks that are allowed to occur.
+    """
     allowed_collision_bodies: set[Body] = field(default_factory=set)
+    """
+    Set of bodies that are allowed to collide.
+    """
 
     def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix):
         collision_matrix.remove_collision_checks(self.allowed_collision_pairs)
@@ -74,10 +91,7 @@ class AllowCollisionRule(CollisionRule, ABC):
     def update(self, world: World):
         self.allowed_collision_pairs = set()
         self.allowed_collision_bodies = set()
-        self._update(world)
-
-    @abstractmethod
-    def _update(self, world: World): ...
+        super().update(world)
 
 
 @dataclass
@@ -89,15 +103,7 @@ class AvoidCollisionBetweenGroups(AvoidCollisionRule):
     body_group_a: List[Body] = field(default_factory=list)
     body_group_b: List[Body] = field(default_factory=list)
 
-    def applies_to(self, body_a: Body, body_b: Body) -> bool:
-        """
-        Returns True if the body is a member of any group handled by this rule.
-        """
-        return (body_a in self.body_group_a and body_b in self.body_group_b) or (
-            body_a in self.body_group_b and body_b in self.body_group_a
-        )
-
-    def update(self, world: World):
+    def _update(self, world: World):
         self.added_collision_checks = set()
         for body_a in self.body_group_a:
             for body_b in self.body_group_b:
@@ -115,17 +121,9 @@ class AvoidAllCollisions(AvoidCollisionRule):
     Adds collision checks between all body pairs of the world managed by the rule to the collision matrix.
     """
 
-    world: World = field(kw_only=True)
-
-    def applies_to(self, body_a: Body, body_b: Body) -> bool:
-        return (
-            body_a in self.world.bodies_with_collision
-            or body_b in self.world.bodies_with_collision
-        )
-
-    def update(self, world: World):
+    def _update(self, world: World):
         self.added_collision_checks = set()
-        for body_a, body_b in combinations(self.world.bodies_with_collision, 2):
+        for body_a, body_b in combinations(world.bodies_with_collision, 2):
             collision_check = CollisionCheck.create_and_validate(
                 body_a=body_a, body_b=body_b, distance=self.buffer_zone_distance
             )
@@ -135,24 +133,28 @@ class AvoidAllCollisions(AvoidCollisionRule):
 @dataclass
 class AvoidExternalCollisions(AvoidCollisionRule):
     """
-    Adds collision checks between all bodies managed by the rule and all other bodies in the world
+    Adds collision checks between all bodies managed by the rule and all bodies that do not belong to the robot.
     that are not managed by the rule.
     """
 
-    bodies: List[Body] = field(default_factory=list)
-    world: World = field(kw_only=True)
+    robot: AbstractRobot = field(kw_only=True)
+    """
+    The robot managed by the rule.
+    """
+    body_subset: set[Body] | None = field(default=None)
+    """
+    A subset of bodies managed by the rule. 
+    All of them must belong to `robot`.
+    If None, all robot bodies are used.
+    """
 
-    def applies_to(self, body_a: Body, body_b: Body) -> bool:
-        return (
-            body_a in self.bodies and body_b in self.world.bodies_with_collision
-        ) or (body_b in self.bodies and body_a in self.world.bodies_with_collision)
-
-    def update(self, world: World):
+    def _update(self, world: World):
         self.added_collision_checks = set()
-        for body_a in self.bodies:
-            for body_b in self.world.bodies_with_collision:
-                if body_a == body_b:
-                    continue
+        if self.body_subset is None:
+            self.body_subset = set(self.robot.bodies_with_collision)
+        external_bodies = set(world.bodies_with_collision) - set(self.body_subset)
+        for body_a in self.body_subset:
+            for body_b in external_bodies:
                 collision_check = CollisionCheck.create_and_validate(
                     body_a=body_a, body_b=body_b, distance=self.buffer_zone_distance
                 )
@@ -167,19 +169,13 @@ class AvoidSelfCollisions(AvoidCollisionRule):
 
     robot: AbstractRobot = field(kw_only=True)
 
-    def applies_to(self, body_a: Body, body_b: Body) -> bool:
-        return (
-            body_a in self.robot.bodies_with_collision
-            and body_b in self.robot.bodies_with_collision
-        )
-
-    def update(self, world: World):
-        self.added_collision_checks = set()
-        for body_a, body_b in combinations(self.robot.bodies_with_collision, 2):
-            collision_check = CollisionCheck.create_and_validate(
-                body_a=body_a, body_b=body_b, distance=self.buffer_zone_distance
+    def _update(self, world: World):
+        self.added_collision_checks = set(
+            CollisionCheck.create_and_validate(
+                body_a, body_b, distance=self.buffer_zone_distance
             )
-            self.added_collision_checks.add(collision_check)
+            for body_a, body_b in combinations(self.robot.bodies_with_collision, 2)
+        )
 
 
 @dataclass
@@ -195,7 +191,7 @@ class AllowCollisionBetweenGroups(AllowCollisionRule):
     body_group_a: List[Body] = field(default_factory=list)
     body_group_b: List[Body] = field(default_factory=list)
 
-    def update(self, world: World):
+    def _update(self, world: World):
         self.allowed_collision_pairs = set()
         for body_a in self.body_group_a:
             for body_b in self.body_group_b:
@@ -238,7 +234,10 @@ class AllowSelfCollisions(AllowCollisionRule):
     robot: AbstractRobot = field(kw_only=True)
 
     def _update(self, world: World):
-        self.allowed_collision_bodies = set(self.robot.bodies_with_collision)
+        self.allowed_collision_pairs = set(
+            CollisionCheck.create_and_validate(body_a, body_b)
+            for body_a, body_b in combinations(self.robot.bodies_with_collision, 2)
+        )
 
 
 @dataclass
@@ -258,10 +257,13 @@ class AllowCollisionForAdjacentPairs(AllowCollisionRule):
 
 @dataclass
 class SelfCollisionMatrixRule(AllowCollisionRule):
-
-    def _update(self, world: World): ...
+    """
+    Used to load collision matrices sorted as srdf, e.g., those created by moveit.
+    """
 
     def update(self, world: World): ...
+
+    def _update(self, world: World): ...
 
     def compute_collision_matrix(self, world: World) -> set[CollisionCheck]:
         """

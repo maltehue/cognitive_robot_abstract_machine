@@ -49,15 +49,15 @@ def test_tf_publisher(rclpy_node, pr2_world_state_reset):
     tf_wrapper.lookup_transform("odom_combined", "pr2/r_gripper_tool_frame")
 
 
-def test_tf_publisher_ignore_robot(rclpy_node, pr2_world_setup):
-    with pr2_world_setup.modify_world():
+def test_tf_publisher_ignore_robot(rclpy_node, pr2_world_copy):
+    with pr2_world_copy.modify_world():
         box = Body(name=PrefixedName("box"))
-        c = FixedConnection(parent=pr2_world_setup.root, child=box)
-        pr2_world_setup.add_connection(c)
+        c = FixedConnection(parent=pr2_world_copy.root, child=box)
+        pr2_world_copy.add_connection(c)
     tf_wrapper = TFWrapper(node=rclpy_node)
     tf_publisher = TFPublisher.create_with_ignore_robot(
         node=rclpy_node,
-        robot=pr2_world_setup.get_semantic_annotations_by_type(AbstractRobot)[0],
+        robot=pr2_world_copy.get_semantic_annotations_by_type(AbstractRobot)[0],
     )
 
     assert not tf_wrapper.wait_for_transform(
@@ -75,11 +75,11 @@ def test_tf_publisher_ignore_robot(rclpy_node, pr2_world_setup):
     )
     transform = tf_wrapper.lookup_transform("odom_combined", "box")
 
-    odom_combined = pr2_world_setup.get_kinematic_structure_entities_by_name(
+    odom_combined = pr2_world_copy.get_kinematic_structure_entities_by_name(
         "odom_combined"
     )[0]
-    base_footprint = pr2_world_setup.get_kinematic_structure_entities_by_name("box")[0]
-    fk = pr2_world_setup.compute_forward_kinematics(odom_combined, base_footprint)
+    base_footprint = pr2_world_copy.get_kinematic_structure_entities_by_name("box")[0]
+    fk = pr2_world_copy.compute_forward_kinematics(odom_combined, base_footprint)
     transform2 = HomogeneousTransformationMatrixToRos2Converter.convert(fk)
     assert transform.transform == transform2.transform
 
