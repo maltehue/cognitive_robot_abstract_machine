@@ -2554,26 +2554,26 @@ class TestTemplates:
 
 
 class TestOpenClose:
-    def test_open(self, pr2_world_state_reset):
+    def test_open(self, pr2_world_setup):
 
-        with pr2_world_state_reset.modify_world():
+        with pr2_world_setup.modify_world():
             door = Door.create_with_new_body_in_world(
                 name=PrefixedName("door"),
-                world=pr2_world_state_reset,
+                world=pr2_world_setup,
                 world_root_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    x=1.5, z=1, yaw=np.pi, reference_frame=pr2_world_state_reset.root
+                    x=1.5, z=1, yaw=np.pi, reference_frame=pr2_world_setup.root
                 ),
             )
 
             handle = Handle.create_with_new_body_in_world(
                 name=PrefixedName("handle"),
-                world=pr2_world_state_reset,
+                world=pr2_world_setup,
                 world_root_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(
                     x=1.5,
                     y=0.45,
                     z=1,
                     yaw=np.pi,
-                    reference_frame=pr2_world_state_reset.root,
+                    reference_frame=pr2_world_setup.root,
                 ),
             )
 
@@ -2586,13 +2586,13 @@ class TestOpenClose:
 
             hinge = Hinge.create_with_new_body_in_world(
                 name=PrefixedName("hinge"),
-                world=pr2_world_state_reset,
+                world=pr2_world_setup,
                 world_root_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(
                     x=1.5,
                     y=-0.5,
                     z=1,
                     yaw=np.pi,
-                    reference_frame=pr2_world_state_reset.root,
+                    reference_frame=pr2_world_setup.root,
                 ),
                 connection_limits=DegreeOfFreedomLimits(
                     lower=lower_limits, upper=upper_limits
@@ -2605,8 +2605,8 @@ class TestOpenClose:
 
         root_C_hinge = door.hinge.root.parent_connection
 
-        r_tip = pr2_world_state_reset.get_body_by_name("r_gripper_tool_frame")
-        handle = pr2_world_state_reset.get_semantic_annotations_by_type(Handle)[0].root
+        r_tip = pr2_world_setup.get_body_by_name("r_gripper_tool_frame")
+        handle = pr2_world_setup.get_semantic_annotations_by_type(Handle)[0].root
         open_goal = 1
         close_goal = -1
 
@@ -2616,7 +2616,7 @@ class TestOpenClose:
                 Sequence(
                     [
                         CartesianPose(
-                            root_link=pr2_world_state_reset.root,
+                            root_link=pr2_world_setup.root,
                             tip_link=r_tip,
                             goal_pose=HomogeneousTransformationMatrix.from_xyz_rpy(
                                 yaw=np.pi, reference_frame=handle
@@ -2657,7 +2657,7 @@ class TestOpenClose:
         msc.add_node(EndMotion.when_true(msc.nodes[0]))
 
         kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+            world=pr2_world_setup,
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
