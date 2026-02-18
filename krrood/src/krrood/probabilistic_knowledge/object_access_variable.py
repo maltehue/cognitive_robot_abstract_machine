@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, assert_never, Never
 
 from typing_extensions import List
@@ -54,3 +54,6 @@ class ObjectAccessVariable:
             current[self.attribute._key_] = value
         elif isinstance(self.attribute, Attribute):
             setattr(current, self.attribute._attribute_name_, value)
+
+    def __hash__(self):
+        return hash(self.variable)

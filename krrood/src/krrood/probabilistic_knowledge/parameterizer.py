@@ -65,14 +65,14 @@ class Parameterization:
         """
         Update the simple event by extending it with the given simple event.
         """
-        self.simple_event.update(simple_event)
+        self.simple_event = SimpleEvent({**simple_event, **self.simple_event})
 
     def create_fully_factorized_distribution(self) -> ProbabilisticCircuit:
         """
         Create a fully factorized probabilistic circuit over the variables in the parameterization.
         """
         distribution_variables = [
-            v for v in self.variables if not isinstance(v, Integer)
+            v for v in self.random_events_variables if not isinstance(v, Integer)
         ]
 
         return fully_factorized(
@@ -90,7 +90,7 @@ class Parameterization:
         :param other: The parameterization to update with.
         """
         self.variables.extend(other.variables)
-        self.simple_event.update(other.simple_event)
+        self.update_simple_event(other.simple_event)
 
 
 @dataclass
@@ -115,17 +115,18 @@ class Parameterizer:
         :return: Parameterization containing the variables and simple event.
         """
         if type(obj) in list_like_classes:
-            state = ToDataAccessObjectState()
-            dao = [to_dao(element, state) for element in obj]
-        else:
-            dao = to_dao(obj)
+            raise NotImplementedError(
+                "Parameterization of list-like types is not supported directly."
+            )
+
+        dao = to_dao(obj)
 
         dao_variable = variable_from([dao])
-        self.parameterize_dao(dao, dao_variable)
+        self._parameterize_dao(dao, dao_variable)
 
         return self.parameterization
 
-    def parameterize_dao(
+    def _parameterize_dao(
         self, dao: DataAccessObject, dao_variable: Selectable
     ) -> Parameterization:
         """
@@ -139,12 +140,18 @@ class Parameterizer:
         sql_alchemy_mapper = inspect(dao).mapper
 
         for wrapped_field in WrappedClass(dao.original_class()).fields:
-            for relationship in sql_alchemy_mapper.relationships:
+
+            relationship = sql_alchemy_mapper.relationships.get(
+                wrapped_field.name, None
+            )
+            if relationship is not None:
                 self._process_relationship(
                     relationship, wrapped_field, dao, dao_variable
                 )
+                continue
 
-            for column in sql_alchemy_mapper.columns:
+            column = sql_alchemy_mapper.columns.get(wrapped_field.name, None)
+            if column is not None:
                 variables, attribute_values = self._process_column(
                     column, wrapped_field, dao, dao_variable
                 )
@@ -154,7 +161,7 @@ class Parameterizer:
         return self.parameterization
 
     def _update_variables_and_event(
-        self, variables: List[Variable], attribute_values: List[Any]
+        self, variables: List[ObjectAccessVariable], attribute_values: List[Any]
     ):
         """
         Update the current parameterization by the given variables and attribute values.
@@ -163,14 +170,13 @@ class Parameterizer:
         :param attribute_values: The attribute values to add to the simple event.
         """
         for variable, attribute_value in zip(variables, attribute_values):
-            if variable is None:
-                continue
+
             self.parameterization.extend_variables([variable])
-            if attribute_value is None:
+            if attribute_value == Ellipsis:
                 continue
 
             self.parameterization.update_simple_event(
-                SimpleEvent({variable: attribute_value})
+                SimpleEvent({variable.variable: attribute_value})
             )
 
     def _process_relationship(
@@ -178,7 +184,7 @@ class Parameterizer:
         relationship: Relationship,
         wrapped_field: WrappedField,
         dao: DataAccessObject,
-        prefix: str,
+        dao_variable: Selectable,
     ):
         """
         Process a SQLAlchemy relationship and add variables and events for it.
@@ -191,28 +197,28 @@ class Parameterizer:
         :param prefix: The prefix to use for variable names.
         """
         attribute_name = relationship.key
-
-        # %% Skip attributes that are not of interest.
-        if not self._is_attribute_of_interest(attribute_name, dao, wrapped_field):
-            return
-
         attribute_dao = getattr(dao, attribute_name)
+        symbolic_attribute_access = getattr(dao_variable, attribute_name)
+
+        if attribute_dao is None:
+            return
 
         # %% one to many relationships
         if wrapped_field.is_one_to_many_relationship:
-            for value in attribute_dao:
-                self.parameterize_dao(
-                    dao=value.target, prefix=f"{prefix}.{attribute_name}"
+            for index, value in enumerate(attribute_dao):
+                if value.target is None:
+                    continue
+                self._parameterize_dao(
+                    dao=value.target,
+                    dao_variable=symbolic_attribute_access[index].target,
                 )
             return
 
         # %% one to one relationships
         if wrapped_field.is_one_to_one_relationship:
-            if attribute_dao is None:
-                attribute_dao = get_dao_class(wrapped_field.type_endpoint)()
-            self.parameterize_dao(
+            self._parameterize_dao(
                 dao=attribute_dao,
-                prefix=f"{prefix}.{attribute_name}",
+                dao_variable=symbolic_attribute_access,
             )
             return
 
@@ -224,10 +230,10 @@ class Parameterizer:
         column: Column,
         wrapped_field: WrappedField,
         dao: DataAccessObject,
-        prefix: str,
-    ) -> Tuple[List[Variable], List[Any]]:
+        dao_variable: Selectable,
+    ) -> Tuple[List[ObjectAccessVariable], List[Any]]:
         """
-        Process a SQLAlchemy column and create variables and events for it.
+        Process an SQLAlchemy column and create variables and events for it.
 
         :param column: The SQLAlchemy column to process.
         :param wrapped_field: The WrappedField potentially corresponding to the column.
@@ -243,21 +249,20 @@ class Parameterizer:
             return [], []
 
         attribute = getattr(dao, attribute_name)
+        symbolic_attribute_access = getattr(dao_variable, attribute_name)
 
-        # %% one to many relationships
         if wrapped_field.is_collection_of_builtins:
             variables = [
                 self._create_variable_from_type(
-                    wrapped_field.type_endpoint, f"{prefix}.{value}"
+                    wrapped_field.type_endpoint, symbolic_attribute_access[index]
                 )
-                for value in attribute
+                for index, value in enumerate(attribute)
             ]
             return variables, attribute
 
-        # %% one to one relationships
         if wrapped_field.is_builtin_type or wrapped_field.is_enum:
             var = self._create_variable_from_type(
-                wrapped_field.type_endpoint, f"{prefix}.{attribute_name}"
+                wrapped_field.type_endpoint, symbolic_attribute_access
             )
             return [var], [attribute]
 
@@ -283,17 +288,15 @@ class Parameterizer:
         :return: True if the attribute is of interest, False otherwise.
         """
         return (
-            attribute_name
-            and wrapped_field.public_name == attribute_name
-            and not wrapped_field.type_endpoint in (datetime, uuid.UUID, str)
-            and not (wrapped_field.is_optional and getattr(dao, attribute_name) is None)
+            not wrapped_field.type_endpoint in (datetime, uuid.UUID, str)
+            and getattr(dao, attribute_name) is not None
         )
 
     def _column_attribute_name(
         self, column: Column, dao: DataAccessObject
     ) -> Optional[str]:
         """
-        Get the attribute name corresponding to a SQLAlchemy Column, if it is not a primary key, foreign key, or polymorphic type.
+        Get the attribute name corresponding to a SQLAlchemy Column if it is not a primary key, foreign key, or polymorphic type.
 
         :return: The attribute name or None if the column is not of interest.
         """
@@ -310,27 +313,33 @@ class Parameterizer:
     def _create_variable_from_type(
         self,
         field_type: Type[enum.Enum] | Type[bool] | Type[int] | Type[float],
-        name: str,
-    ) -> Variable:
+        symbolic_access_variable: AttributeAccessLike,
+    ) -> ObjectAccessVariable:
         """
-        Create a random event variable based on its type.
+        Create an object access variable based on a python type.
 
         :param field_type: The type of the field for which to create the variable. Usually accessed through WrappedField.type_endpoint.
-        :param name: The name of the variable.
+        :param symbolic_access_variable: The EQL statement that accesses the field.
 
-        :return: A random event variable or raise error if the type is not supported.
+        :return: A object access variable or raise error if the type is not supported.
         """
 
         if issubclass(field_type, enum.Enum):
-            return Symbolic(name, Set.from_iterable(list(field_type)))
+            result = Symbolic(
+                str(symbolic_access_variable), Set.from_iterable(field_type)
+            )
         elif issubclass(field_type, bool):
-            return Symbolic(name, Set.from_iterable([True, False]))
+            result = Symbolic(
+                str(symbolic_access_variable), Set.from_iterable([True, False])
+            )
         elif issubclass(field_type, int):
-            return Integer(name)
+            result = Integer(str(symbolic_access_variable))
         elif issubclass(field_type, float):
-            return Continuous(name)
+            result = Continuous(str(symbolic_access_variable))
         else:
             assert_never(field_type)
+
+        return ObjectAccessVariable(result, symbolic_access_variable)
 
     def create_fully_factorized_distribution(
         self,
