@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from typing_extensions import Optional, Iterable, Union as TypingUnion, Dict
 
-from krrood.entity_query_language.core.base_expressions import UnaryExpression, DerivedExpression, SymbolicExpression, Bindings, OperationResult
+from ..core.base_expressions import UnaryExpression, DerivedExpression, SymbolicExpression, Bindings, OperationResult
 from ..failures import (
     NegativeQuantificationError,
     QuantificationConsistencyError,

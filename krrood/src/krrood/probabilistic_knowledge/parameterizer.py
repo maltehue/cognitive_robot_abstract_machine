@@ -10,8 +10,8 @@ from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
 from random_events.set import Set
 from random_events.variable import Continuous, Integer, Symbolic, Variable
 
-from krrood.class_diagrams.class_diagram import WrappedClass
-from krrood.class_diagrams.wrapped_field import WrappedField
+from ..class_diagrams.class_diagram import WrappedClass
+from ..class_diagrams.wrapped_field import WrappedField
 
 SKIPPED_FIELD_TYPES = (datetime,)
 

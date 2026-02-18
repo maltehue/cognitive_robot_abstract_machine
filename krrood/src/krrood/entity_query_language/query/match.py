@@ -21,7 +21,7 @@ from ..failures import (
 )
 from ..predicate import HasType
 from .result_quantifiers import An
-from krrood.entity_query_language.core.variable import Selectable, CanBehaveLikeAVariable, Literal, Attribute, Flatten, DomainType
+from ..core.variable import Selectable, CanBehaveLikeAVariable, Literal, Attribute, Flatten, DomainType
 from ..utils import T
 
 

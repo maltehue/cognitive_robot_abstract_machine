@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 
 from typing_extensions import Optional, Iterator, Iterable, Callable, Any, Collection, Dict
 
-from krrood.entity_query_language.core.base_expressions import UnaryExpression, Bindings, OperationResult, SymbolicExpression
+from ..core.base_expressions import UnaryExpression, Bindings, OperationResult, SymbolicExpression
 from ..failures import NestedAggregationError, InvalidChildType
 from ..utils import T
-from krrood.entity_query_language.core.variable import CanBehaveLikeAVariable, Variable, Selectable
+from ..core.variable import CanBehaveLikeAVariable, Variable, Selectable
 
 
 @dataclass(eq=False, repr=False)

@@ -6,7 +6,7 @@ from typing import Callable, Union as TypingUnion, Type
 
 from typing_extensions import Iterable
 
-from krrood.entity_query_language.core.base_expressions import TruthValueOperator, UnaryExpression, Bindings, \
+from ..core.base_expressions import TruthValueOperator, UnaryExpression, Bindings, \
     OperationResult, BinaryExpression, SymbolicExpression
 
 

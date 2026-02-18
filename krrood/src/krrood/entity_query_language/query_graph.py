@@ -4,19 +4,19 @@ from dataclasses import dataclass, field
 
 from typing_extensions import ClassVar, Optional, Dict
 
-from krrood.entity_query_language.rules.conclusion import Conclusion
-from krrood.entity_query_language.rules.conclusion_selector import ConclusionSelector
-from krrood.entity_query_language.query.query_descriptor import (
+from .rules.conclusion import Conclusion
+from .rules.conclusion_selector import ConclusionSelector
+from .query.query_descriptor import (
     Query,
 )
-from krrood.entity_query_language.query.query_descriptor_operations import OrderedBy, GroupedBy
-from krrood.entity_query_language.query.result_quantifiers import ResultQuantifier
+from .query.query_descriptor_operations import OrderedBy, GroupedBy
+from .query.result_quantifiers import ResultQuantifier
 from .operators.concatenation import Concatenation
-from krrood.entity_query_language.operators.aggregators import Aggregator
-from krrood.entity_query_language.operators.core_logical_operators import LogicalOperator
-from krrood.entity_query_language.core.base_expressions import SymbolicExpression, Filter
-from krrood.entity_query_language.core.variable import Variable, Literal, DomainMapping
-from krrood.entity_query_language.operators.comparator import Comparator
+from .operators.aggregators import Aggregator
+from .operators.core_logical_operators import LogicalOperator
+from .core.base_expressions import SymbolicExpression, Filter
+from .core.variable import Variable, Literal, DomainMapping
+from .operators.comparator import Comparator
 
 try:
     from rustworkx_utils import (

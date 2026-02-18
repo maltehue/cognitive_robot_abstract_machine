@@ -6,14 +6,14 @@ from functools import cached_property, lru_cache
 
 from typing_extensions import Tuple, List, Type, Optional, Callable, TYPE_CHECKING
 
-from krrood.entity_query_language.core.base_expressions import SymbolicExpression
+from ..core.base_expressions import SymbolicExpression
 from ..operators.core_logical_operators import chained_logic, AND
 from ..failures import NoConditionsProvided, LiteralConditionError, \
     AggregatorInWhereConditionsError, NonAggregatorInHavingConditionsError, NonAggregatedSelectedVariablesError
 from .result_quantifiers import ResultQuantificationConstraint, ResultQuantifier, An
 from .query_descriptor_operations import Where, Having, OrderedBy, GroupedBy
 from ..operators.aggregators import Aggregator
-from krrood.entity_query_language.core.variable import Selectable, Literal, DomainMapping, Variable
+from ..core.variable import Selectable, Literal, DomainMapping, Variable
 
 
 if TYPE_CHECKING:

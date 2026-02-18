@@ -15,7 +15,7 @@ from typing_extensions import (
 
 from .enums import PredicateType
 from .utils import T, merge_args_and_kwargs
-from krrood.entity_query_language.core.variable import Variable, _any_of_the_kwargs_is_a_variable
+from .core.variable import Variable, _any_of_the_kwargs_is_a_variable
 from ..symbol_graph.symbol_graph import Symbol
 
 

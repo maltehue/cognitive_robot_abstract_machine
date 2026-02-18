@@ -7,12 +7,12 @@ from functools import cached_property, lru_cache
 from typing_extensions import Tuple, Any, Iterator, Iterable, Optional, Callable, Dict
 
 from ..operators.aggregators import Aggregator, Count
-from krrood.entity_query_language.core.base_expressions import DerivedExpression, SymbolicExpression, \
+from ..core.base_expressions import DerivedExpression, SymbolicExpression, \
     UnaryExpression, Bindings, OperationResult, BinaryExpression, Filter
 from ..failures import UnsupportedAggregationOfAGroupedByVariable
 from ..operators.set_operations import MultiArityExpressionThatPerformsACartesianProduct
 from ..utils import ensure_hashable, is_iterable
-from krrood.entity_query_language.core.variable import Selectable, DomainMapping
+from ..core.variable import Selectable, DomainMapping
 
 
 GroupKey = Tuple[Any, ...]

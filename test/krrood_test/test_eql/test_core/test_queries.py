@@ -7,7 +7,7 @@ import pytest
 import krrood.entity_query_language.factories as eql
 
 from krrood.entity_query_language.factories import entity, set_of, variable, variable_from, distinct, \
-    concatenate, and_, or_, not_, contains, in_, flatten, for_all, exists, an, a, the
+    concatenation, and_, or_, not_, contains, in_, flatten, for_all, exists, an, a, the
 from krrood.entity_query_language.failures import (
     MultipleSolutionFound,
     UnsupportedNegation,
@@ -1018,7 +1018,7 @@ def test_concatenate():
     l2 = [4, 5, 6]
     l1_var = variable_from(l1)
     l2_var = variable_from(l2)
-    query = an(entity(concatenate(l1_var, l2_var)))
+    query = an(entity(concatenation(l1_var, l2_var)))
     results = list(query.evaluate())
     assert results == l1 + l2
 

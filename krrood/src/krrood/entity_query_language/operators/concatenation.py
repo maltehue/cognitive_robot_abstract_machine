@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Tuple, Iterable
 
-from krrood.entity_query_language.core.base_expressions import Bindings, OperationResult
+from ..core.base_expressions import Bindings, OperationResult
 from ..operators.set_operations import Union
 from ..utils import T
-from krrood.entity_query_language.core.variable import CanBehaveLikeAVariable, Selectable
+from ..core.variable import CanBehaveLikeAVariable, Selectable
 
 
 @dataclass(eq=False, repr=False)

@@ -27,14 +27,14 @@ from typing_extensions import (
     Iterator,
 )
 
-from krrood.entity_query_language.core.variable import Selectable, CanBehaveLikeAVariable
+from ..core.variable import Selectable, CanBehaveLikeAVariable
 from .query_builders import WhereBuilder, HavingBuilder, GroupedByBuilder, QuantifierBuilder, OrderedByBuilder
 from .query_descriptor_operations import Where, Having, GroupedBy
 from .result_quantifiers import (
     ResultQuantificationConstraint,
     ResultQuantifier, An,
 )
-from krrood.entity_query_language.core.base_expressions import Bindings, OperationResult, SymbolicExpression, UnaryExpression
+from ..core.base_expressions import Bindings, OperationResult, SymbolicExpression, UnaryExpression
 from ..cache_data import (
     SeenSet,
 )
@@ -108,10 +108,6 @@ class Query(MultiArityExpressionThatPerformsACartesianProduct, ABC):
     Whether the query object descriptor has built the query (wired the query operations) or not. If built already, it
     cannot be modified further and an error will be raised if a user tries to modify the query object descriptor.
     """
-    _expression_: SymbolicExpression = field(init=False)
-    """
-    The expression representing the query, built by wiring the operations together.
-    """
 
     def __post_init__(self):
         for var in self._selected_variables_:
@@ -120,7 +116,6 @@ class Query(MultiArityExpressionThatPerformsACartesianProduct, ABC):
         self._operation_children_ = tuple(self._selected_variables_)
         super().__post_init__()
         self._quantifier_builder_ = QuantifierBuilder(self)
-        self._expression_ = self
 
     @staticmethod
     def modifies_query_structure(method):

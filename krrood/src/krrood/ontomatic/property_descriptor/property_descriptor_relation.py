@@ -7,7 +7,7 @@ from typing_extensions import Optional, Type, Iterable, Tuple, List, TYPE_CHECKI
 from ...class_diagrams.class_diagram import Association
 from ...class_diagrams.wrapped_field import WrappedField
 from .mixins import TransitiveProperty, HasInverseProperty
-from krrood.symbol_graph.symbol_graph import (
+from ...symbol_graph.symbol_graph import (
     PredicateClassRelation,
     SymbolGraph,
     WrappedInstance,

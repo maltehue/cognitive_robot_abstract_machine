@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from typing_extensions import Optional, Iterable
 
 from .conclusion import Conclusion
-from krrood.entity_query_language.operators.set_operations import Union as EQLUnion
-from krrood.entity_query_language.operators.core_logical_operators import LogicalBinaryOperator, OR
-from krrood.entity_query_language.core.base_expressions import Bindings, OperationResult, SymbolicExpression, TruthValueOperator
+from ..operators.set_operations import Union as EQLUnion
+from ..operators.core_logical_operators import LogicalBinaryOperator, OR
+from ..core.base_expressions import Bindings, OperationResult, SymbolicExpression, TruthValueOperator
 
 
 @dataclass(eq=False)

@@ -9,7 +9,7 @@ import operator
 
 from typing_extensions import Union, Iterable
 
-from krrood.entity_query_language.core.base_expressions import SymbolicExpression
+from .core.base_expressions import SymbolicExpression
 from .enums import RDREdge
 from .failures import UnsupportedExpressionTypeForDistinct
 from .query.match import Match, MatchVariable
@@ -22,7 +22,7 @@ from .query.result_quantifiers import ResultQuantifier, ResultQuantificationCons
 from .rules.conclusion_selector import ExceptIf, Alternative, Next
 from .query.query_descriptor import Entity, SetOf, Query
 from .utils import is_iterable
-from krrood.entity_query_language.core.variable import Selectable, DomainType, Literal, CanBehaveLikeAVariable, \
+from .core.variable import Selectable, DomainType, Literal, CanBehaveLikeAVariable, \
     Flatten
 from .predicate import *  # type: ignore
 from ..symbol_graph.symbol_graph import Symbol, SymbolGraph
@@ -108,7 +108,7 @@ def variable_from(
     return Literal(data=domain, name=name, wrap_in_iterator=False)
 
 
-def concatenate(
+def concatenation(
     *variables: Union[Iterable[T], Selectable[T]],
 ) -> Union[T, Selectable[T]]:
     """
