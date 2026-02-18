@@ -209,7 +209,7 @@ def test_print():
     print_node2.start_condition = node1.observation_variable
     end.start_condition = print_node2.observation_variable
 
-    kin_sim = Executor.create_from_parts(world=World())
+    kin_sim = Executor(MotionStatechartContext(world=World()))
     kin_sim.compile(motion_statechart=msc)
 
     assert len(msc.nodes) == 4
@@ -305,7 +305,7 @@ def test_draw_with_invisible_node():
     s1n2.plot_specs.visible = False
     s2n2.plot_specs.visible = False
 
-    kin_sim = Executor.create_from_parts(world=World())
+    kin_sim = Executor(MotionStatechartContext(world=World()))
     kin_sim.compile(motion_statechart=msc)
     msc.draw("muh.pdf")
 
@@ -335,8 +335,10 @@ class TestConditions:
         msc.add_node(Sequence([node]))
         msc.add_node(Sequence([node]))
 
-        kin_sim = Executor.create_from_parts(
-            world=World(),
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=World(),
+            )
         )
         with pytest.raises(NodeAlreadyBelongsToDifferentNodeError):
             kin_sim.compile(motion_statechart=msc)
@@ -347,8 +349,10 @@ class TestConditions:
         msc.add_node(node)
         msc.add_node(Sequence([node]))
 
-        kin_sim = Executor.create_from_parts(
-            world=World(),
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=World(),
+            )
         )
         with pytest.raises(NodeAlreadyBelongsToDifferentNodeError):
             kin_sim.compile(motion_statechart=msc)
@@ -368,8 +372,10 @@ def test_two_goals(pr2_world_state_reset: World):
     )
     msc.add_node(EndMotion.when_true(local_min))
 
-    kin_sim = Executor.create_from_parts(
-        world=pr2_world_state_reset,
+    kin_sim = Executor(
+        MotionStatechartContext(
+            world=pr2_world_state_reset,
+        )
     )
     kin_sim.compile(motion_statechart=msc)
 
@@ -384,8 +390,10 @@ def test_two_goals(pr2_world_state_reset: World):
     )
     msc.add_node(EndMotion.when_true(joint_goal))
 
-    kin_sim = Executor.create_from_parts(
-        world=pr2_world_state_reset,
+    kin_sim = Executor(
+        MotionStatechartContext(
+            world=pr2_world_state_reset,
+        )
     )
     kin_sim.compile(motion_statechart=msc)
 
@@ -456,7 +464,7 @@ class TestMotionStatechartLogic:
         changer.end_condition = node3.observation_variable
         changer.reset_condition = node4.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
 
         assert changer.state is None
@@ -511,7 +519,7 @@ class TestMotionStatechartLogic:
         msc.add_node(cancel)
         cancel.start_condition = node1.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
 
         kin_sim.tick()  # first tick, cancel motion node1 turns true
@@ -537,7 +545,7 @@ class TestMotionStatechartLogic:
         )
         end.start_condition = node1.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
 
         assert len(msc.nodes) == 4
@@ -621,7 +629,7 @@ class TestMotionStatechartLogic:
         msc.add_node(end)
         end.start_condition = goal.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
 
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -743,7 +751,7 @@ class TestMotionStatechartLogic:
             node3.observation_variable,
         )
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         msc.draw("muh.pdf")
 
@@ -830,7 +838,7 @@ class TestMotionStatechartLogic:
         for node in msc.nodes:
             assert node.index == msc_copy.get_node_by_index(node.index).index
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         node1 = msc_copy.get_nodes_by_type(ConstTrueNode)[0]
         outer = msc_copy.get_nodes_by_type(TestNestedGoal)[0]
         end = msc_copy.get_nodes_by_type(EndMotion)[0]
@@ -996,7 +1004,7 @@ def test_set_seed_configuration(pr2_world_state_reset):
     node1.end_condition = node1.observation_variable
     end.start_condition = node1.observation_variable
 
-    kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
     kin_sim.compile(motion_statechart=msc)
 
     kin_sim.tick_until_end()
@@ -1033,7 +1041,7 @@ def test_set_seed_odometry(pr2_world_state_reset):
     node1.end_condition = node1.observation_variable
     end.start_condition = node1.observation_variable
 
-    kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
     kin_sim.compile(motion_statechart=msc)
 
     kin_sim.tick_until_end()
@@ -1095,8 +1103,10 @@ class TestJointTasks:
             task1.observation_variable, always_true.observation_variable
         )
 
-        kin_sim = Executor.create_from_parts(
-            world=world,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=world,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
 
@@ -1146,8 +1156,10 @@ class TestJointTasks:
         msc.add_node(end)
         end.start_condition = joint_goal.observation_variable
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_state_reset,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -1181,8 +1193,10 @@ class TestJointTasks:
         msc.add_node(end)
         end.start_condition = joint_goal.observation_variable
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_state_reset,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -1231,8 +1245,10 @@ def test_long_goal(pr2_world_state_reset: World):
     )
     msc.add_node(EndMotion.when_true(cart_goal))
 
-    kin_sim = Executor.create_from_parts(
-        world=pr2_world_state_reset,
+    kin_sim = Executor(
+        MotionStatechartContext(
+            world=pr2_world_state_reset,
+        )
     )
     kin_sim.compile(motion_statechart=msc)
     t = time.perf_counter()
@@ -1264,7 +1280,7 @@ class TestCartesianTasks:
         )
         msc.add_node(EndMotion.when_true(goal))
 
-        kin_sim = Executor.create_from_parts(world=cylinder_bot_world)
+        kin_sim = Executor(MotionStatechartContext(world=cylinder_bot_world))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1290,8 +1306,10 @@ class TestCartesianTasks:
         msc.add_node(end)
         end.start_condition = cart_goal.observation_variable
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_state_reset,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -1340,7 +1358,7 @@ class TestCartesianTasks:
         )
         msc.add_node(EndMotion.when_true(goal))
 
-        kin_sim = Executor.create_from_parts(world=hsr_world_setup)
+        kin_sim = Executor(MotionStatechartContext(world=hsr_world_setup))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1367,7 +1385,7 @@ class TestCartesianTasks:
         msc.add_node(end)
         end.start_condition = cart_goal.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1416,8 +1434,10 @@ class TestCartesianTasks:
             cart_goal1.observation_variable, cart_goal2.observation_variable
         )
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_state_reset,
+            )
         )
 
         kin_sim.compile(motion_statechart=msc)
@@ -1465,8 +1485,10 @@ class TestCartesianTasks:
             cart_goal1.observation_variable, cart_goal2.observation_variable
         )
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_state_reset,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -1496,8 +1518,10 @@ class TestCartesianTasks:
         msc.add_node(end)
         end.start_condition = cart_goal.observation_variable
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_state_reset,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -1543,7 +1567,7 @@ class TestCartesianTasks:
             cart_goal1.observation_variable, cart_goal2.observation_variable
         )
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1592,7 +1616,7 @@ class TestCartesianTasks:
             cart_goal1.observation_variable, cart_goal2.observation_variable
         )
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1630,7 +1654,7 @@ class TestCartesianTasks:
 
         msc.add_node(EndMotion.when_true(seq))
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1683,7 +1707,7 @@ class TestCartesianTasks:
             cart_goal1.observation_variable, cart_goal2.observation_variable
         )
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1736,7 +1760,7 @@ class TestCartesianTasks:
             cart_goal1.observation_variable, cart_goal2.observation_variable
         )
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1769,7 +1793,7 @@ class TestCartesianTasks:
         msc.add_node(end)
         end.start_condition = cart_straight.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -1884,8 +1908,10 @@ def test_pointing(pr2_world_state_reset: World):
     msc.add_node(end)
     end.start_condition = pointing.observation_variable
 
-    kin_sim = Executor.create_from_parts(
-        world=pr2_world_state_reset,
+    kin_sim = Executor(
+        MotionStatechartContext(
+            world=pr2_world_state_reset,
+        )
     )
     kin_sim.compile(motion_statechart=msc)
     kin_sim.tick_until_end()
@@ -1914,8 +1940,10 @@ def test_pointing_cone(pr2_world_state_reset: World):
     msc.add_node(end)
     end.start_condition = pointing_cone.observation_variable
 
-    kin_sim = Executor.create_from_parts(
-        world=pr2_world_state_reset,
+    kin_sim = Executor(
+        MotionStatechartContext(
+            world=pr2_world_state_reset,
+        )
     )
     kin_sim.compile(motion_statechart=msc)
     kin_sim.tick_until_end()
@@ -1968,8 +1996,10 @@ def test_align_planes(pr2_world_state_reset: World):
     msc.add_node(end)
     end.start_condition = align_planes.observation_variable
 
-    kin_sim = Executor.create_from_parts(
-        world=pr2_world_state_reset,
+    kin_sim = Executor(
+        MotionStatechartContext(
+            world=pr2_world_state_reset,
+        )
     )
     kin_sim.compile(motion_statechart=msc)
     kin_sim.tick_until_end()
@@ -2020,7 +2050,7 @@ def test_align_perpendicular(pr2_world_state_reset: World):
     msc.add_node(end)
     end.start_condition = align_perp.observation_variable
 
-    kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
     kin_sim.compile(motion_statechart=msc)
     kin_sim.tick_until_end()
 
@@ -2080,7 +2110,7 @@ def test_angle_goal(pr2_world_state_reset: World):
 
     msc.add_node(EndMotion.when_true(angle_goal))
 
-    kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
     kin_sim.compile(motion_statechart=msc)
     kin_sim.tick_until_end()
 
@@ -2125,7 +2155,7 @@ class TestVelocityTasks:
         run until end and return (control_cycles, executor)
         """
         msc = self._build_msc(goal_node=goal_node, limit_node=limit_node)
-        kin_sim = Executor.create_from_parts(world=world)
+        kin_sim = Executor(MotionStatechartContext(world=world))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
         return kin_sim.control_cycles, kin_sim
@@ -2179,7 +2209,7 @@ class TestVelocityTasks:
         )
         msc.add_node(cancel_motion)
 
-        kin_sim = Executor.create_from_parts(world=pr2_world_state_reset)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         kin_sim.compile(motion_statechart=msc)
 
         with pytest.raises(Exception):
@@ -2300,8 +2330,10 @@ def test_counting():
         counter.observation_variable, trinary_logic_not(pulse.observation_variable)
     )
 
-    kin_sim = Executor.create_from_parts(
-        world=World(),
+    kin_sim = Executor(
+        MotionStatechartContext(
+            world=World(),
+        )
     )
     kin_sim.compile(motion_statechart=msc)
 
@@ -2325,7 +2357,7 @@ def test_count_ticks():
     msc = MotionStatechart()
     msc.add_node(counter := CountControlCycles(control_cycles=3))
     msc.add_node(EndMotion.when_true(counter))
-    kin_sim = Executor.create_from_parts(world=World())
+    kin_sim = Executor(MotionStatechartContext(world=World()))
     kin_sim.compile(motion_statechart=msc)
     kin_sim.tick_until_end()
     # ending tacks 2 ticks, one to turn EndMotion to Running and one more to turn it to true
@@ -2344,8 +2376,10 @@ class TestEndMotion:
         end = EndMotion.when_all_true(msc.nodes)
         msc.add_node(end)
 
-        kin_sim = Executor.create_from_parts(
-            world=World(),
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=World(),
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -2363,8 +2397,10 @@ class TestEndMotion:
         end = EndMotion.when_all_true(msc.nodes)
         msc.add_node(end)
 
-        kin_sim = Executor.create_from_parts(
-            world=World(),
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=World(),
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         with pytest.raises(TimeoutError):
@@ -2383,8 +2419,10 @@ class TestEndMotion:
         end = EndMotion.when_any_true(msc.nodes)
         msc.add_node(end)
 
-        kin_sim = Executor.create_from_parts(
-            world=World(),
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=World(),
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -2402,8 +2440,10 @@ class TestEndMotion:
         end = EndMotion.when_any_true(msc.nodes)
         msc.add_node(end)
 
-        kin_sim = Executor.create_from_parts(
-            world=World(),
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=World(),
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         with pytest.raises(TimeoutError):
@@ -2415,8 +2455,10 @@ class TestEndMotion:
         msc = MotionStatechart()
         msc.add_node(Sequence([ConstTrueNode(), EndMotion()]))
         with pytest.raises(EndMotionInGoalError):
-            kin_sim = Executor.create_from_parts(
-                world=World(),
+            kin_sim = Executor(
+                MotionStatechartContext(
+                    world=World(),
+                )
             )
             kin_sim.compile(motion_statechart=msc)
 
@@ -2436,7 +2478,7 @@ class TestTemplates:
         msc.add_node(node)
         msc.add_node(EndMotion.when_true(node))
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
         msc.draw("muh.pdf")
@@ -2462,8 +2504,10 @@ class TestTemplates:
         )
         msc.add_node(EndMotion.when_true(parallel))
 
-        kin_sim = Executor.create_from_parts(
-            world=World(),
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=World(),
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -2496,8 +2540,10 @@ class TestTemplates:
         )
         msc.add_node(EndMotion.when_true(parallel))
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_state_reset,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_state_reset,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -2656,8 +2702,10 @@ class TestOpenClose:
         )
         msc.add_node(EndMotion.when_true(msc.nodes[0]))
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_world_setup,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=pr2_world_setup,
+            )
         )
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
@@ -2713,7 +2761,7 @@ class TestCollisionAvoidance:
         kwargs = tracker.create_kwargs()
         msc_copy = MotionStatechart.from_json(new_json_data, **kwargs)
 
-        kin_sim = Executor.create_from_parts(world=cylinder_bot_world)
+        kin_sim = Executor(MotionStatechartContext(world=cylinder_bot_world))
         kin_sim.compile(motion_statechart=msc_copy)
 
         msc_copy.draw("muh.pdf")
@@ -2767,7 +2815,7 @@ class TestCollisionAvoidance:
         kwargs = tracker.create_kwargs()
         msc_copy = MotionStatechart.from_json(new_json_data, **kwargs)
 
-        kin_sim = Executor.create_from_parts(world=self_collision_bot_world)
+        kin_sim = Executor(MotionStatechartContext(world=self_collision_bot_world))
         kin_sim.compile(motion_statechart=msc_copy)
 
         kin_sim.tick_until_end(500)
@@ -2883,8 +2931,10 @@ class TestCollisionAvoidance:
         kwargs = tracker.create_kwargs()
         msc_copy = MotionStatechart.from_json(new_json_data, **kwargs)
 
-        kin_sim = Executor.create_from_parts(
-            world=cylinder_bot_world,
+        kin_sim = Executor(
+            MotionStatechartContext(
+                world=cylinder_bot_world,
+            )
         )
         kin_sim.compile(motion_statechart=msc_copy)
 
@@ -2961,9 +3011,7 @@ class TestCollisionAvoidance:
         msc.add_node(local_min := LocalMinimumReached())
         msc.add_node(EndMotion.when_true(local_min))
 
-        kin_sim = Executor.create_from_parts(
-            world=pr2_with_box, pacer=SimulationPacer(real_time_factor=1.0)
-        )
+        kin_sim = Executor(MotionStatechartContext(world=pr2_with_box))
         kin_sim.compile(motion_statechart=msc)
 
         kin_sim.tick_until_end(500)
@@ -3014,7 +3062,7 @@ class TestCollisionAvoidance:
         msc.add_node(local_min := LocalMinimumReached())
         msc.add_node(EndMotion.when_true(local_min))
 
-        kin_sim = Executor.create_from_parts(world=pr2_with_box)
+        kin_sim = Executor(MotionStatechartContext(world=pr2_with_box))
         kin_sim.compile(motion_statechart=msc)
 
         kin_sim.tick_until_end(500)
@@ -3134,7 +3182,7 @@ class TestLifeCycleTransitions:
         )
         msc.add_node(EndMotion.when_true(sequence))
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -3160,7 +3208,7 @@ class TestLifeCycleTransitions:
         )
         msc.add_node(EndMotion.when_true(sequence))
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -3188,7 +3236,7 @@ class TestLifeCycleTransitions:
         node3.start_condition = node1.observation_variable
         node3.end_condition = node2.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick()
         kin_sim.tick()
@@ -3211,7 +3259,7 @@ class TestLifeCycleTransitions:
         node = TestEndBeforeStart()
         msc.add_node(node)
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick()
         kin_sim.tick()
@@ -3260,7 +3308,7 @@ class TestLifeCycleTransitions:
         count_node2.reset_condition = pulse_node2.observation_variable
         pulse_node1.reset_condition = pulse_node2.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -3485,7 +3533,7 @@ class TestLifeCycleTransitions:
 
         unpause.pause_condition = pulse.observation_variable
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
 
@@ -3506,7 +3554,7 @@ class TestLifeCycleTransitions:
         node1.pause_condition = pulse.observation_variable
         msc.add_node(EndMotion.when_false(pulse))
 
-        kin_sim = Executor.create_from_parts(world=World())
+        kin_sim = Executor(MotionStatechartContext(world=World()))
         kin_sim.compile(motion_statechart=msc)
         kin_sim.tick_until_end()
         msc.plot_gantt_chart()

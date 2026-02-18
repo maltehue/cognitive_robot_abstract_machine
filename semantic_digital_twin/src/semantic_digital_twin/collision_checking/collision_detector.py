@@ -23,9 +23,17 @@ if TYPE_CHECKING:
 
 @dataclass
 class CollisionCheckingResult:
+    """
+    Result of a collision checking operation.
+    """
+
     contacts: list[ClosestPoints] = field(default_factory=list)
 
     def any(self) -> bool:
+        """
+        Check if there are any contacts in the result.
+        :return: True if there are contacts, False otherwise.
+        """
         return len(self.contacts) > 0
 
 
@@ -90,9 +98,22 @@ class ClosestPoints:
 
 @dataclass
 class CollisionDetectorModelUpdater(ModelChangeCallback):
+    """
+    Updates and compiles the collision detector's collision forward kinematics expressions when the world model changes.
+    """
+
     collision_detector: CollisionDetector
+    """
+    Reference to the collision detector.
+    """
     world: World = field(init=False)
+    """
+    Reference to the world.
+    """
     compiled_collision_fks: CompiledFunction = field(init=False)
+    """
+    Compiled collision FK function.
+    """
 
     def __post_init__(self):
         self.world = self.collision_detector.world
@@ -105,6 +126,9 @@ class CollisionDetectorModelUpdater(ModelChangeCallback):
         self.compile_collision_fks()
 
     def compile_collision_fks(self):
+        """
+        Compile the collision FK functions for all bodies with collision.
+        """
         collision_fks = []
         world_root = self.world.root
         for body in self.world.bodies_with_collision:
@@ -133,6 +157,10 @@ class CollisionDetectorModelUpdater(ModelChangeCallback):
 
 @dataclass
 class CollisionDetectorStateUpdater(StateChangeCallback):
+    """
+    Updates the collision detector's collision FK cache when the world state changes.
+    """
+
     collision_detector: CollisionDetector
     world: World = field(init=False)
 
@@ -211,20 +239,3 @@ class CollisionDetector(abc.ABC):
         """
         Reset any caches the collision checker may have.
         """
-
-
-@dataclass
-class NullCollisionDetector(CollisionDetector):
-    def sync_world_model(self) -> None:
-        pass
-
-    def sync_world_state(self) -> None:
-        pass
-
-    def check_collisions(
-        self, collision_matrix: CollisionMatrix
-    ) -> CollisionCheckingResult:
-        return CollisionCheckingResult()
-
-    def reset_cache(self):
-        pass

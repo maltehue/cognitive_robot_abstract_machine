@@ -103,28 +103,14 @@ class Executor:
     # %% init False
     motion_statechart: MotionStatechart = field(init=False)
     """The motion statechart describing the robot's motion logic."""
-    # auxiliary_variable_manager: AuxiliaryVariableManager = field(
-    #     default_factory=AuxiliaryVariableManager, init=False
-    # )
-    # """Manages auxiliary symbolic variables for execution contexts."""
     qp_controller: Optional[QPController] = field(default=None, init=False)
     """Optional quadratic programming controller used for motion control."""
 
-    # control_cycles: int = field(init=False)
-    # """Tracks the number of control cycles elapsed during execution."""
-    # _control_cycles_variable: FloatVariable = field(init=False)
-    # """Auxiliary variable linked to the control_cycles attribute."""
     _control_cycle_index: int = field(init=False)
     """Tracks the index of the current control cycle."""
 
     _time_variable: FloatVariable = field(init=False)
     """Auxiliary variable representing the current time in seconds since the start of the simulation."""
-
-    @classmethod
-    def create_from_parts(cls, world: World, pacer: Pacer | None = None):
-        if pacer is None:
-            pacer = SimulationPacer()
-        return cls(MotionStatechartContext(world=world), pacer=pacer)
 
     @property
     def time(self) -> float:

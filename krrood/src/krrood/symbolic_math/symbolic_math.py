@@ -988,7 +988,13 @@ class FloatVariable(Scalar):
         super().__init__(casadi_sx)
 
     @classmethod
-    def create_with_resolver(cls, name: str, resolver: Callable[[], float]):
+    def create_with_resolver(cls, name: str, resolver: Callable[[], float]) -> Self:
+        """
+        Creates a FloatVariable with a resolver function that is called when the variable is evaluated.
+        :param name: name of the variable
+        :param resolver: callable that returns the value of the variable
+        :return: the FloatVariable
+        """
         self = cls(name)
         self.resolve = resolver
         return self
