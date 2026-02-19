@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
 )
 from std_msgs.msg import ColorRGBA
+from typing_extensions import Callable
 
 from giskardpy.middleware import get_middleware
 from giskardpy.middleware.ros2 import rospy
@@ -49,6 +50,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     SelfCollisionMatrixRule,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
 from semantic_digital_twin.utils import robot_name_from_urdf_string
 from semantic_digital_twin.world import World
@@ -81,6 +83,7 @@ class SelfCollisionMatrixInterface:
     )
     _disabled_links: Set[Body] = field(init=False, default_factory=set)
     collision_matrix: SelfCollisionMatrixRule = field(init=False)
+    robot: AbstractRobot = field(init=False)
 
     @property
     def bodies(self) -> List[Body]:
@@ -115,7 +118,21 @@ class SelfCollisionMatrixInterface:
     def load_urdf(self, urdf_path: str):
         self.world = URDFParser.from_file(urdf_path).parse()
         self.collision_matrix = SelfCollisionMatrixRule()
-        MinimalRobot.from_world(self.world)
+        self.robot = MinimalRobot.from_world(self.world)
+
+    def compute_self_collision_matrix(
+        self, progress_bar: Callable[[int, str], None], **kwargs: dict
+    ):
+        self.collision_matrix.compute_self_collision_matrix(
+            robot=self.robot, progress_callback=progress_bar, **kwargs
+        )
+        self._reasons = {}
+        for collision_check in self.collision_matrix.allowed_collision_pairs:
+            self.set_reason_for_pair(
+                collision_check.body_a,
+                collision_check.body_b,
+                DisableCollisionReason.Unknown,
+            )
 
     def load_srdf(self, srdf_path: str):
         self.collision_matrix = SelfCollisionMatrixRule.from_collision_srdf(
@@ -721,15 +738,18 @@ class Application(QMainWindow):
         dialog = ComputeSelfCollisionMatrixParameterDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             parameters = dialog.get_parameter_map()
-            reasons = (
-                god_map.collision_expression_manager._compute_srdf_button_callback(
-                    self.group_name,
-                    save_to_tmp=False,
-                    progress_callback=self.progress.set_progress,
-                    **parameters,
-                )
+            self.self_collision_matrix_interface.compute_self_collision_matrix(
+                progress_bar=self.progress.set_progress,
+                **parameters,
             )
-            self.table.synchronize(reasons)
+            # reasons = (
+            #     god_map.collision_expression_manager._compute_srdf_button_callback(
+            #         self.group_name,
+            #         save_to_tmp=False,
+            #         **parameters,
+            #     )
+            # )
+            self.table.synchronize()
             self.progress.set_progress(100, "Done checking collisions")
         else:
             self.progress.set_progress(0, "Canceled collision checking")

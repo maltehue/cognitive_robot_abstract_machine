@@ -361,8 +361,10 @@ class AllowNeverInCollision(AllowCollisionRule):
     """
     distance_threshold_range: float = 0.05
     distance_threshold_zero: float = 0.0
-    number_of_tries: int = 100
-    # progress_callback: Optional[Callable[[int, str], None]] = None
+    number_of_tries: int = 50
+    progress_callback: Callable[[int, str], None] = field(
+        default_factory=lambda: lambda value, text: None
+    )
 
     def _update(self, world: World):
         collision_matrix = CollisionMatrix()
@@ -391,8 +393,8 @@ class AllowNeverInCollision(AllowCollisionRule):
                 )
                 # remaining_pairs = collision_matrix.collision_checks.copy()
                 # once_without_contact.update(remaining_pairs.difference(contact_keys))
-                # if try_id % one_percent == 0:
-                #     progress_callback(try_id // one_percent, "checking collisions")
+                if try_id % one_percent == 0:
+                    self.progress_callback(try_id // one_percent, "checking collisions")
             # never_in_contact = remaining_pairs
             # for key in once_without_contact:
             # if key in distance_ranges:
@@ -535,7 +537,6 @@ class SelfCollisionMatrixRule(AllowCollisionRule):
         number_of_tries_always: int = 200,
         almost_percentage: float = 0.95,
         number_of_tries_never: int = 10000,
-        save_to_tmp: bool = True,
         progress_callback: Callable[[int, str], None] | None = None,
     ):
         """
@@ -543,8 +544,6 @@ class SelfCollisionMatrixRule(AllowCollisionRule):
         :param progress_callback: a function that is used to display the progress. it's called with a value of 0-100 and
                                     a string representing the current action
         """
-        if progress_callback is None:
-            progress_callback = lambda value, text: None
         np.random.seed(1337)
         # %% 0. GENERATE ALL POSSIBLE LINK PAIRS
         collision_matrix = CollisionMatrix()
@@ -589,6 +588,7 @@ class SelfCollisionMatrixRule(AllowCollisionRule):
             distance_threshold_min=distance_threshold_never_min,
             distance_threshold_max=distance_threshold_never_max,
             collision_checks=collision_matrix.collision_checks,
+            progress_callback=progress_callback,
         )
         rule.update(robot._world)
         rule.apply_to_collision_matrix(collision_matrix)
@@ -617,7 +617,7 @@ class SelfCollisionMatrixRule(AllowCollisionRule):
             child = etree.SubElement(root, self.SRDF_DISABLE_SELF_COLLISION)
             child.set("link1", body_a.name.name)
             child.set("link2", body_b.name.name)
-            child.set("reason", "idk")
+            child.set("reason", "Unknown")
 
         # Create the XML tree
         tree = etree.ElementTree(root)
