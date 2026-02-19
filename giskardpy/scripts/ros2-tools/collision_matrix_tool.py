@@ -54,6 +54,7 @@ from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
 from semantic_digital_twin.utils import robot_name_from_urdf_string
 from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.world_entity import Body
 
 
@@ -85,6 +86,23 @@ class SelfCollisionMatrixInterface:
     collision_matrix: SelfCollisionMatrixRule = field(init=False)
     robot: AbstractRobot = field(init=False)
 
+    def __post_init__(self):
+        self.world = World()
+        with self.world.modify_world():
+            self.world.add_body(Body(name=PrefixedName("map")))
+        VizMarkerPublisher(self.world, rospy.node).with_tf_publisher()
+
+    def load_urdf(self, urdf_path: str):
+        robot_world = URDFParser.from_file(urdf_path).parse()
+        self.collision_matrix = SelfCollisionMatrixRule()
+        self.robot = MinimalRobot.from_world(robot_world)
+        with self.world.modify_world():
+            self.world.clear()
+            self.world.add_body(map := Body(name=PrefixedName("map")))
+            self.world.merge_world(
+                robot_world, FixedConnection(parent=map, child=robot_world.root)
+            )
+
     @property
     def bodies(self) -> List[Body]:
         return list(sorted(self.world.bodies_with_collision, key=lambda x: x.name.name))
@@ -114,11 +132,6 @@ class SelfCollisionMatrixInterface:
     ):
         body_a, body_b = self.sort_bodies(body_a, body_b)
         self._reasons[body_a, body_b] = reason
-
-    def load_urdf(self, urdf_path: str):
-        self.world = URDFParser.from_file(urdf_path).parse()
-        self.collision_matrix = SelfCollisionMatrixRule()
-        self.robot = MinimalRobot.from_world(self.world)
 
     def compute_self_collision_matrix(
         self, progress_bar: Callable[[int, str], None], **kwargs: dict
@@ -269,7 +282,7 @@ class Table(QTableWidget):
         return self.self_collision_matrix_interface.get_reason_for_pair(body_a, body_b)
 
     def table_item_callback(self, row, column):
-        self.ros_visualizer.clear_marker("")
+        # self.ros_visualizer.clear_marker("")
         # todo color body
         link1 = self.world.get_body_by_name(self.bodies[row])
         link2 = self.world.get_body_by_name(self.bodies[column])
@@ -340,6 +353,7 @@ class Table(QTableWidget):
         # self.table.update_disabled_links(disabled_links)
         # if reasons is not None:
         #     self._reasons = {self.sort_bodies(*k): v for k, v in reasons.items()}
+        self.self_collision_matrix_interface.world.notify_state_change()
         self.clear()
         self.setRowCount(len(self.bodies))
         self.setColumnCount(len(self.bodies))
