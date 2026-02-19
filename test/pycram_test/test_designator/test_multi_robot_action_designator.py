@@ -18,6 +18,7 @@ from pycram.datastructures.enums import (
 )
 from pycram.datastructures.grasp import GraspDescription
 from pycram.datastructures.pose import PoseStamped
+from pycram.datastructures.trajectory import PoseTrajectory
 from pycram.language import SequentialPlan
 from pycram.motion_executor import simulated_robot
 from pycram.testing import _make_sine_scan_poses
@@ -263,16 +264,32 @@ def test_reach_action_multi(immutable_multiple_robot_apartment):
 
 def test_follow_tcp_path_multi(immutable_multiple_robot_apartment):
     world, robot_view, context = immutable_multiple_robot_apartment
-    if isinstance(robot_view, (Stretch, Tiago)):
-        pytest.skip("FollowTCPPathAction currently unsupported for Stretch/Tiago")
+
+    if isinstance(robot_view, (Tiago)):
+        #do not allow since
+        robot_view.full_body_controlled = False
+        robot_view.root.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
+            1.7, 1.7, 0, reference_frame=world.root
+        )
+        world.notify_state_change()
+
+    if isinstance(robot_view, (Stretch)):
+        # do not allow since
+        robot_view.full_body_controlled = False
+        robot_view.root.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
+            2.12, 2.2, 0, reference_frame=world.root
+        )
+        world.notify_state_change()
+    # robot_view.full_body_controlled = True
     left_arm = ViewManager.get_arm_view(Arms.LEFT, robot_view)
+
 
     front_axis = tuple(
         int(v) for v in left_arm.manipulator.front_facing_axis.to_np()[:3]
     )
     grasp_axis = AxisIdentifier.from_tuple(front_axis)
 
-    pose = PoseStamped.from_list([2.37, 2, 1], frame=world.root)
+    pose = PoseStamped.from_spatial_type(world.get_body_by_name("milk.stl").global_pose)
     pose_T = pose.to_spatial_type()
     if grasp_axis == AxisIdentifier.X:
         target_pose = pose
@@ -286,9 +303,11 @@ def test_follow_tcp_path_multi(immutable_multiple_robot_apartment):
     else:
         target_pose = pose
 
-    waypoints = [target_pose]
+    waypoints = PoseTrajectory([target_pose])
     plan = SequentialPlan(
         context,
+        MoveTorsoActionDescription([TorsoState.HIGH]),
+        ParkArmsActionDescription(Arms.BOTH),
         FollowTCPPathActionDescription(arm=Arms.LEFT, target_locations=waypoints),
     )
     with simulated_robot:

@@ -14,7 +14,8 @@ from semantic_digital_twin.datastructures.definitions import (
 )
 from ....datastructures.enums import AxisIdentifier, Arms
 from ....datastructures.partial_designator import PartialDesignator
-from ....datastructures.pose import Vector3Stamped, PoseStamped
+from ....datastructures.pose import Vector3Stamped
+from ....datastructures.trajectory import PoseTrajectory
 from ....failures import TorsoGoalNotReached, ConfigurationNotReached
 from ....language import SequentialPlan
 from ....view_manager import ViewManager
@@ -310,9 +311,9 @@ class FollowTCPPathAction(ActionDescription):
     path of poses.
     """
 
-    target_location: Iterable[PoseStamped]
+    target_location: PoseTrajectory
     """
-    Path poses for the TCP motion as an iterable of PoseStamped objects.
+    Path poses for the TCP motion.
     """
 
     arm: Arms
@@ -321,10 +322,7 @@ class FollowTCPPathAction(ActionDescription):
     """
 
     def execute(self) -> None:
-        target_locations = list(self.target_location)
-
-        if not target_locations:
-            raise ValueError("Provide at least one target location.")
+        target_locations = list(self.target_location.poses)
 
         motion = MoveTCPWaypointsMotion(
             target_locations,
@@ -345,27 +343,10 @@ class FollowTCPPathAction(ActionDescription):
     def description(
         cls,
         arm: Union[Iterable[Arms], Arms],
-        target_locations: Union[Iterable[PoseStamped], PoseStamped] = None,
+        target_locations: Union[Iterable[PoseTrajectory], PoseTrajectory],
     ) -> PartialDesignator[FollowTCPPathAction]:
-        if target_locations is None:
-            raise ValueError("Provide target_locations.")
+        return PartialDesignator(cls, target_location=target_locations, arm=arm)
 
-        if isinstance(target_locations, PoseStamped):
-            raise ValueError(
-                "Provide an iterable of PoseStamped, e.g. [target_pose]."
-            )
-        target_for_designator = list(target_locations)
-
-        if not target_for_designator:
-            raise ValueError("Provide at least one target location.")
-        if not all(isinstance(pose, PoseStamped) for pose in target_for_designator):
-            raise ValueError("All target locations must be PoseStamped.")
-
-        # Wrap waypoints as one designator alternative so PartialDesignator
-        # does not split them into single PoseStamped entries.
-        return PartialDesignator(
-            cls, target_location=[target_for_designator], arm=arm
-        )
 
 
 MoveTorsoActionDescription = MoveTorsoAction.description
