@@ -101,9 +101,7 @@ def conclusion_35528769484583703815352905256802298589(case) -> List[Wardrobe]:
 def conditions_59112619694893607910753808758642808601(case) -> bool:
     def has_handles_and_revolute_connections(case: World) -> bool:
         """Get conditions on whether it's possible to conclude a value for World.semantic_annotations  of type Door."""
-        return any(
-            v for v in case.semantic_annotations if isinstance(v, Handle)
-        ) and any(c for c in case.connections if isinstance(c, RevoluteConnection))
+        return True
 
     return has_handles_and_revolute_connections(case)
 
@@ -111,37 +109,17 @@ def conditions_59112619694893607910753808758642808601(case) -> bool:
 def conclusion_59112619694893607910753808758642808601(case) -> List[Door]:
     def get_doors(case: World) -> List[Door]:
         """Get possible value(s) for World.semantic_annotations  of type Door."""
-        handles = [v for v in case.semantic_annotations if isinstance(v, Handle)]
-        handle_bodies = [h.root for h in handles]
-        connections_with_handles = [
-            c
-            for c in case.connections
-            if isinstance(c, FixedConnection) and c.child in handle_bodies
-        ]
-
-        revolute_connections = [
-            c for c in case.connections if isinstance(c, RevoluteConnection)
-        ]
-        bodies_connected_to_handles = [
-            c.parent if c.child in handle_bodies else c.child
-            for c in connections_with_handles
-        ]
-        bodies_that_have_revolute_joints = [
-            b
-            for b in bodies_connected_to_handles
-            for c in revolute_connections
-            if b == c.child
-        ]
-        body_handle_connections = [
-            c
-            for c in connections_with_handles
-            if c.parent in bodies_that_have_revolute_joints
-        ]
-        doors = [
-            Door(root=c.parent, handle=[h for h in handles if h.root == c.child][0])
-            for c in body_handle_connections
-        ]
-        return doors
+        handle = variable(Handle, case.semantic_annotations)
+        fixed_connection = variable(FixedConnection, case.connections)
+        revolute_connection = variable(RevoluteConnection, case.connections)
+        return (
+            entity(inference(Door)(root=fixed_connection.parent, handle=handle))
+            .where(
+                fixed_connection.child == handle.root,
+                fixed_connection.parent == revolute_connection.child,
+            )
+            .tolist()
+        )
 
     return get_doors(case)
 
@@ -149,11 +127,7 @@ def conclusion_59112619694893607910753808758642808601(case) -> List[Door]:
 def conditions_10840634078579061471470540436169882059(case) -> bool:
     def has_doors_with_fridge_in_their_name(case: World) -> bool:
         """Get conditions on whether it's possible to conclude a value for World.semantic_annotations  of type Fridge."""
-        return any(
-            v
-            for v in case.semantic_annotations
-            if isinstance(v, Door) and "fridge" in v.root.name.name.lower()
-        )
+        return True
 
     return has_doors_with_fridge_in_their_name(case)
 
@@ -161,28 +135,16 @@ def conditions_10840634078579061471470540436169882059(case) -> bool:
 def conclusion_10840634078579061471470540436169882059(case) -> List[Fridge]:
     def get_fridges(case: World) -> List[Fridge]:
         """Get possible value(s) for World.semantic_annotations of type Fridge."""
-        # Get fridge-related doors
-        fridge_doors = [
-            v
-            for v in case.semantic_annotations
-            if isinstance(v, Door) and "fridge" in v.root.name.name.lower()
-        ]
-        # Precompute bodies of the fridge doors
-        fridge_doors_bodies = [d.root for d in fridge_doors]
-        # Filter relevant revolute connections
-        fridge_door_connections = [
-            c
-            for c in case.connections
-            if isinstance(c, RevoluteConnection)
-            and c.child in fridge_doors_bodies
-            and "fridge" in c.parent.name.name.lower()
-        ]
-        return [
-            Fridge(
-                root=c.parent,
-                doors=[fridge_doors[fridge_doors_bodies.index(c.child)]],
+        door = variable(Door, case.semantic_annotations)
+        revolute_connection = variable(RevoluteConnection, case.connections)
+        return (
+            entity(inference(Fridge)(root=revolute_connection.parent, doors=door))
+            .where(
+                revolute_connection.child == door.root,
+                contains(door.root.name.name.lower(), "fridge"),
             )
-            for c in fridge_door_connections
-        ]
+            .grouped_by(revolute_connection.parent)
+            .tolist()
+        )
 
     return get_fridges(case)
