@@ -377,7 +377,7 @@ class AllowNeverInCollision(AllowCollisionRule):
         collision_matrix = CollisionMatrix()
         collision_matrix.collision_checks = self.collision_checks
         for collision_check in self.collision_checks:
-            collision_check.distance = self.distance_threshold_max * 2
+            collision_check.distance = self.distance_threshold_max * 1.1
         with world.reset_state_context():
             one_percent = self.number_of_tries // 100
             distances_cache: dict[CollisionCheck, list[float]] = defaultdict(list)
@@ -395,14 +395,8 @@ class AllowNeverInCollision(AllowCollisionRule):
                 )
                 if try_id % one_percent == 0:
                     self.progress_callback(try_id // one_percent, "checking collisions")
-            for key, distances in list(distances_cache.items()):
-                mean = np.mean(distances)
-                std = np.std(distances)
-                # 99.7% is close enough
-                if mean - 3 * std > self.distance_threshold_zero:
-                    self.allowed_collision_pairs.add(key)
-                if mean + 3 * std < self.distance_threshold_range:
-                    self.allowed_collision_pairs.add(key)
+            self._allow_close_but_never_pairs(distances_cache)
+            self._allow_never_pairs(collision_matrix, distances_cache)
 
     def _update_collision_matrix(
         self,
@@ -419,6 +413,28 @@ class AllowNeverInCollision(AllowCollisionRule):
                 collision_matrix.collision_checks.discard(collision_check)
                 self.robot._world.collision_manager.collision_detector.reset_cache()
                 del distance_ranges[collision_check]
+
+    def _allow_close_but_never_pairs(
+        self, distances_cache: dict[CollisionCheck, list[float]]
+    ):
+        for key, distances in list(distances_cache.items()):
+            mean = np.mean(distances)
+            std = np.std(distances)
+            # 99.7% is close enough
+            if (
+                mean - 3 * std > self.distance_threshold_zero
+                or mean + 3 * std < self.distance_threshold_range
+            ):
+                self.allowed_collision_pairs.add(key)
+                del distances_cache[key]
+
+    def _allow_never_pairs(
+        self,
+        collision_matrix: CollisionMatrix,
+        distances_cache: dict[CollisionCheck, list[float]],
+    ):
+        never = collision_matrix.collision_checks - set(distances_cache.keys())
+        self.allowed_collision_pairs.update(never)
 
     def set_robot_to_rnd_state(self, world: World):
         for degree_of_freedom in self.robot.degrees_of_freedom_with_hardware_interface:

@@ -119,7 +119,7 @@ class ResetStateContextManager:
         self.world = world
 
     def __enter__(self) -> None:
-        self.state = deepcopy(self.world.state)
+        self.state = self.world.state.data.copy()
 
     def __exit__(
         self,
@@ -128,7 +128,7 @@ class ResetStateContextManager:
         exc_tb: Optional[type],
     ) -> None:
         if exc_type is None:
-            self.world.state = self.state
+            self.world.state.data = self.state
             self.world.notify_state_change()
 
 
