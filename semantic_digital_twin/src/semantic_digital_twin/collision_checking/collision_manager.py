@@ -189,6 +189,12 @@ class CollisionManager(ModelChangeCallback):
         consumer.collision_manager = self
         consumer.on_world_model_update(self._world)
 
+    def remove_collision_consumer(self, consumer: CollisionConsumer):
+        """
+        Removes a collision consumer from the list of consumers.
+        """
+        self.collision_consumers.remove(consumer)
+
     def update_collision_matrix(self, buffer: float = 0.05):
         """
         Creates a new collision matrix based on the current rules and applies it to the collision detector.

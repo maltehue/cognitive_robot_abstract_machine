@@ -254,24 +254,30 @@ class ExternalCollisionAvoidance(Goal):
     """
     The maximum velocity for the collision avoidance task.
     """
+    external_collision_manager: ExternalCollisionVariableManager = field(init=False)
+    """
+    Reference to the external collision variable manager shared by other external collision avoidance nodes.
+    """
 
     def expand(self, context: MotionStatechartContext) -> None:
-        external_collision_manager = ExternalCollisionVariableManager(
+        self.external_collision_manager = ExternalCollisionVariableManager(
             context.float_variable_data
         )
-        context.collision_manager.add_collision_consumer(external_collision_manager)
+        context.collision_manager.add_collision_consumer(
+            self.external_collision_manager
+        )
         for body in self.robot.bodies_with_collision:
             if context.collision_manager.get_max_avoided_bodies(body):
-                external_collision_manager.register_group_of_body(body)
+                self.external_collision_manager.register_group_of_body(body)
 
-        for group in external_collision_manager.registered_groups:
+        for group in self.external_collision_manager.registered_groups:
             max_avoided_bodies = group.get_max_avoided_bodies(context.collision_manager)
             for index in range(max_avoided_bodies):
                 distance_monitor = ExternalCollisionDistanceMonitor(
                     name=f"{self.name}/monitor({group.root.name.name, index})",
                     collision_group=group,
                     collision_index=index,
-                    external_collision_manager=external_collision_manager,
+                    external_collision_manager=self.external_collision_manager,
                 )
                 self.add_node(distance_monitor)
 
@@ -280,10 +286,15 @@ class ExternalCollisionAvoidance(Goal):
                     collision_group=group,
                     max_velocity=self.max_velocity,
                     collision_index=index,
-                    external_collision_manager=external_collision_manager,
+                    external_collision_manager=self.external_collision_manager,
                 )
                 self.add_node(task)
                 task.pause_condition = distance_monitor.observation_variable
+
+    def cleanup(self, context: MotionStatechartContext):
+        context.collision_manager.remove_collision_consumer(
+            self.external_collision_manager
+        )
 
 
 @dataclass(eq=False, repr=False)
@@ -441,16 +452,20 @@ class SelfCollisionAvoidance(Goal):
     """
     The maximum velocity for the collision avoidance task.
     """
+    self_collision_manager: SelfCollisionVariableManager = field(init=False)
+    """
+    Reference to the self collision variable manager shared by other self collision avoidance nodes.
+    """
 
     def expand(self, context: MotionStatechartContext) -> None:
-        self_collision_manager = SelfCollisionVariableManager(
+        self.self_collision_manager = SelfCollisionVariableManager(
             context.float_variable_data
         )
-        context.collision_manager.add_collision_consumer(self_collision_manager)
+        context.collision_manager.add_collision_consumer(self.self_collision_manager)
         context.collision_manager.update_collision_matrix()
 
         for group_a, group_b in combinations(
-            self_collision_manager.collision_groups, 2
+            self.self_collision_manager.collision_groups, 2
         ):
             if (
                 group_a.root not in self.robot.kinematic_structure_entities
@@ -458,12 +473,14 @@ class SelfCollisionAvoidance(Goal):
             ):
                 # this is no self collision
                 continue
-            if not self_collision_manager.is_any_collision_checked(group_a, group_b):
+            if not self.self_collision_manager.is_any_collision_checked(
+                group_a, group_b
+            ):
                 continue
-            self_collision_manager.register_groups_of_body_combination(
+            self.self_collision_manager.register_groups_of_body_combination(
                 group_a.root, group_b.root
             )
-            (group_a, group_b) = self_collision_manager.body_pair_to_group_pair(
+            (group_a, group_b) = self.self_collision_manager.body_pair_to_group_pair(
                 group_a.root, group_b.root
             )
 
@@ -471,7 +488,7 @@ class SelfCollisionAvoidance(Goal):
                 name=f"{self.name}/{group_a.root.name.name, group_b.root.name.name}/monitor",
                 collision_group_a=group_a,
                 collision_group_b=group_b,
-                self_collision_manager=self_collision_manager,
+                self_collision_manager=self.self_collision_manager,
             )
             self.add_node(distance_monitor)
 
@@ -480,7 +497,10 @@ class SelfCollisionAvoidance(Goal):
                 collision_group_a=group_a,
                 collision_group_b=group_b,
                 max_velocity=self.max_velocity,
-                self_collision_manager=self_collision_manager,
+                self_collision_manager=self.self_collision_manager,
             )
             self.add_node(task)
             task.pause_condition = distance_monitor.observation_variable
+
+    def cleanup(self, context: MotionStatechartContext):
+        context.collision_manager.remove_collision_consumer(self.self_collision_manager)

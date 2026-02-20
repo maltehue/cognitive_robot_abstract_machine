@@ -177,6 +177,7 @@ class Executor:
             raise TimeoutError("Timeout reached while waiting for end of motion.")
         finally:
             self._set_velocity_acceleration_jerk_to_zero()
+            self.motion_statechart.cleanup_nodes(context=self.context)
 
     def _set_velocity_acceleration_jerk_to_zero(self):
         self.context.world.state.velocities[:] = 0

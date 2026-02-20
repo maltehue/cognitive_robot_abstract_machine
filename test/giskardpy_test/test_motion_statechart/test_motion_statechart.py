@@ -2769,6 +2769,59 @@ class TestCollisionAvoidance:
         collisions = kin_sim.context.world.collision_manager.compute_collisions()
         assert len(collisions.contacts) == 1
         assert collisions.contacts[0].distance > 0.049
+        assert len(cylinder_bot_world.collision_manager.collision_consumers) == 0
+
+    def test_consumer_cleanup_after_cancel(self, cylinder_bot_world: World):
+        robot = cylinder_bot_world.get_semantic_annotations_by_type(AbstractRobot)[0]
+        tip = cylinder_bot_world.get_kinematic_structure_entity_by_name("bot")
+        env1 = cylinder_bot_world.get_kinematic_structure_entity_by_name("environment")
+        env2 = cylinder_bot_world.get_kinematic_structure_entity_by_name("environment2")
+
+        collision_manager = cylinder_bot_world.collision_manager
+        collision_manager.temporary_rules.extend(
+            [
+                AvoidCollisionBetweenGroups(
+                    buffer_zone_distance=0.05,
+                    violated_distance=0.0,
+                    body_group_a=[tip],
+                    body_group_b=[env1],
+                ),
+            ]
+        )
+        collision_manager.max_avoided_bodies_rules.append(
+            MaxAvoidedCollisionsOverride(2, {robot.root})
+        )
+
+        msc = MotionStatechart()
+        msc.add_nodes(
+            [
+                CartesianPose(
+                    root_link=cylinder_bot_world.root,
+                    tip_link=tip,
+                    goal_pose=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        x=1, reference_frame=cylinder_bot_world.root
+                    ),
+                ),
+                ExternalCollisionAvoidance(robot=robot),
+                local_min := LocalMinimumReached(),
+            ]
+        )
+        msc.add_node(
+            Sequence(
+                [
+                    CountControlCycles(control_cycles=5),
+                    CancelMotion(exception=Exception("muh")),
+                ]
+            )
+        )
+        msc.add_node(EndMotion.when_true(local_min))
+
+        kin_sim = Executor(MotionStatechartContext(world=cylinder_bot_world))
+        kin_sim.compile(motion_statechart=msc)
+
+        with pytest.raises(Exception, match="muh"):
+            kin_sim.tick_until_end(500)
+        assert len(cylinder_bot_world.collision_manager.collision_consumers) == 0
 
     def test_self_collision_avoidance(self, self_collision_bot_world: World):
 
@@ -2824,6 +2877,7 @@ class TestCollisionAvoidance:
         assert len(collisions.contacts) == 1
         for contact in collisions.contacts:
             assert contact.distance > 0.249
+        assert len(self_collision_bot_world.collision_manager.collision_consumers) == 0
 
     def test_hard_constraints_violated(self, cylinder_bot_world: World):
         root = cylinder_bot_world.root

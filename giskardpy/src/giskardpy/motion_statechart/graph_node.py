@@ -748,6 +748,12 @@ class MotionStatechartNode(SubclassJSONSerializer):
         .. warning:: This method is called inside a control loop, make sure it is fast.
         """
 
+    def cleanup(self, context: MotionStatechartContext):
+        """
+        Triggered after an EndMotion or CancelMotion was triggered.
+        Place code here to clean up after execution.
+        """
+
     def __hash__(self):
         return hash(self.name)
 

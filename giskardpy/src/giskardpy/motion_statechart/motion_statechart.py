@@ -576,6 +576,10 @@ class MotionStatechart(SubclassJSONSerializer):
             if self.observation_state[node] == ObservationStateValues.TRUE:
                 raise node.exception
 
+    def cleanup_nodes(self, context: MotionStatechartContext):
+        for node in self.nodes:
+            node.cleanup(context)
+
     def draw(self, file_name: str):
         """
         Uses graphviz to draw the motion statechart and safe it at `file_name`.
