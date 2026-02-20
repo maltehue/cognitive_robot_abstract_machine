@@ -1,3 +1,4 @@
+from copy import deepcopy
 from unittest.mock import MagicMock, patch
 import pytest
 from rclpy.duration import Duration
@@ -47,6 +48,36 @@ def test_tf_publisher(rclpy_node, pr2_world_state_reset):
     assert transform.transform == transform2.transform
 
     tf_wrapper.lookup_transform("odom_combined", "pr2/r_gripper_tool_frame")
+
+
+def test_clear(rclpy_node, pr2_world_copy):
+    tf_wrapper = TFWrapper(node=rclpy_node)
+    tf_publisher = TFPublisher(
+        node=rclpy_node,
+        _world=pr2_world_copy,
+    )
+
+    assert tf_wrapper.wait_for_transform(
+        "odom_combined",
+        "pr2/base_footprint",
+        timeout=Duration(seconds=1.0),
+        time=Time(),
+    )
+
+    world_copy = deepcopy(pr2_world_copy)
+    pr2_world_copy.clear()
+    with pr2_world_copy.modify_world():
+        pr2_world_copy.merge_world(world_copy)
+
+    tf_wrapper.tf_buffer.clear()
+    pr2_world_copy.notify_state_change()
+
+    assert tf_wrapper.wait_for_transform(
+        "odom_combined",
+        "pr2/base_footprint",
+        timeout=Duration(seconds=1.0),
+        time=Time(),
+    )
 
 
 def test_tf_publisher_ignore_robot(rclpy_node, pr2_world_copy):

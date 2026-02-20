@@ -3,6 +3,9 @@ from itertools import combinations
 
 import pytest
 
+from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
+    VizMarkerPublisher,
+)
 from semantic_digital_twin.collision_checking.collision_detector import (
     CollisionCheckingResult,
 )
@@ -23,6 +26,10 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidExternalCollisions,
     AllowSelfCollisions,
     AvoidSelfCollisions,
+    SelfCollisionMatrixRule,
+    AllowDefaultInCollision,
+    AllowAlwaysInCollision,
+    AllowNeverInCollision,
 )
 from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
     BulletCollisionDetector,
@@ -276,6 +283,72 @@ class TestCollisionRules:
             )
             == 4
         )
+
+    def test_compute_self_collision_matrix(self, pr2_world_state_reset, rclpy_node):
+        VizMarkerPublisher(
+            _world=pr2_world_state_reset, node=rclpy_node
+        ).with_tf_publisher()
+        pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+        base_link = pr2_world_state_reset.get_body_by_name("base_link")
+        head_pan_link = pr2_world_state_reset.get_body_by_name("head_pan_link")
+        collision_checks = {
+            CollisionCheck(body_a, body_b)
+            for body_a, body_b in combinations(
+                pr2_world_state_reset.bodies_with_collision, 2
+            )
+        }
+        rule = SelfCollisionMatrixRule()
+        rule.compute_self_collision_matrix(pr2, number_of_tries_never=200)
+        expected_check = CollisionCheck.create_and_validate(base_link, head_pan_link)
+        assert expected_check in rule.allowed_collision_pairs
+        assert 0 < len(rule.allowed_collision_pairs) < len(collision_checks)
+        rule.save_self_collision_matrix(robot_name=pr2.name.name, file_name="test.srdf")
+
+        rule = SelfCollisionMatrixRule()
+        rule.allowed_collision_bodies = {base_link}
+        rule.compute_self_collision_matrix(pr2, number_of_tries_never=200)
+        for collision_check in rule.allowed_collision_pairs:
+            assert (
+                base_link != collision_check.body_a
+                and base_link != collision_check.body_b
+            )
+
+    def test_AllowAlwaysInSelfCollision(self, pr2_world_state_reset):
+        robot = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+        rule = AllowDefaultInCollision(
+            bodies=pr2_world_state_reset.bodies_with_collision,
+            robot=robot,
+        )
+        rule.update(pr2_world_state_reset)
+        assert (
+            0
+            < len(rule.allowed_collision_pairs)
+            < len(list(combinations(pr2_world_state_reset.bodies_with_collision, 2)))
+        )
+
+    def test_AllowAlwaysInCollision(self, pr2_world_state_reset):
+        robot = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+        collision_checks = {
+            CollisionCheck(body_a, body_b)
+            for body_a, body_b in combinations(
+                pr2_world_state_reset.bodies_with_collision, 2
+            )
+        }
+        rule = AllowAlwaysInCollision(robot=robot, collision_checks=collision_checks)
+        rule.update(pr2_world_state_reset)
+        assert 0 < len(rule.allowed_collision_pairs) < len(collision_checks)
+
+    def test_AllowNeverInCollision(self, pr2_world_state_reset):
+        robot = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+        collision_checks = {
+            CollisionCheck(body_a, body_b)
+            for body_a, body_b in combinations(
+                pr2_world_state_reset.bodies_with_collision, 2
+            )
+        }
+        rule = AllowNeverInCollision(robot=robot, collision_checks=collision_checks)
+        rule.update(pr2_world_state_reset)
+        assert 0 < len(rule.allowed_collision_pairs) < len(collision_checks)
 
     def test_AllowCollisionForAdjacentPairs(self, pr2_world_state_reset):
         pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]

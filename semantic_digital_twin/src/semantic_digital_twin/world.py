@@ -117,7 +117,7 @@ class ResetStateContextManager:
         self.world = world
 
     def __enter__(self) -> None:
-        self.state = deepcopy(self.world.state)
+        self.state = self.world.state.data.copy()
 
     def __exit__(
         self,
@@ -126,7 +126,7 @@ class ResetStateContextManager:
         exc_tb: Optional[type],
     ) -> None:
         if exc_type is None:
-            self.world.state = self.state
+            self.world.state.data[:] = self.state
             self.world.notify_state_change()
 
 
@@ -1759,7 +1759,7 @@ class World(HasSimulatorProperties):
 
             self.semantic_annotations.clear()
             self.degrees_of_freedom.clear()
-            self.state = WorldState(_world=self)
+            self.state.clear()
         self._world_entity_hash_table.clear()
         self._model_manager.model_modification_blocks.clear()
 

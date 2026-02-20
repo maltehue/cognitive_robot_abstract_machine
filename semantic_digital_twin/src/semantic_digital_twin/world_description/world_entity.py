@@ -251,14 +251,14 @@ class WorldEntityWithClassBasedID(WorldEntityWithID):
 
 
 @dataclass(eq=False)
-class SimulatedWorldEntity(WorldEntityWithID, HasSimulatorProperties):
+class WorldEntityWithSimulatorProperties(WorldEntityWithID, HasSimulatorProperties):
     """
     A WorldEntity that has properties relevant for simulation.
     """
 
 
 @dataclass(eq=False)
-class KinematicStructureEntity(SimulatedWorldEntity, ABC):
+class KinematicStructureEntity(WorldEntityWithSimulatorProperties, ABC):
     """
     An entity that is part of the kinematic structure of the world.
     """
@@ -510,7 +510,7 @@ GenericWorldEntity = TypeVar("GenericWorldEntity", bound=WorldEntity)
 
 
 @dataclass(eq=False)
-class SemanticAnnotation(SimulatedWorldEntity):
+class SemanticAnnotation(WorldEntityWithSimulatorProperties):
     """
     Represents a semantic annotation on a set of bodies in the world.
 
@@ -1032,7 +1032,7 @@ def _attr_values(
 
 
 @dataclass(eq=False)
-class Actuator(SimulatedWorldEntity):
+class Actuator(WorldEntityWithSimulatorProperties):
     """
     Represents an actuator in the world model.
     """

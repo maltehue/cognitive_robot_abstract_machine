@@ -44,8 +44,8 @@ jobs:
           source /opt/ros/cram-env/bin/activate
           poetry install
 
-      - name: Cache .cache directory
-        uses: actions/cache@v4
+      - name: Restore cache
+        uses: actions/cache/restore@v4
         with:
           path: /github/home/.cache
           key: ${{ runner.os }}-cache-${{ github.ref_name }}
@@ -65,3 +65,10 @@ jobs:
           source /opt/ros/overlay_ws/install/setup.bash
           source /opt/ros/cram-env/bin/activate
           python -m pytest -sv cognitive_robot_abstract_machine/test/${{ inputs.lib }}_test
+
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /github/home/.cache
+          key: ${{ runner.os }}-cache-${{ github.ref_name }}

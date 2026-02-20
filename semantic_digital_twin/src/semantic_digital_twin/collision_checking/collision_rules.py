@@ -1,13 +1,24 @@
 from __future__ import annotations
 
-from abc import abstractmethod, ABC
+from abc import ABC
+from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Dict, Any
+from itertools import combinations, combinations_with_replacement
 
+import numpy as np
 from lxml import etree
-from typing_extensions import List, Protocol, TYPE_CHECKING, runtime_checkable, Self
+from typing_extensions import (
+    List,
+    TYPE_CHECKING,
+    Self,
+    Iterable,
+    Callable,
+    ClassVar,
+)
 
+from .collision_detector import ClosestPoints, CollisionCheckingResult
 from krrood.adapters.json_serializer import SubclassJSONSerializer, to_json, from_json
 from .collision_matrix import (
     CollisionRule,
@@ -202,10 +213,15 @@ class AllowAllCollisions(AllowCollisionRule):
     Removed all collision checks from the collision matrix.
     """
 
-    world: World = field(kw_only=True)
-
     def _update(self, world: World):
         self.allowed_collision_bodies = set(world.bodies_with_collision)
+
+
+@dataclass
+class AllowCollisionForBodies(AllowCollisionRule):
+    allowed_collision_bodies: set[Body] = field(default_factory=set)
+
+    def _update(self, world: World): ...
 
 
 @dataclass
@@ -274,6 +290,186 @@ class AllowSelfCollisions(AllowCollisionRule):
 
 
 @dataclass
+class AllowDefaultInCollision(AllowCollisionRule):
+    robot: AbstractRobot = field(kw_only=True)
+    bodies: list[Body] = field(kw_only=True)
+    collision_threshold: float = 0.0
+
+    def _update(self, world: World):
+        with world.reset_state_context():
+            self.set_robot_to_default_state(world)
+            collision_matrix = CollisionMatrix()
+            rule = AvoidCollisionBetweenGroups(
+                buffer_zone_distance=self.collision_threshold,
+                body_group_a=self.bodies,
+                body_group_b=self.bodies,
+            )
+            rule.update(world)
+            rule.apply_to_collision_matrix(collision_matrix)
+            closest_points = (
+                world.collision_manager.collision_detector.check_collisions(
+                    collision_matrix
+                )
+            )
+            self.allowed_collision_pairs = {
+                CollisionCheck(closest_point.body_a, closest_point.body_b)
+                for closest_point in closest_points.contacts
+            }
+
+    def set_robot_to_default_state(self, world: World):
+        for degree_of_freedom in self.robot.degrees_of_freedom_with_hardware_interface:
+            if degree_of_freedom.has_position_limits():
+                lower_limit = degree_of_freedom.limits.lower.position
+                upper_limit = degree_of_freedom.limits.upper.position
+                world.state[degree_of_freedom.id].position = (
+                    lower_limit + upper_limit / 2
+                )
+            else:
+                world.state[degree_of_freedom.id].position = 0
+        world.notify_state_change()
+
+
+@dataclass
+class AllowAlwaysInCollision(AllowCollisionRule):
+    robot: AbstractRobot = field(kw_only=True)
+    collision_checks: set[CollisionCheck] = field(default_factory=set)
+    distance_threshold_always: float = 0.005
+    number_of_tries: int = 200
+    almost_percentage: float = 0.95
+
+    def _update(self, world: World):
+        collision_matrix = CollisionMatrix()
+        collision_matrix.collision_checks = self.collision_checks
+        for collision_check in self.collision_checks:
+            collision_check.distance = self.distance_threshold_always
+        with world.reset_state_context():
+            counts: dict[CollisionCheck, int] = defaultdict(int)
+            for try_id in range(int(self.number_of_tries)):
+                self.set_robot_to_rnd_state(world)
+                closest_points = (
+                    world.collision_manager.collision_detector.check_collisions(
+                        collision_matrix
+                    )
+                )
+                for closest_point in closest_points.contacts:
+                    collision_check = CollisionCheck(
+                        closest_point.body_a, closest_point.body_b
+                    )
+                    counts[collision_check] += 1
+            for collision_check, count in counts.items():
+                if count > self.number_of_tries * self.almost_percentage:
+                    self.allowed_collision_pairs.add(collision_check)
+
+    def set_robot_to_rnd_state(self, world: World):
+        for degree_of_freedom in self.robot.degrees_of_freedom_with_hardware_interface:
+            if degree_of_freedom.has_position_limits():
+                lower_limit = degree_of_freedom.limits.lower.position
+                upper_limit = degree_of_freedom.limits.upper.position
+                rnd_position = (
+                    np.random.random() * (upper_limit - lower_limit)
+                ) + lower_limit
+            else:
+                rnd_position = np.random.random() * np.pi * 2
+            world.state[degree_of_freedom.id].position = rnd_position
+        world.notify_state_change()
+
+
+@dataclass
+class AllowNeverInCollision(AllowCollisionRule):
+    robot: AbstractRobot = field(kw_only=True)
+    collision_checks: set[CollisionCheck] = field(default_factory=set)
+    distance_threshold_max: float = 0.05
+    distance_threshold_min: float = -0.02
+    """
+    If a pair is below this distance, they are not allowed.
+    """
+    distance_threshold_range: float = 0.05
+    distance_threshold_zero: float = 0.0
+    number_of_tries: int = 10_000
+    progress_callback: Callable[[int, str], None] | None = field(default=None)
+
+    def __post_init__(self):
+        if self.progress_callback is None:
+            self.progress_callback = lambda value, text: None
+
+    def _update(self, world: World):
+        collision_matrix = CollisionMatrix()
+        collision_matrix.collision_checks = self.collision_checks
+        for collision_check in self.collision_checks:
+            collision_check.distance = self.distance_threshold_max * 1.1
+        with world.reset_state_context():
+            one_percent = self.number_of_tries // 100
+            distances_cache: dict[CollisionCheck, list[float]] = defaultdict(list)
+            for try_id in range(int(self.number_of_tries)):
+                self.set_robot_to_rnd_state(world)
+                closest_points = (
+                    world.collision_manager.collision_detector.check_collisions(
+                        collision_matrix
+                    )
+                )
+                self._update_collision_matrix(
+                    closest_points=closest_points,
+                    collision_matrix=collision_matrix,
+                    distance_ranges=distances_cache,
+                )
+                if try_id % one_percent == 0:
+                    self.progress_callback(try_id // one_percent, "checking collisions")
+            self._allow_close_but_never_pairs(distances_cache)
+            self._allow_never_pairs(collision_matrix, distances_cache)
+
+    def _update_collision_matrix(
+        self,
+        closest_points: CollisionCheckingResult,
+        collision_matrix: CollisionMatrix,
+        distance_ranges: dict[CollisionCheck, list[float]],
+    ):
+        contact_keys = set()
+        for contact in closest_points.contacts:
+            collision_check = CollisionCheck(contact.body_a, contact.body_b)
+            contact_keys.add(collision_check)
+            distance_ranges[collision_check].append(contact.distance)
+            if contact.distance < self.distance_threshold_min:
+                collision_matrix.collision_checks.discard(collision_check)
+                self.robot._world.collision_manager.collision_detector.reset_cache()
+                del distance_ranges[collision_check]
+
+    def _allow_close_but_never_pairs(
+        self, distances_cache: dict[CollisionCheck, list[float]]
+    ):
+        for key, distances in list(distances_cache.items()):
+            mean = np.mean(distances)
+            std = np.std(distances)
+            # 99.7% is close enough
+            if (
+                mean - 3 * std > self.distance_threshold_zero
+                or mean + 3 * std < self.distance_threshold_range
+            ):
+                self.allowed_collision_pairs.add(key)
+                del distances_cache[key]
+
+    def _allow_never_pairs(
+        self,
+        collision_matrix: CollisionMatrix,
+        distances_cache: dict[CollisionCheck, list[float]],
+    ):
+        never = collision_matrix.collision_checks - set(distances_cache.keys())
+        self.allowed_collision_pairs.update(never)
+
+    def set_robot_to_rnd_state(self, world: World):
+        for degree_of_freedom in self.robot.degrees_of_freedom_with_hardware_interface:
+            if degree_of_freedom.has_position_limits():
+                lower_limit = degree_of_freedom.limits.lower.position
+                upper_limit = degree_of_freedom.limits.upper.position
+                rnd_position = (
+                    np.random.random() * (upper_limit - lower_limit)
+                ) + lower_limit
+            else:
+                rnd_position = np.random.random() * np.pi * 2
+            world.state[degree_of_freedom.id].position = rnd_position
+        world.notify_state_change()
+
+
+@dataclass
 class AllowCollisionForAdjacentPairs(AllowCollisionRule):
     """
     Allow collision between body pairs of a robot that are connected by a chain that has no controllable connection.
@@ -297,6 +493,10 @@ class SelfCollisionMatrixRule(AllowCollisionRule, SubclassJSONSerializer):
     Used to load collision matrices sorted as srdf, e.g., those created by moveit.
     """
 
+    SRDF_DISABLE_ALL_COLLISIONS: ClassVar[str] = "disable_all_collisions"
+    SRDF_DISABLE_SELF_COLLISION: ClassVar[str] = "disable_self_collision"
+    SRDF_MOVEIT_DISABLE_COLLISIONS: ClassVar[str] = "disable_collisions"
+
     def update(self, world: World): ...
 
     def _update(self, world: World): ...
@@ -314,9 +514,6 @@ class SelfCollisionMatrixRule(AllowCollisionRule, SubclassJSONSerializer):
         :param file_path: The path to the SRDF file used for collision configuration.
         """
         self = cls()
-        SRDF_DISABLE_ALL_COLLISIONS: str = "disable_all_collisions"
-        SRDF_DISABLE_SELF_COLLISION: str = "disable_self_collision"
-        SRDF_MOVEIT_DISABLE_COLLISIONS: str = "disable_collisions"
 
         srdf = etree.parse(file_path)
         srdf_root = srdf.getroot()
@@ -324,7 +521,7 @@ class SelfCollisionMatrixRule(AllowCollisionRule, SubclassJSONSerializer):
         children_with_tag = [child for child in srdf_root if hasattr(child, "tag")]
 
         child_disable_collisions = [
-            c for c in children_with_tag if c.tag == SRDF_DISABLE_ALL_COLLISIONS
+            c for c in children_with_tag if c.tag == self.SRDF_DISABLE_ALL_COLLISIONS
         ]
 
         for c in child_disable_collisions:
@@ -334,7 +531,8 @@ class SelfCollisionMatrixRule(AllowCollisionRule, SubclassJSONSerializer):
         child_disable_moveit_and_self_collision = [
             c
             for c in children_with_tag
-            if c.tag in {SRDF_MOVEIT_DISABLE_COLLISIONS, SRDF_DISABLE_SELF_COLLISION}
+            if c.tag
+            in {self.SRDF_MOVEIT_DISABLE_COLLISIONS, self.SRDF_DISABLE_SELF_COLLISION}
         ]
 
         disabled_collision_pairs = [
@@ -377,3 +575,120 @@ class SelfCollisionMatrixRule(AllowCollisionRule, SubclassJSONSerializer):
         )
 
         return self
+
+    def compute_self_collision_matrix(
+        self,
+        robot: AbstractRobot,
+        distance_threshold_zero: float = 0.0,
+        distance_threshold_always: float = 0.005,
+        distance_threshold_never_max: float = 0.05,
+        distance_threshold_never_min: float = -0.02,
+        distance_threshold_never_range: float = 0.05,
+        distance_threshold_never_zero: float = 0.0,
+        number_of_tries_always: int = 200,
+        almost_percentage: float = 0.95,
+        number_of_tries_never: int = 10000,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ):
+        """
+        :param use_collision_checker: if False, only the parts will be called that don't require collision checking.
+        :param progress_callback: a function that is used to display the progress. it's called with a value of 0-100 and
+                                    a string representing the current action
+        """
+        self.allowed_collision_pairs = set()
+        np.random.seed(1337)
+        # %% 0. GENERATE ALL POSSIBLE LINK PAIRS
+        collision_matrix = CollisionMatrix()
+        rule = AvoidSelfCollisions(robot=robot)
+        rule.update(robot._world)
+        rule.apply_to_collision_matrix(collision_matrix)
+
+        rule = AllowCollisionForBodies(
+            allowed_collision_bodies=self.allowed_collision_bodies
+        )
+        rule.apply_to_collision_matrix(collision_matrix)
+
+        # %%
+        rule = AllowCollisionForAdjacentPairs()
+        rule.update(robot._world)
+        rule.apply_to_collision_matrix(collision_matrix)
+        self.allowed_collision_pairs.update(rule.allowed_collision_pairs)
+
+        # %%
+        rule = AllowDefaultInCollision(
+            robot=robot,
+            bodies=robot.bodies_with_collision,
+            collision_threshold=distance_threshold_zero,
+        )
+        rule.update(robot._world)
+        rule.apply_to_collision_matrix(collision_matrix)
+        self.allowed_collision_pairs.update(rule.allowed_collision_pairs)
+
+        # %%
+        rule = AllowAlwaysInCollision(
+            robot=robot,
+            distance_threshold_always=distance_threshold_always,
+            number_of_tries=number_of_tries_always,
+            almost_percentage=almost_percentage,
+            collision_checks=collision_matrix.collision_checks,
+        )
+        rule.update(robot._world)
+        rule.apply_to_collision_matrix(collision_matrix)
+        self.allowed_collision_pairs.update(rule.allowed_collision_pairs)
+
+        # %%
+        rule = AllowNeverInCollision(
+            robot=robot,
+            distance_threshold_range=distance_threshold_never_range,
+            distance_threshold_zero=distance_threshold_never_zero,
+            number_of_tries=number_of_tries_never,
+            distance_threshold_min=distance_threshold_never_min,
+            distance_threshold_max=distance_threshold_never_max,
+            collision_checks=collision_matrix.collision_checks,
+            progress_callback=progress_callback,
+        )
+        rule.update(robot._world)
+        rule.apply_to_collision_matrix(collision_matrix)
+        self.allowed_collision_pairs.update(rule.allowed_collision_pairs)
+
+        self.allowed_collision_pairs = {
+            collision_check
+            for collision_check in self.allowed_collision_pairs
+            if collision_check.body_a not in self.allowed_collision_bodies
+            and collision_check.body_b not in self.allowed_collision_bodies
+        }
+
+    def save_self_collision_matrix(
+        self,
+        robot_name: str,
+        file_name: str,
+    ):
+        # Create the root element
+        root = etree.Element("robot")
+        root.set("name", robot_name)
+
+        # %% disabled links
+        for body in sorted(self.allowed_collision_bodies, key=lambda b: b.name.name):
+            child = etree.SubElement(root, self.SRDF_DISABLE_ALL_COLLISIONS)
+            child.set("link", body.name.name)
+
+        # %% self collision matrix
+        for collision_check in sorted(
+            self.allowed_collision_pairs,
+            key=lambda c: f"{c.body_a.name.name}{c.body_b.name.name}",
+        ):
+            body_a, body_b = collision_check.body_a, collision_check.body_b
+            child = etree.SubElement(root, self.SRDF_DISABLE_SELF_COLLISION)
+            child.set("link1", body_a.name.name)
+            child.set("link2", body_b.name.name)
+            child.set("reason", "Unknown")
+
+        # Create the XML tree
+        tree = etree.ElementTree(root)
+
+        tree.write(
+            file_name,
+            pretty_print=True,
+            xml_declaration=True,
+            encoding=tree.docinfo.encoding,
+        )

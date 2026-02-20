@@ -28,6 +28,7 @@ from ..world_description.connections import (
     OmniDrive,
     ActiveConnection1DOF,
 )
+from ..world_description.degree_of_freedom import DegreeOfFreedom
 from ..world_description.geometry import BoundingBox
 from ..world_description.shape_collection import BoundingBoxCollection
 from ..world_description.world_entity import (
@@ -477,6 +478,23 @@ class AbstractRobot(Agent, ABC):
         A subset of the robot's connections that are controlled by a controller.
         """
         return set(self._world.controlled_connections) & set(self.connections)
+
+    @property
+    def degrees_of_freedom_with_hardware_interface(self) -> List[DegreeOfFreedom]:
+        """
+        The number of degrees of freedom of the robot, which is the sum of the degrees of freedom of all its manipulators.
+        """
+        dofs = []
+        for connection in self.connections:
+            if isinstance(connection, ActiveConnection):
+                dofs.extend(
+                    [
+                        dof
+                        for dof in connection.active_dofs
+                        if dof.has_hardware_interface
+                    ]
+                )
+        return dofs
 
     @classmethod
     def from_world(cls, world: World) -> Self:
