@@ -114,6 +114,9 @@ class CollisionManager(ModelChangeCallback):
     The permanently allow collisions and cannot be overwritten by other rules.
     
     By default we allow collisions between non-robot bodies and between adjacent bodies.
+    
+    .. note: This is only meant for collision that should NEVER be checked. 
+        Allow collision rules can also be added to default or temporary rules if needed.
     """
 
     max_avoided_bodies_rules: List[MaxAvoidedCollisionsRule] = field(
