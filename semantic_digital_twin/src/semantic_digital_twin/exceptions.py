@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict
 from uuid import UUID
 
@@ -20,6 +20,7 @@ from .datastructures.definitions import JointStateType
 from .datastructures.prefixed_name import PrefixedName
 
 if TYPE_CHECKING:
+    from .collision_checking.collision_matrix import CollisionCheck
     from .world import World
     from .world_description.geometry import Scale
     from .world_description.world_entity import (
@@ -416,5 +417,39 @@ class UnresolvedNameError(ValueError):
 
 
 @dataclass
-class YouFoundABugError(DataclassException):
-    """Raised error occur that shouldn't"""
+class CollisionCheckingError(DataclassException):
+    message: str = field(kw_only=True, default=None, init=False)
+
+
+@dataclass
+class InvalidCollisionCheckError(CollisionCheckingError):
+    collision_check: CollisionCheck
+
+
+@dataclass
+class NegativeCollisionCheckingDistanceError(InvalidCollisionCheckError):
+    def __post_init__(self):
+        super().__post_init__()
+        self.message = f"Distance must be positive, got {self.collision_check.distance}"
+
+
+@dataclass
+class InvalidBodiesInCollisionCheckError(InvalidCollisionCheckError):
+    def __post_init__(self):
+        super().__post_init__()
+        self.message = f"Body_a and body_b must be different, got {self.collision_check.body_a} and {self.collision_check.body_b}"
+
+
+@dataclass
+class BodyHasNoGeometryError(InvalidCollisionCheckError):
+    def __post_init__(self):
+        super().__post_init__()
+        self.message = ""
+        if not self.collision_check.body_a.has_collision():
+            self.message += (
+                f"Body {self.collision_check.body_a.name} has collision geometry."
+            )
+        if not self.collision_check.body_b.has_collision():
+            self.message += (
+                f"Body {self.collision_check.body_b.name} has collision geometry."
+            )

@@ -234,10 +234,11 @@ class CollisionManager(ModelChangeCallback):
         Returns the buffer-zone distance for the body pair by scanning rules from highest to lowest priority.
         """
         for rule in reversed(self.rules):
-            if isinstance(rule, AvoidCollisionRule):
-                value = rule.buffer_zone_distance_for(body_a, body_b)
-                if value is not None:
-                    return value
+            if not isinstance(rule, AvoidCollisionRule):
+                continue
+            value = rule.buffer_zone_distance_for(body_a, body_b)
+            if value is not None:
+                return value
         raise ValueError(f"No buffer-zone rule found for {body_a, body_b}")
 
     @lru_cache
@@ -246,10 +247,11 @@ class CollisionManager(ModelChangeCallback):
         Returns the violated distance for the body pair by scanning rules from highest to lowest priority.
         """
         for rule in reversed(self.rules):
-            if isinstance(rule, AvoidCollisionRule):
-                value = rule.violated_distance_for(body_a, body_b)
-                if value is not None:
-                    return value
+            if not isinstance(rule, AvoidCollisionRule):
+                continue
+            value = rule.violated_distance_for(body_a, body_b)
+            if value is not None:
+                return value
         raise ValueError(f"No violated-distance rule found for {body_a, body_b}")
 
     @property

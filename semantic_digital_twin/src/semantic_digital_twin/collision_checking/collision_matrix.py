@@ -8,6 +8,11 @@ from itertools import combinations
 from typing_extensions import Tuple, TYPE_CHECKING, Self
 
 from giskardpy.motion_statechart.data_types import FloatEnum
+from ..exceptions import (
+    NegativeCollisionCheckingDistanceError,
+    InvalidBodiesInCollisionCheckError,
+    BodyHasNoGeometryError,
+)
 from ..world_description.world_entity import Body
 
 if TYPE_CHECKING:
@@ -16,6 +21,10 @@ if TYPE_CHECKING:
 
 @dataclass(repr=False)
 class CollisionCheck:
+    """
+    Represents a collision check between two bodies.
+    """
+
     body_a: Body
     """
     First body in the collision check.
@@ -33,20 +42,26 @@ class CollisionCheck:
     def create_and_validate(
         cls, body_a: Body, body_b: Body, distance: float | None = None
     ) -> Self:
+        """
+        Creates a CollisionCheck instance and validates its properties.
+        Makes sure body_a and body_b are sorted properly.
+        :param body_a: First body in the collision check.
+        :param body_b: Second body in the collision check.
+        :param distance: Minimum distance to check for collisions.
+        :return: Validated CollisionCheck instance.
+        """
         self = cls(body_a=body_a, body_b=body_b, distance=distance)
         if self.distance is not None and self.distance < 0:
-            raise ValueError(f"Distance must be positive, got {self.distance}")
+            raise NegativeCollisionCheckingDistanceError(self)
 
         if self.body_a == self.body_b:
-            raise ValueError(
-                f'Cannot create collision check between the same body "{self.body_a.name}"'
-            )
+            raise InvalidBodiesInCollisionCheckError(self)
 
         if not self.body_a.has_collision():
-            raise ValueError(f"Body {self.body_a.name} has no collision geometry")
+            raise BodyHasNoGeometryError(self)
 
         if not self.body_b.has_collision():
-            raise ValueError(f"Body {self.body_b.name} has no collision geometry")
+            raise BodyHasNoGeometryError(self)
         self.sort_bodies()
         return self
 
@@ -76,6 +91,9 @@ class CollisionMatrix:
     """
 
     collision_checks: set[CollisionCheck] = field(default_factory=set)
+    """
+    Set of collision checks that should be performed.
+    """
 
     def __post_init__(self):
         self.sort_bodies()
@@ -122,15 +140,27 @@ class CollisionRule(ABC):
     """
 
     @abstractmethod
-    def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix): ...
+    def apply_to_collision_matrix(self, collision_matrix: CollisionMatrix):
+        """
+        Modifies the collision matrix by adding or removing collision checks.
+        """
 
     def update(self, world: World):
-        if world._model_manager.version != self._last_world_model_version:
-            self._update(world)
-            self._last_world_model_version = world._model_manager.version
+        """
+        Updates the collision rule based on the current state of the world, if the world model has changed.
+        :param world: The world used for updating
+        """
+        if world._model_manager.version == self._last_world_model_version:
+            return
+        self._update(world)
+        self._last_world_model_version = world._model_manager.version
 
     @abstractmethod
-    def _update(self, world: World): ...
+    def _update(self, world: World):
+        """
+        Specific update logic for the collision rule.
+        :param world: The world used for updating.
+        """
 
 
 @dataclass
