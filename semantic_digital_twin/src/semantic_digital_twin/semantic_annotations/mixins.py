@@ -606,7 +606,7 @@ class HasStorageSpace(HasRootBody, ABC):
 
         :param object_type: The type of the semantic annotations to return.
 
-        :return: A list of semantic annotations of the given type.
+        :return: A list of HasRootBody objects of the given type.
         """
         return [obj for obj in self.objects if isinstance(obj, object_type)]
 
@@ -629,7 +629,8 @@ class HasSupportingSurface(HasStorageSpace, ABC):
         min_surface_area: float = 0.0225,  # 15cm x 15cm
     ) -> Optional[Region]:
         """
-        Calculate the supporting surface region for the semantic annotation, and add it to the world
+        Calculate the supporting surface region for the semantic annotation, add it to the world, and set
+        it as the supporting surface of self
 
         :param upward_threshold: The threshold for the face normal to be considered upward-facing.
         :param clearance_threshold: The threshold for the vertical clearance above the surface.
