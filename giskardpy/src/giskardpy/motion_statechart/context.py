@@ -8,7 +8,7 @@ from krrood.symbolic_math.float_variable_data import FloatVariableData
 from krrood.symbolic_math.symbolic_math import FloatVariable
 from semantic_digital_twin.collision_checking.collision_manager import CollisionManager
 from semantic_digital_twin.world import World
-from .exceptions import MissingContextExtensionError
+from .exceptions import MissingContextExtensionError, DuplicateContextExtensionError
 from ..qp.qp_controller_config import QPControllerConfig
 
 
@@ -68,7 +68,7 @@ class MotionStatechartContext:
         """
         extension_type = type(extension)
         if extension_type in self.extensions:
-            raise ValueError(f"Extension of type {extension_type} already exists.")
+            raise DuplicateContextExtensionError(extension_type=extension_type)
         self.extensions[extension_type] = extension
 
     @classmethod

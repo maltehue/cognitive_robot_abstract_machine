@@ -111,3 +111,13 @@ class MissingContextExtensionError(MotionStatechartError):
         self.message = (
             f'Missing context extension "{self.expected_extension.__name__}".'
         )
+
+
+@dataclass
+class DuplicateContextExtensionError(MotionStatechartError):
+    extension_type: type
+
+    def __post_init__(self):
+        self.message = (
+            f"Extension of type {self.extension_type.__name__} already exists."
+        )
