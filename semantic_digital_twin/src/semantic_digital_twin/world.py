@@ -1170,6 +1170,8 @@ class World(HasSimulatorProperties):
             if root_connection:
                 self.add_connection(root_connection)
 
+            self.collision_manager.merge_collision_manager(other.collision_manager)
+
     def _merge_dofs_with_state_of_world(self, other: World):
         old_state = deepcopy(other.state)
         for dof in other.degrees_of_freedom.copy():
