@@ -67,13 +67,16 @@ class PerformsCartesianProduct(SymbolicExpression, ABC):
     @abstractmethod
     def _product_operands_(self) -> Tuple[SymbolicExpression, ...]:
         """
-        The operands of the cartesian product operation.
+        :return: The operands of the cartesian product operation.
         """
         ...
 
     def _evaluate_product_(self, sources: Bindings) -> Iterator[OperationResult]:
         """
         Evaluate the symbolic expressions by generating combinations of values from their evaluation generators.
+
+        :param sources: The current bindings.
+        :return: An Iterable of Bindings for each combination of values.
         """
         ordered_operands = self._optimize_operands_order_(sources)
         return cartesian_product_while_passing_the_bindings_around(
