@@ -51,7 +51,8 @@ from ..core.base_expressions import (
 from ..cache_data import (
     SeenSet,
 )
-from ..core.variable import InstantiatedVariable, Variable
+from ..core.variable import InstantiatedVariable, Variable, ExternallySetVariable
+from ..enums import DomainSource
 from ..failures import (
     UnsupportedNegation,
     TryingToModifyAnAlreadyBuiltQuery,
@@ -425,7 +426,10 @@ class Query(MultiArityExpressionThatPerformsACartesianProduct, ABC):
                 aggregated_variables.append(variable)
             elif isinstance(variable, InstantiatedVariable):
                 non_aggregated_variables.extend(variable._operation_children_)
-            elif isinstance(variable, Variable) and variable._is_inferred_:
+            elif (
+                isinstance(variable, ExternallySetVariable)
+                and variable._domain_source_ is DomainSource.DEDUCTION
+            ):
                 continue
             else:
                 non_aggregated_variables.append(variable)

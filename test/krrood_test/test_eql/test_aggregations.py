@@ -129,7 +129,7 @@ def test_non_aggregated_selectables_without_aggregation_and_with_grouped_by(
 ):
     world = handles_and_containers_world
     cabinet = variable(Cabinet, domain=world.views)
-    drawer = variable_from(cabinet.drawers)
+    drawer = flat_variable(cabinet.drawers)
     results = a(
         set_of(cabinet, drawer)
         .where(drawer.handle.name.startswith("H"))
