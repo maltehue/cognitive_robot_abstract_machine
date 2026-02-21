@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from copy import deepcopy
 from dataclasses import dataclass, field, InitVar
 from typing import List, Optional, TYPE_CHECKING
@@ -11,7 +12,6 @@ import pandas as pd
 from line_profiler import profile
 
 import krrood.symbolic_math.symbolic_math as sm
-from giskardpy.middleware import get_middleware
 from giskardpy.qp.adapters.qp_adapter import GiskardToQPAdapter
 from giskardpy.qp.constraint_collection import ConstraintCollection
 from giskardpy.qp.exceptions import (
@@ -21,7 +21,6 @@ from giskardpy.qp.exceptions import (
 from giskardpy.qp.solvers.qp_solver import QPSolver
 from giskardpy.utils.utils import create_path
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
-import logging
 
 logger = logging.getLogger(__name__)
 

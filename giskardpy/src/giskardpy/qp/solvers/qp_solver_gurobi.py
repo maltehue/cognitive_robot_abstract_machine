@@ -13,7 +13,6 @@ from .qp_solver_ids import SupportedQPSolver
 from ..adapters.explicit_adapter import GiskardToExplicitQPAdapter
 from ..adapters.qp_adapter import QPData
 from ..exceptions import QPSolverException, InfeasibleException
-from ...middleware import get_middleware
 
 logger = logging.getLogger(__name__)
 

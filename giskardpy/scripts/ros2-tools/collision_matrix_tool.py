@@ -8,9 +8,8 @@ import sys
 import traceback
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Set, Tuple, List, Optional, Dict, Union
+from typing import Tuple, List, Optional, Dict
 
-import pandas as pd
 import rclpy
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QDoubleValidator, QIntValidator
@@ -33,14 +32,9 @@ from PyQt5.QtWidgets import (
     QFrame,
     QScrollArea,
 )
-from std_msgs.msg import ColorRGBA
 from typing_extensions import Callable
 
-from giskardpy.middleware import get_middleware
 from giskardpy.middleware.ros2 import rospy
-from giskardpy.model.world_config import EmptyWorld
-from giskardpy.qp.qp_controller_config import QPControllerConfig
-from semantic_digital_twin.adapters.ros.tf_publisher import TFPublisher
 from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
     VizMarkerPublisher,
     ShapeSource,
@@ -53,7 +47,6 @@ from semantic_digital_twin.collision_checking.collision_rules import (
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
-from semantic_digital_twin.utils import robot_name_from_urdf_string
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.geometry import Color

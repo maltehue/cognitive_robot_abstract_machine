@@ -13,6 +13,9 @@ spinner_thread: Thread = None
 
 
 def spinner_thread_target():
+    """
+    Thread that runs a multithreaded executor in the background
+    """
     global node, executor
     executor = MultiThreadedExecutor()
     executor.add_node(node)
@@ -27,7 +30,7 @@ def spinner_thread_target():
     # Avoid touching a destroyed node during shutdown
     try:
         if node is not None:
-            node.get_logger().info("ros2py died.")
+            node.get_logger().info(f"{node.get_name()} died.")
     except Exception:
         pass
 
@@ -38,13 +41,16 @@ def wait_for_future_to_complete(future: Future) -> None:
 
 
 def init_node(node_name: str) -> None:
+    """
+    Initialise a global ROS2 node and spin thread.
+    """
     global node, spinner_thread, executor
     if node is not None:
         return
     rclpy.init()
     node = Node(node_name)
     spinner_thread = Thread(
-        target=spinner_thread_target, daemon=True, name="rclpy spin"
+        target=spinner_thread_target, daemon=True, name=f"{node.get_name()} spin"
     )
     spinner_thread.start()
 

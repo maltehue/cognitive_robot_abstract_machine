@@ -11,7 +11,6 @@ import numpy as np
 from line_profiler import profile
 
 import krrood.symbolic_math.symbolic_math as sm
-from giskardpy.middleware import get_middleware
 from giskardpy.qp.constraint import (
     DerivativeInequalityConstraint,
     DerivativeEqualityConstraint,
