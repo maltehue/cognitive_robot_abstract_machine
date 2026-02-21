@@ -35,6 +35,7 @@ def immutable_model_world(pr2_apartment_world):
     state = deepcopy(world.state.data)
     yield world, pr2, Context(world, pr2)
     world.state.data[:] = state
+    world.notify_state_change()
 
 
 @pytest.fixture
@@ -43,6 +44,7 @@ def immutable_simple_pr2_world(simple_pr2_world_setup):
     state = deepcopy(world.state.data)
     yield world, robot_view, context
     world.state.data[:] = state
+    world.notify_state_change()
 
 
 @pytest.fixture
