@@ -125,12 +125,11 @@ class Variable(CanHaveDomainSource[T]):
     def _name_(self) -> str:
         if self._type_:
             return self._type_.__name__
-        else:
-            try:
-                first_value = next(iter(self._re_enterable_domain_generator_))
-                return f"{self.__class__.__name__}({type(first_value).__name__}, ...)"
-            except StopIteration:
-                return f"{self.__class__.__name__}()"
+        try:
+            first_value = next(iter(self._re_enterable_domain_generator_))
+            return f"{self.__class__.__name__}({type(first_value).__name__}, ...)"
+        except StopIteration:
+            return f"{self.__class__.__name__}()"
 
 
 @dataclass(eq=False, repr=False)
@@ -162,8 +161,7 @@ class Literal(Variable[T]):
     def _name_(self) -> str:
         if self._name__:
             return self._name__
-        else:
-            return super()._name_
+        return super()._name_
 
 
 @dataclass(eq=False, repr=False)

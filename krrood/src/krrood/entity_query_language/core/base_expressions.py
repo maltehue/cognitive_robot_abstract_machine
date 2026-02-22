@@ -783,5 +783,4 @@ class Selectable(SymbolicExpression, Generic[T], ABC):
     def _name_(self):
         if self._type_:
             return self._type_.__name__
-        else:
-            return self.__class__.__name__
+        return self.__class__.__name__
