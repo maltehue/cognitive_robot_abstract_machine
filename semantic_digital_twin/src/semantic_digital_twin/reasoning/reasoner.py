@@ -15,7 +15,7 @@ from typing_extensions import (
     Type,
 )
 
-from ripple_down_rules import GeneralRDR, CaseQuery
+from krrood.ripple_down_rules import GeneralRDR, CaseQuery
 
 
 class ReasoningResult(UserDict[str, Any]): ...
