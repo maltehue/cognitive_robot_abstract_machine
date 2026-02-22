@@ -69,6 +69,7 @@ jobs:
 
       - name: Save cache
         uses: actions/cache/save@v4
+        if: always()
         with:
           path: /github/home/.cache/semantic_digital_twin
           key: ${{ runner.os }}-cache-${{ inputs.lib }}-${{ github.ref_name }}-${{ github.run_id }}
