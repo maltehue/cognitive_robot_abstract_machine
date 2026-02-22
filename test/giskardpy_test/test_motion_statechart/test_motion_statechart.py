@@ -3112,7 +3112,7 @@ class TestCollisionAvoidance:
                                     angle=np.pi / 2.0,
                                     reference_frame=pr2_with_box.root,
                                 ),
-                                weight=DefaultWeights.WEIGHT_ABOVE_CA,
+                                weight=DefaultWeights.WEIGHT_BELOW_CA,
                             ),
                             ExternalCollisionAvoidance(robot=robot),
                         ]
@@ -3120,8 +3120,17 @@ class TestCollisionAvoidance:
                 ]
             )
         )
+        msc.add_node(
+            distance_violated := ExternalCollisionDistanceMonitor(
+                body=pr2_with_box.get_kinematic_structure_entity_by_name(
+                    "r_gripper_palm_link"
+                ),
+                threshold=0.0,
+            ),
+        )
         msc.add_node(local_min := LocalMinimumReached())
         msc.add_node(EndMotion.when_true(local_min))
+        msc.add_node(CancelMotion.when_true(distance_violated))
 
         kin_sim = Executor(MotionStatechartContext(world=pr2_with_box))
         kin_sim.compile(motion_statechart=msc)

@@ -292,13 +292,15 @@ class ExternalCollisionAvoidance(Goal):
 @dataclass(eq=False, repr=False)
 class ExternalCollisionDistanceMonitor(MotionStatechartNode):
     """
-    Monitors the distance to the closest external object for a specific body.
+    Monitors the distance to the closest external object for a specific collision group of a body.
     Turns True if the distance falls below a given threshold.
+
+    .. note:: the input bodies are only used to look up the collision groups.
     """
 
     body: Body = field(kw_only=True)
     """The robot body to monitor."""
-    threshold: float = field(default=0.05, kw_only=True)
+    threshold: float = field(kw_only=True)
     """Distance threshold in meters."""
     collision_index: int = field(default=0, kw_only=True)
     """Index of the closest collision (0 = closest, 1 = second closest, etc.)."""
@@ -521,15 +523,16 @@ class SelfCollisionAvoidance(Goal):
 @dataclass(eq=False, repr=False)
 class SelfCollisionDistanceMonitor(MotionStatechartNode):
     """
-    Monitors the distance to the closest external object for a specific body.
+    Monitors the distance to the closest external object for the group of a body.
     Turns True if the distance falls below a given threshold.
+    .. note:: the input bodies are only used to look up the collision groups.
     """
 
     body_a: Body = field(kw_only=True)
     """First robot body to monitor."""
     body_b: Body = field(kw_only=True)
     """Second robot body to monitor."""
-    threshold: float = field(default=0.05, kw_only=True)
+    threshold: float = field(kw_only=True)
     """Distance threshold in meters."""
 
     def build(self, context: MotionStatechartContext) -> NodeArtifacts:
