@@ -110,6 +110,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidCollisionBetweenGroups,
     AvoidExternalCollisions,
     AvoidAllCollisions,
+    AllowAllCollisions,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import Manipulator, AbstractRobot
@@ -2725,6 +2726,71 @@ class TestCollisionAvoidance:
         collisions = kin_sim.context.world.collision_manager.compute_collisions()
         assert len(collisions.contacts) == 1
         assert collisions.contacts[0].distance > 0.049
+        assert len(cylinder_bot_world.collision_manager.collision_consumers) == 0
+
+    def test_update_collision_matrix_later(self, cylinder_bot_world: World, rclpy_node):
+        VizMarkerPublisher(
+            _world=cylinder_bot_world, node=rclpy_node
+        ).with_tf_publisher()
+        robot = cylinder_bot_world.get_semantic_annotations_by_type(AbstractRobot)[0]
+        tip = cylinder_bot_world.get_kinematic_structure_entity_by_name("bot")
+        env1 = cylinder_bot_world.get_kinematic_structure_entity_by_name("environment")
+        env2 = cylinder_bot_world.get_kinematic_structure_entity_by_name("environment2")
+
+        msc = MotionStatechart()
+        msc.add_nodes(
+            [
+                UpdateTemporaryCollisionRules(
+                    temporary_rules=[
+                        AvoidCollisionBetweenGroups(
+                            buffer_zone_distance=0.05,
+                            violated_distance=0.0,
+                            body_group_a=[tip],
+                            body_group_b=[env1],
+                        )
+                    ]
+                ),
+                cart_goal_reached := CartesianPose(
+                    root_link=cylinder_bot_world.root,
+                    tip_link=tip,
+                    goal_pose=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        x=1, reference_frame=cylinder_bot_world.root
+                    ),
+                ),
+                Sequence(
+                    [
+                        Parallel(
+                            [
+                                ExternalCollisionAvoidance(robot=robot),
+                                ExternalCollisionDistanceMonitor(
+                                    body=robot.root, threshold=0.049
+                                ),
+                                LocalMinimumReached(),
+                            ],
+                            minimum_success=2,
+                        ),
+                        UpdateTemporaryCollisionRules(
+                            temporary_rules=[AllowAllCollisions()]
+                        ),
+                    ]
+                ),
+            ]
+        )
+        msc.add_node(EndMotion.when_true(cart_goal_reached))
+
+        kin_sim = Executor(
+            MotionStatechartContext(world=cylinder_bot_world),
+            pacer=SimulationPacer(real_time_factor=0.25),
+        )
+        kin_sim.compile(motion_statechart=msc)
+
+        kin_sim.tick_until_end(500)
+        cylinder_bot_world.collision_manager.clear_temporary_rules()
+        cylinder_bot_world.collision_manager.add_temporary_rule(AvoidAllCollisions())
+        cylinder_bot_world.collision_manager.update_collision_matrix()
+        collisions = kin_sim.context.world.collision_manager.compute_collisions()
+        assert len(collisions.contacts) == 1
+        assert collisions.contacts[0].distance < 0.049
         assert len(cylinder_bot_world.collision_manager.collision_consumers) == 0
 
     def test_consumer_cleanup_after_cancel(self, cylinder_bot_world: World):
