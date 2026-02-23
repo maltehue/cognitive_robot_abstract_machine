@@ -1,6 +1,15 @@
 from krrood.entity_query_language.rules.conclusion import Add
-from krrood.entity_query_language.factories import entity, variable, and_, inference, an, refinement, alternative, \
-    next_rule, deduced_variable
+from krrood.entity_query_language.factories import (
+    entity,
+    variable,
+    and_,
+    inference,
+    an,
+    refinement,
+    alternative,
+    next_rule,
+    deduced_variable,
+)
 from krrood.entity_query_language.predicate import HasType
 from krrood.entity_query_language.query_graph import QueryGraph
 from ...dataset.semantic_world_like_classes import (

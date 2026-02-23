@@ -12,34 +12,29 @@ from dataclasses import dataclass, is_dataclass, fields, field
 from functools import cached_property
 
 from typing_extensions import (
-    List,
     Iterable,
     Any,
     Type,
     Optional,
     Tuple,
     Dict,
-    TYPE_CHECKING,
 )
-
-from ..operators.comparator import Comparator
-from ...class_diagrams.class_diagram import WrappedClass
-from ...class_diagrams.failures import ClassIsUnMappedInClassDiagram
-from ...class_diagrams.wrapped_field import WrappedField
 
 from .base_expressions import (
     UnaryExpression,
     Bindings,
     OperationResult,
     Selectable,
-    TruthValueOperator,
 )
+from ..operators.comparator import Comparator
 from ..utils import (
     T,
     merge_args_and_kwargs,
     convert_args_and_kwargs_into_a_hashable_key,
-    is_iterable,
 )
+from ...class_diagrams.class_diagram import WrappedClass
+from ...class_diagrams.failures import ClassIsUnMappedInClassDiagram
+from ...class_diagrams.wrapped_field import WrappedField
 from ...symbol_graph.symbol_graph import SymbolGraph
 
 
@@ -50,39 +45,39 @@ class CanBehaveLikeAVariable(Selectable[T], ABC):
     and comparison operations.
     """
 
-    _known_mappings_: Dict[DomainMappingCacheItem, DomainMapping] = field(
+    _known_mapped_variables_: Dict[MappedVariableCacheItem, MappedVariable] = field(
         init=False, default_factory=dict
     )
     """
-    A storage of created domain mappings to prevent recreating same mapping multiple times.
+    A storage of created MappedVariable instances to prevent recreating same mapping multiple times.
     """
 
-    def _get_domain_mapping_(
-        self, type_: Type[DomainMapping], *args, **kwargs
-    ) -> DomainMapping:
+    def _get_mapped_variable_(
+        self, type_: Type[MappedVariable], *args, **kwargs
+    ) -> MappedVariable:
         """
-        Retrieves or creates a domain mapping instance based on the provided arguments.
+        Retrieves or creates a MappedVariable instance based on the provided arguments.
 
-        :param type_: The type of the domain mapping to retrieve or create.
-        :param args: Positional arguments to pass to the domain mapping constructor.
-        :param kwargs: Keyword arguments to pass to the domain mapping constructor.
-        :return: The retrieved or created domain mapping instance.
+        :param type_: The type of the MappedVariable to retrieve or create.
+        :param args: Positional arguments to pass to the MappedVariable constructor.
+        :param kwargs: Keyword arguments to pass to the MappedVariable constructor.
+        :return: The retrieved or created MappedVariable instance.
         """
-        cache_item = DomainMappingCacheItem(type_, self, args, kwargs)
-        if cache_item in self._known_mappings_:
-            return self._known_mappings_[cache_item]
+        cache_item = MappedVariableCacheItem(type_, self, args, kwargs)
+        if cache_item in self._known_mapped_variables_:
+            return self._known_mapped_variables_[cache_item]
         else:
             instance = type_(**cache_item.all_kwargs)
-            self._known_mappings_[cache_item] = instance
+            self._known_mapped_variables_[cache_item] = instance
             return instance
 
-    def _get_domain_mapping_key_(self, type_: Type[DomainMapping], *args, **kwargs):
+    def _get_mapped_variable_key_(self, type_: Type[MappedVariable], *args, **kwargs):
         """
         Generates a hashable key for the given type and arguments.
 
-        :param type_: The type of the domain mapping.
-        :param args: Positional arguments to pass to the domain mapping constructor.
-        :param kwargs: Keyword arguments to pass to the domain mapping constructor.
+        :param type_: The type of the mapped variable to generate a key for, e.g., Attribute, Index, etc.
+        :param args: Positional arguments to pass to the MappedVariable constructor.
+        :param kwargs: Keyword arguments to pass to the MappedVariable constructor.
         :return: The generated hashable key.
         """
         args = (self,) + args
@@ -95,13 +90,13 @@ class CanBehaveLikeAVariable(Selectable[T], ABC):
             raise AttributeError(
                 f"{self.__class__.__name__} object has no attribute {name}"
             )
-        return self._get_domain_mapping_(Attribute, name)
+        return self._get_mapped_variable_(Attribute, name)
 
     def __getitem__(self, key) -> CanBehaveLikeAVariable[T]:
-        return self._get_domain_mapping_(Index, key)
+        return self._get_mapped_variable_(Index, key)
 
     def __call__(self, *args, **kwargs) -> CanBehaveLikeAVariable[T]:
-        return self._get_domain_mapping_(Call, args, kwargs)
+        return self._get_mapped_variable_(Call, args, kwargs)
 
     def __eq__(self, other) -> Comparator:
         return Comparator(self, other, operator.eq)
@@ -126,14 +121,14 @@ class CanBehaveLikeAVariable(Selectable[T], ABC):
 
 
 @dataclass(eq=False, repr=False)
-class DomainMapping(UnaryExpression, CanBehaveLikeAVariable[T], ABC):
+class MappedVariable(UnaryExpression, CanBehaveLikeAVariable[T], ABC):
     """
-    A symbolic expression the maps the domain of symbolic variables.
+    A symbolic expression the maps the values of symbolic variables.
     """
 
     _child_: CanBehaveLikeAVariable[T]
     """
-    The child expression to apply the domain mapping to.
+    The child expression to apply the mapping to.
     """
 
     def __post_init__(self):
@@ -142,7 +137,7 @@ class DomainMapping(UnaryExpression, CanBehaveLikeAVariable[T], ABC):
 
     def _update_type_(self) -> None:
         """
-        Update the `_type_` attribute with the type of the values of this attribute.
+        Update the `_type_` attribute.
         """
         # Default implementation is that the type is the child type.
         self._type_ = self._child_._type_
@@ -152,44 +147,27 @@ class DomainMapping(UnaryExpression, CanBehaveLikeAVariable[T], ABC):
         sources: Bindings,
     ) -> Iterable[OperationResult]:
         """
-        Apply the domain mapping to the child's values.
+        Apply the mapping to the child's values.
         """
 
         yield from (
             self._build_operation_result_and_update_truth_value_(
-                child_result, mapped_value
+                child_result.bindings | {self._binding_id_: mapped_value}, child_result
             )
             for child_result in self._child_._evaluate_(sources, parent=self)
             for mapped_value in self._apply_mapping_(child_result.value)
         )
 
-    def _build_operation_result_and_update_truth_value_(
-        self, child_result: OperationResult, current_value: Any
-    ) -> OperationResult:
-        """
-        Set the current truth value of the operation result, and build the operation result to be yielded.
-
-        :param child_result: The current result from the child operation.
-        :param current_value: The current value of this operation that is derived from the child result.
-        :return: The operation result.
-        """
-        self._update_truth_value_(current_value)
-        return OperationResult(
-            {**child_result.bindings, self._binding_id_: current_value},
-            self._is_false_,
-            self,
-        )
-
     @abstractmethod
     def _apply_mapping_(self, value: Any) -> Iterable[Any]:
         """
-        Apply the domain mapping to a symbolic value.
+        Apply the mapping to a value from the child variable.
         """
         pass
 
 
 @dataclass(eq=False, repr=False)
-class Attribute(DomainMapping):
+class Attribute(MappedVariable):
     """
     A symbolic attribute that can be used to access attributes of symbolic variables.
 
@@ -204,12 +182,6 @@ class Attribute(DomainMapping):
     def __post_init__(self):
         super().__post_init__()
         self._update_type_()
-
-    @property
-    def _original_value_is_iterable_and_this_operation_preserves_that_(self):
-        if not self._wrapped_field_:
-            return False
-        return self._wrapped_field_.is_iterable
 
     @cached_property
     def _owner_class_(self):
@@ -278,9 +250,9 @@ class Attribute(DomainMapping):
 
 
 @dataclass(eq=False, repr=False)
-class Index(DomainMapping):
+class Index(MappedVariable):
     """
-    A symbolic indexing operation that can be used to access items of symbolic variables via [] operator.
+    A variable that was created through collection indexing by a certain key on its child variable.
     """
 
     _key_: Any
@@ -297,9 +269,9 @@ class Index(DomainMapping):
 
 
 @dataclass(eq=False, repr=False)
-class Call(DomainMapping):
+class Call(MappedVariable):
     """
-    A symbolic call that can be used to call methods on symbolic variables.
+    A variable created through a function call operation on its child variable.
     """
 
     _args_: Tuple[Any, ...] = field(default_factory=tuple)
@@ -323,9 +295,11 @@ class Call(DomainMapping):
 
 
 @dataclass(eq=False, repr=False)
-class Flatten(DomainMapping):
+class FlatVariable(MappedVariable):
     """
-    Domain mapping that flattens an iterable-of-iterables into a single iterable of items.
+    A variable that is created from its child through a flattening operation that
+     transforms the values of the child from an iterable-of-iterables into a single iterable of items.
+     Note: It only unwraps one level of nesting.
 
     Given a child expression that evaluates to an iterable (e.g., Views.bodies), this mapping yields
     one solution per inner element while preserving the original bindings (e.g., the View instance),
@@ -339,37 +313,30 @@ class Flatten(DomainMapping):
     def _name_(self):
         return f"Flatten({self._child_._name_})"
 
-    @property
-    def _original_value_is_iterable_and_this_operation_preserves_that_(self):
-        """
-        :return: False as Flatten loops inside the iterable yielding element by element.
-        """
-        return False
-
 
 @dataclass
-class DomainMappingCacheItem:
+class MappedVariableCacheItem:
     """
-    A cache item for domain mapping creation. To prevent recreating same mapping multiple times, mapping instances are
-    stored in a dictionary with a hashable key. This class is used to generate the key for the dictionary that stores
-    the mapping instances.
+    A cache item for mapped variable creation. To prevent recreating same mapped variable multiple times, mapping
+     instances are stored in a dictionary with a hashable key. This class is used to generate the key for the dictionary
+      that stores the mapped variable instances.
     """
 
-    type: Type[DomainMapping]
+    type: Type[MappedVariable]
     """
-    The type of the domain mapping.
+    The mapping type to create, e.g., Attribute, Index, etc.
     """
     child: CanBehaveLikeAVariable
     """
-    The child of the domain mapping (i.e. the original variable on which the domain mapping is applied).
+    The child of the mapping (i.e. the original variable on which the mapping is applied).
     """
     args: Tuple[Any, ...] = field(default_factory=tuple)
     """
-    Positional arguments to pass to the domain mapping constructor.
+    Positional arguments to pass to the mapping constructor.
     """
     kwargs: Dict[str, Any] = field(default_factory=dict)
     """
-    Keyword arguments to pass to the domain mapping constructor.
+    Keyword arguments to pass to the mapping constructor.
     """
 
     def __post_init__(self):
@@ -392,6 +359,6 @@ class DomainMappingCacheItem:
 
     def __eq__(self, other):
         return (
-            isinstance(other, DomainMappingCacheItem)
+            isinstance(other, MappedVariableCacheItem)
             and self.hashable_key == other.hashable_key
         )

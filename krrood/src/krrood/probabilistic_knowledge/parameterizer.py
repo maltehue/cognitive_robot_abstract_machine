@@ -23,6 +23,8 @@ from ..class_diagrams.class_diagram import WrappedClass
 from ..class_diagrams.wrapped_field import WrappedField
 from ..entity_query_language.core.domain_mapping import Selectable
 from ..entity_query_language.factories import variable_from
+from ..entity_query_language.factories import variable_from, variable
+from ..entity_query_language.core.mapped_variable import Index, Selectable
 from ..ormatic.dao import (
     DataAccessObject,
     to_dao,
@@ -179,7 +181,7 @@ class Parameterizer:
 
         dao = to_dao(obj)
 
-        dao_variable = variable_from([dao])
+        dao_variable = variable(type(dao), [dao])
 
         self._parameterize_dao(dao, dao_variable)
 

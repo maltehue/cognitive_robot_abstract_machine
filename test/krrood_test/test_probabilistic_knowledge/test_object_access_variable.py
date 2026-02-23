@@ -1,4 +1,7 @@
 from krrood.entity_query_language.factories import variable_from
+from random_events.set import Set
+
+from krrood.entity_query_language.factories import variable_from
 from krrood.ormatic.dao import to_dao
 from random_events.variable import Continuous, Symbolic, Set
 

@@ -20,6 +20,7 @@ from typing_extensions import (
     Union,
     Callable,
     Iterator,
+    List,
 )
 
 from .base_expressions import (
@@ -28,7 +29,7 @@ from .base_expressions import (
     SymbolicExpression,
     Selectable,
 )
-from .domain_mapping import CanBehaveLikeAVariable
+from .mapped_variable import CanBehaveLikeAVariable
 from ..cache_data import ReEnterableLazyIterable
 from ..enums import DomainSource
 from ..operators.set_operations import MultiArityExpressionThatPerformsACartesianProduct
@@ -39,11 +40,18 @@ from ..utils import (
 )
 
 
+DomainType = Iterable[T]
+"""
+The type of the domain used for the variable.
+"""
+
+
 @dataclass(eq=False, repr=False)
 class CanHaveDomainSource(CanBehaveLikeAVariable[T], ABC):
     """
     A superclass for variables that can have a domain source.
     """
+
     _type_: Union[Type[T], Callable] = field(kw_only=True, default=None)
     """
     The values type of the variable. (The value of `T`)
@@ -53,45 +61,48 @@ class CanHaveDomainSource(CanBehaveLikeAVariable[T], ABC):
     The source type of the domain (e.g., EXPLICIT, DEDUCED, ...etc.).
     """
 
+    def __post_init__(self):
+        self._var_ = self
+        super().__post_init__()
+
 
 @dataclass(eq=False, repr=False)
-class HasDomain(CanHaveDomainSource[T], ABC):
+class Variable(CanHaveDomainSource[T]):
     """
-    A superclass for expressions that have a domain.
+    An atomic expression of EQL that has a domain of possible values. It can be evaluated to yield values from its
+    domain.
     """
 
-    _domain_: Iterable[T] = field(default_factory=list)
+    _domain_: DomainType = field(default_factory=list)
     """
     The original domain value.
     """
-    _reenterable_generator_domain_: ReEnterableLazyIterable = field(
+    _re_enterable_domain_generator_: ReEnterableLazyIterable = field(
         init=False, default_factory=ReEnterableLazyIterable, repr=False
     )
     """
-    The reenterable generator domain of values for this variable that is created from `_domain_`.
+    The re-enterable generator of values for this variable. This is created from the provided `_domain_`.
+    """
+    _domain_source_: DomainSource = field(init=False, default=DomainSource.EXPLICIT)
+    """
+    The source of the domain for Variable is always EXPLICIT.
     """
 
     def __post_init__(self):
-        self._domain_source_ = DomainSource.EXPLICIT
-
         super().__post_init__()
 
         self._update_domain_(self._domain_)
-
-        self._var_ = self
 
     def _update_domain_(self, domain):
         """
         Set the domain and ensure it is a lazy re-enterable iterable.
         """
         if isinstance(domain, ReEnterableLazyIterable):
-            self._reenterable_generator_domain_ = domain
+            self._re_enterable_domain_generator_ = domain
             return
-        elif isinstance(domain, Selectable):
-            domain = (v.value for v in domain._evaluate_({}, parent=self))
         if not is_iterable(domain):
             domain = [domain]
-        self._reenterable_generator_domain_.set_iterable(domain)
+        self._re_enterable_domain_generator_.set_iterable(domain)
 
     def _evaluate__(
         self,
@@ -101,7 +112,7 @@ class HasDomain(CanHaveDomainSource[T], ABC):
         Fetch values from the domain values and yield an OperationResult for each.
         """
 
-        for v in self._reenterable_generator_domain_:
+        for v in self._re_enterable_domain_generator_:
             bindings = {**sources, self._binding_id_: v}
             yield self._build_operation_result_and_update_truth_value_(bindings)
 
@@ -110,36 +121,30 @@ class HasDomain(CanHaveDomainSource[T], ABC):
     ):
         raise ValueError(f"class {self.__class__} does not have children")
 
-    @property
-    def _original_value_is_iterable_and_this_operation_preserves_that_(self):
-        return is_iterable(next(iter(self._reenterable_generator_domain_), None))
-
-
-@dataclass(eq=False, repr=False)
-class Variable(HasDomain[T]):
-    """
-    A Variable that queries will assign. The Variable produces results of type `T`.
-    """
-
-    _type_: Union[Type, Callable] = field(kw_only=True)
-    """
-    The result type of the variable. (The value of `T`)
-    """
-
     @cached_property
-    def _name_(self):
-        return self._type_.__name__
+    def _name_(self) -> str:
+        if self._type_:
+            return self._type_.__name__
+        try:
+            first_value = next(iter(self._re_enterable_domain_generator_))
+            return f"{self.__class__.__name__}({type(first_value).__name__}, ...)"
+        except StopIteration:
+            return f"{self.__class__.__name__}()"
 
 
 @dataclass(eq=False, repr=False)
-class Literal(HasDomain[T]):
+class Literal(Variable[T]):
     """
     Literals are variables that do not necessarily have a type but they must have a domain.
     """
 
-    _wrap_in_iterator_: bool = field(default=True, kw_only=True)
+    _value_: T = field(kw_only=True)
     """
-    Whether to wrap the domain in an iterator.
+    The value of the literal.
+    """
+    _domain_: List[T] = field(init=False, repr=False)
+    """
+    The domain of the literal. It is constructed from the `_value_` and is always a singleton iterable.
     """
     _name__: Optional[str] = field(default=None, kw_only=True)
     """
@@ -149,18 +154,14 @@ class Literal(HasDomain[T]):
     def __post_init__(
         self,
     ):
-        if self._wrap_in_iterator_:
-            self._domain_ = [self._domain_]
+        self._domain_ = [self._value_]
         super().__post_init__()
 
     @cached_property
     def _name_(self) -> str:
         if self._name__:
             return self._name__
-        elif self._type_:
-            return f"{self.__class__.__name__}({self._type_.__name__})"
-        else:
-            return f"{self.__class__.__name__}({type(next(iter(self._reenterable_generator_domain_), None))}, ...)"
+        return super()._name_
 
 
 @dataclass(eq=False, repr=False)
@@ -174,9 +175,9 @@ class InstantiatedVariable(
     functions.
     """
 
-    _type_: Union[Type, Callable] = field(kw_only=True)
+    _type_: Union[Type[T], Callable] = field(kw_only=True)
     """
-    The type of the variable. (The value of `T`)
+    The result type of the variable. (The value of `T`)
     """
     _kwargs_: Dict[str, Any] = field(default_factory=dict)
     """
@@ -194,9 +195,12 @@ class InstantiatedVariable(
     """
     A dictionary mapping child variable ids to their names. 
     """
+    _domain_source_: DomainSource = field(init=False, default=DomainSource.DEDUCTION)
+    """
+    The source of the domain for InstantiatedVariable is always DEDUCED.
+    """
 
     def __post_init__(self):
-        self._domain_source_ = DomainSource.DEDUCED
         self._update_child_vars_from_kwargs_()
         self._operation_children_ = tuple(self._child_vars_.values())
         # This is done here as it uses `_operation_children_`
@@ -208,7 +212,9 @@ class InstantiatedVariable(
         """
         for k, v in self._kwargs_.items():
             self._child_vars_[k] = (
-                v if isinstance(v, SymbolicExpression) else Literal(v, _name__=k)
+                v
+                if isinstance(v, SymbolicExpression)
+                else Literal(_value_=v, _name__=k)
             )
             self._child_var_id_name_map_[self._child_vars_[k]._binding_id_] = k
 
@@ -233,7 +239,9 @@ class InstantiatedVariable(
             }
             instance = self._type_(**kwargs)
             bindings = {self._binding_id_: instance} | child_result.bindings
-            result = self._build_operation_result_and_update_truth_value_(bindings)
+            result = self._build_operation_result_and_update_truth_value_(
+                bindings, child_result
+            )
             result.previous_operation_result = child_result
             yield result
 
@@ -249,6 +257,10 @@ class InstantiatedVariable(
                 self._child_var_id_name_map_[self._child_vars_[k]._binding_id_] = k
                 break
 
+    @cached_property
+    def _name_(self):
+        return self._type_.__name__
+
 
 @dataclass(eq=False, repr=False)
 class ExternallySetVariable(CanHaveDomainSource[T]):
@@ -263,11 +275,9 @@ class ExternallySetVariable(CanHaveDomainSource[T]):
         raise ValueError(f"class {self.__class__} does not have children")
 
     def _evaluate__(self, sources: Bindings) -> Iterable[OperationResult]:
-        raise ValueError(f"Variable {self._name_} should be externally set.")
-
-
-
-DomainType = TypingUnion[Iterable[T], CanBehaveLikeAVariable[T], None]
-"""
-The type of the domain used for the variable.
-"""
+        """
+        As this variable is externally set, it does not produce any results on its own, it just yields from an empty
+         list to indicate that it has no results. It's important to note that this function will only be called when
+         `_evaluate_` is called, and there's no value in the bindings `sources` for this variable.
+        """
+        yield from []
