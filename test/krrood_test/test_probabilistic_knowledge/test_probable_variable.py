@@ -11,24 +11,21 @@ from krrood.entity_query_language.factories import (
     entity,
     match,
     variable_from,
+    and_,
+    or_,
 )
 from krrood.entity_query_language.query_graph import QueryGraph
 from krrood.ormatic.dao import to_dao
 from krrood.probabilistic_knowledge.parameterizer import Parameterizer
 from krrood.probabilistic_knowledge.probable_variable import (
     QueryToRandomEventTranslator,
+    is_disjunctive_normal_form,
 )
-from ..dataset.example_classes import Position, Pose, Orientation
+from ..dataset.example_classes import Position, Pose, Orientation, Positions
 from ..dataset.ormatic_interface import *  # type: ignore
 
 
 def test_parameterizer_with_where():
-    pose = Pose(
-        position=Position(..., ..., ...),
-        orientation=Orientation(..., ..., ..., None),
-    )
-
-    pose_dao_variable = variable(PoseDAO, [to_dao(pose)])
     pose_variable = variable(Pose, None)
 
     q = entity(pose_variable).where(
@@ -52,3 +49,36 @@ def test_parameterizer_with_where():
     )
 
     assert result_by_hand == r
+
+
+def test_dnf_checking():
+    pose_variable = variable(Pose, None)
+
+    q = entity(pose_variable).where(
+        and_(
+            or_(
+                pose_variable.position.y > 0,
+                pose_variable.position.x == 0,
+            ),
+            or_(
+                pose_variable.position.z >= -1,
+                pose_variable.position.x == 0,
+            ),
+        )
+    )
+
+    assert not is_disjunctive_normal_form(q)
+
+    q = entity(pose_variable).where(
+        or_(
+            and_(
+                pose_variable.position.y > 0,
+                pose_variable.position.x == 0,
+            ),
+            and_(
+                pose_variable.position.z >= -1,
+                pose_variable.position.z <= 1,
+            ),
+        )
+    )
+    assert is_disjunctive_normal_form(q)

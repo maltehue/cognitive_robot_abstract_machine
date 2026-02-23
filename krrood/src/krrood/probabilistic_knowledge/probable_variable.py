@@ -14,6 +14,7 @@ from .object_access_variable import ObjectAccessVariable, AttributeAccessLike
 from ..entity_query_language.core.base_expressions import Selectable
 from ..entity_query_language.core.variable import Variable, Literal
 from ..entity_query_language.operators.comparator import Comparator
+from ..entity_query_language.operators.core_logical_operators import OR, AND
 from ..entity_query_language.query.query import Entity
 from ..entity_query_language.query_graph import QueryGraph
 from ..ormatic.dao import get_dao_class
@@ -149,3 +150,50 @@ class QueryToRandomEventTranslator:
             comparator.right._domain_[0],
             np.inf,
         )
+
+
+def is_disjunctive_normal_form(query: Entity) -> bool:
+    """
+    Checks if the given query is disjunctive normal form.
+
+    :param query: The query to check
+    :return: True if the query is disjunctive normal form, False otherwise
+    """
+    query.build()
+
+    condition_root = query._conditions_root_
+
+    return (
+        is_disjunction_of_conjunction_of_literal_comparators(condition_root)
+        or is_conjunction_of_literal_comparators(condition_root)
+        or is_literal_comparator(condition_root)
+    )
+
+
+def is_disjunction_of_conjunction_of_literal_comparators(disjunction: OR) -> bool:
+    if not isinstance(disjunction, OR):
+        return False
+    for child in disjunction._children_:
+        if not is_conjunction_of_literal_comparators(child):
+            return False
+    return True
+
+
+def is_conjunction_of_literal_comparators(conjunction: AND) -> bool:
+    if not isinstance(conjunction, AND):
+        return False
+    for comparator in conjunction._children_:
+        if not is_literal_comparator(comparator):
+            return False
+
+    return True
+
+
+def is_literal_comparator(comparator: Comparator) -> bool:
+    if not isinstance(comparator, Comparator):
+        return False
+    if not isinstance(comparator.left, AttributeAccessLike):
+        return False
+    if not isinstance(comparator.right, Literal):
+        return False
+    return True
