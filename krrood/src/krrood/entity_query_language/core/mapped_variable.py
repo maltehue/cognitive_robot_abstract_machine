@@ -134,6 +134,7 @@ class MappedVariable(UnaryExpression, CanBehaveLikeAVariable[T], ABC):
     def __post_init__(self):
         super().__post_init__()
         self._var_ = self
+        self._update_type_()
 
     def _update_type_(self) -> None:
         """
@@ -178,10 +179,6 @@ class Attribute(MappedVariable):
     """
     The name of the attribute.
     """
-
-    def __post_init__(self):
-        super().__post_init__()
-        self._update_type_()
 
     @cached_property
     def _owner_class_(self):
