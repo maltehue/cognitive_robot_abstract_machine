@@ -6,7 +6,7 @@ import os
 from functools import wraps
 from types import ModuleType
 
-from typing_extensions import Tuple, Sequence, get_type_hints
+from typing_extensions import Tuple, Sequence, get_type_hints, Set
 from typing_extensions import Type, Optional, Callable, Any, Dict, TYPE_CHECKING, Union, Iterable
 
 from .datastructures.case import create_case, Case

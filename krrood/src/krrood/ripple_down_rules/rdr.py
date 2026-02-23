@@ -578,7 +578,7 @@ class RippleDownRules(SubclassJSONSerializer, ABC):
                 return True
             conclusions = conclusions[case_query.attribute_name]
         conclusion_values = make_list(conclusions)
-        if any(
+        if all(
             not isinstance(cv, case_query.core_attribute_type)
             for cv in conclusion_values
         ):
