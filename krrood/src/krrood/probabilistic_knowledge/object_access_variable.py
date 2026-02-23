@@ -65,6 +65,9 @@ class ObjectAccessVariable:
     def __hash__(self):
         return hash(self.variable)
 
+    def __eq__(self, other):
+        return self.variable == other.variable
+
     @classmethod
     def from_attribute_access_and_type(
         cls, attribute_access: AttributeAccessLike, type_: type
