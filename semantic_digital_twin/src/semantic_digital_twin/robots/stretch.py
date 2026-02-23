@@ -70,7 +70,7 @@ class Stretch(AbstractRobot, HasArms, HasNeck):
                 root=world.get_body_by_name("link_straight_gripper"),
                 tool_frame=world.get_body_by_name("link_grasp_center"),
                 front_facing_orientation=Quaternion(0, 0, 0, 1),
-                front_facing_axis=Vector3(0, 0, 1),
+                front_facing_axis=Vector3(1, 0, 0),
                 thumb=gripper_thumb,
                 finger=gripper_finger,
                 _world=world,
@@ -154,12 +154,7 @@ class Stretch(AbstractRobot, HasArms, HasNeck):
             # Create states
             arm_park = JointState.from_mapping(
                 name=PrefixedName("arm_park", prefix=stretch.name.name),
-                mapping=dict(
-                    zip(
-                        [c for c in arm.connections if type(c) != FixedConnection],
-                        [0.0] * len(list(arm.connections)),
-                    )
-                ),
+                mapping={world.get_connection_by_name("joint_lift"): 0.5},
                 state_type=StaticJointState.PARK,
             )
 

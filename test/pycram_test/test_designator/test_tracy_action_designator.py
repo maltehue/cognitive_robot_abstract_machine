@@ -11,8 +11,8 @@ from pycram.datastructures.enums import Arms, ApproachDirection, VerticalAlignme
 from pycram.datastructures.grasp import GraspDescription
 from pycram.datastructures.pose import PoseStamped
 from pycram.language import SequentialPlan
-from pycram.process_module import simulated_robot
-from pycram.robot_description import ViewManager
+from pycram.motion_executor import simulated_robot
+from pycram.view_manager import ViewManager
 from pycram.robot_plans import (
     ParkArmsActionDescription,
     ReachActionDescription,
@@ -27,6 +27,7 @@ from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
 from semantic_digital_twin.datastructures.definitions import (
     JointStateType,
     GripperState,
+    StaticJointState,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.tracy import Tracy
@@ -99,7 +100,7 @@ def test_park_arms_tracy(immutable_tracy_block_world):
     joints = []
     states = []
     for arm in view.arms:
-        joint_state = arm.get_joint_state_by_type(JointStateType.PARK)
+        joint_state = arm.get_joint_state_by_type(StaticJointState.PARK)
         joints.extend(joint_state.connections)
         states.extend(joint_state.target_values)
     for connection, value in zip(joints, states):
