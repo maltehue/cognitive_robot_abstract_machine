@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from unittest import TestCase
 
@@ -35,18 +36,20 @@ class Robot:
 class TestJSONSerialization(TestCase):
     all_cases: List[Case]
     targets: List[str]
-    cache_dir: str = "./test_results"
-    expert_answers_dir: str = "./test_expert_answers"
+    cache_dir: str = os.path.join(os.path.dirname(__file__), "test_results")
+    expert_answers_dir: str = os.path.join(
+        os.path.dirname(__file__), "test_expert_answers"
+    )
 
     @classmethod
     def setUpClass(cls):
         cls.all_cases, cls.targets = load_zoo_dataset(
-            cls.cache_dir + "/zoo_dataset.pkl"
+            os.path.join(cls.cache_dir, "zoo_dataset.pkl")
         )
 
     def test_scrdr_json_serialization(self):
         scrdr, _ = get_fit_scrdr(self.all_cases, self.targets)
-        filename = f"{self.cache_dir}/scrdr.json"
+        filename = os.path.join(self.cache_dir, "scrdr.json")
         scrdr.to_json_file(filename)
         scrdr = SingleClassRDR.from_json_file(filename)
         for case, target in zip(self.all_cases, self.targets):
@@ -55,7 +58,7 @@ class TestJSONSerialization(TestCase):
 
     def test_mcrdr_json_serialization(self):
         mcrdr_original = get_fit_mcrdr(self.all_cases, self.targets)
-        filename = f"{self.cache_dir}/mcrdr.json"
+        filename = os.path.join(self.cache_dir, "mcrdr.json")
         mcrdr_original.to_json_file(filename)
         mcrdr = MultiClassRDR.from_json_file(filename)
         for case, target in zip(self.all_cases, self.targets):
@@ -64,18 +67,18 @@ class TestJSONSerialization(TestCase):
             render_tree(
                 mcrdr_original.start_rule,
                 use_dot_exporter=True,
-                filename=self.cache_dir + f"/mcrdr_before_json",
+                filename=os.path.join(self.cache_dir, "mcrdr_before_json"),
             )
             render_tree(
                 mcrdr.start_rule,
                 use_dot_exporter=True,
-                filename=self.cache_dir + f"/mcrdr_after_json",
+                filename=os.path.join(self.cache_dir, "mcrdr_after_json"),
             )
             self.assertEqual(make_set(cat), make_set(target))
 
     def test_grdr_json_serialization(self):
         grdr, all_targets = get_fit_grdr(self.all_cases, self.targets)
-        filename = f"{self.cache_dir}/grdr.json"
+        filename = os.path.join(self.cache_dir, "grdr.json")
         grdr.to_json_file(filename)
         grdr = GeneralRDR.from_json_file(filename)
         for case, case_targets in zip(self.all_cases[: len(all_targets)], all_targets):

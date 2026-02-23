@@ -17,7 +17,7 @@ from .datasets import (
 
 def test_construct_class_hierarchy():
     isA.infer()
-    Drawer.to_dot(os.path.join(dirname(__file__), "dependency_graph"))
+    Drawer.to_dot(os.path.join(os.path.dirname(__file__), "dependency_graph"))
     assert len(Drawer._dependency_graph.nodes()) == 20
     assert len(Drawer._dependency_graph.edges()) == 17
 
@@ -25,10 +25,10 @@ def test_construct_class_hierarchy():
 def test_construct_class_composition():
     isA.infer()
     has.infer()
-    Drawer.to_dot(os.path.join(dirname(__file__), "dependency_graph"))
+    Drawer.to_dot(os.path.join(os.path.dirname(__file__), "dependency_graph"))
     assert len(Drawer._dependency_graph.nodes()) == 20
     assert len(Drawer._dependency_graph.edges()) == 22
-    Drawer.to_dot(os.path.join(dirname(__file__), "dependency_graph"))
+    Drawer.to_dot(os.path.join(os.path.dirname(__file__), "dependency_graph"))
 
 
 # @pytest.mark.skip("Not Implemented yet")

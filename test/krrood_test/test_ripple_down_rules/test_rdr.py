@@ -36,10 +36,14 @@ class TestRDR(TestCase):
     all_cases: List[Case]
     targets: List[str]
     case_queries: List[CaseQuery]
-    test_results_dir: str = "./test_results"
-    expert_answers_dir: str = "./test_expert_answers"
-    generated_rdrs_dir: str = "./test_generated_rdrs"
-    cache_file: str = f"{test_results_dir}/zoo_dataset.pkl"
+    test_results_dir: str = os.path.join(os.path.dirname(__file__), "test_results")
+    expert_answers_dir: str = os.path.join(
+        os.path.dirname(__file__), "test_expert_answers"
+    )
+    generated_rdrs_dir: str = os.path.join(
+        os.path.dirname(__file__), "test_generated_rdrs"
+    )
+    cache_file: str = os.path.join(test_results_dir, "zoo_dataset.pkl")
     app: Optional[QApplication] = None
     viewer: Optional[RDRCaseViewer] = None
     use_gui: bool = False
@@ -74,7 +78,9 @@ class TestRDR(TestCase):
     def test_classify_scrdr(self):
         use_loaded_answers = True
         save_answers = False
-        filename = self.expert_answers_dir + "/scrdr_expert_answers_classify"
+        filename = os.path.join(
+            self.expert_answers_dir, "scrdr_expert_answers_classify"
+        )
         expert = Human(use_loaded_answers=use_loaded_answers)
         if use_loaded_answers:
             expert.load_answers(filename)
@@ -208,17 +214,21 @@ class TestRDR(TestCase):
         save_dir = self.generated_rdrs_dir
         model_name = scrdr.save(save_dir)
         assert os.path.exists(save_dir)
-        assert os.path.exists(save_dir + f"/{model_name}/{scrdr.metadata_folder}")
+        assert os.path.exists(os.path.join(save_dir, model_name, scrdr.metadata_folder))
         assert os.path.exists(
-            save_dir + f"/{model_name}/{scrdr.metadata_folder}/{model_name}.json"
+            os.path.join(
+                save_dir, model_name, scrdr.metadata_folder, f"{model_name}.json"
+            )
         )
-        assert os.path.exists(save_dir + f"/__init__.py")
-        assert os.path.exists(save_dir + f"/{model_name}/__init__.py")
+        assert os.path.exists(os.path.join(save_dir, "__init__.py"))
+        assert os.path.exists(os.path.join(save_dir, model_name, "__init__.py"))
         assert os.path.exists(
-            save_dir + f"/{model_name}/{scrdr.generated_python_file_name}.py"
+            os.path.join(save_dir, model_name, scrdr.generated_python_file_name + ".py")
         )
         assert os.path.exists(
-            save_dir + f"/{model_name}/{scrdr.generated_python_defs_file_name}.py"
+            os.path.join(
+                save_dir, model_name, scrdr.generated_python_defs_file_name + ".py"
+            )
         )
 
         scrdr_loaded = SingleClassRDR.load(save_dir, scrdr.generated_python_file_name)
@@ -230,36 +240,44 @@ class TestRDR(TestCase):
     def test_expert_incremental_save(self):
         if not os.path.exists(
             os.path.join(
-                self.test_results_dir, "expert_incremental_save/expert_answers.py"
+                self.test_results_dir, "expert_incremental_save", "expert_answers.py"
             )
         ):
             return
             # os.remove(os.path.join(self.test_results_dir, "expert_incremental_save/expert_answers.py"))
         expert = Human(
-            answers_save_path=f"{self.test_results_dir}/expert_incremental_save/expert_answers"
+            answers_save_path=os.path.join(
+                self.test_results_dir, "expert_incremental_save", "expert_answers"
+            )
         )
         cq = CaseQuery(self.all_cases[0], "species", Species, True)
         conclusion = expert.ask_for_conclusion(cq)
         assert os.path.exists(
-            self.test_results_dir + "/expert_incremental_save/expert_answers.py"
+            os.path.join(
+                self.test_results_dir, "expert_incremental_save", "expert_answers.py"
+            )
         )
 
     def test_scrdr_incremental_save_and_load(self):
         if os.path.exists(
-            self.test_results_dir + "/scrdr_incremental_save/animal_species_scrdr"
+            os.path.join(
+                self.test_results_dir, "scrdr_incremental_save", "animal_species_scrdr"
+            )
         ):
             scrdr = SingleClassRDR.load(
-                f"{self.test_results_dir}/scrdr_incremental_save",
+                os.path.join(self.test_results_dir, "scrdr_incremental_save"),
                 "animal_species_scrdr",
             )
             scrdr.ask_always = False
         else:
             scrdr = SingleClassRDR(
-                save_dir=self.test_results_dir + "/scrdr_incremental_save"
+                save_dir=os.path.join(self.test_results_dir, "scrdr_incremental_save")
             )
             return
         expert = Human(
-            answers_save_path=f"{self.test_results_dir}/scrdr_incremental_save/expert_answers"
+            answers_save_path=os.path.join(
+                self.test_results_dir, "scrdr_incremental_save", "expert_answers"
+            )
         )
         cq = CaseQuery(
             self.all_cases[0],
@@ -272,7 +290,9 @@ class TestRDR(TestCase):
         )
         scrdr.fit_case(cq, expert=expert)
         assert not os.path.exists(
-            self.test_results_dir + "/scrdr_incremental_save/expert_answers.py"
+            os.path.join(
+                self.test_results_dir, "scrdr_incremental_save", "expert_answers.py"
+            )
         )
         assert scrdr.classify(self.all_cases[0]) == self.targets[0]
 
@@ -294,7 +314,7 @@ class TestRDR(TestCase):
             render_tree(
                 scrdr.start_rule,
                 use_dot_exporter=True,
-                filename=self.test_results_dir + f"/scrdr_no_targets",
+                filename=os.path.join(self.test_results_dir, "scrdr_no_targets"),
             )
 
     def test_write_scrdr_no_targets_to_python_file(self):
@@ -310,7 +330,7 @@ class TestRDR(TestCase):
             update_existing_rules=True,
             scenario=self.test_write_scrdr_no_targets_to_python_file,
         )
-        model_dir = self.generated_rdrs_dir + "/scrdr_no_targets"
+        model_dir = os.path.join(self.generated_rdrs_dir, "scrdr_no_targets")
         os.makedirs(model_dir, exist_ok=True)
         scrdr._write_to_python(model_dir)
         classify_species_scrdr = scrdr.get_rdr_classifier_from_python_file(model_dir)
@@ -350,7 +370,7 @@ class TestRDR(TestCase):
             update_existing_rules=True,
             scenario=self.test_write_mcrdr_no_targets_to_python_file,
         )
-        model_dir = self.generated_rdrs_dir + "/mcrdr_no_targets"
+        model_dir = os.path.join(self.generated_rdrs_dir, "mcrdr_no_targets")
         os.makedirs(model_dir, exist_ok=True)
         mcrdr._write_to_python(model_dir)
         classify_species_mcrdr = mcrdr.get_rdr_classifier_from_python_file(model_dir)
@@ -380,8 +400,10 @@ class TestRDR(TestCase):
                 render_tree(
                     rdr.start_rule,
                     use_dot_exporter=True,
-                    filename=self.test_results_dir
-                    + f"/grdr_no_targets_{conclusion_name}",
+                    filename=os.path.join(
+                        self.test_results_dir,
+                        f"grdr_no_targets_{conclusion_name}",
+                    ),
                 )
         for case, case_targets in zip(self.all_cases[:20], all_targets):
             cat = grdr.classify(case)
@@ -406,7 +428,7 @@ class TestRDR(TestCase):
             update_existing_rules=True,
             scenario=self.test_write_grdr_no_targets_to_python_file,
         )
-        model_dir = self.generated_rdrs_dir + "/grdr_no_targets"
+        model_dir = os.path.join(self.generated_rdrs_dir, "grdr_no_targets")
         grdr._write_to_python(model_dir)
         classify_species_grdr = grdr.get_rdr_classifier_from_python_file(model_dir)
         for case, case_targets in zip(self.all_cases[:20], all_targets):
@@ -443,7 +465,7 @@ class TestRDR(TestCase):
             load_answers=True,
             scenario=self.test_write_multi_line_scrdr_to_python_file,
         )
-        model_dir = self.generated_rdrs_dir + "/scrdr_multi_line"
+        model_dir = os.path.join(self.generated_rdrs_dir, "scrdr_multi_line")
         scrdr._write_to_python(model_dir)
         classify_species_scrdr = scrdr.get_rdr_classifier_from_python_file(model_dir)
         for case, target in zip(self.all_cases[:n], self.targets[:n]):
@@ -454,7 +476,7 @@ class TestRDR(TestCase):
         scrdr, _ = get_fit_scrdr(
             self.all_cases, self.targets, scenario=self.test_write_scrdr_to_python_file
         )
-        model_dir = self.generated_rdrs_dir + "/scrdr"
+        model_dir = os.path.join(self.generated_rdrs_dir, "scrdr")
         scrdr._write_to_python(model_dir)
         classify_species_scrdr = scrdr.get_rdr_classifier_from_python_file(model_dir)
         for case, target in zip(self.all_cases, self.targets):
@@ -465,7 +487,7 @@ class TestRDR(TestCase):
         scrdr, _ = get_fit_scrdr(
             self.all_cases, self.targets, scenario=self.test_update_rdr_from_python_file
         )
-        modified_model_dir = self.generated_rdrs_dir + "/scrdr_modified"
+        modified_model_dir = os.path.join(self.generated_rdrs_dir, "scrdr_modified")
         scrdr._write_to_python(modified_model_dir)
         main_file_path = os.path.join(
             modified_model_dir, f"{scrdr.generated_python_file_name}.py"
@@ -508,7 +530,7 @@ class TestRDR(TestCase):
         mcrdr = get_fit_mcrdr(
             self.all_cases, self.targets, scenario=self.test_write_mcrdr_to_python_file
         )
-        model_dir = self.generated_rdrs_dir + "/mcrdr"
+        model_dir = os.path.join(self.generated_rdrs_dir, "mcrdr")
         mcrdr._write_to_python(model_dir)
         classify_species_mcrdr = mcrdr.get_rdr_classifier_from_python_file(model_dir)
         for case, target in zip(self.all_cases, self.targets):
@@ -527,7 +549,7 @@ class TestRDR(TestCase):
             save_answers=False,
             scenario=self.test_write_mcrdr_multi_line_to_python_file,
         )
-        model_dir = self.generated_rdrs_dir + "/mcrdr_multi_line"
+        model_dir = os.path.join(self.generated_rdrs_dir, "mcrdr_multi_line")
         mcrdr._write_to_python(model_dir)
         classify_species_mcrdr = mcrdr.get_rdr_classifier_from_python_file(model_dir)
         for case, target in zip(self.all_cases[:n], self.targets[:n]):
@@ -538,7 +560,7 @@ class TestRDR(TestCase):
         grdr, all_targets = get_fit_grdr(
             self.all_cases, self.targets, scenario=self.test_write_grdr_to_python_file
         )
-        model_dir = self.generated_rdrs_dir + "/grdr"
+        model_dir = os.path.join(self.generated_rdrs_dir, "grdr")
         grdr._write_to_python(model_dir)
         classify_animal_grdr = grdr.get_rdr_classifier_from_python_file(model_dir)
         for case, case_targets in zip(self.all_cases[: len(all_targets)], all_targets):
@@ -549,7 +571,9 @@ class TestRDR(TestCase):
     def test_classify_mcrdr(self):
         use_loaded_answers = True
         save_answers = False
-        filename = self.expert_answers_dir + "/mcrdr_expert_answers_classify"
+        filename = os.path.join(
+            self.expert_answers_dir, "mcrdr_expert_answers_classify"
+        )
         expert = Human(use_loaded_answers=use_loaded_answers)
         if use_loaded_answers:
             expert.load_answers(filename)
@@ -570,7 +594,9 @@ class TestRDR(TestCase):
         use_loaded_answers = True
         draw_tree = False
         save_answers = False
-        filename = self.expert_answers_dir + "/mcrdr_expert_answers_stop_only_fit"
+        filename = os.path.join(
+            self.expert_answers_dir, "mcrdr_expert_answers_stop_only_fit"
+        )
         expert = Human(use_loaded_answers=use_loaded_answers)
         if use_loaded_answers:
             expert.load_answers(filename)
@@ -597,7 +623,9 @@ class TestRDR(TestCase):
         draw_tree = False
         save_answers = False
         append = False
-        filename = self.expert_answers_dir + "/mcrdr_stop_plus_rule_expert_answers_fit"
+        filename = os.path.join(
+            self.expert_answers_dir, "mcrdr_stop_plus_rule_expert_answers_fit"
+        )
         expert = Human(use_loaded_answers=use_loaded_answers, append=append)
         if use_loaded_answers:
             expert.load_answers(filename)
@@ -624,9 +652,8 @@ class TestRDR(TestCase):
         save_answers = False
         draw_tree = False
         append = False
-        filename = (
-            self.expert_answers_dir
-            + "/mcrdr_stop_plus_rule_combined_expert_answers_fit"
+        filename = os.path.join(
+            self.expert_answers_dir, "mcrdr_stop_plus_rule_combined_expert_answers_fit"
         )
         expert = Human(use_loaded_answers=use_loaded_answers, append=append)
         if use_loaded_answers:
@@ -652,7 +679,7 @@ class TestRDR(TestCase):
     def test_classify_grdr(self):
         use_loaded_answers = True
         save_answers = False
-        filename = self.expert_answers_dir + "/grdr_expert_answers_classify"
+        filename = os.path.join(self.expert_answers_dir, "grdr_expert_answers_classify")
         expert = Human(use_loaded_answers=use_loaded_answers)
         if use_loaded_answers:
             expert.load_answers(filename)

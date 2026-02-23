@@ -200,7 +200,9 @@ def get_two_molecules_model(
     draw_tree=False,
     load_answers=True,
     save_answers=False,
-    filename="./test_expert_answers/mutagenic_expert_answers",
+    filename=os.path.join(
+        os.path.dirname(__file__), "test_expert_answers", "mutagenic_expert_answers"
+    ),
     scenario: Optional[Callable] = None,
 ) -> SingleClassRDR:
     expert = Human(use_loaded_answers=load_answers)
@@ -213,7 +215,7 @@ def get_two_molecules_model(
         CaseQuery(
             molecule_1,
             "mutagenic",
-            bool,
+            (bool,),
             True,
             _target=molecule_1.mutagenic,
             case_factory=make_molecule_1,
@@ -221,7 +223,7 @@ def get_two_molecules_model(
         CaseQuery(
             molecule_2,
             "mutagenic",
-            bool,
+            (bool,),
             True,
             _target=molecule_2.mutagenic,
             case_factory=make_molecule_2,
@@ -257,7 +259,9 @@ def test_two_molecules():
 
 def test_serialize_two_molecules_model():
     rdr = get_two_molecules_model(scenario=test_serialize_two_molecules_model)
-    filename = "./test_results/two_molecules_model"
+    filename = os.path.join(
+        os.path.dirname(__file__), "test_results", "two_molecules_model"
+    )
     rdr.to_json_file(filename)
     loaded_rdr = type(rdr).from_json_file(filename)
     assert rdr.classify(make_molecule_1()) == loaded_rdr.classify(make_molecule_1())
@@ -266,7 +270,9 @@ def test_serialize_two_molecules_model():
 
 def test_write_two_molecules_model_to_python():
     rdr = get_two_molecules_model(scenario=test_write_two_molecules_model_to_python)
-    filename = "./test_generated_rdrs/two_molecules"
+    filename = os.path.join(
+        os.path.dirname(__file__), "test_generated_rdrs", "two_molecules"
+    )
     rdr._write_to_python(filename)
     loaded_rdr = rdr.get_rdr_classifier_from_python_file(filename)
     assert rdr.classify(make_molecule_1()) == loaded_rdr(make_molecule_1())

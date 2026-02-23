@@ -17,9 +17,11 @@ from .test_helpers.helpers import get_fit_scrdr
 
 class TestAlchemyRDR(TestCase):
     session: sqlalchemy.orm.Session
-    test_results_dir: str = "./test_results"
-    expert_answers_dir: str = "./test_expert_answers"
-    cache_file: str = f"{test_results_dir}/zoo_dataset.pkl"
+    test_results_dir: str = os.path.join(os.path.dirname(__file__), "test_results")
+    expert_answers_dir: str = os.path.join(
+        os.path.dirname(__file__), "test_expert_answers"
+    )
+    cache_file: str = os.path.join(test_results_dir, "zoo_dataset.pkl")
     all_cases: Sequence[MappedAnimal]
     targets: List[Species]
 
@@ -65,7 +67,7 @@ class TestAlchemyRDR(TestCase):
     def test_fit_scrdr(self):
         use_loaded_answers = True
         draw_tree = False
-        filename = self.expert_answers_dir + "/scrdr_expert_answers_fit"
+        filename = os.path.join(self.expert_answers_dir, "scrdr_expert_answers_fit")
         expert = Human(use_loaded_answers=use_loaded_answers)
         if use_loaded_answers:
             expert.load_answers(filename)
@@ -106,7 +108,7 @@ class TestAlchemyRDR(TestCase):
         use_loaded_answers = True
         save_answers = False
         draw_tree = False
-        filename = self.expert_answers_dir + "/grdr_expert_answers_fit"
+        filename = os.path.join(self.expert_answers_dir, "grdr_expert_answers_fit")
         expert = Human(use_loaded_answers=use_loaded_answers)
         if use_loaded_answers:
             expert.load_answers(filename)

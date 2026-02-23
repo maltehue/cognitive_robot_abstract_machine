@@ -19,8 +19,10 @@ from krrood.ripple_down_rules.utils import flatten_list
 class RelationalRDRTestCase(TestCase):
     case: Any
     case_query: Any
-    test_results_dir: str = "./test_results"
-    expert_answers_dir: str = "./test_expert_answers"
+    test_results_dir: str = os.path.join(os.path.dirname(__file__), "test_results")
+    expert_answers_dir: str = os.path.join(
+        os.path.dirname(__file__), "test_expert_answers"
+    )
     robot: Robot
     part_a: Part
     part_b: Part
@@ -52,7 +54,9 @@ class RelationalRDRTestCase(TestCase):
     def test_classify_scrdr(self):
         use_loaded_answers = True
         save_answers = False
-        filename = self.expert_answers_dir + "/relational_scrdr_expert_answers_classify"
+        filename = os.path.join(
+            self.expert_answers_dir, "relational_scrdr_expert_answers_classify"
+        )
         expert = Human(use_loaded_answers=use_loaded_answers)
         if use_loaded_answers:
             expert.load_answers(filename)

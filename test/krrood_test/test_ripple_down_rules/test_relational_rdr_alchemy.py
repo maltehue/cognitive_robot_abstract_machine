@@ -139,8 +139,10 @@ class PhysicalObject(Base):
 class RelationalRDRTestCase(TestCase):
     case: Any
     case_query: Any
-    test_results_dir: str = "./test_results"
-    expert_answers_dir: str = "./test_expert_answers"
+    test_results_dir: str = os.path.join(os.path.dirname(__file__), "test_results")
+    expert_answers_dir: str = os.path.join(
+        os.path.dirname(__file__), "test_expert_answers"
+    )
     robot: PhysicalObject
     part_a: PhysicalObject
     part_b: PhysicalObject

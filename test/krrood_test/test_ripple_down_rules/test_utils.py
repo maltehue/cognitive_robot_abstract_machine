@@ -51,7 +51,15 @@ class UtilsTestCase(TestCase):
         )
 
     def test_get_relative_import(self):
-        package_dir = f"{dirname(__file__)}/../src/ripple_down_rules"
+        package_dir = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "krrood",
+            "src",
+            "krrood",
+            "ripple_down_rules",
+        )
 
         target_file = os.path.join(package_dir, "datastructures", "case.py")
         imported_module = os.path.join(package_dir, "rdr.py")
