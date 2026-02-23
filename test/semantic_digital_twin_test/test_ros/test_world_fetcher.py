@@ -237,6 +237,7 @@ def test_pr2_collision_rules(rclpy_node, pr2_world_state_reset):
         )
 
     time.sleep(1)
-    assert len(pr2_world_state_reset.collision_manager.rules) == len(
+    # temporary rules are not synced
+    assert len(pr2_world_state_reset.collision_manager.rules) - 1 == len(
         pr2_world_copy.collision_manager.rules
     )
