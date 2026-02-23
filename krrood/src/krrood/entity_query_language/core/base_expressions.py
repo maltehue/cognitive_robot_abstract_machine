@@ -724,6 +724,11 @@ class Selectable(SymbolicExpression, Generic[T], ABC):
     The type of the selectable.
     """
 
+    def __post_init__(self):
+        super().__post_init__()
+        if self._type_ is None:
+            self._type_ = self._type__
+
     def _build_operation_result_and_update_truth_value_(
         self, bindings: Bindings, child_result: Optional[OperationResult] = None
     ) -> OperationResult:

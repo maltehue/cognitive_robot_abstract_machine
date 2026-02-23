@@ -967,7 +967,7 @@ def test_exists_and_for_all(handles_and_containers_world):
         )
     )
 
-    QueryGraph(query.build()).visualize()
+    # QueryGraph(query.build()).visualize()
 
     results = list(query.evaluate())
 
