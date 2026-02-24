@@ -20,7 +20,7 @@ class CollisionGroup:
     A group is a collection of bodies that are connected by fixed or passive connections.
     """
 
-    root: KinematicStructureEntity
+    root: Body
     """
     The root kinematic structure entity of the group. 
     It does not necessarily have to have collision shapes.
@@ -31,6 +31,9 @@ class CollisionGroup:
     All bodies belonging to the group.
     .. note: `root` is only in bodies, if it is itself a body.
     """
+
+    def __post_init__(self):
+        self.add_body(self.root)
 
     def __repr__(self) -> str:
         return f"CollisionGroup(root={self.root.name}, bodies={[b.name for b in self.bodies]})"

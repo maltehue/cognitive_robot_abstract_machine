@@ -11,6 +11,7 @@ from semantic_digital_twin.collision_checking.collision_detector import (
 )
 from semantic_digital_twin.collision_checking.collision_groups import (
     CollisionGroupConsumer,
+    CollisionGroup,
 )
 from semantic_digital_twin.collision_checking.collision_manager import CollisionManager
 from semantic_digital_twin.collision_checking.collision_matrix import (
@@ -459,3 +460,47 @@ class TestCollisionGroups:
         # ever body with a collision should be in a group
         for body in robot.bodies_with_collision:
             collision_group_consumer.get_collision_group(body)
+
+    def test_is_collision_groups_combination_checked(self, pr2_world_state_reset):
+        group_a = CollisionGroup(
+            root=pr2_world_state_reset.bodies_with_collision[0],
+            bodies=set(pr2_world_state_reset.bodies_with_collision[1:5]),
+        )
+        group_b = CollisionGroup(
+            root=pr2_world_state_reset.bodies_with_collision[10],
+            bodies=set(pr2_world_state_reset.bodies_with_collision[11:15]),
+        )
+
+        # check roots
+        root_matrix = CollisionMatrix(
+            collision_checks={
+                CollisionCheck.create_and_validate(group_a.root, group_b.root)
+            }
+        )
+        assert root_matrix.is_collision_groups_combination_checked(group_a, group_b)
+
+        # check empty
+        empty_matrix = CollisionMatrix()
+        assert not empty_matrix.is_collision_groups_combination_checked(
+            group_a, group_b
+        )
+
+        # root with non root
+        root_matrix = CollisionMatrix(
+            collision_checks={
+                CollisionCheck.create_and_validate(
+                    list(group_a.bodies)[1], group_b.root
+                )
+            }
+        )
+        assert root_matrix.is_collision_groups_combination_checked(group_a, group_b)
+
+        # root with non group body
+        root_matrix = CollisionMatrix(
+            collision_checks={
+                CollisionCheck.create_and_validate(
+                    pr2_world_state_reset.bodies_with_collision[-1], group_b.root
+                )
+            }
+        )
+        assert not root_matrix.is_collision_groups_combination_checked(group_a, group_b)

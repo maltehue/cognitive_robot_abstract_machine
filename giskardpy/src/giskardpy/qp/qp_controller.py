@@ -397,11 +397,6 @@ class QPController:
             config=self.config,
         )
 
-        # logger.info("Done compiling controller:")
-        # logger.info(f'  #free variables: {self.num_free_variables}')
-        # logger.info(f'  #equality constraints: {self.num_eq_constraints}')
-        # logger.info(f'  #inequality constraints: {self.num_ineq_constraints}')
-
     def _set_active_dofs(self, degrees_of_freedom: List[DegreeOfFreedom]):
         all_active_float_variables = set().union(
             *[

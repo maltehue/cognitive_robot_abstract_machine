@@ -301,9 +301,25 @@ class AllowSelfCollisions(AllowCollisionRule):
 
 @dataclass
 class AllowDefaultInCollision(AllowCollisionRule):
+    """
+    Allows collision between robot bodies that are in collision if the robot is in its default state.
+    The default state is defined as all degrees of freedom being positioned in the center of their limits,
+    or zero if they have no limits.
+    """
+
     robot: AbstractRobot = field(kw_only=True)
+    """
+    The robot managed by the rule.
+    """
     bodies: list[Body] = field(kw_only=True)
+    """
+    Bodies to check. 
+    .. warning: must be a subset of the robot bodies
+    """
     collision_threshold: float = 0.0
+    """
+    The distance used for collision checking to decide if a robot is in collision by default.
+    """
 
     def _update(self, world: World):
         with world.reset_state_context():
@@ -341,11 +357,33 @@ class AllowDefaultInCollision(AllowCollisionRule):
 
 @dataclass
 class AllowAlwaysInCollision(AllowCollisionRule):
+    """
+    Allows collision between robot bodies that are in collision always.
+    This is computed by placing the robot in random states and checking if the robot is in collision in `almost_percentage` of the cases.
+    .. note: This rule is expensive and should be used with caution.
+    """
+
     robot: AbstractRobot = field(kw_only=True)
+    """
+    The robot managed by the rule.
+    """
     collision_checks: set[CollisionCheck] = field(default_factory=set)
+    """
+    The collision checks to use for collision checking.
+    Allows you to prefilter the collision checks to perform.
+    """
     distance_threshold_always: float = 0.005
+    """
+    The distance used for collision checking to decide if a robot is in collision always.
+    """
     number_of_tries: int = 200
+    """
+    The number of tries to perform to determine if the robot is in collision always.
+    """
     almost_percentage: float = 0.95
+    """
+    The percentage of tries that must result in collision for the rule to allow collision.
+    """
 
     def _update(self, world: World):
         collision_matrix = CollisionMatrix()
