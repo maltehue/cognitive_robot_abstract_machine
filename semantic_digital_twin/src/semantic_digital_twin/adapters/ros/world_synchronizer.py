@@ -162,6 +162,9 @@ class Synchronizer(WorldEntityWithID):
         if msg.meta_data == self.meta_data:
             return
 
+        self._subscription_callback(msg)
+
+    def acknowledge_message(self, msg: message_type):
         acknowledgment = Acknowledgment(
             publication_event_id=msg.publication_event_id,
             node_meta_data=self.meta_data,
@@ -169,7 +172,6 @@ class Synchronizer(WorldEntityWithID):
         self.acknowledge_publisher.publish(
             std_msgs.msg.String(data=json.dumps(to_json(acknowledgment)))
         )
-        self._subscription_callback(msg)
 
     def acknowledge_callback(self, msg: std_msgs.msg.String):
         """
@@ -310,6 +312,7 @@ class SynchronizerOnCallback(Synchronizer, Callback, ABC):
             self.missed_messages.append(msg)
         else:
             self.apply_message(msg)
+            self.acknowledge_message(msg)
 
     @abstractmethod
     def apply_message(self, msg):
@@ -334,6 +337,7 @@ class SynchronizerOnCallback(Synchronizer, Callback, ABC):
         with self._world.modify_world(publish_changes=False):
             for msg in self.missed_messages:
                 self.apply_message(msg)
+                self.acknowledge_message(msg)
 
         self.missed_messages = []
 
