@@ -15,8 +15,10 @@ from .exceptions import WhereExpressionNotInDisjunctiveNormalForm
 from .object_access_variable import ObjectAccessVariable, AttributeAccessLike
 from ..entity_query_language.core.base_expressions import Selectable, SymbolicExpression
 from ..entity_query_language.core.variable import Variable, Literal
+from ..entity_query_language.factories import entity, variable_from, set_of
 from ..entity_query_language.operators.comparator import Comparator
 from ..entity_query_language.operators.core_logical_operators import OR, AND
+from ..entity_query_language.predicate import symbolic_function
 from ..entity_query_language.query.query import Entity
 from ..entity_query_language.query_graph import QueryGraph
 from ..ormatic.dao import get_dao_class
@@ -55,6 +57,7 @@ class QueryToRandomEventTranslator:
 
             if isinstance(expression, OR):
                 queue.extend(expression._children_)
+                continue
 
             elif isinstance(expression, AND):
                 simple_event = self._translate_conjunction(expression)
@@ -90,6 +93,7 @@ class QueryToRandomEventTranslator:
 
         return result
 
+    @symbolic_function
     def _object_access_variable_from_comparator(
         self, comparator: Comparator
     ) -> ObjectAccessVariable:
@@ -126,11 +130,11 @@ class QueryToRandomEventTranslator:
             expr for expr in expression._descendants_ if isinstance(expr, Comparator)
         ]
 
-        comparators_grouped_by_variable = groupby(
-            comparators, key=lambda c: self._object_access_variable_from_comparator(c)
-        )
+        c = variable_from(comparators)
+        key = self._object_access_variable_from_comparator(c)
+        comparators_grouped_by_variable = set_of(c, key).grouped_by(key).tolist()
 
-        return {k: list(v) for k, v in comparators_grouped_by_variable}
+        return {v[key]: v[c] for v in comparators_grouped_by_variable}
 
     def _translate_comparators(
         self,

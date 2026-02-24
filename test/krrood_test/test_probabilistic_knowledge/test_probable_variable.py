@@ -1,7 +1,9 @@
-import numpy as np
-from random_events.product_algebra import SimpleEvent
+from itertools import groupby
 
-from random_events.interval import singleton, open_closed, open, closed
+import numpy as np
+from random_events.product_algebra import SimpleEvent, Event
+
+from random_events.interval import singleton, open_closed, open, closed, closed_open
 
 from random_events.variable import Continuous
 
@@ -54,7 +56,7 @@ def test_parameterizer_with_where():
 def test_dnf_checking():
     pose_variable = variable(Pose, None)
 
-    q = entity(pose_variable).where(
+    q1 = entity(pose_variable).where(
         and_(
             or_(
                 pose_variable.position.y > 0,
@@ -67,9 +69,9 @@ def test_dnf_checking():
         )
     )
 
-    assert not is_disjunctive_normal_form(q)
+    assert not is_disjunctive_normal_form(q1)
 
-    q = entity(pose_variable).where(
+    q2 = entity(pose_variable).where(
         or_(
             pose_variable.position.x == 0,
             and_(
@@ -80,6 +82,36 @@ def test_dnf_checking():
             and_(pose_variable.orientation.z > 0),
         )
     )
-    assert is_disjunctive_normal_form(q)
+    assert is_disjunctive_normal_form(q2)
 
-    print(list(q._conditions_root_._descendants_))
+    t = QueryToRandomEventTranslator(q2)
+    translated = t.translate()
+
+    variables = [
+        Continuous("Pose.position.x"),
+        Continuous("Pose.position.y"),
+        Continuous("Pose.position.z"),
+        Continuous("Pose.orientation.z"),
+    ]
+    [p_x, p_y, p_z, o_z] = variables
+
+    e1 = SimpleEvent(
+        {
+            p_x: singleton(0.0),
+        }
+    )
+    e1.fill_missing_variables(variables)
+    e2 = SimpleEvent(
+        {
+            p_z: closed(-1.0, 1.0),
+            p_y: closed_open(-np.inf, 10.0),
+        }
+    )
+    e2.fill_missing_variables(variables)
+    e3 = SimpleEvent({o_z: open(0.0, np.inf)})
+    e3.fill_missing_variables(variables)
+
+    result_by_hand = Event(e1, e2, e3)
+
+    assert (result_by_hand - translated).is_empty()
+    assert (translated - result_by_hand).is_empty()
