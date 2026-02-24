@@ -1156,10 +1156,10 @@ def test_acknowledgement_with_missed_messages(rclpy_node):
         w1.state.data[0, 0] = 1.0
         w1.notify_state_change()
 
-        # With synchronous publishing the state must already be propagated
-        # by the time notify_state_change returns.
+        # the notify should time out giving us the old state
         assert w2.state.data[0, 0] == 0
         synchronizer_2.apply_missed_messages()
+        # after apply message we should have the correct state
         assert w1.state.data[0, 0] == w2.state.data[0, 0]
 
         synchronizer_1.close()
