@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Set, Optional, Generator
+from typing import List, Tuple, Dict, Set, Optional
 import re
 
 import numpy as np
@@ -118,15 +118,26 @@ class GLTFLoader(Step):
         match = re.match(r"^(.+?)(?:_\d+|_[A-Za-z]\d*)?$", str(node_name))
         return match.group(1) if match else str(node_name)
 
-    def _grouping_similar_meshes(self, base_node: str) -> Tuple[Set[str], Set[str]]:
-        """Group meshes with similar names (e.g., Bolt_001, Bolt_002 -> Bolt).
+    def _collect_matching_children(
+            self, node: str, base_name: str, object_nodes: Set[str]
+    ) -> Tuple[Set[str], Set[str]]:
+        """Collect children that match base_name and those that don't."""
+        matching = set()
+        non_matching = set()
+        for child in self.scene.graph.transforms.children.get(node, []):
+            if child in object_nodes:
+                continue
+            if self._extract_base_name(child) == base_name:
+                matching.add(child)
+            else:
+                non_matching.add(child)
+        return matching, non_matching
 
-        FreeCAD exports parts with suffixes like _001, _002, etc.
-        This method groups them for fusion.
-        """
+    def _grouping_similar_meshes(self, base_node: str) -> Tuple[Set[str], Set[str]]:
+        """Group meshes with similar names (e.g., Bolt_001, Bolt_002 -> Bolt)."""
         base_name = self._extract_base_name(base_node)
         object_nodes = {base_node}
-        new_object_notes = set()
+        new_object_nodes = set()
         to_search = [base_node]
         max_iterations = 10000
 
@@ -134,20 +145,16 @@ class GLTFLoader(Step):
             if not to_search:
                 break
             node = to_search.pop()
-            for child in self.scene.graph.transforms.children.get(node, []):
-                if child in object_nodes:
-                    continue
-                if self._extract_base_name(child) == base_name:
-                    object_nodes.add(child)
-                    to_search.append(child)
-                else:
-                    new_object_notes.add(child)
-        else:
-            print(
-                f"Warning: Hit max iterations in _grouping_similar_meshes for {base_node}"
+            matching, non_matching = self._collect_matching_children(
+                node, base_name, object_nodes
             )
+            object_nodes.update(matching)
+            to_search.extend(matching)
+            new_object_nodes.update(non_matching)
+        else:
+            print(f"Warning: Hit max iterations in _grouping_similar_meshes for {base_node}")
 
-        return object_nodes, new_object_notes
+        return object_nodes, new_object_nodes
 
     def _fusion_meshes(self, object_nodes: Set[str]) -> trimesh.Trimesh:
         """Fuse multiple mesh nodes into a single mesh.
@@ -175,6 +182,25 @@ class GLTFLoader(Step):
             return trimesh.util.concatenate(meshes)  # type: ignore[return-value]
         return trimesh.Trimesh()  # Empty mesh if no geometry found
 
+    def _add_child_connection(
+            self, world: World, parent_node: str, child_node: str,
+            world_elements: Dict[str, Body]
+    ) -> None:
+        """Add a child body and its connection to the world."""
+        if child_node not in world_elements or parent_node not in world_elements:
+            return
+        parent_body = world_elements[parent_node]
+        child_body = world_elements[child_node]
+        world.add_kinematic_structure_entity(child_body)
+        relative_transform = self._get_relative_transform(parent_node, child_node)
+        conn = FixedConnection(
+            parent=parent_body,
+            child=child_body,
+            parent_T_connection_expression=relative_transform,
+            name=PrefixedName(f"{parent_node}_{child_node}"),
+        )
+        world.add_connection(conn)
+
     def _build_world_from_elements(
         self,
         world_elements: Dict[str, Body],
@@ -194,38 +220,29 @@ class GLTFLoader(Step):
         object_root = self._get_root_node()
         if object_root not in world_elements:
             raise ValueError(f"Root node '{object_root}' not found in world_elements")
+
         object_root_body = world_elements[object_root]
         world.add_kinematic_structure_entity(object_root_body)
+
+        # Connect root to world root if exists
         if world.root is not None and world.root != object_root_body:
             root_transform, _ = self.scene.graph.get(object_root)
             conn = FixedConnection(
                 parent=world.root,
                 child=object_root_body,
-                parent_T_connection_expression=HomogeneousTransformationMatrix(
-                    root_transform
-                ),
+                parent_T_connection_expression=HomogeneousTransformationMatrix(root_transform),
                 name=PrefixedName(f"object_root_{object_root}"),
             )
             world.add_connection(conn)
+
+        # Add all child connections via BFS
         to_add_nodes = [object_root]
         while to_add_nodes:
             node = to_add_nodes.pop()
-            children = connection.get(node, [])
-            for child in children:
+            for child in connection.get(node, []):
                 to_add_nodes.append(child)
-                if child not in world_elements or node not in world_elements:
-                    continue
-                parent_body = world_elements[node]
-                child_body = world_elements[child]
-                world.add_kinematic_structure_entity(child_body)
-                relative_transform = self._get_relative_transform(node, child)
-                conn = FixedConnection(
-                    parent=parent_body,
-                    child=child_body,
-                    parent_T_connection_expression=relative_transform,
-                    name=PrefixedName(f"{node}_{child}"),
-                )
-                world.add_connection(conn)
+                self._add_child_connection(world, node, child, world_elements)
+
         return world
 
     def _create_empty_body(self, name: str) -> Body:
@@ -256,53 +273,50 @@ class GLTFLoader(Step):
             children_to_visit=children.difference(visited_nodes),
         )
 
-    def _traverse_scene_graph(
-        self, root: str
-    ) -> Generator[Tuple[str, Optional[str]], Set[str], None]:
-        """Generator that yields (node, body_parent) pairs during traversal.
+    def _process_root_node(
+            self, root: str
+    ) -> Tuple[Body, Set[str], Set[Tuple[str, str]]]:
+        """Process the root node and return body, visited nodes, and children to visit."""
+        _, root_geometry = self.scene.graph.get(root)
+        children_raw = self.scene.graph.transforms.children.get(root, [])
 
-        This generator traverses the scene graph starting from root.
-        It yields each node along with its effective body parent.
-        Non-geometry nodes are skipped but their children are still yielded
-        with the correct body parent.
+        if root_geometry is None:
+            body = self._create_empty_body(root)
+            return body, {root}, {(child, root) for child in children_raw}
 
-        The caller can send back a set of additional visited nodes after each yield.
+        result = self._process_geometry_node(root, set())
+        if result and len(result.body.visual.shapes) > 0:
+            return result.body, result.visited_nodes, {(c, root) for c in result.children_to_visit}
 
-        Yields:
-            Tuple of (node_name, body_parent_name or None for root)
-        """
-        to_visit: Set[Tuple[str, Optional[str]]] = {(root, None)}
-        visited: Set[str] = set()
+        # Root has empty geometry
+        body = self._create_empty_body(root)
+        object_nodes, children = self._grouping_similar_meshes(root)
+        return body, object_nodes, {(child, root) for child in children}
 
-        while to_visit:
-            node, body_parent = to_visit.pop()
+    def _handle_non_geometry_node(
+            self, node: str, body_parent: str, visited_nodes: Set[str]
+    ) -> Set[Tuple[str, str]]:
+        """Handle a non-geometry node, returning children to visit."""
+        children_to_visit = set()
+        for child in self.scene.graph.transforms.children.get(node, []):
+            if child not in visited_nodes:
+                children_to_visit.add((child, body_parent))
+        return children_to_visit
 
-            if node in visited:
-                continue
-
-            # Yield the node and receive any additional visited nodes from caller
-            additional_visited = yield (node, body_parent)
-            if additional_visited:
-                visited = visited.union(additional_visited)
-            visited.add(node)
-
-            # Get children of this node
-            children = self.scene.graph.transforms.children.get(node, [])
-
-            # Check if this is a geometry node
-            _, geometry_name = self.scene.graph.get(node)
-
-            if geometry_name is None:
-                # Non-geometry node: children inherit same body_parent
-                for child in children:
-                    if child not in visited:
-                        to_visit.add((child, body_parent))
+    def _handle_empty_geometry_node(
+            self, node: str, body_parent: str, visited_nodes: Set[str]
+    ) -> Tuple[Set[str], Set[Tuple[str, str]]]:
+        """Handle a node with empty geometry, returning updated visited and children."""
+        object_nodes, children = self._grouping_similar_meshes(node)
+        new_visited = object_nodes | {node}
+        children_to_visit = {(c, body_parent) for c in children.difference(visited_nodes)}
+        return new_visited, children_to_visit
 
     def _create_world_objects(self, world: World) -> World:
         """Parse the scene graph and create world objects with connections.
 
         This method traverses the scene graph, groups similar meshes (e.g., Bolt_001, Bolt_002),
-        fuses them, and creates Body objects with parent-child connections.
+        fuses them and creates Body objects with parent-child connections.
 
         Non-geometry nodes (like transforms/sketches) are skipped but their children
         are still processed with the correct parent body.
@@ -311,38 +325,15 @@ class GLTFLoader(Step):
         world_elements: Dict[str, Body] = {}
         connection: Dict[str, List[str]] = {}
         visited_nodes: Set[str] = set()
-        to_visit_new_node: Set[Tuple[str, str]] = set()
 
-        # Process root node (special case - cannot be skipped even if no geometry)
-        _, root_geometry = self.scene.graph.get(root)
-        if root_geometry is None:
-            world_elements[root] = self._create_empty_body(root)
-            to_visit_new_node.update(
-                [
-                    (child, root)
-                    for child in self.scene.graph.transforms.children.get(root, [])
-                ]
-            )
-            visited_nodes.add(root)
-        else:
-            result = self._process_geometry_node(root, visited_nodes)
-            if result:
-                world_elements[root] = result.body
-                visited_nodes = visited_nodes.union(result.visited_nodes)
-                to_visit_new_node.update(
-                    [(child, root) for child in result.children_to_visit]
-                )
-            else:
-                # Root has empty geometry, create empty body
-                world_elements[root] = self._create_empty_body(root)
-                object_nodes, children = self._grouping_similar_meshes(root)
-                visited_nodes = visited_nodes.union(object_nodes)
-                to_visit_new_node.update([(child, root) for child in children])
-        connection[root] = []
+        # Process root
+        root_body, root_visited, to_visit_new_node = self._process_root_node(root)
+        world_elements[root] = root_body
+        visited_nodes = visited_nodes.union(root_visited)
+
 
         while to_visit_new_node:
             node, body_parent = to_visit_new_node.pop()
-
             if node in visited_nodes:
                 continue
 
@@ -350,36 +341,23 @@ class GLTFLoader(Step):
 
             # Non-geometry node: pass through to children
             if geometry_name is None:
-                for child in self.scene.graph.transforms.children.get(node, []):
-                    if child not in visited_nodes:
-                        to_visit_new_node.add((child, body_parent))
+                to_visit_new_node.update(self._handle_non_geometry_node(node, body_parent, visited_nodes))
                 visited_nodes.add(node)
                 continue
 
-            # Process geometry node
             result = self._process_geometry_node(node, visited_nodes)
-
             if result is None:
-                # Empty geometry, skip but process children
-                object_nodes, children = self._grouping_similar_meshes(node)
-                visited_nodes = visited_nodes.union(object_nodes)
-                visited_nodes.add(node)
-                for child in children.difference(visited_nodes):
-                    to_visit_new_node.add((child, body_parent))
+                new_visited, children = self._handle_empty_geometry_node(node, body_parent, visited_nodes)
+                visited_nodes.update(new_visited)
+                to_visit_new_node.update(children)
                 continue
 
-            # Add body and update connections
+            # Register body and connection
             world_elements[node] = result.body
-            visited_nodes = visited_nodes.union(result.visited_nodes)
-            visited_nodes.add(node)
-
-            if body_parent in connection:
-                connection[body_parent].append(node)
+            visited_nodes.update(result.visited_nodes | {node})
+            connection.setdefault(body_parent, []).append(node)
             connection[node] = []
-
-            # Queue children with this node as body_parent
-            for child in result.children_to_visit:
-                to_visit_new_node.add((child, node))
+            to_visit_new_node.update((c, node) for c in result.children_to_visit)
 
         return self._build_world_from_elements(world_elements, connection, world)
 
