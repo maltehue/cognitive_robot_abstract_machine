@@ -1,4 +1,5 @@
 import operator
+from collections import deque
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import groupby
@@ -10,8 +11,9 @@ from random_events.interval import open_closed, closed_open, closed
 
 from random_events.product_algebra import Event, SimpleEvent
 
+from .exceptions import WhereExpressionNotInDisjunctiveNormalForm
 from .object_access_variable import ObjectAccessVariable, AttributeAccessLike
-from ..entity_query_language.core.base_expressions import Selectable
+from ..entity_query_language.core.base_expressions import Selectable, SymbolicExpression
 from ..entity_query_language.core.variable import Variable, Literal
 from ..entity_query_language.operators.comparator import Comparator
 from ..entity_query_language.operators.core_logical_operators import OR, AND
@@ -22,36 +24,106 @@ from ..ormatic.dao import get_dao_class
 
 @dataclass
 class QueryToRandomEventTranslator:
+    """
+    Class that translates a query into a random event.
+    Requires that the query is in disjunctive normal form.
+    """
 
     query: Entity
+    """
+    The query in disjunctive normal form to translate.
+    """
+
+    def __post_init__(self):
+        if not is_disjunctive_normal_form(self.query):
+            raise WhereExpressionNotInDisjunctiveNormalForm(
+                self.query._where_expression_
+            )
 
     def translate(self) -> Event:
+        """
+        :return: The random event that corresponds to the query.
+        """
         self.query.build()
 
+        simple_events = []
+
+        # get all roots of and expressions
+        queue = deque(self.query._where_expression_._children_)
+        while queue:
+            expression = queue.popleft()
+
+            if isinstance(expression, OR):
+                queue.extend(expression._children_)
+
+            elif isinstance(expression, AND):
+                simple_event = self._translate_conjunction(expression)
+            elif isinstance(expression, Comparator):
+                simple_event = SimpleEvent(
+                    {v.variable: v.variable.domain for v in self.all_variables}
+                )
+                self._translate_comparators(
+                    self._object_access_variable_from_comparator(expression),
+                    [expression],
+                    simple_event,
+                )
+            else:
+                assert_never(expression)
+            simple_events.append(simple_event)
+        return Event(*simple_events)
+
+    def _translate_conjunction(self, expression: AND):
+        """
+        Translate a conjunction expression into a random event.
+        The conjunction must not contain any disjunctions anymore.
+
+        :param expression: The conjunction expression to translate.
+        :return: The random event corresponding to the conjunction.
+        """
         result = SimpleEvent()
 
         # check that it is always a comparison between a variable and a literal
-        for variable, comparators in self.comparators_grouped_by_variable.items():
+        for variable, comparators in self.comparators_grouped_by_variable(
+            expression
+        ).items():
             self._translate_comparators(variable, comparators, result)
 
         return result
 
-    def _object_access_variable_from_comparator(self, comparator: Comparator):
+    def _object_access_variable_from_comparator(
+        self, comparator: Comparator
+    ) -> ObjectAccessVariable:
+        """
+        Create an ObjectAccessVariable from a comparator.
+        Requires that the comparator's left operand is an attribute access like operation.
+
+        :param comparator: The comparator to extract the variable from.
+        :return: The ObjectAccessVariable corresponding to the comparator's left operand.
+        """
         assert isinstance(comparator.left, AttributeAccessLike)
         return ObjectAccessVariable.from_attribute_access_and_type(
             comparator.left, comparator.left._type_
         )
 
-    @cached_property
-    def comparators_grouped_by_variable(
-        self,
-    ) -> Dict[ObjectAccessVariable, List[Comparator]]:
-        # Get the Where expression
-        where_expr = self.query._where_expression_
+    @property
+    def all_variables(self) -> List[ObjectAccessVariable]:
+        return list(
+            self.comparators_grouped_by_variable(self.query._where_expression_).keys()
+        )
 
-        # Get all descendants of the Where expression that are Comparators
+    def comparators_grouped_by_variable(
+        self, expression: SymbolicExpression
+    ) -> Dict[ObjectAccessVariable, List[Comparator]]:
+        """
+        Group comparators by their variable given an expression.
+
+        :param expression: The expression where all comparators in the descendents should be grouped by variables.
+        :return: A dictionary mapping ObjectAccessVariables to lists of their corresponding comparators.
+        """
+
+        # Get all descendants of the expression that are Comparators
         comparators = [
-            expr for expr in where_expr._descendants_ if isinstance(expr, Comparator)
+            expr for expr in expression._descendants_ if isinstance(expr, Comparator)
         ]
 
         comparators_grouped_by_variable = groupby(
@@ -66,6 +138,14 @@ class QueryToRandomEventTranslator:
         comparators: List[Comparator],
         result: SimpleEvent,
     ) -> None:
+        """
+        Translate comparators for a given variable into a random event in-place.
+
+        :param variable: The variable for which to translate comparators.
+        :param comparators: The comparators to translate.
+        :param result: The random event to update in-place.
+        :return: None
+        """
 
         result[variable.variable] = variable.variable.domain
         for comparator in comparators:
@@ -170,30 +250,54 @@ def is_disjunctive_normal_form(query: Entity) -> bool:
     )
 
 
-def is_disjunction_of_conjunction_of_literal_comparators(disjunction: OR) -> bool:
-    if not isinstance(disjunction, OR):
+def is_disjunction_of_conjunction_of_literal_comparators(expression: OR) -> bool:
+    """
+    Checks if the given expression is a disjunction of conjunctions of literal comparators.
+
+    :param expression: The expression to check.
+    :return: True if the expression is a disjunction of conjunctions of literal comparators, False otherwise.
+    """
+    if not isinstance(expression, OR):
         return False
-    for child in disjunction._children_:
-        if not is_conjunction_of_literal_comparators(child):
+    for child in expression._children_:
+        if not (
+            is_disjunction_of_conjunction_of_literal_comparators(child)
+            or is_conjunction_of_literal_comparators(child)
+            or is_literal_comparator(child)
+        ):
             return False
     return True
 
 
-def is_conjunction_of_literal_comparators(conjunction: AND) -> bool:
-    if not isinstance(conjunction, AND):
+def is_conjunction_of_literal_comparators(expression: AND) -> bool:
+    """
+    Checks if the given expression is a conjunction of literal comparators.
+
+    :param expression: The expression to check.
+    :return: True if the expression is a conjunction of literal comparators, False otherwise.
+    """
+    if not isinstance(expression, AND):
         return False
-    for comparator in conjunction._children_:
-        if not is_literal_comparator(comparator):
+    for child in expression._children_:
+        if not (
+            is_conjunction_of_literal_comparators(child) or is_literal_comparator(child)
+        ):
             return False
 
     return True
 
 
-def is_literal_comparator(comparator: Comparator) -> bool:
-    if not isinstance(comparator, Comparator):
+def is_literal_comparator(expression: Comparator) -> bool:
+    """
+    Checks if the given expression is a literal comparator.
+
+    :param expression: The expression to check.
+    :return: True if the expression is a literal comparator, False otherwise.
+    """
+    if not isinstance(expression, Comparator):
         return False
-    if not isinstance(comparator.left, AttributeAccessLike):
+    if not isinstance(expression.left, AttributeAccessLike):
         return False
-    if not isinstance(comparator.right, Literal):
+    if not isinstance(expression.right, Literal):
         return False
     return True

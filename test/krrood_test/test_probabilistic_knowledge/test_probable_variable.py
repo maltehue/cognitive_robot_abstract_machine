@@ -29,12 +29,12 @@ def test_parameterizer_with_where():
     pose_variable = variable(Pose, None)
 
     q = entity(pose_variable).where(
-        pose_variable.position.y > 0,
-        pose_variable.position.x == 0,
-        pose_variable.position.y < 10,
-        pose_variable.position.z >= -1,
-        pose_variable.position.z <= 1,
-        pose_variable.orientation.x != 1,
+        pose_variable.position.y > 0.0,
+        pose_variable.position.x == 0.0,
+        pose_variable.position.y < 10.0,
+        pose_variable.position.z >= -1.0,
+        pose_variable.position.z <= 1.0,
+        pose_variable.orientation.x != 1.0,
     )
     t = QueryToRandomEventTranslator(q)
     r = t.translate()
@@ -48,7 +48,7 @@ def test_parameterizer_with_where():
         }
     )
 
-    assert result_by_hand == r
+    assert result_by_hand.as_composite_set() == r
 
 
 def test_dnf_checking():
@@ -71,14 +71,15 @@ def test_dnf_checking():
 
     q = entity(pose_variable).where(
         or_(
-            and_(
-                pose_variable.position.y > 0,
-                pose_variable.position.x == 0,
-            ),
+            pose_variable.position.x == 0,
             and_(
                 pose_variable.position.z >= -1,
                 pose_variable.position.z <= 1,
+                pose_variable.position.y < 10,
             ),
+            and_(pose_variable.orientation.z > 0),
         )
     )
     assert is_disjunctive_normal_form(q)
+
+    print(list(q._conditions_root_._descendants_))
