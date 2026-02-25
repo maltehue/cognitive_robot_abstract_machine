@@ -6,7 +6,7 @@ try:
     from .ormatic_interface import mapper_registry
 except ImportError:
     pass
-from ..designators.object_designator import *
+from pycram.designators.object_designator import *
 import json
 
 logger = logging.getLogger(__name__)

@@ -16,8 +16,8 @@ from krrood.symbolic_math.symbolic_math import (
     Scalar,
     VariableParameters,
 )
-from ..spatial_types import HomogeneousTransformationMatrix, RotationMatrix, Vector3
-from ..world_description.degree_of_freedom import DegreeOfFreedom
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, RotationMatrix, Vector3
+from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
 
 if TYPE_CHECKING:
     from ..world import World

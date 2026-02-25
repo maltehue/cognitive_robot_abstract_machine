@@ -7,7 +7,7 @@ from uuid import UUID
 from typing_extensions import Dict, Any
 from typing_extensions import Optional, TYPE_CHECKING, Self, ClassVar
 
-from ..exceptions import (
+from semantic_digital_twin.exceptions import (
     WorldEntityWithIDNotInKwargs,
     WorldEntityWithIDNotFoundError,
 )

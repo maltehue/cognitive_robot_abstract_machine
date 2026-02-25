@@ -22,17 +22,17 @@ from typing_extensions import (
     TYPE_CHECKING,
 )
 
-from ..core.base_expressions import (
+from krrood.entity_query_language.core.base_expressions import (
     UnaryExpression,
     Bindings,
     OperationResult,
     SymbolicExpression,
     Selectable,
 )
-from ..failures import NestedAggregationError, InvalidChildType
-from ..utils import T
-from ..core.variable import Variable
-from ..core.mapped_variable import CanBehaveLikeAVariable
+from krrood.entity_query_language.failures import NestedAggregationError, InvalidChildType
+from krrood.entity_query_language.utils import T
+from krrood.entity_query_language.core.variable import Variable
+from krrood.entity_query_language.core.mapped_variable import CanBehaveLikeAVariable
 
 
 if TYPE_CHECKING:

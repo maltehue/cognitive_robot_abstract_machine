@@ -16,8 +16,8 @@ from typing_extensions import (
 
 from krrood.adapters.exceptions import JSONSerializationError
 from krrood.utils import DataclassException
-from .datastructures.definitions import JointStateType
-from .datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.datastructures.definitions import JointStateType
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 
 if TYPE_CHECKING:
     from .collision_checking.collision_matrix import CollisionCheck

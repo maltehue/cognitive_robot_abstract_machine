@@ -30,9 +30,9 @@ from typing_extensions import (
     Type,
 )
 
-from ..failures import NoExpressionFoundForGivenID
-from ..utils import make_list, T, make_set, is_iterable
-from ...symbol_graph.symbol_graph import SymbolGraph
+from krrood.entity_query_language.failures import NoExpressionFoundForGivenID
+from krrood.entity_query_language.utils import make_list, T, make_set, is_iterable
+from krrood.symbol_graph.symbol_graph import SymbolGraph
 
 if TYPE_CHECKING:
     from ..rules.conclusion import Conclusion

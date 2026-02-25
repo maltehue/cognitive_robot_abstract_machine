@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from typing_extensions import Iterable, TYPE_CHECKING, Type
 
-from ..core.base_expressions import (
+from krrood.entity_query_language.core.base_expressions import (
     TruthValueOperator,
     UnaryExpression,
     Bindings,

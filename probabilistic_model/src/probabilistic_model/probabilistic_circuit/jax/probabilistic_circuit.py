@@ -12,10 +12,10 @@ from random_events.variable import Variable, Symbolic
 from sortedcontainers import SortedSet
 from typing_extensions import Tuple, Self, List, Optional
 
-from . import ProductLayer, SparseSumLayer, InputLayer, InnerLayer
-from .discrete_layer import DiscreteLayer
-from .inner_layer import Layer, NXConverterLayer
-from ..rx.probabilistic_circuit import ProbabilisticCircuit as NXProbabilisticCircuit
+from probabilistic_model.probabilistic_circuit.jax. import ProductLayer, SparseSumLayer, InputLayer, InnerLayer
+from probabilistic_model.probabilistic_circuit.jax.discrete_layer import DiscreteLayer
+from probabilistic_model.probabilistic_circuit.jax.inner_layer import Layer, NXConverterLayer
+from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import ProbabilisticCircuit as NXProbabilisticCircuit
 import jax
 import tqdm
 import networkx as nx

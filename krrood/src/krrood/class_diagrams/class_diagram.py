@@ -11,7 +11,7 @@ from typing import get_args, get_origin, _GenericAlias, Any
 
 import rustworkx as rx
 
-from ..utils import module_and_class_name
+from krrood.utils import module_and_class_name
 
 try:
     from rustworkx_utils import RWXNode
@@ -32,14 +32,14 @@ from typing_extensions import (
 )
 
 
-from .attribute_introspector import (
+from krrood.class_diagrams.attribute_introspector import (
     AttributeIntrospector,
     DataclassOnlyIntrospector,
 )
-from .utils import Role, get_generic_type_param
-from .wrapped_field import WrappedField
+from krrood.class_diagrams.utils import Role, get_generic_type_param
+from krrood.class_diagrams.wrapped_field import WrappedField
 
-from .failures import ClassIsUnMappedInClassDiagram
+from krrood.class_diagrams.failures import ClassIsUnMappedInClassDiagram
 
 if TYPE_CHECKING:
     from ..entity_query_language.predicate import PropertyDescriptor

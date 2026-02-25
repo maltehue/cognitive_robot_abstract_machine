@@ -15,9 +15,9 @@ from semantic_digital_twin.spatial_types.spatial_types import (
 from semantic_digital_twin.world_description.world_entity import Body
 from typing_extensions import Self, Tuple, Optional, List, TYPE_CHECKING
 
-from .enums import AxisIdentifier, Arms
-from ..ros import Time as ROSTime
-from ..tf_transformations import (
+from pycram.datastructures.enums import AxisIdentifier, Arms
+from pycram.ros import Time as ROSTime
+from pycram.tf_transformations import (
     quaternion_multiply,
     translation_matrix,
     quaternion_matrix,

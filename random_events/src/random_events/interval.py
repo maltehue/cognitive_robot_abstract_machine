@@ -7,7 +7,7 @@ from typing import Dict, Any
 import random_events_lib as rl
 from typing_extensions import Self, Iterable
 
-from . import sigma_algebra
+from random_events. import sigma_algebra
 
 
 class Bound(enum.IntEnum):

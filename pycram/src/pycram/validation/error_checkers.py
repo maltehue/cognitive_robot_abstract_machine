@@ -3,8 +3,8 @@ from collections.abc import Iterable
 
 import numpy as np
 
-from ..datastructures.enums import JointType
-from ..tf_transformations import quaternion_multiply, quaternion_inverse
+from pycram.datastructures.enums import JointType
+from pycram.tf_transformations import quaternion_multiply, quaternion_inverse
 from typing_extensions import (
     List,
     Union,

@@ -6,17 +6,17 @@ from sortedcontainers import SortedSet
 from typing_extensions import Self, Optional
 
 import jax
-from . import NXConverterLayer
-from .inner_layer import InputLayer
+from probabilistic_model.probabilistic_circuit.jax. import NXConverterLayer
+from probabilistic_model.probabilistic_circuit.jax.inner_layer import InputLayer
 import jax.numpy as jnp
 
-from ..rx.probabilistic_circuit import Unit
-from ...distributions import SymbolicDistribution
+from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import Unit
+from probabilistic_model.distributions import SymbolicDistribution
 import tqdm
 import numpy as np
-from ..rx.probabilistic_circuit import ProbabilisticCircuit as NXProbabilisticCircuit, UnivariateDiscreteLeaf
+from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import ProbabilisticCircuit as NXProbabilisticCircuit, UnivariateDiscreteLeaf
 
-from ...utils import MissingDict
+from probabilistic_model.utils import MissingDict
 
 
 class DiscreteLayer(InputLayer):

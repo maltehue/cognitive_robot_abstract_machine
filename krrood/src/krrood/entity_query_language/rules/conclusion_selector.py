@@ -11,16 +11,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing_extensions import Optional, Iterable, TYPE_CHECKING, Self
 
-from .conclusion import Conclusion
-from ..operators.set_operations import Union as EQLUnion
-from ..operators.core_logical_operators import (
+from krrood.entity_query_language.rules.conclusion import Conclusion
+from krrood.entity_query_language.operators.set_operations import Union as EQLUnion
+from krrood.entity_query_language.operators.core_logical_operators import (
     LogicalBinaryOperator,
     OR,
     AND,
     chained_logic,
     LogicalOperator,
 )
-from ..core.base_expressions import (
+from krrood.entity_query_language.core.base_expressions import (
     Bindings,
     OperationResult,
     SymbolicExpression,

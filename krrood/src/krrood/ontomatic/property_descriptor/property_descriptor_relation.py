@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing_extensions import Optional, Type, Iterable, Tuple, List, TYPE_CHECKING
 
-from ...class_diagrams.class_diagram import Association
-from ...class_diagrams.wrapped_field import WrappedField
-from .mixins import TransitiveProperty, HasInverseProperty
-from ...symbol_graph.symbol_graph import (
+from krrood.class_diagrams.class_diagram import Association
+from krrood.class_diagrams.wrapped_field import WrappedField
+from krrood.ontomatic.property_descriptor.mixins import TransitiveProperty, HasInverseProperty
+from krrood.symbol_graph.symbol_graph import (
     PredicateClassRelation,
     SymbolGraph,
     WrappedInstance,
