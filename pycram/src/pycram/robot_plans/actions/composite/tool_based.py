@@ -12,7 +12,7 @@ from semantic_digital_twin.world_description.world_entity import (
 from typing_extensions import Union, Optional, Iterable
 
 from pycram.robot_plans.motions.gripper import MoveTCPMotion
-from pycram. import utils
+from pycram import utils
 from pycram.datastructures.pose import PoseStamped
 from pycram.datastructures.partial_designator import PartialDesignator
 from pycram.datastructures.enums import (
