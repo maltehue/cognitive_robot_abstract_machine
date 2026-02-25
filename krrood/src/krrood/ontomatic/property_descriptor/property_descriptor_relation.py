@@ -6,7 +6,10 @@ from typing_extensions import Optional, Type, Iterable, Tuple, List, TYPE_CHECKI
 
 from krrood.class_diagrams.class_diagram import Association
 from krrood.class_diagrams.wrapped_field import WrappedField
-from krrood.ontomatic.property_descriptor.mixins import TransitiveProperty, HasInverseProperty
+from krrood.ontomatic.property_descriptor.mixins import (
+    TransitiveProperty,
+    HasInverseProperty,
+)
 from krrood.symbol_graph.symbol_graph import (
     PredicateClassRelation,
     SymbolGraph,
@@ -14,7 +17,9 @@ from krrood.symbol_graph.symbol_graph import (
 )
 
 if TYPE_CHECKING:
-    from .property_descriptor import PropertyDescriptor
+    from krrood.ontomatic.property_descriptor.property_descriptor import (
+        PropertyDescriptor,
+    )
 
 
 @dataclass(unsafe_hash=True)

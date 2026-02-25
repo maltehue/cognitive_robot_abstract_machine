@@ -56,8 +56,10 @@ from ..spatial_types.spatial_types import (
 from ..utils import IDGenerator, camel_case_split
 
 if TYPE_CHECKING:
-    from ..world_description.degree_of_freedom import DegreeOfFreedom
-    from ..world import World, GenericSemanticAnnotation
+    from semantic_digital_twin.world_description.degree_of_freedom import (
+        DegreeOfFreedom,
+    )
+    from semantic_digital_twin.world import World, GenericSemanticAnnotation
 
 id_generator = IDGenerator()
 

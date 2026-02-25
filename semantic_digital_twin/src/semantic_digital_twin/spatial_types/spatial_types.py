@@ -35,7 +35,9 @@ from semantic_digital_twin.exceptions import (
 )
 
 if TYPE_CHECKING:
-    from ..world_description.world_entity import KinematicStructureEntity
+    from semantic_digital_twin.world_description.world_entity import (
+        KinematicStructureEntity,
+    )
 
 
 @dataclass(eq=False, repr=False)

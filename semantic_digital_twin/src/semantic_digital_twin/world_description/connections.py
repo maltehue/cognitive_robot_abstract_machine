@@ -19,7 +19,7 @@ from ..spatial_types import HomogeneousTransformationMatrix, Vector3, Point3, Qu
 from ..spatial_types.derivatives import DerivativeMap
 
 if TYPE_CHECKING:
-    from ..world import World
+    from semantic_digital_twin.world import World
 
 
 class HasUpdateState(ABC):

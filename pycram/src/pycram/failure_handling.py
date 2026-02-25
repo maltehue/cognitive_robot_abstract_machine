@@ -10,7 +10,7 @@ from pycram.language import MonitorNode, MonitorPlan
 from pycram.plan import Plan
 
 if TYPE_CHECKING:
-    from .robot_plans import BaseMotion
+    from pycram.robot_plans import BaseMotion
 
 
 class FailureHandling:

@@ -53,11 +53,11 @@ from pycram.failures import PlanFailure
 from pycram.motion_executor import MotionExecutor
 
 if TYPE_CHECKING:
-    from .robot_plans import ActionDescription
-    from .designator import DesignatorDescription, DesignatorType
-    from .datastructures.partial_designator import PartialDesignator
-    from .robot_plans.actions.base import ActionType
-    from .robot_plans.motions.base import MotionType
+    from pycram.robot_plans import ActionDescription
+    from pycram.designator import DesignatorDescription, DesignatorType
+    from pycram.datastructures.partial_designator import PartialDesignator
+    from pycram.robot_plans.actions.base import ActionType
+    from pycram.robot_plans.motions.base import MotionType
 else:
     ActionType = TypeVar("ActionType")
     MotionType = TypeVar("MotionType")

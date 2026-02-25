@@ -36,9 +36,9 @@ from pycram.plan import (
 from pycram.ros import sleep
 
 if TYPE_CHECKING:
-    from .robot_plans.actions.base import ActionDescription
+    from pycram.robot_plans.actions.base import ActionDescription
 
-    from .robot_plans import BaseMotion
+    from pycram.robot_plans import BaseMotion
 
 logger = logging.getLogger(__name__)
 

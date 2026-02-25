@@ -8,7 +8,7 @@ from typing_extensions import TYPE_CHECKING
 from semantic_digital_twin.world_description.world_entity import Body, Connection
 
 if TYPE_CHECKING:
-    from ..world import World
+    from semantic_digital_twin.world import World
 
 
 class CollisionBodyCollector(rx.visit.DFSVisitor):

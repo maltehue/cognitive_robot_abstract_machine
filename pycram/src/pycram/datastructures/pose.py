@@ -27,7 +27,7 @@ from pycram.tf_transformations import (
 )
 
 if TYPE_CHECKING:
-    from .grasp import GraspDescription
+    from pycram.datastructures.grasp import GraspDescription
 
 
 @dataclass

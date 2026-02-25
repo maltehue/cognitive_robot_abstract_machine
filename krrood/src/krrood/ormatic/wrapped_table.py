@@ -18,7 +18,7 @@ from krrood.class_diagrams.wrapped_field import WrappedField
 from krrood.utils import module_and_class_name
 
 if TYPE_CHECKING:
-    from .ormatic import ORMatic
+    from krrood.ormatic.ormatic import ORMatic
 
 
 logger = logging.getLogger(__name__)

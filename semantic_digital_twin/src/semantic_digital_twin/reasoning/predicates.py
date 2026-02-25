@@ -29,7 +29,7 @@ from ..world_description.geometry import TriangleMesh
 from ..world_description.world_entity import Body, Region, KinematicStructureEntity
 
 if TYPE_CHECKING:
-    from ..robots.abstract_robot import (
+    from semantic_digital_twin.robots.abstract_robot import (
         Camera,
     )
 

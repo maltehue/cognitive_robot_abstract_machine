@@ -51,7 +51,11 @@ from krrood.entity_query_language.core.base_expressions import (
 from krrood.entity_query_language.cache_data import (
     SeenSet,
 )
-from krrood.entity_query_language.core.variable import InstantiatedVariable, Variable, ExternallySetVariable
+from krrood.entity_query_language.core.variable import (
+    InstantiatedVariable,
+    Variable,
+    ExternallySetVariable,
+)
 from krrood.entity_query_language.enums import DomainSource
 from krrood.entity_query_language.failures import (
     UnsupportedNegation,
@@ -59,13 +63,15 @@ from krrood.entity_query_language.failures import (
     NonPositiveLimitValue,
 )
 from krrood.entity_query_language.operators.aggregators import Aggregator
-from krrood.entity_query_language.operators.set_operations import MultiArityExpressionThatPerformsACartesianProduct
+from krrood.entity_query_language.operators.set_operations import (
+    MultiArityExpressionThatPerformsACartesianProduct,
+)
 from krrood.entity_query_language.utils import (
     T,
 )
 
 if TYPE_CHECKING:
-    from ..factories import ConditionType
+    from krrood.entity_query_language.factories import ConditionType
 
 ResultMapping = Callable[[Iterator[OperationResult]], Iterator[OperationResult]]
 """

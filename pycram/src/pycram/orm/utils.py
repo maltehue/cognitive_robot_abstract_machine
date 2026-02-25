@@ -3,7 +3,7 @@ import sqlalchemy
 import logging
 
 try:
-    from .ormatic_interface import mapper_registry
+    from pycram.orm.ormatic_interface import mapper_registry
 except ImportError:
     pass
 from pycram.designators.object_designator import *

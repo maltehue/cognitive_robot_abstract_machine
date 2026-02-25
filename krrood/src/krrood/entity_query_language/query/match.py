@@ -37,8 +37,8 @@ from ..utils import T
 from ...rustworkx_utils import RWXNode
 
 if TYPE_CHECKING:
-    from ..factories import ConditionType
-    from .query import Entity
+    from krrood.entity_query_language.factories import ConditionType
+    from krrood.entity_query_language.query.query import Entity
 
 
 @dataclass
@@ -174,7 +174,7 @@ class Match(AbstractMatchExpression[T]):
         """
         Return the entity expression corresponding to the match query.
         """
-        from ..factories import entity
+        from krrood.entity_query_language.factories import entity
 
         if self.variable is None:
             self.resolve()
@@ -228,7 +228,7 @@ class Match(AbstractMatchExpression[T]):
         self.parent = parent
 
     def create_variable(self):
-        from ..factories import variable
+        from krrood.entity_query_language.factories import variable
 
         self.variable = variable(self.type, domain=None)
 
@@ -266,7 +266,7 @@ class MatchVariable(Match[T]):
     """
 
     def create_variable(self):
-        from ..factories import variable
+        from krrood.entity_query_language.factories import variable
 
         self.variable = variable(self.type, domain=self.domain)
 

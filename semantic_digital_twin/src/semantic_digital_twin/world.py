@@ -89,7 +89,7 @@ from .world_description.world_modification import (
 from .world_description.world_state import WorldState
 
 if TYPE_CHECKING:
-    from .spatial_types import GenericSpatialType
+    from semantic_digital_twin.spatial_types import GenericSpatialType
 
 logger = logging.getLogger(__name__)
 

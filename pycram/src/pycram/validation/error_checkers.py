@@ -16,9 +16,8 @@ from typing_extensions import (
     Tuple,
 )
 
-
 if TYPE_CHECKING:
-    from ..datastructures.pose import PoseStamped
+    from pycram.datastructures.pose import PoseStamped
 
 
 class ErrorChecker(ABC):

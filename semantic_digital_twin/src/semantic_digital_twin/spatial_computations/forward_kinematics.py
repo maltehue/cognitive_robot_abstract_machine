@@ -23,7 +23,7 @@ from ..utils import copy_lru_cache
 from ..world_description.world_entity import Connection, KinematicStructureEntity
 
 if TYPE_CHECKING:
-    from ..world import World
+    from semantic_digital_twin.world import World
 
 
 @dataclass

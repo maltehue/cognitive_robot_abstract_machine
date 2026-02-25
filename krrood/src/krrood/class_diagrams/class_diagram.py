@@ -42,7 +42,7 @@ from krrood.class_diagrams.wrapped_field import WrappedField
 from krrood.class_diagrams.failures import ClassIsUnMappedInClassDiagram
 
 if TYPE_CHECKING:
-    from ..entity_query_language.predicate import PropertyDescriptor
+    from krrood.entity_query_language.predicate import PropertyDescriptor
 
 
 @dataclass

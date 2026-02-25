@@ -18,8 +18,10 @@ from ..datastructures.variables import SpatialVariables
 from ..spatial_types import HomogeneousTransformationMatrix, Point3
 
 if TYPE_CHECKING:
-    from .world_entity import KinematicStructureEntity
-    from ..world import World
+    from semantic_digital_twin.world_description.world_entity import (
+        KinematicStructureEntity,
+    )
+    from semantic_digital_twin.world import World
 
 logger = logging.getLogger(__name__)
 

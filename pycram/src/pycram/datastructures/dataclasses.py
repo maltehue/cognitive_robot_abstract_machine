@@ -21,7 +21,7 @@ from pycram.datastructures.enums import ApproachDirection, VerticalAlignment, Gr
 from pycram.datastructures.pose import PoseStamped
 
 if TYPE_CHECKING:
-    from ..plan import Plan
+    from pycram.plan import Plan
 
 
 @dataclass

@@ -17,7 +17,7 @@ from ...utils.utils import create_path
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ..motion_statechart import MotionStatechart
+    from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 
 
 @dataclass

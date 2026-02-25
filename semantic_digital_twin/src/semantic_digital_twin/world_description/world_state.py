@@ -21,7 +21,7 @@ from semantic_digital_twin.exceptions import (
 from semantic_digital_twin.spatial_types.derivatives import Derivatives
 
 if TYPE_CHECKING:
-    from ..world import World
+    from semantic_digital_twin.world import World
 
 
 class WorldStateEntryView:

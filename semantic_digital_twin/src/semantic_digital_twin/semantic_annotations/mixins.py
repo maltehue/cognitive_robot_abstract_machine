@@ -32,14 +32,22 @@ from semantic_digital_twin.datastructures.variables import SpatialVariables
 from semantic_digital_twin.exceptions import (
     MismatchingWorld,
 )
-from semantic_digital_twin.spatial_types import Point3, HomogeneousTransformationMatrix, Vector3
+from semantic_digital_twin.spatial_types import (
+    Point3,
+    HomogeneousTransformationMatrix,
+    Vector3,
+)
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     FixedConnection,
 )
-from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedomLimits
+from semantic_digital_twin.world_description.degree_of_freedom import (
+    DegreeOfFreedomLimits,
+)
 from semantic_digital_twin.world_description.geometry import Scale
-from semantic_digital_twin.world_description.shape_collection import BoundingBoxCollection
+from semantic_digital_twin.world_description.shape_collection import (
+    BoundingBoxCollection,
+)
 from semantic_digital_twin.world_description.world_entity import (
     SemanticAnnotation,
     Body,
@@ -47,10 +55,12 @@ from semantic_digital_twin.world_description.world_entity import (
     KinematicStructureEntity,
     Connection,
 )
-from semantic_digital_twin.world_description.world_modification import synchronized_attribute_modification
+from semantic_digital_twin.world_description.world_modification import (
+    synchronized_attribute_modification,
+)
 
 if TYPE_CHECKING:
-    from .semantic_annotations import (
+    from semantic_digital_twin.semantic_annotations.semantic_annotations import (
         Drawer,
         Door,
         Handle,

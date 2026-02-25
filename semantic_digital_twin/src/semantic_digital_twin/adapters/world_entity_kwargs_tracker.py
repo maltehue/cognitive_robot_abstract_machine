@@ -13,8 +13,8 @@ from semantic_digital_twin.exceptions import (
 )
 
 if TYPE_CHECKING:
-    from ..world import World
-    from ..world_description.world_entity import WorldEntityWithID
+    from semantic_digital_twin.world import World
+    from semantic_digital_twin.world_description.world_entity import WorldEntityWithID
 
 
 @dataclass

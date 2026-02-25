@@ -34,7 +34,7 @@ from ..adapters.world_entity_kwargs_tracker import WorldEntityWithIDKwargsTracke
 from ..exceptions import MissingWorldModificationContextError
 
 if TYPE_CHECKING:
-    from ..world import World
+    from semantic_digital_twin.world import World
 
 
 @dataclass

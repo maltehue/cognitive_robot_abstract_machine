@@ -39,7 +39,7 @@ from typing_extensions import (
 from pycram.datastructures.pose import PoseStamped
 
 if TYPE_CHECKING:
-    from .view_manager import CameraDescription
+    from pycram.view_manager import CameraDescription
 
 
 def link_pose_for_joint_config(

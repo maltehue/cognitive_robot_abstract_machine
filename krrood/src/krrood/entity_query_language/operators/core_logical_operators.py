@@ -20,7 +20,7 @@ from krrood.entity_query_language.core.base_expressions import (
 )
 
 if TYPE_CHECKING:
-    from ..factories import ConditionType
+    from krrood.entity_query_language.factories import ConditionType
 
 
 @dataclass(eq=False, repr=False)

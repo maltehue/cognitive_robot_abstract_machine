@@ -25,7 +25,7 @@ from pycram.validation.error_checkers import (
 from pycram.datastructures.enums import JointType
 
 if TYPE_CHECKING:
-    from ..datastructures.pose import PoseStamped
+    from pycram.datastructures.pose import PoseStamped
 
 logger = logging.getLogger(__name__)
 OptionalArgCallable = Union[Callable[[], Any], Callable[[Any], Any]]

@@ -43,7 +43,7 @@ from ..world_description.world_entity import (
 )
 
 if TYPE_CHECKING:
-    from ..world import World
+    from semantic_digital_twin.world import World
 
 
 @dataclass
