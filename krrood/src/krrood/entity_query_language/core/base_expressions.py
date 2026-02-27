@@ -9,7 +9,7 @@ from __future__ import annotations
 import itertools
 import uuid
 from abc import ABC, abstractmethod
-from collections import UserDict
+from collections import UserDict, deque
 from copy import copy
 from dataclasses import dataclass, field
 from functools import cached_property, lru_cache
@@ -378,7 +378,7 @@ class SymbolicExpression(ABC):
     @property
     def _descendants_(self) -> Iterator[SymbolicExpression]:
         """
-        :return: All descendants of this symbolic expression.
+        :return: All descendants of this symbolic expression in children first, then depth-first by subtree order.
         """
         yield from self._children_
         for child in self._children_:
