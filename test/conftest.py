@@ -16,6 +16,7 @@ from krrood.ontomatic.property_descriptor.attribute_introspector import (
 from krrood.utils import recursive_subclasses
 from pycram.datastructures.dataclasses import Context  # type: ignore
 from semantic_digital_twin.adapters.mesh import STLParser
+from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
@@ -201,12 +202,16 @@ def world_with_urdf_factory(
     urdf_path: str,
     robot_semantic_annotation: Type[AbstractRobot] | None,
     drive_connection_type: Type[OmniDrive | DiffDrive],
+    robot_starting_pose: HomogeneousTransformationMatrix | None = None,
+    urdf_path_resolver: PathResolver | None = None,
 ):
     """
     Builds this tree:
     map -> odom_combined -> "urdf tree"
     """
-    urdf_parser = URDFParser.from_file(file_path=urdf_path)
+    urdf_parser = URDFParser.from_file(
+        file_path=urdf_path, path_resolver=urdf_path_resolver
+    )
     world_with_urdf = urdf_parser.parse()
     if robot_semantic_annotation is not None:
         robot_semantic_annotation.from_world(world_with_urdf)
@@ -226,6 +231,8 @@ def world_with_urdf_factory(
             world=world_with_urdf,
         )
         world_with_urdf.add_connection(c_root_bf)
+        if robot_starting_pose is not None:
+            c_root_bf.origin = robot_starting_pose
 
     return world_with_urdf
 

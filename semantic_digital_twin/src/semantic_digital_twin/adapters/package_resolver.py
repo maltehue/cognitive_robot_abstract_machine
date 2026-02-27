@@ -138,6 +138,24 @@ class FileUriResolver(PathResolver):
 
 
 @dataclass
+class StaticPathPrefixResolver(PathResolver):
+    """
+    Resolves URIs by prepending a static prefix.
+    """
+
+    prefix: str
+    """
+    A static prefix to prepend to the URI. This can be used to resolve relative paths based on a known directory.
+    """
+
+    def supports(self, uri: str) -> bool:
+        return not "://" in uri
+
+    def resolve(self, uri: str) -> str:
+        return os.path.join(self.prefix, uri)
+
+
+@dataclass
 class CompositePathResolver(PathResolver):
     """
     Tries multiple path resolvers in order.

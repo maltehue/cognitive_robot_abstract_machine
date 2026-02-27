@@ -125,8 +125,6 @@ class URDFParser:
     The path resolver to use for resolving URIs in the URDF file.
     """
 
-    static_package_prefix: Optional[str] = None
-
     def __post_init__(self):
         self.urdf = hacky_urdf_parser_fix(self.urdf)
         self.parsed = urdfpy.URDF.from_xml_string(self.urdf)
@@ -134,17 +132,26 @@ class URDFParser:
             self.prefix = robot_name_from_urdf_string(self.urdf)
 
     @classmethod
-    def from_file(cls, file_path: str, prefix: Optional[str] = None) -> URDFParser:
+    def from_file(
+        cls,
+        file_path: str,
+        prefix: Optional[str] = None,
+        path_resolver: Optional[PathResolver] = None,
+    ) -> URDFParser:
         if file_path.endswith(".xacro"):
             return cls.from_xacro(file_path, prefix)
 
-        file_path = CompositePathResolver().resolve(file_path)
+        path_resolver = path_resolver or CompositePathResolver()
+
+        file_path = path_resolver.resolve(file_path)
         if file_path is not None:
             with open(file_path, "r") as file:
                 # Since parsing URDF causes a lot of warning messages which can't be deactivated, we suppress them
                 with suppress_stdout_stderr():
                     urdf = file.read()
-        return URDFParser(urdf=urdf, prefix=prefix)
+        urdf_parser = URDFParser(urdf=urdf, prefix=prefix)
+        urdf_parser.path_resolver = path_resolver
+        return urdf_parser
 
     @classmethod
     def from_xacro(cls, xacro_path: str, prefix: Optional[str] = None) -> URDFParser:
