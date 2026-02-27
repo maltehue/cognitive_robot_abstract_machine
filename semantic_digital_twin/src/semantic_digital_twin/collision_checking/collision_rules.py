@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC
 from collections import defaultdict
 from dataclasses import dataclass, field
-from itertools import combinations
+from itertools import combinations, product
 from typing import Dict, Any
 from itertools import combinations, combinations_with_replacement
 
@@ -174,14 +174,15 @@ class AvoidExternalCollisions(AvoidCollisionRule, SubclassJSONSerializer):
     def _update(self, world: World):
         self.added_collision_checks = set()
         if self.body_subset is None:
-            self.body_subset = set(self.robot.bodies_with_collision)
-        external_bodies = set(world.bodies_with_collision) - set(self.body_subset)
-        for body_a in self.body_subset:
-            for body_b in external_bodies:
-                collision_check = CollisionCheck.create_and_validate(
-                    body_a=body_a, body_b=body_b, distance=self.buffer_zone_distance
-                )
-                self.added_collision_checks.add(collision_check)
+            body_subset = set(self.robot.bodies_with_collision)
+        else:
+            body_subset = self.body_subset
+        external_bodies = set(world.bodies_with_collision) - set(body_subset)
+        for body_a, body_b in product(body_subset, external_bodies):
+            collision_check = CollisionCheck.create_and_validate(
+                body_a=body_a, body_b=body_b, distance=self.buffer_zone_distance
+            )
+            self.added_collision_checks.add(collision_check)
 
     def to_json(self) -> Dict[str, Any]:
         return {

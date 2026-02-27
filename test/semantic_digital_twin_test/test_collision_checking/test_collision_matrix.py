@@ -251,6 +251,40 @@ class TestCollisionRules:
                 and body_b_is_robot
             )
 
+    def test_AvoidExternalCollisions_with_attached_body(self, pr2_apartment_world):
+        pr2 = pr2_apartment_world.get_semantic_annotations_by_type(PR2)[0]
+        collision_matrix = CollisionMatrix()
+        rule = AvoidExternalCollisions(
+            buffer_zone_distance=1, violated_distance=0.1, robot=pr2
+        )
+        rule.update(pr2_apartment_world)
+        with pr2_apartment_world.modify_world():
+            body = Body(
+                name=PrefixedName("muh"),
+                collision=ShapeCollection(shapes=[Sphere(radius=0.05)]),
+            )
+            connection = FixedConnection(
+                parent=pr2_apartment_world.get_body_by_name("r_gripper_tool_frame"),
+                child=body,
+            )
+            pr2_apartment_world.add_connection(connection)
+        rule.update(pr2_apartment_world)
+        rule.apply_to_collision_matrix(collision_matrix)
+        pr2_bodies = set(pr2.bodies_with_collision)
+        attached_body_present = False
+        for collision_check in collision_matrix.collision_checks:
+            body_a_is_robot = collision_check.body_a in pr2_bodies
+            body_b_is_robot = collision_check.body_b in pr2_bodies
+            assert (
+                body_a_is_robot
+                and not body_b_is_robot
+                or not body_a_is_robot
+                and body_b_is_robot
+            )
+            if collision_check.body_a == body or collision_check.body_b == body:
+                attached_body_present = True
+        assert attached_body_present
+
     def test_pr2_collision_config(self, pr2_world_state_reset):
         pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
         collision_manager = pr2_world_state_reset.collision_manager
