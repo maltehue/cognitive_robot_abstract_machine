@@ -263,7 +263,7 @@ class Finger(KinematicChain):
 @dataclass
 class ParallelGripper(Manipulator):
     """
-    Represents a gripper of a robot. Contains a collection of fingers and a thumb. The thumb is a specific finger
+    Represents a parallel gripper of a robot. Contains a finger and a thumb. The thumb is a specific finger
     that always needs to touch an object when grasping it, ensuring a stable grasp.
     """
 
@@ -274,6 +274,38 @@ class ParallelGripper(Manipulator):
         """
         Assigns the parallel gripper to the given robot and calls the appropriate methods for the its finger and thumb.
          This method ensures that the parallel gripper is only assigned to one robot at a time, and raises an error if
+         it is already assigned to another
+        """
+        if self._robot is not None and self._robot != robot:
+            raise ValueError(
+                f"ParallelGripper {self.name} is already part of another robot: {self._robot.name}."
+            )
+        if self._robot is not None:
+            return
+        self._robot = robot
+
+    def __hash__(self):
+        """
+        Returns the hash of the kinematic chain, which is based on the root and tip bodies.
+        This allows for proper comparison and storage in sets or dictionaries.
+        """
+        return hash((self.name, self.root, self.tool_frame))
+
+
+@dataclass
+class HumanoidGripper(Manipulator):
+    """
+    Represents a human-like gripper of a robot. Contains a collection of fingers and a thumb. The thumb is a specific finger
+    that always needs to touch an object when grasping it, ensuring a stable grasp.
+    """
+
+    fingers: List[Finger] = field(default_factory=list)
+    thumb: Finger = field(default=None)
+
+    def assign_to_robot(self, robot: AbstractRobot):
+        """
+        Assigns the humanoid gripper to the given robot and calls the appropriate methods for the its finger and thumb.
+         This method ensures that the humanoid gripper is only assigned to one robot at a time, and raises an error if
          it is already assigned to another
         """
         if self._robot is not None and self._robot != robot:
