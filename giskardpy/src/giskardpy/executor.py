@@ -215,6 +215,4 @@ class Executor:
             raise EmptyProblemException()
 
     def plot_trajectory(self, file_name: str = "./trajectory.pdf"):
-        self.trajectory_plotter.plot_trajectory(
-            self.context.world_state_trajectory, file_name
-        )
+        self.trajectory_plotter.plot_trajectory(self.world_state_trajectory, file_name)

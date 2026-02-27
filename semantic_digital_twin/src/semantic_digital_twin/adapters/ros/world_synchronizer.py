@@ -102,6 +102,9 @@ class Synchronizer(WorldEntityWithID):
     message_type: ClassVar[Optional[Type[Message]]] = None
     """The type of the message that is sent and received."""
 
+    wait_for_synchronization_timeout: float = field(default=30.0)
+    """Timeout in seconds for waiting for synchronization."""
+
     _current_publication_event_id: Optional[UUID] = None
     """The UUID of the most recently published message awaiting acknowledgment."""
 
@@ -246,7 +249,7 @@ class Synchronizer(WorldEntityWithID):
                 success = self._acknowledge_condition_variable.wait_for(
                     lambda: len(self._received_acknowledgments)
                     >= self._expected_acknowledgment_count,
-                    timeout=5,
+                    timeout=self.wait_for_synchronization_timeout,
                 )
                 if not success:
                     self.node.get_logger().warning(
