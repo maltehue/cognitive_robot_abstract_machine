@@ -25,6 +25,9 @@ class QueryToRandomEventTranslator:
     """
     Class that translates a query into a random event.
     Requires that the query is in disjunctive normal form.
+
+    Check the documentation of `is_disjunctive_normal_form` for more information.
+
     """
 
     query: Entity
@@ -73,7 +76,7 @@ class QueryToRandomEventTranslator:
             simple_events.append(simple_event)
         return Event(*simple_events)
 
-    def _translate_conjunction(self, expression: AND):
+    def _translate_conjunction(self, expression: AND) -> SimpleEvent:
         """
         Translate a conjunction expression into a random event.
         The conjunction must not contain any disjunctions anymore.
@@ -180,7 +183,7 @@ class QueryToRandomEventTranslator:
         comparator: Comparator,
         object_access_variable: ObjectAccessVariable,
         result: SimpleEvent,
-    ):
+    ) -> None:
         result[
             object_access_variable.variable
         ] &= object_access_variable.variable.make_value(
@@ -192,7 +195,7 @@ class QueryToRandomEventTranslator:
         comparator: Comparator,
         object_access_variable: ObjectAccessVariable,
         result: SimpleEvent,
-    ):
+    ) -> None:
         result[object_access_variable.variable] &= open(
             comparator.right._domain_[0], np.inf
         )
@@ -202,7 +205,7 @@ class QueryToRandomEventTranslator:
         comparator: Comparator,
         object_access_variable: ObjectAccessVariable,
         result: SimpleEvent,
-    ):
+    ) -> None:
         result[object_access_variable.variable] &= closed_open(
             -np.inf,
             comparator.right._domain_[0],
@@ -213,7 +216,7 @@ class QueryToRandomEventTranslator:
         comparator: Comparator,
         object_access_variable: ObjectAccessVariable,
         result: SimpleEvent,
-    ):
+    ) -> None:
         result[object_access_variable.variable] &= closed(
             -np.inf,
             comparator.right._domain_[0],
@@ -224,7 +227,7 @@ class QueryToRandomEventTranslator:
         comparator: Comparator,
         object_access_variable: ObjectAccessVariable,
         result: SimpleEvent,
-    ):
+    ) -> None:
         result[object_access_variable.variable] &= closed(
             comparator.right._domain_[0],
             np.inf,
@@ -233,7 +236,23 @@ class QueryToRandomEventTranslator:
 
 def is_disjunctive_normal_form(query: Entity) -> bool:
     """
-    Checks if the given query is disjunctive normal form.
+    Checks if the given query is disjunctive normal form (DNF).
+
+    A query is in DNF if the following 3 statements are true:
+    1. All its comparators are literal comparators, i.e. comparators between one variable and one literal
+    2. All of its conjunctions (AND statements) only have literal comparators as children
+    3. There is at most one disjunction (OR statement) which has to be at the root.
+
+    Example:
+        (x > 3) is DNF
+
+        (x > 3) & (y < 5) is DNF
+
+        (x > 3) | (y < 5) is DNF
+
+        (x > 3) | ((y > 5) & (z < 2)) is DNF
+
+        (x > 3) & ((y > 5) | (z < 2)) is not DNF
 
     :param query: The query to check
     :return: True if the query is disjunctive normal form, False otherwise

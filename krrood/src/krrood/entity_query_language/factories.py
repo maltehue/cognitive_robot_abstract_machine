@@ -100,6 +100,10 @@ def probable_variable(
     Same as :py:func:`krrood.entity_query_language.match.match_variable` but instead of searching for solutions in
     the domain objects, it is used as a query for probabilistic models to infer solutions that satisfy the constraints
     in the query.
+
+    .. note::
+
+        Calling a ProbableVariable will return a ProbableVariable instead of its expression.
     """
     return ProbableVariable(type_=type_)
 

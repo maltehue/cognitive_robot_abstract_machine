@@ -8,6 +8,7 @@ from ..utils import DataclassException
 class WhereExpressionNotInDisjunctiveNormalForm(DataclassException):
     """
     Raised when a `Where` expression is not in disjunctive normal form.
+    Check `is_disjunctive_normal_form` for more information and to see if the expression is in disjunctive normal form.
     """
 
     where_expression: Where

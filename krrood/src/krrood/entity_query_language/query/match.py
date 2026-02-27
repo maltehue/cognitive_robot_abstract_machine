@@ -385,7 +385,9 @@ class ProbableVariable(MatchVariable):
     """
 
     def __call__(self, **kwargs):
-        query = super().__call__(**kwargs)
+        super().__call__(
+            **kwargs
+        )  # call super method but return self s. t. the next operations still act on this instead of the expression
         return self
 
 

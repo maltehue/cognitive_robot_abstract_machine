@@ -1,6 +1,6 @@
 import enum
 from dataclasses import dataclass
-from typing import assert_never
+from typing import assert_never, Self
 
 from random_events.set import Set
 
@@ -72,7 +72,7 @@ class ObjectAccessVariable:
     @classmethod
     def from_attribute_access_and_type(
         cls, attribute_access: AttributeAccessLike, type_: type
-    ):
+    ) -> Self:
         """
         Create an ObjectAccessVariable from the given attribute and type.
 
@@ -96,7 +96,7 @@ class ObjectAccessVariable:
     @classmethod
     def from_expression(
         cls, attribute_access: AttributeAccessLike, expression: SymbolicExpression
-    ):
+    ) -> Self:
         """
         Create an ObjectAccessVariable from the given attribute and a symbolic expression.
         The symbolic expression is converted to a list and used for the domain of the variable.
