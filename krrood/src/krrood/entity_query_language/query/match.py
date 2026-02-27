@@ -25,16 +25,16 @@ from typing_extensions import (
     TYPE_CHECKING,
 )
 
-from .quantifiers import An
-from ..core.base_expressions import Selectable
-from ..core.mapped_variable import Attribute, FlatVariable, CanBehaveLikeAVariable
-from ..core.variable import Literal, DomainType
-from ..failures import (
+from krrood.entity_query_language.query.quantifiers import An
+from krrood.entity_query_language.core.base_expressions import Selectable
+from krrood.entity_query_language.core.mapped_variable import Attribute, FlatVariable, CanBehaveLikeAVariable
+from krrood.entity_query_language.core.variable import Literal, DomainType
+from krrood.entity_query_language.failures import (
     NoKwargsInMatchVar,
 )
-from ..predicate import HasType
-from ..utils import T
-from ...rustworkx_utils import RWXNode
+from krrood.entity_query_language.predicate import HasType
+from krrood.entity_query_language.utils import T
+from krrood.rustworkx_utils import RWXNode
 
 if TYPE_CHECKING:
     from krrood.entity_query_language.factories import ConditionType
