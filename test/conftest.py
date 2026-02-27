@@ -5,6 +5,8 @@ from copy import deepcopy
 
 import numpy as np
 import pytest
+
+from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.collision_checking.collision_matrix import (
     MaxAvoidedCollisionsOverride,
 )
@@ -18,8 +20,6 @@ from krrood.ontomatic.property_descriptor.attribute_introspector import (
 from krrood.utils import recursive_subclasses
 from pycram.datastructures.dataclasses import Context  # type: ignore
 from semantic_digital_twin.adapters.mesh import STLParser
-from semantic_digital_twin.adapters.ros.tf_publisher import TFPublisher
-from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot

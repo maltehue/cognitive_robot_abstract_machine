@@ -18,7 +18,7 @@ from rclpy.subscription import Subscription
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .messages import (
+from semantic_digital_twin.adapters.ros.messages import (
     MetaData,
     WorldStateUpdate,
     Message,
@@ -26,12 +26,12 @@ from .messages import (
     LoadModel,
     Acknowledgment,
 )
-from ..world_entity_kwargs_tracker import WorldEntityWithIDKwargsTracker
-from ...callbacks.callback import Callback, StateChangeCallback, ModelChangeCallback
-from ...exceptions import MissingPublishChangesKWARG
-from ...orm.ormatic_interface import *
-from ...world import World
-from ...world_description.world_entity import (
+from semantic_digital_twin.adapters.world_entity_kwargs_tracker import WorldEntityWithIDKwargsTracker
+from semantic_digital_twin.callbacks.callback import Callback, StateChangeCallback, ModelChangeCallback
+from semantic_digital_twin.exceptions import MissingPublishChangesKWARG
+from semantic_digital_twin.orm.ormatic_interface import *
+from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.world_entity import (
     WorldEntityWithClassBasedID,
     WorldEntityWithID,
 )
@@ -101,6 +101,9 @@ class Synchronizer(WorldEntityWithID):
 
     message_type: ClassVar[Optional[Type[Message]]] = None
     """The type of the message that is sent and received."""
+
+    wait_for_synchronization_timeout: float = field(default=30.0)
+    """Timeout in seconds for waiting for synchronization."""
 
     _current_publication_event_id: Optional[UUID] = None
     """The UUID of the most recently published message awaiting acknowledgment."""
@@ -246,7 +249,7 @@ class Synchronizer(WorldEntityWithID):
                 success = self._acknowledge_condition_variable.wait_for(
                     lambda: len(self._received_acknowledgments)
                     >= self._expected_acknowledgment_count,
-                    timeout=5,
+                    timeout=self.wait_for_synchronization_timeout,
                 )
                 if not success:
                     self.node.get_logger().warning(
