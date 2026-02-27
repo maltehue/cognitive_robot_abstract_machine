@@ -7,6 +7,7 @@ from urdf_parser_py import urdf as urdfpy
 
 from .package_resolver import CompositePathResolver, PathResolver
 from ..datastructures.prefixed_name import PrefixedName
+from ..exceptions import NegativeConnectionVelocity
 from ..spatial_types.derivatives import Derivatives, DerivativeMap
 from ..spatial_types.spatial_types import HomogeneousTransformationMatrix, Vector3
 from ..utils import (
@@ -79,8 +80,13 @@ def urdf_joint_to_limits(
         upper_limits.position = upper
 
     velocity = getattr(limit, "velocity", None) if limit is not None else None
-    lower_limits.velocity = -abs(velocity) if velocity is not None else None
-    upper_limits.velocity = abs(velocity) if velocity is not None else None
+
+    if velocity is not None and velocity < 0:
+        raise NegativeConnectionVelocity(
+            connection_name=urdf_joint.name, velocity=velocity
+        )
+    lower_limits.velocity = -velocity if velocity is not None else None
+    upper_limits.velocity = velocity if velocity is not None else None
 
     if urdf_joint.mimic is not None:
         multiplier = (

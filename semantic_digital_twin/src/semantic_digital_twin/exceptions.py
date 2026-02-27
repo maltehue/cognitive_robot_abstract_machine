@@ -74,6 +74,26 @@ class LogicalError(DataclassException):
 
 
 @dataclass
+class NegativeConnectionVelocity(DataclassException):
+    """
+    An error that happens when a negative velocity limit is provided for a connection.
+    """
+
+    connection_name: Union[str, PrefixedName]
+    """
+    The name of the connection for which the velocity limit is negative.
+    """
+
+    velocity: float
+    """
+    The negative velocity limit.
+    """
+
+    def __post_init__(self):
+        self.message = f"Velocity limit must be non-negative, got {self.velocity} for joint {self.connection_name}"
+
+
+@dataclass
 class DofNotInWorldStateError(DataclassException, KeyError):
     """
     An exception raised when a degree of freedom is not found in the world's state dictionary.

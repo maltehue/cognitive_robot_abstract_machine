@@ -872,6 +872,23 @@ class KinematicChainDAO_sensors_association(Base, AssociationDataAccessObject):
     )
 
 
+class HumanoidGripperDAO_fingers_association(Base, AssociationDataAccessObject):
+
+    __tablename__ = "HumanoidGripperDAO_fingers_association"
+
+    database_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_humanoidgripperdao_id: Mapped[int] = mapped_column(
+        ForeignKey("HumanoidGripperDAO.database_id")
+    )
+    target_fingerdao_id: Mapped[int] = mapped_column(
+        ForeignKey("FingerDAO.database_id")
+    )
+
+    target: Mapped[FingerDAO] = relationship(
+        "FingerDAO", foreign_keys=[target_fingerdao_id]
+    )
+
+
 class WorldModelModificationBlockDAO_modifications_association(
     Base, AssociationDataAccessObject
 ):
@@ -6423,6 +6440,43 @@ class ManipulatorDAO(
     __mapper_args__ = {
         "polymorphic_identity": "ManipulatorDAO",
         "inherit_condition": database_id == SemanticRobotAnnotationDAO.database_id,
+    }
+
+
+class HumanoidGripperDAO(
+    ManipulatorDAO,
+    DataAccessObject[semantic_digital_twin.robots.abstract_robot.HumanoidGripper],
+):
+
+    __tablename__ = "HumanoidGripperDAO"
+
+    database_id: Mapped[builtins.int] = mapped_column(
+        ForeignKey(ManipulatorDAO.database_id),
+        primary_key=True,
+        use_existing_column=True,
+    )
+
+    thumb_id: Mapped[int] = mapped_column(
+        ForeignKey("FingerDAO.database_id", use_alter=True),
+        nullable=True,
+        use_existing_column=True,
+    )
+
+    fingers: Mapped[builtins.list[HumanoidGripperDAO_fingers_association]] = (
+        relationship(
+            "HumanoidGripperDAO_fingers_association",
+            collection_class=builtins.list,
+            cascade="all, delete-orphan",
+            foreign_keys="[HumanoidGripperDAO_fingers_association.source_humanoidgripperdao_id]",
+        )
+    )
+    thumb: Mapped[FingerDAO] = relationship(
+        "FingerDAO", uselist=False, foreign_keys=[thumb_id], post_update=True
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": "HumanoidGripperDAO",
+        "inherit_condition": database_id == ManipulatorDAO.database_id,
     }
 
 
