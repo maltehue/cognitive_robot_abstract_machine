@@ -64,10 +64,22 @@ class ExpressionBuilder(ABC):
     """
     The query that the expression is being built for.
     """
+    _built_expression: Optional[SymbolicExpression] = field(init=False, default=None)
+    """
+    The expression that is built from the metadata.
+    """
 
-    @abstractmethod
-    @cached_property
+    @property
     def expression(self) -> SymbolicExpression:
+        """
+        :return: The expression that is built from the metadata.
+        """
+        if self._built_expression is not None:
+            return self._built_expression
+        self._built_expression = self.build()
+        return self._built_expression
+
+    def build(self) -> SymbolicExpression:
         """
         :return: The expression that is built from the metadata.
         """
@@ -167,8 +179,7 @@ class WhereBuilder(FilterBuilder):
         if aggregators:
             raise AggregatorInWhereConditionsError(aggregators, query=self.query)
 
-    @cached_property
-    def expression(self) -> Where:
+    def build(self) -> Where:
         return Where(self.conditions_expression)
 
 
@@ -184,8 +195,7 @@ class HavingBuilder(FilterBuilder):
      the aggregations of grouped results.
     """
 
-    @cached_property
-    def expression(self) -> Having:
+    def build(self) -> Having:
         aggregators, non_aggregators = (
             self.aggregators_and_non_aggregators_in_conditions
         )
@@ -213,8 +223,7 @@ class GroupedByBuilder(ExpressionBuilder):
     def __post_init__(self):
         self.assert_correct_selected_variables()
 
-    @cached_property
-    def expression(self) -> GroupedBy:
+    def build(self) -> GroupedBy:
         aggregators, non_aggregators = self.aggregators_and_non_aggregators
         where = self.query._where_expression_
         children = OrderedSet()
@@ -379,8 +388,7 @@ class QuantifierBuilder(ExpressionBuilder):
     The child expression of the quantifier.
     """
 
-    @cached_property
-    def expression(self) -> ResultQuantifier:
+    def build(self) -> ResultQuantifier:
         """
         Builds a result quantifier of the specified type with the given child and quantification constraint.
         """
@@ -412,6 +420,5 @@ class OrderedByBuilder(ExpressionBuilder):
     The data source that generates the results to be ordered.
     """
 
-    @cached_property
-    def expression(self) -> SymbolicExpression:
+    def build(self) -> OrderedBy:
         return OrderedBy(self.data_source, self.variable, self.descending, self.key)

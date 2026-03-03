@@ -1064,13 +1064,18 @@ def test_order_by_not_evaluated_variable(handles_and_containers_world):
 def test_ordering_the_query_by_the_query_itself(handles_and_containers_world):
     body = variable(Body, domain=handles_and_containers_world.bodies)
     query = entity(body).where(contains(body.name, "Handle"))
-    ordered_query = an(query.ordered_by(query.name[-1]))
-    # QueryGraph(ordered_query).visualize()
-    assert list(ordered_query.evaluate()) == sorted(
-        [b for b in handles_and_containers_world.bodies if "Handle" in b.name],
+    ordered_query = an(query.ordered_by(query.name[-1], descending=True))
+    QueryGraph(ordered_query.build()).visualize()
+    filtered_values = [
+        b for b in handles_and_containers_world.bodies if "Handle" in b.name
+    ]
+    sorted_expectation = sorted(
+        filtered_values,
         key=lambda b: b.name[-1],
-        reverse=False,
+        reverse=True,
     )
+    assert filtered_values != sorted_expectation
+    assert ordered_query.tolist() == sorted_expectation
 
 
 def test_distinct_on_query_descriptor(handles_and_containers_world):
