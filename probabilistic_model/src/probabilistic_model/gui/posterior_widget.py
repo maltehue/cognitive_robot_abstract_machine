@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field, InitVar
 from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget,
@@ -17,21 +18,97 @@ from PySide6.QtGui import QIcon
 from .controller import ModelController
 from .variable_constraint_widget import VariableConstraintWidget
 from random_events.product_algebra import SimpleEvent, Event
+from probabilistic_model.probabilistic_model import ProbabilisticModel
 
 
+@dataclass
 class PosteriorWidget(QWidget):
     """
     The Posterior page widget of the GUI.
     Allows calculating and viewing posterior distributions given evidence.
     """
 
-    def __init__(self, controller: ModelController, parent: Optional[QWidget] = None):
+    controller: ModelController
+    """
+    The model controller.
+    """
+
+    parent: InitVar[Optional[QWidget]] = None
+    """
+    The parent widget.
+    """
+
+    evidence_widgets: List[VariableConstraintWidget] = field(
+        default_factory=list, init=False
+    )
+    """
+    The list of variable constraint widgets for the evidence.
+    """
+
+    current_posterior_model: Optional[ProbabilisticModel] = field(
+        default=None, init=False
+    )
+    """
+    The current posterior model after calculation.
+    """
+
+    query_vars: List[str] = field(default_factory=list, init=False)
+    """
+    The list of selected variables to plot.
+    """
+
+    current_var_index: int = field(default=0, init=False)
+    """
+    The index of the currently plotted variable.
+    """
+
+    calculate_button: QPushButton = field(init=False)
+    """
+    The button to calculate the posterior.
+    """
+
+    query_vars_list: QListWidget = field(init=False)
+    """
+    The list widget to select query variables.
+    """
+
+    evidence_container: QWidget = field(init=False)
+    """
+    The container for evidence variable rows.
+    """
+
+    evidence_layout: QVBoxLayout = field(init=False)
+    """
+    The layout for evidence variable rows.
+    """
+
+    prev_button: QPushButton = field(init=False)
+    """
+    The button to show the previous plot.
+    """
+
+    next_button: QPushButton = field(init=False)
+    """
+    The button to show the next plot.
+    """
+
+    plot_container: QVBoxLayout = field(init=False)
+    """
+    The layout container for the plot and title.
+    """
+
+    plot_title: QLabel = field(init=False)
+    """
+    The label displaying the plot title.
+    """
+
+    plot_widget: ProbabilisticModelPlotWidget = field(init=False)
+    """
+    The widget that renders the distribution plots.
+    """
+
+    def __post_init__(self, parent: Optional[QWidget]):
         super().__init__(parent)
-        self.controller = controller
-        self.evidence_widgets: List[VariableConstraintWidget] = []
-        self.current_posterior_model = None
-        self.query_vars = []
-        self.current_var_index = 0
         self.init_ui()
 
     def init_ui(self):

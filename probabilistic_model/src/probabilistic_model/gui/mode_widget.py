@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field, InitVar
 from typing import List, Optional, Union
 from PySide6.QtWidgets import (
     QWidget,
@@ -16,19 +17,92 @@ from PySide6.QtGui import QIcon
 from random_events.product_algebra import SimpleEvent, Event
 
 
+@dataclass
 class ModeWidget(QWidget):
     """
     The Mode page widget of the GUI.
     Calculates and displays the Most Probable Explanation (MPE).
     """
 
-    def __init__(self, controller: ModelController, parent: Optional[QWidget] = None):
+    controller: ModelController
+    """
+    The model controller.
+    """
+
+    parent: InitVar[Optional[QWidget]] = None
+    """
+    The parent widget.
+    """
+
+    evidence_widgets: List[VariableConstraintWidget] = field(
+        default_factory=list, init=False
+    )
+    """
+    The list of variable constraint widgets for the evidence.
+    """
+
+    modes: List[SimpleEvent] = field(default_factory=list, init=False)
+    """
+    The list of simple events representing the calculated modes.
+    """
+
+    likelihood: float = field(default=0.0, init=False)
+    """
+    The maximum likelihood value of the modes.
+    """
+
+    current_mode_index: int = field(default=0, init=False)
+    """
+    The index of the currently displayed mode.
+    """
+
+    calculate_button: QPushButton = field(init=False)
+    """
+    The button to calculate the mode.
+    """
+
+    result_container: QWidget = field(init=False)
+    """
+    The widget containing the results and navigation.
+    """
+
+    result_layout: QVBoxLayout = field(init=False)
+    """
+    The layout for the results.
+    """
+
+    prev_button: QPushButton = field(init=False)
+    """
+    The button to navigate to the previous mode.
+    """
+
+    next_button: QPushButton = field(init=False)
+    """
+    The button to navigate to the next mode.
+    """
+
+    mode_info_label: QLabel = field(init=False)
+    """
+    The label displaying mode information and likelihood.
+    """
+
+    mode_details_scroll: QScrollArea = field(init=False)
+    """
+    The scroll area for mode details.
+    """
+
+    mode_details_container: QWidget = field(init=False)
+    """
+    The widget container for mode rows.
+    """
+
+    mode_details_layout: QVBoxLayout = field(init=False)
+    """
+    The layout for the mode rows.
+    """
+
+    def __post_init__(self, parent: Optional[QWidget]):
         super().__init__(parent)
-        self.controller = controller
-        self.evidence_widgets: List[VariableConstraintWidget] = []
-        self.modes: List[SimpleEvent] = []
-        self.likelihood: float = 0.0
-        self.current_mode_index: int = 0
         self.init_ui()
 
     def init_ui(self):

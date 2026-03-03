@@ -1,3 +1,5 @@
+from dataclasses import dataclass, field, InitVar
+from typing import Optional
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -16,27 +18,65 @@ from .mode_widget import ModeWidget
 from probabilistic_model.probabilistic_model import ProbabilisticModel
 
 
+@dataclass
 class MainWindow(QMainWindow):
     """
     Main Window of the Probabilistic Model GUI.
     """
 
-    controller: ModelController
-    home_widget: HomeWidget
-    query_widget: QueryWidget
-    posterior_widget: PosteriorWidget
-    mode_widget: ModeWidget
-    central_stack: QStackedWidget
-    navigation_group: QActionGroup
+    model: Optional[ProbabilisticModel] = None
+    """
+    The initial probabilistic model (optional).
+    """
 
-    def __init__(self, model: ProbabilisticModel = None, parent: QWidget = None):
+    parent: InitVar[Optional[QWidget]] = None
+    """
+    The parent widget.
+    """
+
+    controller: ModelController = field(init=False)
+    """
+    The model controller.
+    """
+
+    home_widget: HomeWidget = field(init=False)
+    """
+    The home page widget.
+    """
+
+    query_widget: QueryWidget = field(init=False)
+    """
+    The query page widget.
+    """
+
+    posterior_widget: PosteriorWidget = field(init=False)
+    """
+    The posterior page widget.
+    """
+
+    mode_widget: ModeWidget = field(init=False)
+    """
+    The mode page widget.
+    """
+
+    central_stack: QStackedWidget = field(init=False)
+    """
+    The stacked widget for the pages.
+    """
+
+    navigation_group: QActionGroup = field(init=False)
+    """
+    The action group for toolbar navigation.
+    """
+
+    def __post_init__(self, parent: Optional[QWidget]):
         super().__init__(parent)
         self.setWindowTitle("Probabilistic Model GUI")
         self.resize(1000, 700)
 
-        self.controller = ModelController(model=model)
+        self.controller = ModelController(model=self.model)
         self.init_ui()
-        if model:
+        if self.model:
             self.refresh_widgets()
 
     def init_ui(self):

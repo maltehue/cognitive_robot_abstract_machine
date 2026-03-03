@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field, InitVar
 from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget,
@@ -16,17 +17,49 @@ from PySide6.QtGui import QIcon
 from random_events.product_algebra import SimpleEvent, Event
 
 
+@dataclass
 class QueryWidget(QWidget):
     """
     The Query page widget of the GUI.
     Allows constructing queries and evidence to calculate probabilities.
     """
 
-    def __init__(self, controller: ModelController, parent: Optional[QWidget] = None):
+    controller: ModelController
+    """
+    The model controller.
+    """
+
+    parent: InitVar[Optional[QWidget]] = None
+    """
+    The parent widget.
+    """
+
+    query_widgets: List[VariableConstraintWidget] = field(
+        default_factory=list, init=False
+    )
+    """
+    The list of variable constraint widgets for the query.
+    """
+
+    evidence_widgets: List[VariableConstraintWidget] = field(
+        default_factory=list, init=False
+    )
+    """
+    The list of variable constraint widgets for the evidence.
+    """
+
+    calculate_button: QPushButton = field(init=False)
+    """
+    The button to calculate the probability.
+    """
+
+    result_label: QLabel = field(init=False)
+    """
+    The label to display the calculation result.
+    """
+
+    def __post_init__(self, parent: Optional[QWidget]):
         super().__init__(parent)
-        self.controller = controller
-        self.query_widgets: List[VariableConstraintWidget] = []
-        self.evidence_widgets: List[VariableConstraintWidget] = []
         self.init_ui()
 
     def init_ui(self):

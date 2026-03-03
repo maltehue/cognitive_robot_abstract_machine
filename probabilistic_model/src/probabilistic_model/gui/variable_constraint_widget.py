@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field, InitVar
 from typing import Optional, List, Union, Tuple, Set as TypingSet
 from PySide6.QtWidgets import (
     QWidget,
@@ -28,50 +29,88 @@ from random_events.interval import closed, Interval, SimpleInterval, Bound
 from random_events.set import Set, SetElement
 
 
+@dataclass
 class NumericIntervalWidget(QWidget):
     """
     A widget representing a single interval for a numeric variable.
     Includes spin boxes for precise input and a range slider for visual adjustment.
     """
 
+    variable: Variable
+    """
+    The variable this widget represents.
+    """
+
+    minimum_bound: float
+    """
+    The minimum value allowed for the variable.
+    """
+
+    maximum_bound: float
+    """
+    The maximum value allowed for the variable.
+    """
+
+    initial_values: Tuple[float, float]
+    """
+    The initial values for the lower and upper bounds of the interval.
+    """
+
+    parent: InitVar[Optional[QWidget]] = None
+    """
+    The parent widget.
+    """
+
+    minimum_spin_box: Union[QDoubleSpinBox, QSpinBox] = field(init=False)
+    """
+    The spin box for the minimum interval value.
+    """
+
+    maximum_spin_box: Union[QDoubleSpinBox, QSpinBox] = field(init=False)
+    """
+    The spin box for the maximum interval value.
+    """
+
+    slider: Union[QDoubleRangeSlider, QRangeSlider] = field(init=False)
+    """
+    The range slider for visual adjustment of the interval.
+    """
+
+    remove_button: QPushButton = field(init=False)
+    """
+    The button to remove this interval row.
+    """
+
     changed = Signal()
     removed = Signal()
 
-    def __init__(
-        self,
-        variable: Variable,
-        minimum_bound: float,
-        maximum_bound: float,
-        initial_values: Tuple[float, float],
-        parent: Optional[QWidget] = None,
-    ):
+    def __post_init__(self, parent: Optional[QWidget]):
         super().__init__(parent)
-        self.variable = variable
-        self.minimum_bound = minimum_bound
-        self.maximum_bound = maximum_bound
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        if isinstance(variable, Continuous):
+        if isinstance(self.variable, Continuous):
             self.minimum_spin_box = QDoubleSpinBox()
             self.maximum_spin_box = QDoubleSpinBox()
             self.slider = QDoubleRangeSlider(Qt.Orientation.Horizontal)
             for spin_box in [self.minimum_spin_box, self.maximum_spin_box]:
-                spin_box.setRange(minimum_bound, maximum_bound)
+                spin_box.setRange(self.minimum_bound, self.maximum_bound)
                 spin_box.setDecimals(3)
-                spin_box.setSingleStep((maximum_bound - minimum_bound) / 100.0)
+                spin_box.setSingleStep(
+                    (self.maximum_bound - self.minimum_bound) / 100.0
+                )
         else:
             self.minimum_spin_box = QSpinBox()
             self.maximum_spin_box = QSpinBox()
             self.slider = QRangeSlider(Qt.Orientation.Horizontal)
             for spin_box in [self.minimum_spin_box, self.maximum_spin_box]:
-                spin_box.setRange(int(minimum_bound), int(maximum_bound))
+                spin_box.setRange(int(self.minimum_bound), int(self.maximum_bound))
 
-        self.slider.setRange(minimum_bound, maximum_bound)
-        self.slider.setValue(initial_values)
-        self.minimum_spin_box.setValue(initial_values[0])
-        self.maximum_spin_box.setValue(initial_values[1])
+        self.slider.setRange(self.minimum_bound, self.maximum_bound)
+        self.slider.setValue(self.initial_values)
+        self.minimum_spin_box.setValue(self.initial_values[0])
+        self.maximum_spin_box.setValue(self.initial_values[1])
 
         primary = get_primary_color()
         secondary_light = get_secondary_light_color()
@@ -143,24 +182,90 @@ class NumericIntervalWidget(QWidget):
         return (self.minimum_spin_box.value(), self.maximum_spin_box.value())
 
 
+@dataclass
 class VariableConstraintWidget(QFrame):
     """
     A widget that allows selecting a variable and defining its constraints.
     """
 
+    variables: List[Variable]
+    """
+    The list of variables to select from.
+    """
+
+    priors: Optional[VariableMap] = None
+    """
+    The prior distributions for the variables (optional).
+    """
+
+    parent: InitVar[Optional[QWidget]] = None
+    """
+    The parent widget.
+    """
+
+    main_layout: QVBoxLayout = field(init=False)
+    """
+    The main layout of the widget.
+    """
+
+    variable_combo: QComboBox = field(init=False)
+    """
+    The combo box to select a variable.
+    """
+
+    remove_button: QPushButton = field(init=False)
+    """
+    The button to remove this variable constraint widget.
+    """
+
+    constraint_container: QWidget = field(init=False)
+    """
+    The container widget for constraints.
+    """
+
+    constraint_layout: QVBoxLayout = field(init=False)
+    """
+    The layout for the constraint container.
+    """
+
+    constraint_widget: Optional[Union[QScrollArea, QListWidget]] = field(init=False)
+    """
+    The widget used for defining constraints (QScrollArea or QListWidget).
+    """
+
+    intervals_container: QWidget = field(init=False)
+    """
+    The container for numeric interval rows.
+    """
+
+    intervals_layout: QVBoxLayout = field(init=False)
+    """
+    The layout for the numeric intervals container.
+    """
+
+    add_range_button: QPushButton = field(init=False)
+    """
+    The button to add a new numeric interval.
+    """
+
+    scroll_area: QScrollArea = field(init=False)
+    """
+    The scroll area for numeric intervals.
+    """
+
+    interval_widgets: List[NumericIntervalWidget] = field(init=False)
+    """
+    The list of numeric interval widgets.
+    """
+
     changed = Signal()
     removed = Signal()
 
-    def __init__(
-        self,
-        variables: List[Variable],
-        priors: Optional[VariableMap] = None,
-        parent: Optional[QWidget] = None,
-    ):
+    _read_only: bool = field(default=False, init=False)
+
+    def __post_init__(self, parent: Optional[QWidget]):
         super().__init__(parent)
-        self.variables = sorted(variables, key=lambda v: v.name)
-        self.priors = priors
-        self._read_only = False
+        self.variables = sorted(self.variables, key=lambda v: v.name)
         self.init_ui()
 
     def init_ui(self):

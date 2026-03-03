@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field, InitVar
 import os
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QScrollArea
 from PySide6.QtCore import Qt
@@ -6,8 +7,10 @@ from PySide6.QtGui import QPixmap
 from .controller import ModelController
 from random_events.interval import Interval
 from random_events.set import Set
+from typing import Optional
 
 
+@dataclass
 class HomeWidget(QWidget):
     """
     The Home page widget of the GUI.
@@ -15,10 +18,27 @@ class HomeWidget(QWidget):
     """
 
     controller: ModelController
+    """
+    The model controller.
+    """
 
-    def __init__(self, controller: ModelController, parent: QWidget = None):
+    parent: InitVar[Optional[QWidget]] = None
+    """
+    The parent widget.
+    """
+
+    variable_list_container: QWidget = field(init=False)
+    """
+    Container for the list of variables.
+    """
+
+    variable_list_layout: QVBoxLayout = field(init=False)
+    """
+    Layout for the list of variables.
+    """
+
+    def __post_init__(self, parent: Optional[QWidget]):
         super().__init__(parent)
-        self.controller = controller
         self.init_ui()
 
     def get_logo_path(self) -> str:

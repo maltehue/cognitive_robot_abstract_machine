@@ -16,8 +16,19 @@ class ModelController:
     """
 
     model: Optional[ProbabilisticModel] = None
+    """
+    The probabilistic model being managed.
+    """
+
     variable_map: Dict[str, Variable] = field(default_factory=dict)
+    """
+    A mapping from variable names to variable objects.
+    """
+
     priors: Optional[VariableMap] = None
+    """
+    The prior distributions for all variables in the model.
+    """
 
     def __post_init__(self):
         """

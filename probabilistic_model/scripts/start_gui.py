@@ -28,11 +28,15 @@ def main(model_path: str = None):
     # In Qt6, AA_UseDesktopOpenGL is still available but often default.
     # On some systems, AA_UseOpenGLES or AA_UseSoftwareOpenGL might be needed instead.
     model_path = "/home/tom_sch/.config/JetBrains/PyCharm2025.3/scratches/model.pm"
-    with open(model_path) as f:
-        model = ProbabilisticCircuit.from_json(json.load(f))
+
+    if model_path is None:
+        model = None
+    else:
+        with open(model_path) as f:
+            model = ProbabilisticCircuit.from_json(json.load(f))
 
     app = QApplication(sys.argv)
-    apply_stylesheet(app, theme="light_amber.xml")
+    apply_stylesheet(app, theme="dark_amber.xml")
     window = MainWindow(model=model)
     window.show()
     sys.exit(app.exec())
