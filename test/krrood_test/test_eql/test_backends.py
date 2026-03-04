@@ -47,12 +47,11 @@ def test_same_query_multiple_domains(session, database):
     result = list(database_backend.evaluate(q))
     assert len(result) == 1
 
-    underspecified_pose = underspecified(Pose)
-
-    prob_q = underspecified_pose(
+    prob_q = underspecified(Pose)(
         position=underspecified(Position)(x=..., y=..., z=...),
         orientation=Orientation(x=0.0, y=0.0, z=0.0, w=1.0),
-    ).where(underspecified_pose.variable.position.x > 0.5)
+    )
+    prob_q.where(prob_q.variable.position.x > 0.5)
 
     parameters = MatchParameterizer(
         MatchToInstanceTranslator(prob_q).translate()

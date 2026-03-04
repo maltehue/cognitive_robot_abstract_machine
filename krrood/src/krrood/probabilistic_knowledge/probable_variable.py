@@ -50,7 +50,6 @@ class QueryToRandomEventTranslator:
         """
         :return: The random event that corresponds to the query.
         """
-        self.query.build()
 
         simple_events = []
 
@@ -265,7 +264,6 @@ def is_disjunctive_normal_form(query: Entity) -> bool:
     :param query: The query to check
     :return: True if the query is disjunctive normal form, False otherwise
     """
-    query.build()
 
     condition_root = query._conditions_root_
 

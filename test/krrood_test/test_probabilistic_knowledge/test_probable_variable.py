@@ -16,6 +16,7 @@ from krrood.entity_query_language.query.match import (
 from krrood.probabilistic_knowledge.parameterizer import (
     copy_partial_object,
     MatchParameterizer,
+    UnderspecifiedToParametersTranslator,
 )
 from krrood.probabilistic_knowledge.probable_variable import (
     QueryToRandomEventTranslator,
@@ -37,6 +38,7 @@ def test_parameterizer_with_where():
         pose_variable.position.z <= 1.0,
         pose_variable.orientation.x != 1.0,
     )
+    q.build()
     t = QueryToRandomEventTranslator(q)
     r = t.translate()
 
@@ -67,6 +69,7 @@ def test_dnf_checking():
             ),
         )
     )
+    q1.build()
 
     assert not is_disjunctive_normal_form(q1)
 
@@ -81,6 +84,7 @@ def test_dnf_checking():
             and_(pose_variable.orientation.z > 0),
         )
     )
+    q2.build()
     assert is_disjunctive_normal_form(q2)
 
     t = QueryToRandomEventTranslator(q2)
@@ -147,3 +151,15 @@ def test_probable_variable_with_concrete_kwarg():
     parameters = MatchParameterizer(instance).parameterize()
     assert len(parameters.variables) == 7
     assert len(parameters.assignments) == 4
+
+
+def test_new_underspecified_translator():
+    probable_pose = underspecified(Pose)
+    prob_q = probable_pose(
+        position=underspecified(Position)(x=..., y=..., z=...),
+        orientation=Orientation(x=0.0, y=0.0, z=0.0, w=1.0),
+    ).where(probable_pose.variable.position.x > 0.5)
+
+    print(type(prob_q))
+    a = UnderspecifiedToParametersTranslator(prob_q).parameterize()
+    print(a)

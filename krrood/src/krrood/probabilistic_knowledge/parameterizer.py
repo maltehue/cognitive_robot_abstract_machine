@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import enum
 import uuid
+from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import cached_property
 from types import NoneType, MethodType, FunctionType
-from typing import Dict, Iterable, Set
+from typing import Dict, Iterable, Set, Callable, Self
 
 import numpy as np
+from poetry.console.commands import self
 from sqlalchemy import inspect, Column
 from sqlalchemy.orm import Relationship
 from typing_extensions import List, Optional, assert_never, Any, Tuple, Type
 
+from krrood.entity_query_language.query.match import UnderspecifiedVariable
 from probabilistic_model.probabilistic_circuit.rx.helper import fully_factorized
 from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
     ProbabilisticCircuit,
@@ -516,3 +521,69 @@ def copy_partial_object(instance: Any, seen_objects: Dict[int, Any] = None) -> A
             setattr(result, key, copied_value)
 
     return result
+
+
+@dataclass
+class CallableAndKwargs:
+    callable: Callable
+    kwargs: Dict[str, Any] = field(default_factory=dict)
+
+    def __deepcopy__(self, memo):
+        return self.__class__(
+            self.callable,
+            {name: deepcopy(value) for name, value in self.kwargs.items()},
+        )
+
+    def variables(self):
+        result = {}
+        symbolic_access = variable(type(self), [])
+        self._variables(symbolic_access, result)
+        return symbolic_access.variables
+
+    def _variables(self, symbolic_access: AttributeAccessLike, result: Dict): ...
+        for key, value in self.kwargs.items():
+            if isinstance(value, list_like_classes):
+                ...
+            elif isinstance(value, CallableAndKwargs):
+                ...
+
+@dataclass
+class CoolerParameters:
+    callable_and_kwargs: CallableAndKwargs
+
+
+@dataclass
+class UnderspecifiedToParametersTranslator:
+
+    statement: UnderspecifiedVariable
+
+    def parameterize(self):
+
+        return self._construct(self.statement)
+
+    def _construct(
+        self,
+        statement: UnderspecifiedVariable,
+    ) -> CallableAndKwargs:
+
+        current_callable = statement.expression.selected_variable
+
+        kwargs = dict()
+
+        for key, argument in statement.kwargs.items():
+
+            if isinstance(argument, list_like_classes):
+                value_to_set = []
+                for item in argument:
+                    if isinstance(item, UnderspecifiedVariable):
+                        value_to_set.append(self._construct(item))
+                    else:
+                        value_to_set.append(item)
+                kwargs[key] = value_to_set
+
+            elif isinstance(argument, UnderspecifiedVariable):
+                kwargs[key] = self._construct(argument)
+
+            else:
+                kwargs[key] = argument
+        return CallableAndKwargs(current_callable, kwargs)

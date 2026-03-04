@@ -26,7 +26,10 @@ from typing_extensions import (
 )
 
 from krrood.entity_query_language.query.quantifiers import An
-from krrood.entity_query_language.core.base_expressions import Selectable
+from krrood.entity_query_language.core.base_expressions import (
+    Selectable,
+    SymbolicExpression,
+)
 from krrood.entity_query_language.core.mapped_variable import (
     Attribute,
     FlatVariable,
@@ -169,6 +172,8 @@ class Match(AbstractMatchExpression[T]):
     This is needed to apply where conditions directly to the match instance. 
     """
 
+    _where_expression: List[ConditionType] = field(init=False, default_factory=list)
+
     def __call__(self, **kwargs) -> Union[Self, T, CanBehaveLikeAVariable[T]]:
         """
         Update the match with new keyword arguments to constrain the type we are matching with.
@@ -263,6 +268,7 @@ class Match(AbstractMatchExpression[T]):
         return self.name
 
     def where(self, *conditions: ConditionType) -> Match[T]:
+        self._where_expression.extend(conditions)
         self.expression.where(*conditions)
         return self
 

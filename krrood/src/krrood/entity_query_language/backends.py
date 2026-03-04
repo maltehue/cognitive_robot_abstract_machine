@@ -4,6 +4,7 @@ from typing import Iterable, TypeVar
 
 from sqlalchemy.orm import sessionmaker
 
+from krrood.entity_query_language.factories import and_
 from krrood.entity_query_language.failures import (
     NoSolutionFound,
     GenerativeBackendQueryIsNotMatch,
@@ -122,7 +123,7 @@ class ProbabilisticBackend(GenerativeBackend):
 
         # translate where conditions to random event
         random_events_translator = QueryToRandomEventTranslator(
-            expression.expression._conditions_root_
+            and_(*expression._where_expression)
         )
         truncation_event = random_events_translator.translate()
 
