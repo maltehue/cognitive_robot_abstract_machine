@@ -62,7 +62,7 @@ EQL treats relational querying as a structural operation over objects.
 EQL is not only a query language.
 It is also a description language.
 
-You can write description-logic-style statements directly in Python, allowing declarative constraints, structural matching, and semantic expression within the same framework.
+You can write first-order-logic statements directly in Python, allowing declarative constraints, structural matching, and semantic expression within the same framework.
 
 This unifies:
 
