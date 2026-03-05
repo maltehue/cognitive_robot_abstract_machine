@@ -23,8 +23,6 @@ class TestQueryGUI(unittest.TestCase):
 
     def setUp(self):
         self.controller = ModelController()
-
-        # Setup a simple model
         self.v1 = Continuous("v1", closed(0, 1))
         self.v2 = Symbolic("v2", Set.from_iterable(["a", "b"]))
 
@@ -32,20 +30,17 @@ class TestQueryGUI(unittest.TestCase):
         self.model.variables = [self.v1, self.v2]
         self.model.probability.return_value = 0.5
 
-        # Configure marginal to return real numbers for bounds
         mock_marginal_v1 = MagicMock()
         mock_marginal_v1.support.simple_sets = [SimpleEvent({self.v1: closed(0, 1)})]
-        
+
         mock_marginal_v2 = MagicMock()
-        mock_marginal_v2.support.simple_sets = [SimpleEvent({self.v2: Set.from_iterable(["a", "b"])})]
+        mock_marginal_v2.support.simple_sets = [
+            SimpleEvent({self.v2: Set.from_iterable(["a", "b"])})
+        ]
 
-        def side_effect(vars):
-            if vars == [self.v1]:
-                return mock_marginal_v1
-            return mock_marginal_v2
-        
-        self.model.marginal.side_effect = side_effect
-
+        self.model.marginal.side_effect = lambda vars: (
+            mock_marginal_v1 if vars == [self.v1] else mock_marginal_v2
+        )
         self.controller.set_model(self.model)
 
     def test_variable_constraint_widget_continuous(self):
@@ -64,16 +59,13 @@ class TestQueryGUI(unittest.TestCase):
         changed_mock.reset_mock()
 
         # Check slider value change triggers changed signal
-        # For numeric variables, the slider is in the first interval widget
         slider = widget.interval_widgets[0].slider
-        slider.setValue((0.1, 0.9))
-        app.processEvents()
+        slider.sliderMoved.emit((0.1, 0.9))
         self.assertTrue(changed_mock.called)
 
         # Check constraint retrieval
         var, constraint = widget.get_constraint()
         self.assertEqual(var, self.v1)
-        # Check values with small delta
         self.assertAlmostEqual(constraint.simple_sets[0].lower, 0.1, places=3)
         self.assertAlmostEqual(constraint.simple_sets[0].upper, 0.9, places=3)
 
@@ -101,16 +93,10 @@ class TestQueryGUI(unittest.TestCase):
         widget = QueryWidget(self.controller)
         initial_count = len(widget.query_widgets)
 
-        # Trigger add row for query
-        # Since add_variable_row is connected to button, we can call it directly
-        # or simulate button click if we find the button.
-        # For simplicity, call the method.
         layout_container = widget.query_widgets[0].parentWidget()
         widget.add_variable_row(widget.query_widgets, layout_container)
-
         self.assertEqual(len(widget.query_widgets), initial_count + 1)
 
-        # Remove row
         row_widget = widget.query_widgets[-1].parentWidget()
         var_widget = widget.query_widgets[-1]
         widget.remove_variable_row(row_widget, var_widget, widget.query_widgets)
@@ -129,36 +115,26 @@ class TestQueryGUI(unittest.TestCase):
         self.assertEqual(prob, 1.0)  # 0.5 / 0.5 in this mock case
 
     def test_variable_constraint_widget_labels(self):
-        # We need priors to test marks from priors
         from random_events.product_algebra import VariableMap
 
         priors = VariableMap()
-        # Mocking a distribution that has support
         dist = MagicMock()
-        # support is usually a SimpleEvent in simple cases, but in CompositeSets it's multiple
-        # Actually in random_events, distribution.support is an Event (CompositeSet)
         dist.support.simple_sets = [SimpleEvent({self.v1: closed(0.1, 0.9)})]
         priors[self.v1] = dist
 
         widget = VariableConstraintWidget(self.model.variables, priors)
-        # Select v1
         index = widget.variable_combo.findText("v1")
         widget.variable_combo.setCurrentIndex(index)
 
-        # Check if value_label exists and has text
-        self.assertTrue(hasattr(widget, "value_label"))
         self.assertIn("Range:", widget.value_label.text())
         self.assertIn("0.10", widget.value_label.text())
         self.assertIn("0.90", widget.value_label.text())
 
-        # Check for marks labels
         from PySide6.QtWidgets import QLabel
 
         labels = widget.findChildren(QLabel)
         mark_labels = [l for l in labels if l != widget.value_label]
-        # Should have around 6 marks
         self.assertGreaterEqual(len(mark_labels), 2)
-        # Verify one of the marks is the minimum
         mark_texts = [l.text() for l in mark_labels]
         self.assertIn("0.10", mark_texts)
         self.assertIn("0.90", mark_texts)
