@@ -29,7 +29,9 @@ from krrood.entity_query_language.core.base_expressions import (
     BinaryExpression,
     Selectable,
 )
-from krrood.entity_query_language.operators.set_operations import PerformsCartesianProduct
+from krrood.entity_query_language.operators.set_operations import (
+    PerformsCartesianProduct,
+)
 from krrood.entity_query_language.utils import is_iterable, make_set
 
 
