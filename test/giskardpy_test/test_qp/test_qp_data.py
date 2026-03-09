@@ -5,7 +5,7 @@ from giskardpy.qp.qp_data import (
     QPData,
     ConditioningStrategy,
     HessianOneConditioningStrategy,
-    MyConditioningStrategy,
+    JerkOneConditioningStrategy,
 )
 from giskardpy.qp.solvers.qp_solver_gurobi import QPSolverGurobi
 from giskardpy.qp.solvers.qp_solver_qpSWIFT import QPSolverQPSwift
@@ -7919,7 +7919,7 @@ def test_sadness_qp_gurobi(sadness_qp17):
 def test_sadness_qp_gurobi_my_conditioning(sadness_qp_raw):
     qp_data = sadness_qp_raw
     normal_result = QPSolverGurobi().solver_call(qp_data)
-    conditioning = MyConditioningStrategy()
+    conditioning = JerkOneConditioningStrategy()
     conditioned_qp_data = conditioning.apply(qp_data)
     conditioned_result = QPSolverGurobi().solver_call(conditioned_qp_data)
     result = conditioning.unapply(conditioned_result)
@@ -7929,7 +7929,7 @@ def test_sadness_qp_gurobi_my_conditioning(sadness_qp_raw):
 def test_sadness_qp_qpswift_my_conditioning(sadness_qp_raw):
     qp_data = sadness_qp_raw
     normal_result = QPSolverQPSwift(ignore_fail=True).solver_call(qp_data)
-    conditioning = MyConditioningStrategy()
+    conditioning = JerkOneConditioningStrategy()
     conditioned_qp_data = conditioning.apply(qp_data)
     conditioned_result = QPSolverQPSwift().solver_call(conditioned_qp_data)
     result = conditioning.unapply(conditioned_result)

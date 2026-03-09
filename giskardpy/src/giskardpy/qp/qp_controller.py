@@ -22,7 +22,7 @@ from giskardpy.qp.qp_data import (
     QPDataExplicit,
     QPData,
     QPDataFactory,
-    MyConditioningStrategy,
+    JerkOneConditioningStrategy,
     ConditioningStrategy,
     HessianOneConditioningStrategy,
 )
@@ -477,14 +477,16 @@ class QPController:
         # 2. apply filter
         qp_data_filtered = qp_data_raw.apply_filters()
         # 3. apply conditioning
-        conditioning = ConditioningStrategy()
-        conditioning.update(qp_data_filtered)
-        qp_data_filtered = qp_data_filtered.apply_conditioning(conditioning)
+        if self.config.conditioning_strategy is not None:
+            conditioning = self.config.conditioning_strategy()
+            conditioning.update(qp_data_filtered)
+            qp_data_filtered = qp_data_filtered.apply_conditioning(conditioning)
         # 4. solve qp
         xdot_full = self.qp_solver.solver_call(qp_data_filtered)
         # 5. if fail backup strategy
         # 6. turn xdot into control command
-        xdot_full = conditioning.unapply(xdot_full)
+        if self.config.conditioning_strategy is not None:
+            xdot_full = conditioning.unapply(xdot_full)
         return self.xdot_to_control_commands(xdot_full)
 
         qp_data_raw = self.qp_adapter.evaluate(

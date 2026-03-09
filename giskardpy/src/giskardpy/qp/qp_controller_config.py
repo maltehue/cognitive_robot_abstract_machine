@@ -9,6 +9,7 @@ from typing import Optional, Dict, Type
 from typing_extensions import TYPE_CHECKING
 
 from giskardpy.qp.exceptions import QPSolverException
+from giskardpy.qp.qp_data import ConditioningStrategy, NoConditioningStrategy
 from giskardpy.qp.qp_formulation import QPFormulation
 from giskardpy.qp.solvers.qp_solver_ids import SupportedQPSolver
 from giskardpy.qp.solvers.qp_solver_piqp import QPSolverPIQP
@@ -130,9 +131,7 @@ class QPControllerConfig:
     Reference to the resolved QP solver class.
     """
 
-    conditioning_strategy: ConditioningStrategy = field(
-        default=ConditioningStrategy.HessianOne
-    )
+    conditioning_strategy: type[ConditioningStrategy] | None = field(default=None)
     """
     Reference to the resolved QP solver class.
     """

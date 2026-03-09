@@ -33,7 +33,7 @@ class ConditioningStrategy:
     R_eq: sp.csc_matrix | None = field(default=None)
     R_neq: sp.csc_matrix | None = field(default=None)
 
-    def update(self, qp_data: QPData): ...
+    def update(self, qp_data: QPDataExplicit): ...
 
     def unapply(self, xdot: np.ndarray) -> np.ndarray:
         """
@@ -42,6 +42,10 @@ class ConditioningStrategy:
         if self.C is None:
             return xdot
         return self.C @ xdot
+
+
+@dataclass
+class NoConditioningStrategy(ConditioningStrategy): ...
 
 
 @dataclass
@@ -60,12 +64,14 @@ class HessianOneConditioningStrategy(ConditioningStrategy):
 
 
 @dataclass
-class MyConditioningStrategy(ConditioningStrategy):
+class JerkOneConditioningStrategy(ConditioningStrategy):
     def update(self, qp_data: QPData):
-        asdf = np.abs(qp_data.eq_matrix.toarray()).max(axis=0)
-        asdf[qp_data.quadratic_weights != 0] = 1
-        asdf[qp_data.quadratic_weights == 0] = 1 / asdf[qp_data.quadratic_weights == 0]
-        self.C = sp.diags(asdf, format="csc")
+        C_diagonal = np.abs(qp_data.eq_matrix.toarray()).max(axis=0)
+        C_diagonal[qp_data.quadratic_weights != 0] = 1
+        C_diagonal[qp_data.quadratic_weights == 0] = (
+            1 / C_diagonal[qp_data.quadratic_weights == 0]
+        )
+        self.C = sp.diags(C_diagonal, format="csc")
 
 
 # @dataclass
@@ -724,29 +730,6 @@ class QPDataTwoSidedInequalityFactory(QPDataFactory):
             parameters=VariableParameters.from_lists(*free_symbols),
             sparse=True,
         )
-
-        # self.b_bE_bA_filter = np.ones(
-        #     self.qp_data.box_lower_constraints.shape[0]
-        #     + self.qp_data.eq_bounds.shape[0]
-        #     + self.qp_data.neq_lower_bounds.shape[0],
-        #     dtype=bool,
-        # )
-        # self.b_zero_inf_filter_view = self.b_bE_bA_filter[
-        #     : self.qp_data.box_lower_constraints.shape[0]
-        # ]
-        # self.bE_filter_view = self.b_bE_bA_filter[
-        #     self.qp_data.box_lower_constraints.shape[
-        #         0
-        #     ] : self.qp_data.box_lower_constraints.shape[0]
-        #     + self.qp_data.eq_bounds.shape[0]
-        # ]
-        # self.bA_filter_view = self.b_bE_bA_filter[
-        #     self.qp_data.box_lower_constraints.shape[0]
-        #     + self.qp_data.eq_bounds.shape[0] :
-        # ]
-        # self.bE_bA_filter = self.b_bE_bA_filter[
-        #     self.qp_data.box_lower_constraints.shape[0] :
-        # ]
 
         self._nAi_Ai_cache = {}
 
