@@ -787,9 +787,12 @@ class HasSupportingSurface(HasStorageSpace, ABC):
         samples = surface_circuit.sample(amount)
         samples = samples[np.argsort(surface_circuit.log_likelihood(samples))[::-1]]
         samples = np.concatenate((samples, z_coordinate), axis=1)
-        return [
-            Point3(*s[1:], reference_frame=self.supporting_surface) for s in samples
-        ]
+
+        if category_of_interest:
+            return [
+                Point3(*s[1:], reference_frame=self.supporting_surface) for s in samples
+            ]
+        return [Point3(*s, reference_frame=self.supporting_surface) for s in samples]
 
     def _build_surface_sampler(
         self,
@@ -834,8 +837,8 @@ class HasSupportingSurface(HasStorageSpace, ABC):
 
         event_2d = event.marginal(SpatialVariables.xy)
         for obj in self.objects:
-            bounding_box = BoundingBoxCollection.from_shapes(
-                obj.root.collision
+            bounding_box = obj.root.collision.as_bounding_box_collection_in_frame(
+                self.supporting_surface
             ).bounding_box()
             bounding_box.enlarge_all(object_bloat)
             object_event = bounding_box.simple_event.as_composite_set()
@@ -852,7 +855,8 @@ class HasSupportingSurface(HasStorageSpace, ABC):
         """
         Create a Gaussian mixture model from a list of points, truncated by an event.
 
-        :param objects_of_interest: A list of points representing the positions of the objects to sample around, in the world frame.
+        :param objects_of_interest: Objects of interest to sample around. The Gaussian mixtures will be centered around
+           the positions of these objects on the surface.
         :param variance: The standard deviation to use for the Gaussian mixtures.
         :param sample_space: The event to truncate the Gaussian mixture model with.
 
@@ -875,7 +879,8 @@ class HasSupportingSurface(HasStorageSpace, ABC):
     ) -> ProbabilisticCircuit:
         """
         Create a Gaussian mixture model from a list of points, without truncation.
-        This method is extracted from the `_2d_gaussian_sampler_from_2d_sample_space` method so that
+        This method is extracted from the `_2d_gaussian_sampler_from_2d_sample_space` method so that the generated
+        distribution can be tested properly, which cannot be done after truncation.
         """
         surface_circuit = ProbabilisticCircuit()
         surface_circuit_root = SumUnit(probabilistic_circuit=surface_circuit)
