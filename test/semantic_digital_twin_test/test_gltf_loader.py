@@ -14,6 +14,7 @@ from semantic_digital_twin.pipeline.gltf_loader import GLTFLoader
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.world_description.world_entity import Body
 from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.exceptions import RootNodeNotFoundError
 
 import tempfile
 import os
@@ -195,7 +196,7 @@ class TestGLTFLoader:
         loader = GLTFLoader(file_path="/dummy/path.gltf")
         loader.scene = scene
 
-        with pytest.raises(ValueError, match="Multiple root nodes found in scene"):
+        with pytest.raises(RootNodeNotFoundError):
             loader._get_root_node()
 
     def test_build_world_single_body(self):
