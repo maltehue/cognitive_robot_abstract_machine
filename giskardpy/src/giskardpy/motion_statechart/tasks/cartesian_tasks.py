@@ -196,13 +196,13 @@ class CartesianPositionTrajectory(CartesianTask):
                 )
         return reference_frame
 
-    def goal_points_to_np(self):
+    def _goal_points_to_np(self):
         self._goal_points_np = np.array(
             [point.to_np()[:-1] for point in self.goal_points]
         )
 
     def build(self, context: MotionStatechartContext) -> NodeArtifacts:
-        self.goal_points_to_np()
+        self._goal_points_to_np()
         artifacts = super().build(context)
         self._init_goal_reference_frame_P_current_target_point(
             context.float_variable_data
