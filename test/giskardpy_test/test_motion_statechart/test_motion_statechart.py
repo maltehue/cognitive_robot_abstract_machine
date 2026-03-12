@@ -2837,13 +2837,13 @@ class TestCollisionAvoidance:
                 UpdateTemporaryCollisionRules(
                     temporary_rules=[
                         AvoidCollisionBetweenGroups(
-                            buffer_zone_distance=0.25,
+                            buffer_zone_distance=0.05,
                             violated_distance=0.0,
                             body_group_a=[weak],
                             body_group_b=[wall],
                         ),
                         AvoidCollisionBetweenGroups(
-                            buffer_zone_distance=0.025,
+                            buffer_zone_distance=0.05,
                             violated_distance=0.0,
                             body_group_a=[strong],
                             body_group_b=[wall],
@@ -2882,12 +2882,20 @@ class TestCollisionAvoidance:
 
         kin_sim.tick_until_end(500)
 
-        collisions = kin_sim.context.world.collision_manager.compute_collisions()
-        for c in collisions.contacts:
-            print("==================")
-            print(c.body_a.name)
-            print(c.body_b.name)
-            print(c.distance)
+        assert (
+            0.05
+            > world.collision_manager.collision_detector.check_collision_between_bodies(
+                body_a=strong, body_b=wall, distance=1
+            ).distance
+            > -0.01
+        )
+
+        assert (
+            world.collision_manager.collision_detector.check_collision_between_bodies(
+                body_a=weak, body_b=wall, distance=1
+            ).distance
+            > 0.049
+        )
 
     def test_external_collision_avoidance_with_weight_above_ca(
         self, cylinder_bot_world: World, rclpy_node

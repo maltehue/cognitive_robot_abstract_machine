@@ -234,9 +234,8 @@ class _ExternalCollisionAvoidanceTask(_ExternalCollisionAvoidanceNode):
             reference_velocity=self.max_velocity,
             lower_error=lower_limit,
             upper_error=float("inf"),
-            quadratic_weight=50,
+            quadratic_weight=DefaultWeights.WEIGHT_COLLISION_AVOIDANCE,
             task_expression=a_projected_on_normal,
-            linear_weight=0,
         )
 
         return artifacts
@@ -521,7 +520,7 @@ class _SelfCollisionAvoidanceTask(_SelfCollisionAvoidanceNode):
             reference_velocity=self.max_velocity,
             lower_error=lower_limit,
             upper_error=float("inf"),
-            weight=DefaultWeights.WEIGHT_COLLISION_AVOIDANCE,
+            quadratic_weight=DefaultWeights.WEIGHT_COLLISION_AVOIDANCE,
             task_expression=a_projected_on_normal,
             lower_slack_limit=-float("inf"),
             upper_slack_limit=self.create_upper_slack(
