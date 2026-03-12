@@ -299,8 +299,8 @@ def mpc(
         neq_matrix=sp.csc_matrix(np.zeros((0, model.shape[0]))),
         neq_lower_bounds=np.array([]),
         neq_upper_bounds=np.array([]),
-        num_eq_slack_variables=0,
-        num_neq_slack_variables=0,
+        num_equality_slack_variables=0,
+        num_inequality_slack_variables=0,
     )
     result = solver.solver_call_explicit_interface(qp_data)
     return result

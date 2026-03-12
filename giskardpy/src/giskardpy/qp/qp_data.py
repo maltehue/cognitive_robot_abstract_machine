@@ -30,59 +30,62 @@ class ConditioningStrategy:
     Inherit from this to implement different strategies
     """
 
-    C: sp.csc_matrix | None = field(default=None)
-    R_eq: sp.csc_matrix | None = field(default=None)
-    R_neq: sp.csc_matrix | None = field(default=None)
+    column_scaling_matrix: sp.csc_matrix | None = field(default=None)
+    """
+    Matrix used to scale the columns of the QP problem.
+    Using this matrix will change the result of the QP problem and `unapply` will have to be called.
+    """
+    equality_constraint_scaling_matrix: sp.csc_matrix | None = field(default=None)
+    """
+    Matrix used to scale the equality constraints of the QP problem.
+    """
+    inquality_constraint_scaling_matrix: sp.csc_matrix | None = field(default=None)
+    """
+    Matrix used to scale the inequality constraints of the QP problem.
+    """
 
-    def update(self, qp_data: QPDataExplicit): ...
+    def update(self, qp_data: QPDataExplicit):
+        """
+        Update the conditioning given a specific QP problem.
+        """
 
     def unapply(self, xdot: np.ndarray) -> np.ndarray:
         """
-        Retrieve the xdot of the original QP Problem
+        Retrieve the xdot of the original QP Problem.
         """
-        if self.C is None:
+        if self.column_scaling_matrix is None:
             return xdot
-        return self.C @ xdot
-
-
-@dataclass
-class NoConditioningStrategy(ConditioningStrategy): ...
-
-
-@dataclass
-class HessianOneConditioningStrategy(ConditioningStrategy):
-    def _apply_column_scaling(self, qp_data: QPData) -> QPData:
-        diagonal = 1 / np.sqrt(qp_data.quadratic_weights)
-        diagonal[qp_data.quadratic_weights == 0] = 1.0
-        self.C = sp.diags(diagonal, format="csc")
-        return super()._apply_column_scaling(qp_data)
-
-    def _apply_row_scaling_eq(self, qp_data: QPData) -> QPData:
-        asdf = np.abs(qp_data.eq_matrix.toarray()).max(axis=1)
-        asdf[asdf == 0] = 1.0
-        self.R_eq = sp.diags(1 / asdf, format="csc")
-        return super()._apply_row_scaling_eq(qp_data)
+        return self.column_scaling_matrix @ xdot
 
 
 @dataclass
 class JerkOneConditioningStrategy(ConditioningStrategy):
+    """
+    Scales the QP such that the jerk entries in the system model equality constraints are 1.
+    """
+
     def update(self, qp_data: QPData):
         C_diagonal = np.abs(qp_data.eq_matrix.toarray()).max(axis=0)
         C_diagonal[qp_data.quadratic_weights != 0] = 1
         C_diagonal[qp_data.quadratic_weights == 0] = (
             1 / C_diagonal[qp_data.quadratic_weights == 0]
         )
-        self.C = sp.diags(C_diagonal, format="csc")
+        self.column_scaling_matrix = sp.diags(C_diagonal, format="csc")
 
 
 @dataclass
 class QPData:
-    num_eq_slack_variables: int
-    num_neq_slack_variables: int
+    """
+    Parent class for a container of input for a QP solver.
+    Subclasses implement specific formats for the QP problem.
+    """
+
+    num_equality_slack_variables: int
+    num_inequality_slack_variables: int
 
     @property
     def num_slack_variables(self) -> int:
-        return self.num_neq_slack_variables + self.num_eq_slack_variables
+        return self.num_inequality_slack_variables + self.num_equality_slack_variables
 
     def apply_filters(self) -> Self: ...
 
@@ -136,7 +139,7 @@ class QPDataExplicit(QPData):
         return self.neq_matrix.toarray()
 
     def to_two_sided_inequality(self) -> QPDataTwoSidedInequality:
-        A2 = sp.eye(len(self.box_upper_constraints))
+        A2 = sp.eye(len(self.box_upper_constraints), format="csc")
         if self.eq_matrix.shape[0] * self.eq_matrix.shape[1] != 0:
             A2 = sp.vstack((A2, self.eq_matrix))
         if self.neq_matrix.shape[0] * self.neq_matrix.shape[1] != 0:
@@ -159,49 +162,67 @@ class QPDataExplicit(QPData):
                     self.neq_upper_bounds,
                 )
             ),
-            num_eq_slack_variables=self.num_eq_slack_variables,
-            num_neq_slack_variables=self.num_neq_slack_variables,
+            num_equality_slack_variables=self.num_equality_slack_variables,
+            num_inequality_slack_variables=self.num_inequality_slack_variables,
         )
 
     def _apply_column_scaling(
         self, conditioning: ConditioningStrategy, qp_data: QPDataExplicit
-    ) -> QPDataExplicit:
-        if conditioning.C is not None:
+    ) -> Self:
+        if conditioning.column_scaling_matrix is not None:
             qp_data.quadratic_weights = (
-                conditioning.C @ qp_data.quadratic_weights @ conditioning.C
+                conditioning.column_scaling_matrix
+                @ qp_data.quadratic_weights
+                @ conditioning.column_scaling_matrix
             )
-            qp_data.linear_weights = conditioning.C @ qp_data.linear_weights
+            qp_data.linear_weights = (
+                conditioning.column_scaling_matrix @ qp_data.linear_weights
+            )
 
             # Since x = C @ x_hat, the box constraints L <= x <= U become L <= C @ x_hat <= U.
             # For a diagonal matrix C with positive entries, this is equivalent to
             # C_inv @ L <= x_hat <= C_inv @ U.
-            diagonal_C = conditioning.C.diagonal()
+            diagonal_C = conditioning.column_scaling_matrix.diagonal()
             diagonal_C_inv = np.zeros_like(diagonal_C)
             mask = diagonal_C != 0
             diagonal_C_inv[mask] = 1.0 / diagonal_C[mask]
             C_inv = sp.diags(diagonal_C_inv)
             qp_data.box_lower_constraints = C_inv @ qp_data.box_lower_constraints
             qp_data.box_upper_constraints = C_inv @ qp_data.box_upper_constraints
-            qp_data.eq_matrix = qp_data.eq_matrix @ conditioning.C
+            qp_data.eq_matrix = qp_data.eq_matrix @ conditioning.column_scaling_matrix
             if qp_data.neq_matrix.shape[0] * qp_data.neq_matrix.shape[1] != 0:
-                qp_data.neq_matrix = qp_data.neq_matrix @ conditioning.C
+                qp_data.neq_matrix = (
+                    qp_data.neq_matrix @ conditioning.column_scaling_matrix
+                )
         return qp_data
 
     def _apply_row_scaling_eq(
         self, conditioning: ConditioningStrategy, qp_data: QPDataExplicit
     ) -> QPDataExplicit:
-        if conditioning.R_eq is not None:
-            qp_data.eq_matrix = conditioning.R_eq @ qp_data.eq_matrix
-            qp_data.eq_bounds = conditioning.R_eq @ qp_data.eq_bounds
+        if conditioning.equality_constraint_scaling_matrix is not None:
+            qp_data.eq_matrix = (
+                conditioning.equality_constraint_scaling_matrix @ qp_data.eq_matrix
+            )
+            qp_data.eq_bounds = (
+                conditioning.equality_constraint_scaling_matrix @ qp_data.eq_bounds
+            )
         return qp_data
 
     def _apply_row_scaling_neq(
         self, conditioning: ConditioningStrategy, qp_data: QPDataExplicit
     ) -> QPDataExplicit:
-        if conditioning.R_neq is not None:
-            qp_data.neq_matrix = conditioning.R_neq @ qp_data.neq_matrix
-            qp_data.neq_lower_bounds = conditioning.R_neq @ qp_data.neq_lower_bounds
-            qp_data.neq_upper_bounds = conditioning.R_neq @ qp_data.neq_upper_bounds
+        if conditioning.inquality_constraint_scaling_matrix is not None:
+            qp_data.neq_matrix = (
+                conditioning.inquality_constraint_scaling_matrix @ qp_data.neq_matrix
+            )
+            qp_data.neq_lower_bounds = (
+                conditioning.inquality_constraint_scaling_matrix
+                @ qp_data.neq_lower_bounds
+            )
+            qp_data.neq_upper_bounds = (
+                conditioning.inquality_constraint_scaling_matrix
+                @ qp_data.neq_upper_bounds
+            )
         return qp_data
 
     def apply_filters(self) -> Self:
@@ -209,10 +230,10 @@ class QPDataExplicit(QPData):
         # don't filter dofs with 0 weight
         zero_quadratic_weight_filter[: -self.num_slack_variables] = True
         slack_part = zero_quadratic_weight_filter[
-            -(self.num_eq_slack_variables + self.num_neq_slack_variables) :
+            -(self.num_equality_slack_variables + self.num_inequality_slack_variables) :
         ]
-        bE_part = slack_part[: self.num_eq_slack_variables]
-        bA_part = slack_part[self.num_eq_slack_variables :]
+        bE_part = slack_part[: self.num_equality_slack_variables]
+        bA_part = slack_part[self.num_equality_slack_variables :]
 
         bE_filter = np.ones(self.eq_matrix.shape[0], dtype=bool)
         bE_filter.fill(True)
@@ -242,8 +263,8 @@ class QPDataExplicit(QPData):
             ),
             neq_lower_bounds=self.neq_lower_bounds[bA_filter],
             neq_upper_bounds=self.neq_upper_bounds[bA_filter],
-            num_eq_slack_variables=self.num_eq_slack_variables,
-            num_neq_slack_variables=self.num_neq_slack_variables,
+            num_equality_slack_variables=self.num_equality_slack_variables,
+            num_inequality_slack_variables=self.num_inequality_slack_variables,
         )
 
     def _filter_eq_matrix(
@@ -278,8 +299,8 @@ class QPDataExplicit(QPData):
             f"    neq_matrix={self._sparse_matrix_to_str(self.neq_matrix)},\n"
             f"    neq_lower_bounds={self._np_array_to_str(self.neq_lower_bounds)},\n"
             f"    neq_upper_bounds={self._np_array_to_str(self.neq_upper_bounds)},\n"
-            f"    num_eq_slack_variables={self.num_eq_slack_variables},\n"
-            f"    num_neq_slack_variables={self.num_neq_slack_variables},\n"
+            f"    num_eq_slack_variables={self.num_equality_slack_variables},\n"
+            f"    num_neq_slack_variables={self.num_inequality_slack_variables},\n"
             ")"
         )
 
@@ -517,8 +538,8 @@ class QPDataExplicitFactory(QPDataFactory):
             neq_matrix=neq_matrix_np_raw,
             neq_lower_bounds=neq_lower_bounds_np_raw,
             neq_upper_bounds=neq_upper_bounds_np_raw,
-            num_eq_slack_variables=self.qp_data.num_eq_slack_variables,
-            num_neq_slack_variables=self.qp_data.num_neq_slack_variables,
+            num_equality_slack_variables=self.qp_data.num_eq_slack_variables,
+            num_inequality_slack_variables=self.qp_data.num_neq_slack_variables,
         )
 
 
@@ -541,8 +562,8 @@ class QPDataTwoSidedInequality(QPData):
     neq_lower_bounds: np.ndarray
     neq_upper_bounds: np.ndarray
 
-    num_eq_slack_variables: int
-    num_neq_slack_variables: int
+    num_equality_slack_variables: int
+    num_inequality_slack_variables: int
 
     @classmethod
     @property
@@ -660,16 +681,20 @@ class QPDataTwoSidedInequality(QPData):
     def _apply_column_scaling(
         self, conditioning: ConditioningStrategy, qp_data: QPData
     ) -> QPData:
-        if conditioning.C is not None:
+        if conditioning.column_scaling_matrix is not None:
             qp_data.quadratic_weights = (
-                conditioning.C @ qp_data.quadratic_weights @ conditioning.C
+                conditioning.column_scaling_matrix
+                @ qp_data.quadratic_weights
+                @ conditioning.column_scaling_matrix
             )
-            qp_data.linear_weights = conditioning.C @ qp_data.linear_weights
+            qp_data.linear_weights = (
+                conditioning.column_scaling_matrix @ qp_data.linear_weights
+            )
 
             # Since x = C @ x_hat, the box constraints L <= x <= U become L <= C @ x_hat <= U.
             # For a diagonal matrix C with positive entries, this is equivalent to
             # C_inv @ L <= x_hat <= C_inv @ U.
-            diagonal_C = conditioning.C.diagonal()
+            diagonal_C = conditioning.column_scaling_matrix.diagonal()
             diagonal_C_inv = np.zeros_like(diagonal_C)
             mask = diagonal_C != 0
             diagonal_C_inv[mask] = 1.0 / diagonal_C[mask]
@@ -677,24 +702,33 @@ class QPDataTwoSidedInequality(QPData):
             qp_data.box_lower_constraints[:] = C_inv @ qp_data.box_lower_constraints
             qp_data.box_upper_constraints[:] = C_inv @ qp_data.box_upper_constraints
             qp_data.neq_matrix[self.bE_start :, :] = (
-                qp_data.neq_matrix[self.bE_start :, :] @ conditioning.C
+                qp_data.neq_matrix[self.bE_start :, :]
+                @ conditioning.column_scaling_matrix
             )
         return qp_data
 
     def _apply_row_scaling_eq(
         self, conditioning: ConditioningStrategy, qp_data: QPData
     ) -> QPData:
-        if conditioning.R_eq is not None:
-            qp_data.eq_matrix = conditioning.R_eq @ qp_data.eq_matrix
-            qp_data.eq_bounds = conditioning.R_eq @ qp_data.eq_bounds
+        if conditioning.equality_constraint_scaling_matrix is not None:
+            qp_data.eq_matrix = (
+                conditioning.equality_constraint_scaling_matrix @ qp_data.eq_matrix
+            )
+            qp_data.eq_bounds = (
+                conditioning.equality_constraint_scaling_matrix @ qp_data.eq_bounds
+            )
         return qp_data
 
     def _apply_row_scaling_neq(
         self, conditioning: ConditioningStrategy, qp_data: QPData
     ) -> QPData:
-        if conditioning.R_neq is not None:
-            qp_data.neq_matrix = conditioning.R_neq @ qp_data.neq_matrix
-            qp_data.neq_bounds = conditioning.R_neq @ qp_data.neq_bounds
+        if conditioning.inquality_constraint_scaling_matrix is not None:
+            qp_data.neq_matrix = (
+                conditioning.inquality_constraint_scaling_matrix @ qp_data.neq_matrix
+            )
+            qp_data.neq_bounds = (
+                conditioning.inquality_constraint_scaling_matrix @ qp_data.neq_bounds
+            )
         return qp_data
 
 

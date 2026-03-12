@@ -11,7 +11,6 @@ from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.qp.qp_data import (
     JerkOneConditioningStrategy,
-    HessianOneConditioningStrategy,
 )
 from giskardpy.qp.solvers.qp_solver import QPSolver
 from semantic_digital_twin.datastructures.joint_state import JointState
@@ -52,7 +51,7 @@ except Exception as e:
 @pytest.mark.parametrize("solver", installed_qp_solvers)
 @pytest.mark.parametrize(
     "conditioning_strategies",
-    [None, HessianOneConditioningStrategy, JerkOneConditioningStrategy],
+    [None, JerkOneConditioningStrategy],
 )
 def test_joint_goal(solver, pr2_world_state_reset, conditioning_strategies):
     msc = MotionStatechart()
