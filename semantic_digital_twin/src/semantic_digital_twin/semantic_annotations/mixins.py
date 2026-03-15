@@ -818,7 +818,7 @@ class HasSupportingSurface(HasStorageSpace, ABC):
         if objects_of_interest:
             return self._2d_gaussian_sampler_from_2d_sample_space(
                 objects_of_interest=objects_of_interest,
-                # using values too low makes sampling from truncated gaussians very instable
+                # using values too low makes sampling from truncated gaussians very unstable
                 variance=1,
                 sample_space=truncated_event_2d,
             )
