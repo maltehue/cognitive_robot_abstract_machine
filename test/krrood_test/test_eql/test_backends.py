@@ -9,18 +9,19 @@ from krrood.entity_query_language.factories import (
     variable,
     entity,
     an,
-    probable_variable,
-    probable,
+    underspecified,
     variable_from,
 )
 from krrood.ormatic.dao import to_dao
-from krrood.probabilistic_knowledge.model_registries import DictRegistry
-from krrood.probabilistic_knowledge.parameterizer import MatchParameterizer
-from krrood.probabilistic_knowledge.probable_variable import MatchToInstanceTranslator
+from krrood.parametrization.model_registries import DictRegistry
+from krrood.parametrization.parameterizer import UnderspecifiedParameters
+from probabilistic_model.probabilistic_circuit.rx.helper import fully_factorized
+from random_events.set import Set
+from random_events.variable import Symbolic
 from ..dataset.example_classes import KRROODPose, KRROODPosition, KRROODOrientation
 
 
-def test_same_query_multiple_domains(session, database):
+def test_same_query_multiple_backends(session, database):
 
     p1 = KRROODPose(
         position=KRROODPosition(1, 0, 0), orientation=KRROODOrientation(0, 0, 0, 1)
@@ -52,17 +53,15 @@ def test_same_query_multiple_domains(session, database):
     result = list(database_backend.evaluate(q))
     assert len(result) == 1
 
-    probable_pose = probable_variable(KRROODPose)
+    prob_q = underspecified(KRROODPose)(
+        position=underspecified(KRROODPosition)(x=..., y=..., z=...),
+        orientation=KRROODOrientation(x=0.0, y=0.0, z=0.0, w=1.0),
+    )
+    prob_q.expression
+    prob_q.where(prob_q.variable.position.x > 0.5)
 
-    prob_q = probable_pose(
-        position=probable(KRROODPosition)(x=..., y=..., z=...),
-        orientation=probable(KRROODOrientation)(x=0.0, y=0.0, z=0.0, w=1.0),
-    ).where(probable_pose.variable.position.x > 0.5)
-
-    parameters = MatchParameterizer(
-        MatchToInstanceTranslator(prob_q).translate()
-    ).parameterize()
-    model = parameters.create_fully_factorized_distribution()
+    parameters = UnderspecifiedParameters(prob_q)
+    model = fully_factorized(parameters.variables.values())
 
     registry = DictRegistry({KRROODPose: model})
 
@@ -72,3 +71,13 @@ def test_same_query_multiple_domains(session, database):
         assert value.position.x > 0.5
 
     assert pm_backend.number_of_samples == len({v.position for v in values})
+
+
+def test_probabilistic_backend_with_symbolic_expression():
+    prob_q = underspecified(KRROODPosition)(
+        x=..., y=..., z=variable(int, domain=[1, 2, 3])
+    )
+    parameters = UnderspecifiedParameters(prob_q)
+    assert parameters.variables["KRROODPosition.z"] == Symbolic(
+        "KRROODPosition.z", Set.from_iterable([1, 2, 3])
+    )
