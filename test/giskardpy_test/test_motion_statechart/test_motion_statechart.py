@@ -3728,78 +3728,87 @@ class TestCollisionAvoidance:
 
     def test_avoid_self_collision_with_l_arm(self, pr2_with_box, rclpy_node):
         VizMarkerPublisher(_world=pr2_with_box, node=rclpy_node).with_tf_publisher()
-        r_tip = pr2_with_box.get_kinematic_structure_entity_by_name(
-            "r_gripper_tool_frame"
-        )
-        l_forearm_link = pr2_with_box.get_kinematic_structure_entity_by_name(
-            "l_forearm_link"
-        )
-        r_palm_link = pr2_with_box.get_kinematic_structure_entity_by_name(
-            "r_gripper_palm_link"
-        )
-        base_footprint = pr2_with_box.get_kinematic_structure_entity_by_name(
-            "base_footprint"
-        )
-        robot = pr2_with_box.get_semantic_annotations_by_type(AbstractRobot)[0]
-
-        msc = MotionStatechart()
-        msc.add_node(
-            Sequence(
-                [
-                    SetSeedConfiguration(
-                        seed_configuration=JointState.from_str_dict(
-                            {
-                                "r_elbow_flex_joint": -1.43286344265,
-                                "r_forearm_roll_joint": -1.26465060073,
-                                "r_shoulder_lift_joint": 0.47990329056,
-                                "r_shoulder_pan_joint": -0.281272240139,
-                                "r_upper_arm_roll_joint": -0.528415402668,
-                                "r_wrist_flex_joint": -1.18811419869,
-                                "r_wrist_roll_joint": 2.26884630124,
-                            },
-                            world=pr2_with_box,
-                        )
-                    ),
-                    Parallel(
-                        [
-                            CartesianPose(
-                                root_link=base_footprint,
-                                tip_link=r_tip,
-                                goal_pose=HomogeneousTransformationMatrix.from_xyz_rpy(
-                                    0.2, reference_frame=r_tip
-                                ),
-                                weight=DefaultWeights.WEIGHT_ABOVE_CA,
-                            ),
-                            SelfCollisionAvoidance(robot=robot),
-                        ],
-                    ),
-                ],
-            ),
-        )
-        msc.add_node(
-            contact := SelfCollisionDistanceMonitor(
-                body_a=r_palm_link, body_b=l_forearm_link, threshold=0.01
+        for i in range(50):
+            print(f"try {i}")
+            r_tip = pr2_with_box.get_kinematic_structure_entity_by_name(
+                "r_gripper_tool_frame"
             )
-        )
-        msc.add_node(local_min := LocalMinimumReached())
-        msc.add_node(EndMotion.when_true(local_min))
-        msc.add_node(CancelMotion.when_true(contact))
+            l_forearm_link = pr2_with_box.get_kinematic_structure_entity_by_name(
+                "l_forearm_link"
+            )
+            r_palm_link = pr2_with_box.get_kinematic_structure_entity_by_name(
+                "r_gripper_palm_link"
+            )
+            base_footprint = pr2_with_box.get_kinematic_structure_entity_by_name(
+                "base_footprint"
+            )
+            robot = pr2_with_box.get_semantic_annotations_by_type(AbstractRobot)[0]
 
-        kin_sim = Executor(
-            MotionStatechartContext(
-                world=pr2_with_box,
-                qp_controller_config=QPControllerConfig(
-                    target_frequency=100,
-                    prediction_horizon=30,
-                    qp_solver_class=QPSolverPIQP,
+            msc = MotionStatechart()
+            msc.add_node(
+                Sequence(
+                    [
+                        SetSeedConfiguration(
+                            seed_configuration=JointState.from_str_dict(
+                                {
+                                    "r_elbow_flex_joint": -1.43286344265,
+                                    "r_forearm_roll_joint": -1.26465060073,
+                                    "r_shoulder_lift_joint": 0.47990329056,
+                                    "r_shoulder_pan_joint": -0.281272240139,
+                                    "r_upper_arm_roll_joint": -0.528415402668,
+                                    "r_wrist_flex_joint": -1.18811419869,
+                                    "r_wrist_roll_joint": 2.26884630124,
+                                    "l_elbow_flex_joint": 0.0,
+                                    "l_forearm_roll_joint": 0.0,
+                                    "l_shoulder_lift_joint": 0.0,
+                                    "l_shoulder_pan_joint": 0.0,
+                                    "l_upper_arm_roll_joint": 0.0,
+                                    "l_wrist_flex_joint": 0.0,
+                                    "l_wrist_roll_joint": 0.0,
+                                },
+                                world=pr2_with_box,
+                            )
+                        ),
+                        Parallel(
+                            [
+                                CartesianPose(
+                                    root_link=base_footprint,
+                                    tip_link=r_tip,
+                                    goal_pose=HomogeneousTransformationMatrix.from_xyz_rpy(
+                                        0.2, reference_frame=r_tip
+                                    ),
+                                    weight=DefaultWeights.WEIGHT_ABOVE_CA,
+                                ),
+                                SelfCollisionAvoidance(robot=robot),
+                            ],
+                        ),
+                    ],
                 ),
             )
-        )
-        kin_sim.compile(motion_statechart=msc)
+            msc.add_node(
+                contact := SelfCollisionDistanceMonitor(
+                    body_a=r_palm_link, body_b=l_forearm_link, threshold=0.01
+                )
+            )
+            msc.add_node(local_min := LocalMinimumReached())
+            msc.add_node(EndMotion.when_true(local_min))
+            msc.add_node(CancelMotion.when_true(contact))
 
-        assert len(msc.nodes) == 75
+            kin_sim = Executor(
+                MotionStatechartContext(
+                    world=pr2_with_box,
+                    qp_controller_config=QPControllerConfig(
+                        target_frequency=100,
+                        prediction_horizon=30,
+                        qp_solver_class=QPSolverPIQP,
+                    ),
+                )
+            )
+            kin_sim.compile(motion_statechart=msc)
 
-        kin_sim.tick_until_end(500)
+            assert len(msc.nodes) == 75
+
+            kin_sim.tick_until_end(500)
 
 
 def test_constraint_collection(pr2_world_state_reset: World):
