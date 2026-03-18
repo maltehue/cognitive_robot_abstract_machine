@@ -33,7 +33,6 @@ from functools import partial, wraps
 
 import casadi as ca
 import numpy as np
-from line_profiler.explicit_profiler import profile
 from scipy import sparse as sp
 from typing_extensions import (
     ClassVar,
@@ -521,7 +520,6 @@ class SymbolicMathType(ABC):
     def shape(self) -> Tuple[int, int]:
         return self.casadi_sx.shape
 
-    @profile
     def flatten(self) -> Vector:
         """
         Returns a row-major flattened Vector, matching numpy.ndarray.flatten(order='C').
@@ -2333,21 +2331,21 @@ def substitution_cache(method):
             ),
         )
         if not cache_key in _substitution_cache:
-            variable_args = {}
+            variable_kwargs = {}
             for name, arg in bound_arguments.arguments.items():
                 match arg:
                     case Scalar():
-                        variable_args[name] = FloatVariable(name=name)
+                        variable_kwargs[name] = FloatVariable(name=name)
                     case SymbolicMathType():
-                        variable_args[name] = Matrix.create_filled_with_variables(
+                        variable_kwargs[name] = Matrix.create_filled_with_variables(
                             arg.shape, name=name
                         )
                     case _:
-                        variable_args[name] = arg
+                        variable_kwargs[name] = arg
 
             symbol_args = [
                 arg
-                for arg in variable_args.values()
+                for arg in variable_kwargs.values()
                 if isinstance(arg, SymbolicMathType)
             ]
             variables = [
@@ -2355,19 +2353,19 @@ def substitution_cache(method):
                 for arg in symbol_args
                 for item in arg.flatten()
             ]
-            result = method(**variable_args)
+            result = method(**variable_kwargs)
             _substitution_cache[cache_key] = (result, variables, signature)
 
-        expr, variables, signature = _substitution_cache[cache_key]
+        expression, variables, signature = _substitution_cache[cache_key]
         substitutions = [
             item
             for arg in bound_arguments.arguments.values()
             if isinstance(arg, SymbolicMathType)
             for item in arg.flatten()
         ]
-        if isinstance(expr, tuple):
-            return (e.substitute(variables, substitutions) for e in expr)
-        return expr.substitute(variables, substitutions)
+        if isinstance(expression, tuple):
+            return (expr.substitute(variables, substitutions) for expr in expression)
+        return expression.substitute(variables, substitutions)
 
     return wrapper
 
