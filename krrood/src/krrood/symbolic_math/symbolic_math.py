@@ -30,6 +30,7 @@ from collections import Counter
 from dataclasses import field, dataclass
 from enum import IntEnum
 from functools import partial, wraps
+from inspect import BoundArguments
 
 import casadi as ca
 import numpy as np
@@ -46,6 +47,7 @@ from typing_extensions import (
     Dict,
     TypeVar,
     Type,
+    Any,
 )
 
 from krrood.symbolic_math.exceptions import (
@@ -522,7 +524,7 @@ class SymbolicMathType(ABC):
 
     def flatten(self) -> Vector:
         """
-        Returns a row-major flattened Vector, matching numpy.ndarray.flatten(order='C').
+        Returns a row-major flattened Vector, matching `numpy.ndarray.flatten(order='C')`.
         """
         rows, cols = self.shape
         if rows == 0 or cols == 0:
@@ -2303,11 +2305,6 @@ def if_less_eq_cases(
     return _create_return_type(else_result).from_casadi_sx(result_sx)
 
 
-_substitution_cache: Dict[
-    str, Tuple[SymbolicMathType, List[FloatVariable], inspect.Signature]
-] = {}
-
-
 def substitution_cache(method):
     """
     This decorator allows you to speed up complex symbolic math operations.
@@ -2315,54 +2312,65 @@ def substitution_cache(method):
     On subsequent calls, the cached expression is used and the args are substituted into the variables,
     avoiding rebuilding of the computation graph.
     """
+    cache = method.__substitution_cache__ = {}
+
+    def _variables_from_kwargs(
+        variable_kwargs: dict[str, SymbolicMathType],
+    ) -> list[FloatVariable | Scalar]:
+        """
+        Extracts the variables from SymbolicMathType kwargs.
+        """
+        return [
+            item
+            for arg in variable_kwargs.values()
+            if isinstance(arg, SymbolicMathType)
+            for item in arg.flatten()
+        ]
+
+    def _create_placeholder_kwargs(
+        bound_arguments: BoundArguments,
+    ) -> dict[str, Any]:
+        """
+        This function creates placeholder kwargs for the given bound arguments by replacing all SymbolicMathType variables
+        with placeholder float variables.
+        :param bound_arguments: The bound arguments to create placeholder kwargs for.
+        :return: The placeholder kwargs.
+        """
+        variable_kwargs = {}
+        for name, arg in bound_arguments.arguments.items():
+            match arg:
+                case Scalar():
+                    variable_kwargs[name] = FloatVariable(name=name)
+                case SymbolicMathType():
+                    variable_kwargs[name] = Matrix.create_filled_with_variables(
+                        arg.shape, name=name
+                    )
+                case _:
+                    variable_kwargs[name] = arg
+
+        return variable_kwargs
 
     @wraps(method)
     def wrapper(*args, **kwargs):
-        global _substitution_cache
         signature = inspect.signature(method)
         bound_arguments = signature.bind(*args, **kwargs)
         bound_arguments.apply_defaults()
         cache_key = (
-            method.__name__,
             tuple(
                 arg
                 for arg in bound_arguments.arguments.values()
                 if not isinstance(arg, SymbolicMathType)
             ),
         )
-        if not cache_key in _substitution_cache:
-            variable_kwargs = {}
-            for name, arg in bound_arguments.arguments.items():
-                match arg:
-                    case Scalar():
-                        variable_kwargs[name] = FloatVariable(name=name)
-                    case SymbolicMathType():
-                        variable_kwargs[name] = Matrix.create_filled_with_variables(
-                            arg.shape, name=name
-                        )
-                    case _:
-                        variable_kwargs[name] = arg
-
-            symbol_args = [
-                arg
-                for arg in variable_kwargs.values()
-                if isinstance(arg, SymbolicMathType)
-            ]
-            variables = [
-                item.free_variables()[0]
-                for arg in symbol_args
-                for item in arg.flatten()
-            ]
+        if not cache_key in cache:
+            variable_kwargs = _create_placeholder_kwargs(bound_arguments)
             result = method(**variable_kwargs)
-            _substitution_cache[cache_key] = (result, variables, signature)
 
-        expression, variables, signature = _substitution_cache[cache_key]
-        substitutions = [
-            item
-            for arg in bound_arguments.arguments.values()
-            if isinstance(arg, SymbolicMathType)
-            for item in arg.flatten()
-        ]
+            variables = _variables_from_kwargs(variable_kwargs)
+            cache[cache_key] = (result, variables)
+
+        expression, variables = cache[cache_key]
+        substitutions = _variables_from_kwargs(bound_arguments.arguments)
         if isinstance(expression, tuple):
             return (expr.substitute(variables, substitutions) for expr in expression)
         return expression.substitute(variables, substitutions)
