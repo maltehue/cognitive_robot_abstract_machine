@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from numpy import testing
 from random_events.interval import closed, closed_open
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.variable import Continuous
 from scipy.special import logsumexp
 

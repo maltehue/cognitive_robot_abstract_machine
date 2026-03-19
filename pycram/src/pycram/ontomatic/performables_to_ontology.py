@@ -1,7 +1,6 @@
 from enum import EnumMeta
 from owlready2 import get_ontology, Thing, DataProperty, types
-from random_events.utils import recursive_subclasses
-from random_events.utils import get_full_class_name
+from krrood.adapters.json_serializer import recursive_subclasses, get_full_class_name
 from typing_extensions import (
     Dict,
     List,

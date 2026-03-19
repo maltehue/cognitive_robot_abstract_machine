@@ -7,7 +7,7 @@ import numpy as np
 import optax
 from jax.experimental.sparse import BCOO
 from random_events.product_algebra import SimpleEvent
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.variable import Variable, Symbolic
 from sortedcontainers import SortedSet
 from typing_extensions import Tuple, Self, List, Optional

@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from jpt.learning.impurity import Impurity
 from plotly.subplots import make_subplots
 from random_events.product_algebra import VariableMap
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.variable import Variable
 from typing_extensions import Self
 

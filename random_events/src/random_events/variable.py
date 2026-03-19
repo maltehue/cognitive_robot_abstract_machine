@@ -8,7 +8,8 @@ from typing_extensions import Self, Dict, Any, Optional, Iterable, Type
 from random_events.interval import reals, Interval, closed, singleton, SimpleInterval
 from random_events.set import Set, SetElement
 from random_events.sigma_algebra import AbstractCompositeSet
-from random_events.utils import SubclassJSONSerializer, CPPWrapper
+from random_events.utils import CPPWrapper
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 
 compatible_types = (
     int,

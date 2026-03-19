@@ -5,8 +5,9 @@ from typing import Tuple, Dict, Any
 
 import random_events_lib as rl
 from typing_extensions import Self, Iterable
+from random_events.utils import CPPWrapper
 
-from random_events.utils import SubclassJSONSerializer, CPPWrapper
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 
 EMPTY_SET_SYMBOL = "∅"
 

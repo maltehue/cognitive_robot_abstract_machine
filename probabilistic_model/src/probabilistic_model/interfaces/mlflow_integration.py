@@ -1,7 +1,7 @@
 import mlflow.pyfunc
 from mlflow.models.signature import ModelSignature
 from mlflow.types import ColSpec, DataType, Schema
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.variable import Continuous, Symbolic, Integer
 from typing_extensions import Optional
 import json

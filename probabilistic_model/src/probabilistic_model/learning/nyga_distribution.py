@@ -8,7 +8,7 @@ import numpy as np
 import random_events
 from random_events.interval import closed, closed_open, SimpleInterval, Bound
 from random_events.product_algebra import SimpleEvent
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.variable import Continuous, Variable
 from typing_extensions import Self
 

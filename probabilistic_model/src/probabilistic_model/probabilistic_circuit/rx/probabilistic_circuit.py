@@ -52,7 +52,7 @@ from probabilistic_model.utils import MissingDict
 from random_events.interval import SimpleInterval, Interval
 from random_events.product_algebra import VariableMap, SimpleEvent, Event
 from random_events.set import Set
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.variable import Variable, Symbolic, Continuous, Integer
 
 

@@ -13,7 +13,7 @@ from jax.experimental.sparse import BCOO, bcoo_concatenate
 from jax.scipy.special import logsumexp
 from jax.tree_util import tree_flatten
 from jaxtyping import Int
-from random_events.utils import recursive_subclasses, SubclassJSONSerializer
+from krrood.adapters.json_serializer import recursive_subclasses, SubclassJSONSerializer
 from random_events.variable import Variable
 from sortedcontainers import SortedSet
 from typing_extensions import List, Iterator, Tuple, Union, Type, Dict, Any, Self, Optional

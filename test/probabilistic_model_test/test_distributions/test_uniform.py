@@ -5,7 +5,7 @@ from random_events.product_algebra import *
 
 from probabilistic_model.distributions.distributions import DiracDeltaDistribution
 from probabilistic_model.distributions.uniform import UniformDistribution
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 
 
 class UniformDistributionTestCase(unittest.TestCase):

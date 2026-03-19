@@ -2,7 +2,7 @@ import itertools
 
 import numpy as np
 from random_events.product_algebra import SimpleEvent, Event
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.variable import Symbolic, Variable
 from typing_extensions import Self, Any, Iterable, List, Optional, Tuple, Dict
 

@@ -1,7 +1,7 @@
 import unittest
 from enum import IntEnum
 
-from random_events.utils import SubclassJSONSerializer
+from krrood.adapters.json_serializer import SubclassJSONSerializer
 
 from probabilistic_model.distributions.distributions import *
 from probabilistic_model.utils import MissingDict

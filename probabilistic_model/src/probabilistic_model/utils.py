@@ -9,7 +9,6 @@ from functools import wraps
 
 import numpy as np
 from random_events.interval import SimpleInterval, Interval
-from random_events.utils import recursive_subclasses
 from typing_extensions import Type
 import datetime
 
