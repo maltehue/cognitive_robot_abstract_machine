@@ -19,7 +19,7 @@ RUN source /opt/ros/jazzy/setup.bash \
     && python3 -m venv cram-env --system-site-packages \
     && source /opt/ros/cram-env/bin/activate \
     && git clone https://github.com/cram2/cognitive_robot_abstract_machine.git \
-    && pip install poetry objgraph\
+    && pip install poetry objgraph treon jupytext\
     && rm -rf cognitive_robot_abstract_machine
 
 
