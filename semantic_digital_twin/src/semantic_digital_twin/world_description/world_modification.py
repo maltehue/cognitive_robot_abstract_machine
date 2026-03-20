@@ -84,8 +84,15 @@ class WorldModelModification(WorldModification, ABC):
     """
 
     @classmethod
-    def from_domain_object(cls, obj: WorldEntityWithID):
-        return cls(object_json=obj.to_json())
+    def from_domain_object(cls, domain_object: WorldEntityWithID) -> Self:
+        """
+        Creates an instance of the class from a given domain object.
+
+        :param domain_object: The domain object to create an instance from.
+
+        :return: An instance of the class.
+        """
+        return cls(object_json=domain_object.to_json())
 
     def to_json(self):
         return {**super().to_json(), "object_json": self.object_json}
