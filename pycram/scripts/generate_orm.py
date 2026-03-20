@@ -14,7 +14,7 @@ from semantic_digital_twin.world import WorldModelManager
 from semantic_digital_twin.world_description.world_entity import Body
 from semantic_digital_twin.world_description.world_modification import (
     WorldModelModificationBlock,
-    WorldModelModification,
+    WorldModification,
 )
 
 import pycram.language
@@ -81,7 +81,7 @@ classes |= {ActionDescription}
 classes |= {DesignatorDescription}
 classes |= {BaseMotion}
 classes |= set(classes_of_module(grasp))
-classes |= {WorldModelModificationBlock, WorldModelModification}
+classes |= {WorldModelModificationBlock, WorldModification}
 
 # Semantic World Classes
 classes |= {Body}
