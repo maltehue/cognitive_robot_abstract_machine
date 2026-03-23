@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import select
 from krrood.ormatic.dao import to_dao
-from ..dataset.reproduce_issue import IssueMain, IssueDependency, PlanReproduction
+from ..dataset.cyclic_dao_dependency import IssueMain, IssueDependency, PlanReproduction
 from ..dataset.ormatic_interface import IssueMainMappingDAO, PlanReproductionDAO
 
 
