@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from io import BytesIO
+from typing import Type
 from uuid import UUID
 
 import numpy as np
@@ -54,7 +55,6 @@ class WorldMapping(HasSimulatorProperties, AlternativeMapping[World]):
 
         with result.modify_world():
             for entity in self.kinematic_structure_entities:
-                print(entity)
                 result.add_kinematic_structure_entity(entity)
 
             for dof in self.degrees_of_freedom:
@@ -70,6 +70,18 @@ class WorldMapping(HasSimulatorProperties, AlternativeMapping[World]):
             result.state._world = result
 
         return result
+
+    @classmethod
+    def required_pre_build_alternative_mappings(cls) -> List[Type[AlternativeMapping]]:
+        return [
+            WorldStateMapping,
+            Vector3Mapping,
+            Point3Mapping,
+            QuaternionMapping,
+            RotationMatrixMapping,
+            HomogeneousTransformationMatrixMapping,
+            PoseMapping,
+        ]
 
 
 @dataclass

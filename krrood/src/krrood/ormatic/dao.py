@@ -263,9 +263,16 @@ class FromDataAccessObjectState(DataAccessObjectState[FromDataAccessObjectWorkIt
     Cache for synthetic parent DAOs to maintain identity across discovery and filling phases.
     """
 
-    dependencies: Dict[int, Set[int]] = field(default_factory=dict)
+    dependencies: rustworkx.PyDiGraph = field(
+        default_factory=lambda: rustworkx.PyDiGraph(multigraph=False)
+    )
     """
-    Map of DAO IDs to the set of DAO IDs they depend on.
+    Dependency graph between DAOs.
+    """
+
+    id_to_node: Dict[int, int] = field(default_factory=dict)
+    """
+    Map of DAO IDs to their node indices in the dependency graph.
     """
 
     current_dao: Optional[DataAccessObject] = None
@@ -291,16 +298,36 @@ class FromDataAccessObjectState(DataAccessObjectState[FromDataAccessObjectWorkIt
         self.initialized_ids.add(id(dao_instance))
 
     def record_dependency(
-        self, parent_dao: DataAccessObject, dependency: DataAccessObject
+        self,
+        parent_dao: DataAccessObject,
+        dependency: DataAccessObject,
+        relationship_name: Optional[str] = None,
     ):
         """
         Record a dependency from one DAO to another during the discovery phase.
 
         :param parent_dao: The DAO that depends on another.
         :param dependency: The DAO that is depended upon.
+        :param relationship_name: The name of the field/relationship that triggered the discovery.
         """
         if self.discovery_mode:
-            self.dependencies.setdefault(id(parent_dao), set()).add(id(dependency))
+            parent_id = id(parent_dao)
+            dependency_id = id(dependency)
+
+            if parent_id not in self.id_to_node:
+                self.id_to_node[parent_id] = self.dependencies.add_node(parent_id)
+            if dependency_id not in self.id_to_node:
+                self.id_to_node[dependency_id] = self.dependencies.add_node(
+                    dependency_id
+                )
+
+            if parent_id != dependency_id:
+                # An edge from dependency to parent means dependency must be resolved before parent.
+                self.dependencies.add_edge(
+                    self.id_to_node[dependency_id],
+                    self.id_to_node[parent_id],
+                    relationship_name,
+                )
 
     def push_work_item(self, dao_instance: DataAccessObject, domain_object: Any):
         """
@@ -802,11 +829,13 @@ class DataAccessObject(HasGeneric[T]):
     def from_dao(
         self,
         state: Optional[FromDataAccessObjectState] = None,
+        relationship_name: Optional[str] = None,
     ) -> T:
         """
         Convert the DAO back into a domain object instance.
 
         :param state: The conversion state.
+        :param relationship_name: The name of the field/relationship that triggered the discovery.
         :return: The converted domain object.
         """
         state = state or FromDataAccessObjectState()
@@ -817,7 +846,7 @@ class DataAccessObject(HasGeneric[T]):
         if not state.is_processing:
             return self._perform_from_dao_conversion(state)
 
-        return self._register_for_conversion(state)
+        return self._register_for_conversion(state, relationship_name)
 
     def _perform_from_dao_conversion(self, state: FromDataAccessObjectState) -> T:
         """
@@ -920,20 +949,21 @@ class DataAccessObject(HasGeneric[T]):
         """
         state.resolution_mode = True
 
-        # Map DAO ID to work item and its discovery index.
-        id_to_work_item = {id(wi.dao_instance): wi for wi in discovery_order}
-        id_to_index = {id(wi.dao_instance): i for i, wi in enumerate(discovery_order)}
+        graph = state.dependencies
+        id_to_node = state.id_to_node
+        node_to_index = {
+            node: i
+            for i, wi in enumerate(discovery_order)
+            if (node := id_to_node.get(id(wi.dao_instance))) is not None
+        }
 
-        # Build local graph for the current batch.
-        dependants, pending_counts = self._build_dependency_graph(
-            state, id_to_work_item
-        )
-
-        # Initialize the set of ready objects.
+        # Initialize the set of ready objects (in-degree zero).
+        pending_counts = {node: graph.in_degree(node) for node in graph.node_indices()}
         ready_indices = [
             i
             for i, wi in enumerate(discovery_order)
-            if pending_counts[id(wi.dao_instance)] == 0
+            if (node := id_to_node.get(id(wi.dao_instance))) is not None
+            and pending_counts[node] == 0
         ]
         unresolved_indices = list(range(len(discovery_order)))
 
@@ -947,38 +977,14 @@ class DataAccessObject(HasGeneric[T]):
             unresolved_indices.remove(current_index)
 
             # Update dependants and move newly ready ones to the queue.
-            for dependant_id in dependants[id(work_item.dao_instance)]:
-                pending_counts[dependant_id] -= 1
-                if pending_counts[dependant_id] == 0:
-                    idx = id_to_index[dependant_id]
-                    if idx in unresolved_indices:
-                        ready_indices.append(idx)
-
-    def _build_dependency_graph(
-        self,
-        state: FromDataAccessObjectState,
-        id_to_work_item: Dict[int, FromDataAccessObjectWorkItem],
-    ) -> Tuple[Dict[int, Set[int]], Dict[int, int]]:
-        """
-        Build a local dependency graph (adjacency list and in-degrees) for the current batch.
-
-        :param state: The conversion state containing global dependencies.
-        :param id_to_work_item: Mapping of DAO IDs to their work items.
-        :return: A tuple (dependants, pending_counts).
-        """
-        dependency_graph = rustworkx.PyDiGraph(multigraph=True)
-        dependants = {dao_id: set() for dao_id in id_to_work_item}
-        pending_counts = {dao_id: 0 for dao_id in id_to_work_item}
-
-        for dao_id, deps in state.dependencies.items():
-            if dao_id not in id_to_work_item:
-                continue
-            for dep_id in deps:
-                # We only care about dependencies within the current set of DAOs.
-                if dep_id in id_to_work_item and dep_id != dao_id:
-                    dependants[dep_id].add(dao_id)
-                    pending_counts[dao_id] += 1
-        return dependants, pending_counts
+            current_node = id_to_node.get(id(work_item.dao_instance))
+            if current_node is not None:
+                for dependant_node in graph.successor_indices(current_node):
+                    pending_counts[dependant_node] -= 1
+                    if pending_counts[dependant_node] == 0:
+                        idx = node_to_index.get(dependant_node)
+                        if idx is not None and idx in unresolved_indices:
+                            ready_indices.append(idx)
 
     def _pick_next_ready_index(
         self,
@@ -1083,15 +1089,18 @@ class DataAccessObject(HasGeneric[T]):
                     domain_object.__post_init__()
                 processed_ids.add(id(domain_object))
 
-    def _register_for_conversion(self, state: FromDataAccessObjectState) -> T:
+    def _register_for_conversion(
+        self, state: FromDataAccessObjectState, relationship_name: Optional[str] = None
+    ) -> T:
         """
         Register this DAO for conversion if not already present.
 
         :param state: The conversion state.
+        :param relationship_name: The name of the field/relationship that triggered the discovery.
         :return: The uninitialized domain object.
         """
         if state.current_dao is not None:
-            state.record_dependency(state.current_dao, self)
+            state.record_dependency(state.current_dao, self, relationship_name)
 
         if not state.has(self):
             domain_object = state.allocate_and_memoize(
@@ -1196,18 +1205,23 @@ class DataAccessObject(HasGeneric[T]):
                 continue
 
             if self._is_single_relationship(relationship):
-                value.from_dao(state=state)
+                value.from_dao(state=state, relationship_name=relationship.key)
             elif relationship.direction in (ONETOMANY, MANYTOMANY):
                 target_dao_clazz = relationship.mapper.class_
                 if issubclass(target_dao_clazz, AssociationDataAccessObject):
                     # Collection of Association Objects
                     [
-                        item.target.from_dao(state=state)
+                        item.target.from_dao(
+                            state=state, relationship_name=relationship.key
+                        )
                         for item in value
                         if item.target is not None
                     ]
                 else:
-                    [item.from_dao(state=state) for item in value]
+                    [
+                        item.from_dao(state=state, relationship_name=relationship.key)
+                        for item in value
+                    ]
 
         self._build_base_keyword_arguments_for_alternative_parent(domain_object, state)
         return domain_object
@@ -1333,7 +1347,7 @@ class DataAccessObject(HasGeneric[T]):
             )
         parent_dao = state.synthetic_parent_daos[cache_key]
 
-        base_result = parent_dao.from_dao(state=state)
+        base_result = parent_dao.from_dao(state=state, relationship_name="parent")
 
         if state.discovery_mode:
             return
@@ -1436,6 +1450,12 @@ class AlternativeMapping(HasGeneric[T], abc.ABC):
         :return: The constructed domain object.
         """
         raise NotImplementedError
+
+    @classmethod
+    def required_pre_build_alternative_mappings(cls) -> List[Type[AlternativeMapping]]:
+        """
+        A list of other alternative mappings that have to be built before this one.
+        """
 
 
 @lru_cache(maxsize=None)
