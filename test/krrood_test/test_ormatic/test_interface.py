@@ -842,6 +842,6 @@ def test_class_dependencies(session, database):
         for source, target in state._class_dependencies.edge_list()
     }
     assert edges == {
-        (EntryPointMappingDAO, BuildFirstAssociationDAO),
-        (EntryPointMappingDAO, BuildFirstMappingDAO),
+        (BuildFirstAssociationDAO, EntryPointMappingDAO),
+        (BuildFirstMappingDAO, EntryPointMappingDAO),
     }

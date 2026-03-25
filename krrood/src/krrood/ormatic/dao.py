@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import inspect
+import itertools
 import logging
 import threading
 import time
@@ -272,6 +273,8 @@ class FromDataAccessObjectState(DataAccessObjectState[FromDataAccessObjectWorkIt
     """
     A rustowkrx graph that tracks the dependencies between classes defined 
     in `AlternativeMapping.required_pre_build_classes`
+    The nodes are the data access object types and the edges represent the dependencies.
+    An edge (source, target) means that the class `source` needs to be build before `target`.
     """
 
     def is_initialized(self, dao_instance: DataAccessObject) -> bool:
@@ -336,6 +339,14 @@ class FromDataAccessObjectState(DataAccessObjectState[FromDataAccessObjectWorkIt
             type_: self._class_dependencies.add_node(type_) for type_ in dao_types
         }  # add all dao types to the dependency graph
 
+        for parent, child in itertools.combinations(dao_types, 2):
+            if parent is child:
+                continue
+            if issubclass(child, parent):
+                self._class_dependencies.add_edge(
+                    types_to_index[parent], types_to_index[child], None
+                )
+
         # add all dependencies between the classes defined from the alternative mappings
         for dao_type in dao_types:
             alternative_mapping = dao_type.original_class()
@@ -388,8 +399,8 @@ class FromDataAccessObjectState(DataAccessObjectState[FromDataAccessObjectWorkIt
 
                 # add the dependency
                 self._class_dependencies.add_edge(
-                    types_to_index[dao_of_alternative_mapping],
                     types_to_index[concrete_dao_type],
+                    types_to_index[dao_of_alternative_mapping],
                     None,
                 )
 
@@ -406,9 +417,7 @@ class FromDataAccessObjectState(DataAccessObjectState[FromDataAccessObjectWorkIt
         number_of_work_items = len(work_items)
         result = []
 
-        for type_index in reversed(
-            rustworkx.topological_sort(self._class_dependencies)
-        ):
+        for type_index in rustworkx.topological_sort(self._class_dependencies):
             dao_type = self._class_dependencies[type_index]
 
             matching_types = [
