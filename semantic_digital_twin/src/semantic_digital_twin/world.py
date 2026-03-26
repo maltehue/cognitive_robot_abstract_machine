@@ -91,9 +91,9 @@ from semantic_digital_twin.world_description.world_modification import (
     AddDegreeOfFreedomModification,
     RemoveDegreeOfFreedomModification,
     AddKinematicStructureEntityModification,
+    RemoveKinematicStructureEntityModification,
     AddConnectionModification,
     RemoveConnectionModification,
-    RemoveBodyModification,
     AddSemanticAnnotationModification,
     RemoveSemanticAnnotationModification,
     AddActuatorModification,
@@ -777,7 +777,7 @@ class World(HasSimulatorProperties):
         if self.is_kinematic_structure_entity_in_world(kinematic_structure_entity):
             self._remove_kinematic_structure_entity(kinematic_structure_entity)
 
-    @atomic_world_modification(modification=RemoveBodyModification)
+    @atomic_world_modification(modification=RemoveKinematicStructureEntityModification)
     def _remove_kinematic_structure_entity(
         self, kinematic_structure_entity: KinematicStructureEntity
     ) -> None:
@@ -1168,6 +1168,7 @@ class World(HasSimulatorProperties):
         with self.modify_world(), other.modify_world():
             self_root = self.root
             other_root_id = other.root.id
+            other._clear_kinematic_structure()
             for modification in other._model_manager.model_modification_blocks:
                 modification.apply(self)
 
@@ -1759,6 +1760,21 @@ class World(HasSimulatorProperties):
             self.state.clear()
         self._world_entity_hash_table.clear()
         self._model_manager.model_modification_blocks.clear()
+
+    def _clear_kinematic_structure(self):
+        """
+        Clears all kinematic structure entities from the world.
+        ..warning::
+            Super destructive, world will be unusable after this call.
+        """
+        kinematic_structure_entities = self.kinematic_structure_entities
+        connections = self.connections
+        with self.modify_world():
+            for kinematic_structure_entity in kinematic_structure_entities:
+                self.remove_kinematic_structure_entity(kinematic_structure_entity)
+
+            for connection in connections:
+                self.remove_connection(connection)
 
     def is_empty(self):
         """

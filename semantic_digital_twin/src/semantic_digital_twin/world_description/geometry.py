@@ -505,14 +505,15 @@ class Mesh(Shape):
         )
 
         # Tie file lifetime to the Mesh instance
-        weakref.finalize(
-            instance, cls._cleanup_temp_files, tmp_path, dirname, file_type
-        )
+        weakref.finalize(instance, cls._cleanup_temp_files, tmp_path, dirname)
 
         return instance
 
     @staticmethod
-    def _cleanup_temp_files(tmp_path: str, dirname: str, file_type: str) -> None:
+    def _cleanup_temp_files(tmp_path: str, dirname: str) -> None:
+        """
+        Clean up temporary files created for the mesh.
+        """
         for path in [
             tmp_path,
             os.path.join(dirname, f"{os.path.basename(tmp_path)}.mtl"),
