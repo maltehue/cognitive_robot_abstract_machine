@@ -1834,36 +1834,20 @@ class World(HasSimulatorProperties):
         memo[me_id] = new_world
 
         with new_world.modify_world():
-            for body in self.bodies:
-                new_body = Body(
-                    name=body.name,
-                    id=body.id,
-                )
-                new_world.add_kinematic_structure_entity(new_body)
-                new_body.visual = body.visual.copy_for_world(new_world)
-                new_body.collision = body.collision.copy_for_world(new_world)
-            for region in self.regions:
-                new_region = Region(
-                    name=region.name,
-                    area=region.area,
-                    id=region.id,
-                )
-                new_world.add_kinematic_structure_entity(new_region)
+            for body in self.kinematic_structure_entities:
+                new_kinematic_structure_entity = body.copy_for_world(new_world)
+                new_world.add_kinematic_structure_entity(new_kinematic_structure_entity)
             for dof in self.degrees_of_freedom:
-                new_dof = DegreeOfFreedom(
-                    name=dof.name,
-                    limits=DegreeOfFreedomLimits(
-                        lower=dof.limits.lower,
-                        upper=dof.limits.upper,
-                    ),
-                    id=dof.id,
-                )
+                new_dof = dof.copy_for_world(new_world)
                 new_world.add_degree_of_freedom(new_dof)
                 new_world.state[dof.id] = self.state[dof.id].data
                 new_dof.has_hardware_interface = dof.has_hardware_interface
             for connection in self.connections:
                 new_connection = connection.copy_for_world(new_world)
                 new_world.add_connection(new_connection)
+            for semantic_annotation in self.semantic_annotations:
+                new_semantic_annotation = semantic_annotation.copy_for_world(new_world)
+                new_world.add_semantic_annotation(new_semantic_annotation)
         return new_world
 
     def visualize_world_structure(self) -> Image:

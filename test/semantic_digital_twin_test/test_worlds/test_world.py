@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import dataclass
+from uuid import UUID
 
 import numpy as np
 import pytest
@@ -14,7 +15,7 @@ from semantic_digital_twin.exceptions import (
     WrongWorldModelVersion,
     NonMonotonicTimeError,
 )
-from semantic_digital_twin.semantic_annotations.semantic_annotations import Handle
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Handle, Milk
 from semantic_digital_twin.spatial_types import Vector3
 from semantic_digital_twin.spatial_types.derivatives import Derivatives, DerivativeMap
 
@@ -34,6 +35,8 @@ from semantic_digital_twin.world_description.connections import (
     OmniDrive,
 )
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
+from semantic_digital_twin.world_description.geometry import Box, Scale
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import (
     SemanticAnnotation,
     Body,
@@ -1137,3 +1140,32 @@ def test_reset_state_context(pr2_world_state_reset):
             10, 10, 0
         )
     assert np.allclose(state_copy, pr2_world_state_reset.state.data)
+
+
+def test_copy_for_world():
+
+    w1 = World()
+    w2 = World()
+    b1_uuid = UUID(int=1)
+    b1_w1 = Body(
+        name=PrefixedName("b1"),
+        collision=ShapeCollection([Box(scale=Scale())]),
+        id=b1_uuid,
+    )
+
+    milk = Milk(root=b1_w1)
+    with w1.modify_world():
+        w1.add_body(b1_w1)
+        w1.add_semantic_annotation(milk)
+
+    b1_w2 = b1_w1.copy_for_world(w2)
+
+    assert b1_w2.id == b1_w1.id
+    assert b1_w2.name == b1_w1.name
+    assert b1_w2.collision == b1_w1.collision
+
+    with w2.modify_world():
+        w2.add_body(b1_w2)
+    copied_milk = milk.copy_for_world(w2)
+
+    assert copied_milk.root == b1_w2

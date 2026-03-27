@@ -31,6 +31,7 @@ from krrood.adapters.json_serializer import (
     SubclassJSONSerializer,
     to_json,
     from_json,
+    list_like_classes,
 )
 from krrood.class_diagrams.attribute_introspector import DataclassOnlyIntrospector
 from krrood.entity_query_language.predicate import Symbol
@@ -235,6 +236,31 @@ class WorldEntityWithID(WorldEntity, SubclassJSONSerializer):
             return state.get_world_entity_with_id(obj)
         else:
             return obj
+
+    def copy_for_world(self, world: World) -> Self:
+        """
+        Copy the object, while updating all references to WorldEntityWithID objects to point to the new world.
+        This assumes that the referenced objects are already in the new world.
+        """
+
+        def _resolve_item(item: Any, world: World) -> Any:
+            if isinstance(item, WorldEntityWithID):
+                return world.get_world_entity_with_id_by_id(item.id)
+            return deepcopy(item)
+
+        result = {}
+        introspector = DataclassOnlyIntrospector()
+        for field_ in introspector.discover(self.__class__):
+            value = getattr(self, field_.public_name)
+
+            if isinstance(value, list_like_classes):
+                current_result = value.__class__(
+                    [_resolve_item(item, world) for item in value]
+                )
+            else:
+                current_result = _resolve_item(value, world)
+            result[field_.public_name] = current_result
+        return self.__class__(**result)
 
 
 @dataclass(eq=False)
