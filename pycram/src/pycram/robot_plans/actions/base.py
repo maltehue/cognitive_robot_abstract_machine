@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from typing_extensions import Any, Optional, TYPE_CHECKING
 
+from pycram.exceptions import ContextIsUnavailable
 from pycram.failures import PlanFailure
 from semantic_digital_twin.world import World
 
@@ -26,7 +27,9 @@ class ActionDescription(Designator):
 
     @property
     def world(self) -> Optional[World]:
-        return self.plan.world if self.plan else None
+        if self.plan is None:
+            raise ContextIsUnavailable(self)
+        return self.plan.world
 
     def perform(self) -> Any:
         """

@@ -7711,7 +7711,7 @@ class MonitorNodeDAO(
     }
 
 
-class PlanNodeIsNoneDAO(Base, DataAccessObject[pycram.exceptions.PlanNodeIsNone]):
+class PlanNodeIsNoneDAO(Base, DataAccessObject[pycram.exceptions.ContextIsUnavailable]):
 
     __tablename__ = "PlanNodeIsNoneDAO"
 

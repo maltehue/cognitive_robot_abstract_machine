@@ -36,7 +36,7 @@ class Context(PlanEntity):
     A ROS node that should be used for communication in this plan
     """
 
-    query_backend: Optional[QueryBackend] = field(default_factory=EntityQueryLanguageBackend)
+    query_backend: QueryBackend = field(default_factory=EntityQueryLanguageBackend)
     """
     The backend used to answer queries about underspecified statements.
     """
@@ -51,6 +51,10 @@ class Context(PlanEntity):
         :param query_backend: The query backend to use for answering queries
         :return: A context with the first robot in the world and no super plan
         """
+
+        if query_backend is None:
+            query_backend = EntityQueryLanguageBackend()
+
         result =  cls(
             world=world,
             robot=world.get_semantic_annotations_by_type(AbstractRobot)[0],

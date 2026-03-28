@@ -606,11 +606,11 @@ class AttributeMatch(AbstractMatchExpression[T]):
         if result is not None:
             return result
 
-        if isinstance(self.parent, AttributeMatch):
-            return get_field_type_endpoint(
-                self.parent.assigned_value.type, self.variable._attribute_name_
-            )
-        return None
+        if not isinstance(self.parent, AttributeMatch):
+            return None
+        return get_field_type_endpoint(
+            self.parent.assigned_value.type, self.variable._attribute_name_
+        )
 
 
 def construct_graph_and_get_root(

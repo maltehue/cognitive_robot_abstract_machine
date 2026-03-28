@@ -12,8 +12,7 @@ from semantic_digital_twin.world_description.world_modification import WorldMode
 @dataclass
 class ExecutionData:
     """
-    A dataclass for storing the information of an execution that is used for creating a robot description for that
-    execution. An execution is a Robot with a virtual mobile base that can be used to move the robot in the environment.
+    All kinds of data that is relevant to the execution of an action designator.
     """
 
     execution_start_pose: Pose

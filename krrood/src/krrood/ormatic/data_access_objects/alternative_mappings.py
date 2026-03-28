@@ -10,6 +10,7 @@ from types import FunctionType
 from typing_extensions import Optional, Self, List, Type, TypeVar, TYPE_CHECKING
 
 from krrood.ormatic.data_access_objects.base import HasGeneric
+from krrood.ormatic.exceptions import UncallableFunction
 
 if TYPE_CHECKING:
     from krrood.ormatic.data_access_objects.to_dao import ToDataAccessObjectState
@@ -55,7 +56,6 @@ class AlternativeMapping(HasGeneric[T], abc.ABC):
         :param obj: The source object.
         :return: A new instance of this mapping class.
         """
-        raise NotImplementedError
 
     @abc.abstractmethod
     def to_domain_object(self) -> T:
@@ -64,7 +64,6 @@ class AlternativeMapping(HasGeneric[T], abc.ABC):
 
         :return: The constructed domain object.
         """
-        raise NotImplementedError
 
     @classmethod
     def required_pre_build_classes(cls) -> List[Type]:
@@ -76,21 +75,6 @@ class AlternativeMapping(HasGeneric[T], abc.ABC):
 
     def __hash__(self):
         return id(self)
-
-
-@dataclass
-class UncallableFunction(NotImplementedError):
-    """
-    Exception raised when anonymous functions are reconstructed and then called.
-    """
-
-    function_mapping: FunctionMapping
-
-    def __post_init__(self):
-        super().__init__(
-            f"The reconstructed function was a lambda function and hence cannot be called again. "
-            f"The function tried to be reconstructed from {self.function_mapping}"
-        )
 
 
 def raise_uncallable_function(function_mapping: FunctionMapping):

@@ -10,9 +10,9 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class PlanNodeIsNone(DataclassException):
+class ContextIsUnavailable(DataclassException):
     """
-    Raised when an instance managed by a plan node has no plan node.
+    Raised when an instance that tries to access the context of a plan has no reference to the plan.
 
     Most likely raised when an action created a subplan without calling `ActionDescription.add_subplan`
     """
