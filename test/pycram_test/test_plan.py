@@ -2,7 +2,6 @@ import os
 import time
 
 import pytest
-from vtkmodules.vtkCommonCore import reference
 
 from krrood.entity_query_language.backends import ProbabilisticBackend
 from krrood.entity_query_language.factories import (
