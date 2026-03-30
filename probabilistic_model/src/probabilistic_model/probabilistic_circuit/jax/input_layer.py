@@ -118,10 +118,7 @@ class DiracDeltaLayer(ContinuousLayer):
 
     def validate(self):
         if not self.location.shape == self.density_cap.shape:
-            raise ShapeMismatchError(
-                self.density_cap.shape,
-                self.location.shape
-            )
+            raise ShapeMismatchError(self.density_cap.shape, self.location.shape)
 
     @property
     def number_of_nodes(self):
@@ -134,7 +131,7 @@ class DiracDeltaLayer(ContinuousLayer):
         return jnp.where(x == self.location, jnp.log(self.density_cap), -jnp.inf)
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         return (DiracDeltaDistribution,)
 
     @classmethod

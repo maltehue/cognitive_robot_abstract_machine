@@ -7,23 +7,20 @@ from typing import Dict, Any
 import numpy as np
 import optax
 from jax.experimental.sparse import BCOO
-from random_events.product_algebra import SimpleEvent
 from krrood.adapters.json_serializer import SubclassJSONSerializer, to_json, from_json
 from random_events.variable import Variable, Symbolic
 from sortedcontainers import SortedSet
 from typing_extensions import Tuple, Self, List, Optional
 
-from probabilistic_model.probabilistic_circuit.jax import (
+from probabilistic_model.probabilistic_circuit.jax.inner_layer import (
     ProductLayer,
     SparseSumLayer,
     InputLayer,
     InnerLayer,
-)
-from probabilistic_model.probabilistic_circuit.jax.discrete_layer import DiscreteLayer
-from probabilistic_model.probabilistic_circuit.jax.inner_layer import (
     Layer,
     NXConverterLayer,
 )
+from probabilistic_model.probabilistic_circuit.jax.discrete_layer import DiscreteLayer
 from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
     ProbabilisticCircuit as NXProbabilisticCircuit,
 )
@@ -34,10 +31,11 @@ import jax.numpy as jnp
 import equinox as eqx
 
 
-
 @dataclass
 class ProbabilisticCircuit(SubclassJSONSerializer):
     """
+    :noindex:
+
     A probabilistic circuit as wrapper for a layered probabilistic model.
     """
 

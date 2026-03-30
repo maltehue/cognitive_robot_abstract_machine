@@ -40,7 +40,7 @@ from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
 def inverse_class_of(clazz: Type[Unit]) -> Type[Layer]:
     for subclass in recursive_subclasses(Layer):
         if not inspect.isabstract(subclass):
-            if issubclass(clazz, subclass.nx_classes()):
+            if issubclass(clazz, subclass.rustworkx_classes()):
                 return subclass
 
     raise TypeError(f"Could not find class for {clazz}")
@@ -115,7 +115,7 @@ class Layer(eqx.Module, SubclassJSONSerializer, ABC):
         raise NotImplementedError
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         """
         :return: The tuple of matching classes of the layer in the probabilistic_model.probabilistic_circuit.rx package.
         """
@@ -316,10 +316,7 @@ class SumLayer(InnerLayer, ABC):
     def validate(self):
         for log_weights in self.log_weights:
             if not log_weights.shape[0] == self.number_of_nodes:
-                raise ShapeMismatchError(
-                    self.number_of_nodes,
-                    log_weights.shape[0]
-                )
+                raise ShapeMismatchError(self.number_of_nodes, log_weights.shape[0])
 
         for log_weights, child_layer in self.log_weighted_child_layers:
             if not log_weights.shape[1] == child_layer.number_of_nodes:
@@ -350,7 +347,7 @@ class SparseSumLayer(SumLayer):
     log_weights: List[BCOO]
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         return (SumUnit,)
 
     @property
@@ -556,7 +553,7 @@ class DenseSumLayer(SumLayer):
         )
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         return tuple()
 
     @property
@@ -696,8 +693,7 @@ class ProductLayer(InnerLayer):
     def validate(self):
         if not self.edges.shape == (len(self.child_layers), self.number_of_nodes):
             raise ShapeMismatchError(
-                (len(self.child_layers), self.number_of_nodes),
-                self.edges.shape
+                (len(self.child_layers), self.number_of_nodes), self.edges.shape
             )
 
     @property
@@ -705,7 +701,7 @@ class ProductLayer(InnerLayer):
         return self.edges.shape[1]
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         return (ProductUnit,)
 
     @property

@@ -31,26 +31,30 @@ for component in tqdm.trange(number_of_components, desc="Generating data"):
 data = np.concatenate(data, axis=0)
 variable = Continuous("x")
 
-nx_model = NygaInduction(variable, min_samples_per_quantile=min_samples_per_quantile)
+rustworkx_model = NygaInduction(
+    variable, min_samples_per_quantile=min_samples_per_quantile
+)
 
 run = mlflow.start_run(run_name="Integration example with mlflow")
 
 # Log the hyperparameters
-mlflow.log_params({"min_samples_per_quantile": nx_model.min_samples_per_quantile})
-nx_model = nx_model.fit(data)
+mlflow.log_params(
+    {"min_samples_per_quantile": rustworkx_model.min_samples_per_quantile}
+)
+rustworkx_model = rustworkx_model.fit(data)
 mlflow.set_tag("Training Info", "Basic LR model for iris data")
 
 file = tempfile.NamedTemporaryFile()
 
 with open(file.name, "w") as f:
-    json.dump(nx_model.to_json(), f)
+    json.dump(rustworkx_model.to_json(), f)
 
 # Log the model
 model_info = mlflow.pyfunc.log_model(
     artifact_path="mlflow_integration_test",
     artifacts={"model_path": file.name},
-    signature=infer_signature(nx_model),
-    python_model=ProbabilisticModelWrapper(nx_model),
+    signature=infer_signature(rustworkx_model),
+    python_model=ProbabilisticModelWrapper(rustworkx_model),
     registered_model_name="tracking-quickstart",
 )
 

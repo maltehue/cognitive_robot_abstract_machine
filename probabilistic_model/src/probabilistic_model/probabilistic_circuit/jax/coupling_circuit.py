@@ -7,7 +7,7 @@ from jax.tree_util import tree_flatten, tree_unflatten
 
 import equinox as eqx
 from typing_extensions import Tuple, List
-import jax.numpy as jnp
+from probabilistic_model.exceptions import ShapeMismatchError
 from probabilistic_model.probabilistic_circuit.jax.probabilistic_circuit import Layer
 
 
@@ -146,10 +146,14 @@ class CouplingCircuit(eqx.Module):
         Check if the output of the conditioner matches the parametrization of the circuit.
         """
         self.circuit.validate()
-        assert (
-            self.circuit.number_of_trainable_parameters
+        if (
+            not self.circuit.number_of_trainable_parameters
             == self.conditioner.output_length
-        )
+        ):
+            raise ShapeMismatchError(
+                self.circuit.number_of_trainable_parameters,
+                self.conditioner.output_length,
+            )
 
 
 class LinearConditioner(eqx.Module, Conditioner):

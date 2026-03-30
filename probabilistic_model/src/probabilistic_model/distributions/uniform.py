@@ -1,5 +1,3 @@
-import numpy as np
-
 from probabilistic_model.distributions.distributions import *
 from probabilistic_model.constants import (
     PADDING_FACTOR_FOR_X_AXIS_IN_PLOT,
@@ -28,7 +26,10 @@ class UniformDistribution(ContinuousDistributionWithFiniteSupport):
         return result[:, 0]
 
     def univariate_log_mode(self) -> Tuple[AbstractCompositeSet, float]:
-        return self.interval.as_composite_set(), self.log_probability_density_function_value()
+        return (
+            self.interval.as_composite_set(),
+            self.log_probability_density_function_value(),
+        )
 
     def log_conditional_from_simple_interval(
         self, interval: SimpleInterval
@@ -76,10 +77,12 @@ class UniformDistribution(ContinuousDistributionWithFiniteSupport):
 
             .. math::
 
-                    \int_{-\infty}^{\infty} (x - center)^{order} pdf(x) dx = \frac{p(x-center)^(1+order)}{1+order}
+               \int_{-\infty}^{\infty} (x - center)^{order} pdf(x) dx = \frac{p(x-center)^(1+order)}{1+order}
 
             """
-            return (self.probability_density_function_value() * (x - center) ** (order + 1)) / (order + 1)
+            return (
+                self.probability_density_function_value() * (x - center) ** (order + 1)
+            ) / (order + 1)
 
         result = evaluate_integral_at(self.upper) - evaluate_integral_at(self.lower)
 
@@ -130,7 +133,16 @@ class UniformDistribution(ContinuousDistributionWithFiniteSupport):
         """
         Create a Plotly trace for the probability density function (PDF) of the uniform distribution.
         """
-        probability_density_values = [0, 0, None, self.probability_density_function_value(), self.probability_density_function_value(), None, 0, 0]
+        probability_density_values = [
+            0,
+            0,
+            None,
+            self.probability_density_function_value(),
+            self.probability_density_function_value(),
+            None,
+            0,
+            0,
+        ]
         probability_density_trace = go.Scatter(
             x=self.x_axis_points_for_plotly(),
             y=probability_density_values,
@@ -146,7 +158,12 @@ class UniformDistribution(ContinuousDistributionWithFiniteSupport):
         """
         x = self.x_axis_points_for_plotly()
         cumulative_density_values = [
-            value if value is None else self.cumulative_distribution_function(np.array([[value]]))[0] for value in x
+            (
+                value
+                if value is None
+                else self.cumulative_distribution_function(np.array([[value]]))[0]
+            )
+            for value in x
         ]
         cumulative_density_trace = go.Scatter(
             x=x,
@@ -161,11 +178,18 @@ class UniformDistribution(ContinuousDistributionWithFiniteSupport):
         probability_density_trace = self.probability_density_function_trace()
         cumulative_density_trace = self.cumulative_density_function_trace()
 
-        height = self.probability_density_function_value() * SCALING_FACTOR_FOR_EXPECTATION_IN_PLOT
+        height = (
+            self.probability_density_function_value()
+            * SCALING_FACTOR_FOR_EXPECTATION_IN_PLOT
+        )
 
         mode_trace = self.univariate_mode_traces(self.mode()[0], height)
         expectation_trace = self.univariate_expectation_trace(height)
-        return [probability_density_trace, cumulative_density_trace, expectation_trace] + mode_trace
+        return [
+            probability_density_trace,
+            cumulative_density_trace,
+            expectation_trace,
+        ] + mode_trace
 
     def __hash__(self):
         return hash((self.variable.name, hash(self.interval)))

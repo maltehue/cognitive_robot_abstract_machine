@@ -8,8 +8,10 @@ from sortedcontainers import SortedSet
 from typing_extensions import Self, Optional
 
 import jax
-from probabilistic_model.probabilistic_circuit.jax import NXConverterLayer
-from probabilistic_model.probabilistic_circuit.jax.inner_layer import InputLayer
+from probabilistic_model.probabilistic_circuit.jax.inner_layer import (
+    InputLayer,
+    NXConverterLayer,
+)
 import jax.numpy as jnp
 
 from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import Unit
@@ -41,7 +43,7 @@ class DiscreteLayer(InputLayer):
         self.log_probabilities = log_probabilities
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         return (SymbolicDistribution,)
 
     def validate(self):

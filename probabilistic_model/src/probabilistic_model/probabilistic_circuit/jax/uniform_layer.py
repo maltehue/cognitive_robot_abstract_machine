@@ -32,15 +32,12 @@ class UniformLayer(ContinuousLayerWithFiniteSupport):
     """
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         return (UniformDistribution,)
 
     def validate(self):
         if not self.lower.shape == self.upper.shape:
-            raise ShapeMismatchError(
-                self.upper.shape,
-                self.lower.shape
-            )
+            raise ShapeMismatchError(self.upper.shape, self.lower.shape)
 
     @property
     def number_of_nodes(self) -> int:

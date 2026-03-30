@@ -32,7 +32,7 @@ class MultinomialDistribution(ProbabilisticModel):
     The variables of the distribution.
     """
 
-    probabilities: Optional[np.ndarray] = field(default=None)
+    probabilities: Optional[npt.NDArray] = field(default=None)
     """
     The probability mass function. The dimensions correspond to the variables in the same order.
     The first dimension indexes over the first variable and so on. If no probabilities are provided in the constructor,
@@ -287,7 +287,7 @@ class MultinomialDistribution(ProbabilisticModel):
             variable.encode(value) for variable, value in zip(self.variables, event)
         ]
 
-    def fit(self, data: np.ndarray) -> Self:
+    def fit(self, data: npt.NDArray) -> Self:
         """
         Fit the distribution to the data.
 

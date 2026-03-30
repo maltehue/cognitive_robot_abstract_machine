@@ -8,7 +8,7 @@ from random_events.variable import Continuous, Symbolic
 from sortedcontainers import SortedSet
 from typing_extensions import List, Self, Type, Iterable, Union
 
-from probabilistic_model.probabilistic_circuit.jax import (
+from probabilistic_model.probabilistic_circuit.jax.inner_layer import (
     ProductLayer,
     DenseSumLayer,
 )
@@ -62,7 +62,6 @@ class Partition:
         return id(self)
 
 
-
 class RegionGraph(nx.DiGraph):
     """
     A region graph is a directed acyclic bipartite graph that represents a (potentially repeated) partition of variables.
@@ -96,19 +95,20 @@ class RegionGraph(nx.DiGraph):
     A repetition is another partitioning on the set of variables.
     """
 
-    def __init__(self, variables: SortedSet,
-                 partitions: int = 2,
-                 depth:int = 2,
-                 repetitions:int = 2,
-                 classes: int = 1,
-                 ):
+    def __init__(
+        self,
+        variables: SortedSet,
+        partitions: int = 2,
+        depth: int = 2,
+        repetitions: int = 2,
+        classes: int = 1,
+    ):
         super().__init__()
         self.classes = classes
         self.variables = variables
         self.partitions = partitions
         self.depth = depth
         self.repetitions = repetitions
-
 
     def create_random_region_graph(self):
         """

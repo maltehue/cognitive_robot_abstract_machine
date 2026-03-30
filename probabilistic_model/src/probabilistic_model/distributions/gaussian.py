@@ -11,7 +11,10 @@ from dataclasses import dataclass, field
 from typing_extensions import Union, Iterable, Any, Self, Dict, List, Tuple
 import numpy as np
 import numpy.typing as npt
-from probabilistic_model.distributions.distributions import ContinuousDistribution, ContinuousDistributionWithFiniteSupport
+from probabilistic_model.distributions.distributions import (
+    ContinuousDistribution,
+    ContinuousDistributionWithFiniteSupport,
+)
 from probabilistic_model.probabilistic_model import OrderType, CenterType, MomentType
 from probabilistic_model.utils import simple_interval_as_array
 from random_events.interval import Interval, reals, singleton, SimpleInterval, Bound
@@ -114,7 +117,9 @@ class GaussianDistribution(ContinuousDistribution):
     def log_conditional_from_simple_interval(
         self, interval: SimpleInterval
     ) -> Tuple[Optional[TruncatedGaussianDistribution], float]:
-        cdf_values = self.cumulative_distribution_function(simple_interval_as_array(interval).reshape(-1, 1))
+        cdf_values = self.cumulative_distribution_function(
+            simple_interval_as_array(interval).reshape(-1, 1)
+        )
         probability = cdf_values[1] - cdf_values[0]
         if probability <= 0.0:
             return None, -np.inf
@@ -167,7 +172,7 @@ class GaussianDistribution(ContinuousDistribution):
 
 @dataclass
 class TruncatedGaussianDistribution(
-   ContinuousDistributionWithFiniteSupport, GaussianDistribution
+    ContinuousDistributionWithFiniteSupport, GaussianDistribution
 ):
     """
     Class for Truncated Gaussian distributions.
@@ -184,13 +189,19 @@ class TruncatedGaussianDistribution(
             - \mathbf{\Phi}\left( \frac{\text{self.interval.lower} - \mu}{\sigma} \right)
         """
         return (
-            GaussianDistribution.cumulative_distribution_function(self, np.array([[self.upper]]))
-            - GaussianDistribution.cumulative_distribution_function(self, np.array([[self.lower]]))
+            GaussianDistribution.cumulative_distribution_function(
+                self, np.array([[self.upper]])
+            )
+            - GaussianDistribution.cumulative_distribution_function(
+                self, np.array([[self.lower]])
+            )
         )[0]
 
     @property
     def cumulative_density_function_to_lower(self):
-        return GaussianDistribution.cumulative_distribution_function(self, np.array([[self.lower]]))[0]
+        return GaussianDistribution.cumulative_distribution_function(
+            self, np.array([[self.lower]])
+        )[0]
 
     def log_likelihood_without_bounds_check(self, x: npt.NDArray) -> npt.NDArray:
         return GaussianDistribution.log_likelihood(self, x) - np.log(
@@ -201,9 +212,12 @@ class TruncatedGaussianDistribution(
         result = np.zeros(len(x))
         non_zero_condition = self.left_included_condition(x)
         x_non_zero = x[non_zero_condition].reshape(-1, 1)
-        cumulative_density_function_non_zero = GaussianDistribution.cumulative_distribution_function(self, x_non_zero)
+        cumulative_density_function_non_zero = (
+            GaussianDistribution.cumulative_distribution_function(self, x_non_zero)
+        )
         result[non_zero_condition[:, 0]] = (
-            cumulative_density_function_non_zero - self.cumulative_density_function_to_lower
+            cumulative_density_function_non_zero
+            - self.cumulative_density_function_to_lower
         ) / self.normalizing_constant
         result = np.minimum(1, result)
         return result
@@ -227,10 +241,10 @@ class TruncatedGaussianDistribution(
     def rejection_sample(self, amount: int) -> npt.NDArray:
         """
         Rejection sample from the distribution.
+
         .. note::
             Be aware that this may be inefficient.
             The acceptance probability is self.normalizing_constant.
-
         """
         samples = super().sample(amount)
         log_likelihoods = self.log_likelihood(samples)
@@ -245,24 +259,23 @@ class TruncatedGaussianDistribution(
         Helper method to calculate the moment of a Truncated Gaussian distribution.
 
         .. note::
-        This method follows the equation (2.8) in :cite:p:`ogasawara2022moments`.
+            This method follows the equation (2.8) in :cite:p:`ogasawara2022moments`.
 
         .. math::
 
-            \mathbb{E} \left[ \left( X-center \right)^{order} \right]\mathds{1}_{\left[ lower , upper \right]}(x)
+            \mathbb{E} \left[ \left( X-center \right)^{order} \right]\mathbb{1}_{\left[ lower , upper \right]}(x)
             = \sigma^{order} \frac{1}{\Phi(upper)-\Phi(lower)} \sum_{k=0}^{order} \binom{order}{k} I_k (-center)^{(order-k)}.
 
-            where:
+        where:
 
-            .. math::
+        .. math::
 
-                I_k = \frac{2^{\frac{k}{2}}}{\sqrt{\pi}}\Gamma \left( \frac{k+1}{2} \right) \left[ sgn \left(upper\right)
-                 \mathds{1}\left \{ k=2 \nu \right \} + \mathds{1} \left\{k = 2\nu -1 \right\} \frac{1}{2}
-                  F_{\Gamma} \left( \frac{upper^2}{2},\frac{k+1}{2} \right) - sgn \left(lower\right) \mathds{1}\left \{ k=2 \nu \right \}
-                 + \mathds{1} \left\{k = 2\nu -1 \right\} \frac{1}{2} F_{\Gamma} \left( \frac{lower^2}{2},\frac{k+1}{2} \right) \right]
+            I_k = \frac{2^{\frac{k}{2}}}{\sqrt{\pi}}\Gamma \left( \frac{k+1}{2} \right) \left[ sgn \left(upper\right)
+            \mathbb{1}\left \{ k=2 \nu \right \} + \mathbb{1} \left\{k = 2\nu -1 \right\} \frac{1}{2}
+            F_{\Gamma} \left( \frac{upper^2}{2},\frac{k+1}{2} \right) - sgn \left(lower\right) \mathbb{1}\left \{ k=2 \nu \right \}
+            + \mathbb{1} \left\{k = 2\nu -1 \right\} \frac{1}{2} F_{\Gamma} \left( \frac{lower^2}{2},\frac{k+1}{2} \right) \right]
 
         :return: The moment of the distribution.
-
         """
 
         order = order[self.variable]
@@ -297,11 +310,13 @@ class TruncatedGaussianDistribution(
 
             gamma_term_lower = (
                 -0.5
-                * gamma.cdf(lower_bound ** 2 / 2, (value + 1) / 2)
+                * gamma.cdf(lower_bound**2 / 2, (value + 1) / 2)
                 * bound_selection_lower
             )
             gamma_term_upper = (
-                    0.5 * gamma.cdf(upper_bound ** 2 / 2, (value + 1) / 2) * bound_selection_upper
+                0.5
+                * gamma.cdf(upper_bound**2 / 2, (value + 1) / 2)
+                * bound_selection_upper
             )
 
             truncated_moment += (

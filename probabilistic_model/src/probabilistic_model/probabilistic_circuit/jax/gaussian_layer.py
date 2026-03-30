@@ -41,7 +41,11 @@ class GaussianLayer(ContinuousLayer):
     """
 
     def __init__(
-        self, variable: int, location: jax.Array, log_scale: jax.Array, min_scale: jax.Array
+        self,
+        variable: int,
+        location: jax.Array,
+        log_scale: jax.Array,
+        min_scale: jax.Array,
     ):
         super().__init__(variable)
         self.location = location
@@ -61,20 +65,14 @@ class GaussianLayer(ContinuousLayer):
         return result
 
     @classmethod
-    def nx_classes(cls) -> Tuple[Type, ...]:
+    def rustworkx_classes(cls) -> Tuple[Type, ...]:
         return (GaussianDistribution,)
 
     def validate(self):
         if not self.location.shape == self.log_scale.shape:
-            raise ShapeMismatchError(
-                self.log_scale.shape,
-                self.location.shape
-            )
+            raise ShapeMismatchError(self.log_scale.shape, self.location.shape)
         if not self.min_scale.shape == self.log_scale.shape:
-            raise ShapeMismatchError(
-                self.log_scale.shape,
-                self.min_scale.shape
-            )
+            raise ShapeMismatchError(self.log_scale.shape, self.min_scale.shape)
         if not jnp.all(self.min_scale >= 0):
             raise ValueError("The minimum scale must be positive.")
 

@@ -16,7 +16,8 @@ from random_events.variable import Continuous
 from probabilistic_model.distributions.distributions import DiracDeltaDistribution
 from probabilistic_model.learning.jpt.jpt import JointProbabilityTree
 from probabilistic_model.learning.jpt.variables import infer_variables_from_dataframe
-from probabilistic_model.probabilistic_circuit.jax import SparseSumLayer, UniformLayer
+from probabilistic_model.probabilistic_circuit.jax.uniform_layer import UniformLayer
+from probabilistic_model.probabilistic_circuit.jax.inner_layer import SparseSumLayer
 from probabilistic_model.probabilistic_circuit.jax.probabilistic_circuit import (
     ProbabilisticCircuit,
 )
@@ -63,10 +64,18 @@ class SmallCircuitIntegrationTestCase(unittest.TestCase):
         prod2.add_subcircuit(sum3)
         prod2.add_subcircuit(sum5)
 
-        d_x1 = leaf(DiracDeltaDistribution(variable=cls.x, location=0, density_cap=1), nx_model)
-        d_x2 = leaf(DiracDeltaDistribution(variable=cls.x, location=1, density_cap=2), nx_model)
-        d_y1 = leaf(DiracDeltaDistribution(variable=cls.y, location=2, density_cap=3), nx_model)
-        d_y2 = leaf(DiracDeltaDistribution(variable=cls.y, location=3, density_cap=4), nx_model)
+        d_x1 = leaf(
+            DiracDeltaDistribution(variable=cls.x, location=0, density_cap=1), nx_model
+        )
+        d_x2 = leaf(
+            DiracDeltaDistribution(variable=cls.x, location=1, density_cap=2), nx_model
+        )
+        d_y1 = leaf(
+            DiracDeltaDistribution(variable=cls.y, location=2, density_cap=3), nx_model
+        )
+        d_y2 = leaf(
+            DiracDeltaDistribution(variable=cls.y, location=3, density_cap=4), nx_model
+        )
 
         sum2.add_subcircuit(d_x1, np.log(0.8))
         sum2.add_subcircuit(d_x2, np.log(0.2))
@@ -125,7 +134,9 @@ class JPTIntegrationTestCase(unittest.TestCase):
             samples, columns=[f"x_{i}" for i in range(cls.number_of_variables)]
         )
         variables = infer_variables_from_dataframe(df, min_samples_per_quantile=100)
-        jpt = JointProbabilityTree(annotated_variables=variables, min_samples_per_leaf=0.1)
+        jpt = JointProbabilityTree(
+            annotated_variables=variables, min_samples_per_leaf=0.1
+        )
 
         cls.jpt = jpt.fit(df)
 
