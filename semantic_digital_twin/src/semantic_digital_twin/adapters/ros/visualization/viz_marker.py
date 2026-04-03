@@ -71,6 +71,11 @@ class VizMarkerPublisher(ModelChangeCallback):
     Which shapes to use for each body
     """
 
+    alpha: float = field(kw_only=True, default=1.0)
+    """
+    Marker transparency in [0.0, 1.0]. 0.0 is fully transparent.
+    """
+
     markers: MarkerArray = field(init=False, default_factory=MarkerArray)
     """Maker message to be published."""
     qos_profile: QoSProfile = field(
@@ -114,6 +119,7 @@ class VizMarkerPublisher(ModelChangeCallback):
             marker_ns = str(body.name)
             for i, shape in enumerate(shapes):
                 marker = SemDTToRos2Converter.convert(shape)
+                marker.color.a = self.alpha
                 marker.frame_locked = True
                 marker.id = i
                 marker.ns = marker_ns
