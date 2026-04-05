@@ -11,10 +11,20 @@ from krrood.entity_query_language.factories import variable, an, set_of
 from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
     VizMarkerPublisher,
 )
-from semantic_digital_twin.reasoning.predicates_base import (
-    SatisfiesRequest,
+from semantic_digital_twin.reasoning.body_motion_problem import (
     Causes,
-    CanExecute,
+    SatisfiesRequest,
+    CanPerform,
+    Effect,
+    TaskRequest,
+    Motion,
+)
+from semantic_digital_twin.reasoning.body_motion_problem.container_manipulation import (
+    ContainerSatisfiesRequest,
+    ContainerCanPerform,
+    RunMSCModel,
+    OpenedEffect,
+    ClosedEffect,
 )
 from semantic_digital_twin.reasoning.world_reasoner import WorldReasoner
 from semantic_digital_twin.robots.abstract_robot import AbstractRobot
@@ -24,14 +34,6 @@ from semantic_digital_twin.robots.tiago import Tiago
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Drawer,
     Door,
-)
-from semantic_digital_twin.semantic_annotations.task_effect_motion import (
-    OpenedEffect,
-    ClosedEffect,
-    TaskRequest,
-    Effect,
-    Motion,
-    RunMSCModel,
 )
 from semantic_digital_twin.world import World
 
@@ -197,7 +199,7 @@ class TestBodyMotionProblem:
         motion_sym = variable(Motion, domain=motions)
 
         # Define Predicates for the query
-        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        satisfies_request = ContainerSatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
 
         query = an(
@@ -239,7 +241,7 @@ class TestBodyMotionProblem:
         motion_sym = variable(Motion, domain=motions)
 
         # Define Predicates for the query
-        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        satisfies_request = ContainerSatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
 
         query = an(
@@ -278,7 +280,7 @@ class TestBodyMotionProblem:
         motion_sym = variable(Motion, domain=[motion])
 
         # Define Predicates for the query
-        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        satisfies_request = ContainerSatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(
             effect=effect_sym, motion=motion_sym, environment=apartment_world
         )
@@ -313,7 +315,7 @@ class TestBodyMotionProblem:
         motion_sym = variable(Motion, domain=motions)
 
         # Define Predicates for the query
-        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        satisfies_request = ContainerSatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(
             effect=effect_sym, motion=motion_sym, environment=apartment_world
         )
@@ -382,10 +384,10 @@ class TestBodyMotionProblem:
         effect_sym = variable(Effect, domain=effects)
         motion_sym = variable(Motion, domain=motions)
 
-        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        satisfies_request = ContainerSatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
         robot = Stretch.from_world(world)
-        can_execute = CanExecute(motion=motion_sym, robot=robot)
+        can_execute = ContainerCanPerform(motion=motion_sym, robot=robot)
 
         query = an(
             set_of(task_sym, motion_sym, effect_sym).where(
@@ -427,10 +429,10 @@ class TestBodyMotionProblem:
         effect_sym = variable(Effect, domain=effects)
         motion_sym = variable(Motion, domain=motions)
 
-        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        satisfies_request = ContainerSatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
         robot = Tiago.from_world(world)
-        can_execute = CanExecute(motion=motion_sym, robot=robot)
+        can_execute = ContainerCanPerform(motion=motion_sym, robot=robot)
 
         query = an(
             set_of(task_sym, motion_sym, effect_sym).where(
@@ -479,10 +481,10 @@ class TestBodyMotionProblem:
         motion_sym = variable(Motion, domain=[motion])
 
         # Define Predicates for the query
-        satisfies_request = SatisfiesRequest(task=task_sym, effect=effect_sym)
+        satisfies_request = ContainerSatisfiesRequest(task=task_sym, effect=effect_sym)
         causes_opening = Causes(effect=effect_sym, motion=motion_sym, environment=world)
         robot = PR2.from_world(world)
-        can_execute = CanExecute(motion=motion_sym, robot=robot)
+        can_execute = ContainerCanPerform(motion=motion_sym, robot=robot)
 
         query = an(
             set_of(motion_sym, effect_sym, task_sym).where(
@@ -507,11 +509,11 @@ class TestBodyMotionProblem:
         effects, _, open_task, _, _ = self._extend_world(world)
 
         effect = next(e for e in effects if isinstance(e, OpenedEffect))
-        predicate = SatisfiesRequest(task=open_task, effect=effect)
+        predicate = ContainerSatisfiesRequest(task=open_task, effect=effect)
         assert predicate()
 
         close_task = TaskRequest(task_type="close", name="close_container")
-        predicate_close = SatisfiesRequest(task=close_task, effect=effect)
+        predicate_close = ContainerSatisfiesRequest(task=close_task, effect=effect)
         assert not predicate_close()
 
     def test_causes(self, mutable_model_world):
@@ -548,7 +550,7 @@ class TestBodyMotionProblem:
         motion.trajectory = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
         robot = PR2.from_world(world)
 
-        predicate = CanExecute(motion=motion, robot=robot)
+        predicate = ContainerCanPerform(motion=motion, robot=robot)
         assert predicate()
 
 
