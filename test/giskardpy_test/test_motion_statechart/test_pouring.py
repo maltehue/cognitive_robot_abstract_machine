@@ -63,9 +63,12 @@ def world_with_cup():
                 upper=DerivativeMap(position=math.pi / 2, velocity=2.0),
             ),
             scale=Scale(0.4, 0.4, 1.0),
-            initial_fill=1.0,
-            k=1,
         )
+    cup.initialize_fill_level(
+        world=world,
+        initial_fill=1.0,
+        outflow_rate_constant=1,
+    )
     world.set_positions_1DOF_connection({cup.root.parent_connection: 0.1})
     return world, cup
 
@@ -114,7 +117,7 @@ class TestPouringTask:
         """
         world = pr2_world_setup
 
-        # 2. Create a cup setup
+        # Create a cup setup
         gripper_frame = world.get_kinematic_structure_entity_by_name(
             "r_gripper_tool_frame"
         )
@@ -145,19 +148,19 @@ class TestPouringTask:
             )
             cup_body.visual = ShapeCollection(shapes=[cup_shape])
             cup_body.collision = ShapeCollection(shapes=[cup_shape])
+            cup_body.collision.reference_frame = cup_body
 
         cup = PourableContainer(name=PrefixedName("cup"), root=cup_body)
         with world.modify_world():
             world.add_semantic_annotation(cup)
 
-        # 3. Initialize fill level and equation
         cup.initialize_fill_level(
             world=world,
             initial_fill=1.0,
-            k=1.0,
+            outflow_rate_constant=1.0,
         )
 
-        # 4. Run PouringTask
+        # Run PouringTask
         goal_fill = 0.6
         tolerance = 0.05
         msc = MotionStatechart()

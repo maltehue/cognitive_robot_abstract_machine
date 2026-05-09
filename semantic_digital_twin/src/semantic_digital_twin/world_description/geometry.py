@@ -894,32 +894,6 @@ class Box(Shape):
         )
 
 
-@dataclass
-class ContainerGeometry:
-    """Physical interior dimensions of a pourable container (rectangular cross-section)."""
-
-    height: float
-    half_width: float
-
-    @classmethod
-    def from_body(cls, body: Body) -> ContainerGeometry:
-        """
-        Derive container dimensions from the body's collision geometry.
-
-        :param body: Body whose collision shapes define the interior dimensions.
-        :raises ValueError: When the body has no collision geometry.
-        """
-        if not body.collision.shapes:
-            raise ValueError(
-                f"Body '{body.name}' has no collision geometry to derive ContainerGeometry from."
-            )
-        bounds = body.collision.combined_mesh.bounds
-        return cls(
-            height=float(bounds[1][2] - bounds[0][2]),
-            half_width=float((bounds[1][0] - bounds[0][0]) / 2),
-        )
-
-
 @dataclass(eq=False)
 class BoundingBox:
     min_x: float

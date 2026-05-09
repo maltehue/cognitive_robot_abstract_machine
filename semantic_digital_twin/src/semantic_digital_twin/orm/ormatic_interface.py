@@ -2294,23 +2294,6 @@ class ConstraintBuilderDAO(
     )
 
 
-class ContainerGeometryDAO(
-    Base,
-    DataAccessObject[
-        semantic_digital_twin.world_description.geometry.ContainerGeometry
-    ],
-):
-
-    __tablename__ = "ContainerGeometryDAO"
-
-    database_id: Mapped[builtins.int] = mapped_column(
-        Integer, primary_key=True, use_existing_column=True
-    )
-
-    height: Mapped[builtins.float] = mapped_column(use_existing_column=True)
-    half_width: Mapped[builtins.float] = mapped_column(use_existing_column=True)
-
-
 class DatabaseNotAvailableErrorDAO(
     Base,
     DataAccessObject[semantic_digital_twin.orm.exceptions.DatabaseNotAvailableError],
@@ -2706,18 +2689,8 @@ class InflowEquationDAO(
         use_existing_column=True,
     )
 
-    container_geometry_id: Mapped[int] = mapped_column(
-        ForeignKey("ContainerGeometryDAO.database_id", use_alter=True),
-        nullable=True,
-        use_existing_column=True,
-    )
-
-    container_geometry: Mapped[ContainerGeometryDAO] = relationship(
-        "ContainerGeometryDAO",
-        uselist=False,
-        foreign_keys=[container_geometry_id],
-        post_update=True,
-    )
+    container_height: Mapped[builtins.float] = mapped_column(use_existing_column=True)
+    container_width: Mapped[builtins.float] = mapped_column(use_existing_column=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "InflowEquationDAO",
@@ -3465,7 +3438,9 @@ class PouringEquationDAO(
         use_existing_column=True,
     )
 
-    k: Mapped[builtins.float] = mapped_column(use_existing_column=True)
+    outflow_rate_constant: Mapped[builtins.float] = mapped_column(
+        use_existing_column=True
+    )
 
     __mapper_args__ = {
         "polymorphic_identity": "PouringEquationDAO",
@@ -3488,18 +3463,8 @@ class ArticulatedPouringEquationDAO(
         use_existing_column=True,
     )
 
-    container_geometry_id: Mapped[int] = mapped_column(
-        ForeignKey("ContainerGeometryDAO.database_id", use_alter=True),
-        nullable=True,
-        use_existing_column=True,
-    )
-
-    container_geometry: Mapped[ContainerGeometryDAO] = relationship(
-        "ContainerGeometryDAO",
-        uselist=False,
-        foreign_keys=[container_geometry_id],
-        post_update=True,
-    )
+    container_height: Mapped[builtins.float] = mapped_column(use_existing_column=True)
+    container_width: Mapped[builtins.float] = mapped_column(use_existing_column=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "ArticulatedPouringEquationDAO",
@@ -7988,14 +7953,12 @@ class WallDAO(
     }
 
 
-class HasContainerGeometryDAO(
+class HasFillLevelDAO(
     HasRootBodyDAO,
-    DataAccessObject[
-        semantic_digital_twin.semantic_annotations.mixins.HasContainerGeometry
-    ],
+    DataAccessObject[semantic_digital_twin.semantic_annotations.mixins.HasFillLevel],
 ):
 
-    __tablename__ = "HasContainerGeometryDAO"
+    __tablename__ = "HasFillLevelDAO"
 
     database_id: Mapped[builtins.int] = mapped_column(
         ForeignKey(HasRootBodyDAO.database_id),
@@ -8003,28 +7966,44 @@ class HasContainerGeometryDAO(
         use_existing_column=True,
     )
 
-    __mapper_args__ = {
-        "polymorphic_identity": "HasContainerGeometryDAO",
-        "inherit_condition": database_id == HasRootBodyDAO.database_id,
-    }
-
-
-class HasFillLevelDAO(
-    HasContainerGeometryDAO,
-    DataAccessObject[semantic_digital_twin.semantic_annotations.mixins.HasFillLevel],
-):
-
-    __tablename__ = "HasFillLevelDAO"
-
-    database_id: Mapped[builtins.int] = mapped_column(
-        ForeignKey(HasContainerGeometryDAO.database_id),
-        primary_key=True,
+    fill_connection_id: Mapped[typing.Optional[builtins.int]] = mapped_column(
+        ForeignKey("LiquidConnectionDAO.database_id", use_alter=True),
+        nullable=True,
         use_existing_column=True,
+    )
+    fill_equation_id: Mapped[typing.Optional[builtins.int]] = mapped_column(
+        ForeignKey("PouringEquationDAO.database_id", use_alter=True),
+        nullable=True,
+        use_existing_column=True,
+    )
+    inflow_equation_id: Mapped[typing.Optional[builtins.int]] = mapped_column(
+        ForeignKey("InflowEquationDAO.database_id", use_alter=True),
+        nullable=True,
+        use_existing_column=True,
+    )
+
+    fill_connection: Mapped[LiquidConnectionDAO] = relationship(
+        "LiquidConnectionDAO",
+        uselist=False,
+        foreign_keys=[fill_connection_id],
+        post_update=True,
+    )
+    fill_equation: Mapped[PouringEquationDAO] = relationship(
+        "PouringEquationDAO",
+        uselist=False,
+        foreign_keys=[fill_equation_id],
+        post_update=True,
+    )
+    inflow_equation: Mapped[InflowEquationDAO] = relationship(
+        "InflowEquationDAO",
+        uselist=False,
+        foreign_keys=[inflow_equation_id],
+        post_update=True,
     )
 
     __mapper_args__ = {
         "polymorphic_identity": "HasFillLevelDAO",
-        "inherit_condition": database_id == HasContainerGeometryDAO.database_id,
+        "inherit_condition": database_id == HasRootBodyDAO.database_id,
     }
 
 

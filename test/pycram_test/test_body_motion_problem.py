@@ -116,9 +116,12 @@ def world_with_cup():
                 upper=DerivativeMap(position=math.pi / 2, velocity=2.0),
             ),
             scale=Scale(0.4, 0.4, 1.0),
-            initial_fill=1.0,
-            k=1,
         )
+    cup.initialize_fill_level(
+        world=world,
+        initial_fill=1.0,
+        outflow_rate_constant=1,
+    )
     world.set_positions_1DOF_connection({cup.root.parent_connection: 0.1})
     return world, cup
 
@@ -144,8 +147,11 @@ def pr2_world_with_cup(pr2_world_setup):
                 reference_frame=world.root,
             ),
             scale=Scale(0.08, 0.08, 0.12),
-            initial_fill=1.0,
         )
+    cup.initialize_fill_level(
+        world=world,
+        initial_fill=1.0,
+    )
     world.set_positions_1DOF_connection({cup.root.parent_connection: 0.1})
     return world, cup, robot
 

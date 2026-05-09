@@ -41,7 +41,7 @@ class PouringTask(Task):
     """Target fill level to achieve in terms of percentage."""
 
     tolerance: float
-    """Acceptance band around goal_value."""
+    """tolerance threshold around goal_value."""
 
     reference_velocity: float = field(default=0.05, kw_only=True)
     """Desired rate of decrease for the normalized fill level."""

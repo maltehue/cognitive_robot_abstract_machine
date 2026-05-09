@@ -14,7 +14,6 @@ import krrood.symbolic_math.symbolic_math as sm
 from krrood.symbolic_math.symbolic_math import Scalar
 
 from semantic_digital_twin.physics.differential_equation import DifferentialEquation
-from semantic_digital_twin.world_description.geometry import ContainerGeometry
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Vector3
 
 
@@ -29,7 +28,7 @@ class PouringEquation(DifferentialEquation):
     :param k: Outflow rate constant.
     """
 
-    k: float = field(default=1.0, kw_only=True)
+    outflow_rate_constant: float = field(default=1.0, kw_only=True)
 
     @abstractmethod
     def symbolic_velocity(
@@ -69,7 +68,8 @@ class ArticulatedPouringEquation(PouringEquation):
     :param container_geometry: Physical dimensions of the container.
     """
 
-    container_geometry: ContainerGeometry
+    container_height: float
+    container_width: float
 
     def symbolic_tilt_floor(self, fill_sym: Scalar) -> Scalar:
         """
@@ -78,8 +78,8 @@ class ArticulatedPouringEquation(PouringEquation):
         :param fill_sym: Symbolic fill-level position DOF variable.
         :return: Symbolic φ(fill) in radians.
         """
-        A = self.container_geometry.height
-        r = self.container_geometry.half_width
+        A = self.container_height
+        r = self.container_width / 2
         return sm.atan2(A - fill_sym * A, r)
 
     def symbolic_velocity(
@@ -90,8 +90,8 @@ class ArticulatedPouringEquation(PouringEquation):
         :param fill_expression: Symbolic fill level in [0, 1].
         :return: Symbolic d(fill_normalized)/dt as a CasADi expression.
         """
-        A = self.container_geometry.height
-        r = self.container_geometry.half_width
+        A = self.container_height
+        r = self.container_width / 2
         h_sym = fill_expression * A
         L_sym = sm.sqrt((A - h_sym) ** 2 + r**2)
         phi_sym = sm.atan2(A - h_sym, r)
@@ -99,7 +99,7 @@ class ArticulatedPouringEquation(PouringEquation):
             sm.Scalar(0.0),
             L_sym * sm.sin(tilt_expression - phi_sym),
         )
-        return -self.k * gap_sym / A
+        return -self.outflow_rate_constant * gap_sym / A
 
 
 def tilt_expression_from_fk(root_T_cup: HomogeneousTransformationMatrix) -> Scalar:
@@ -128,14 +128,13 @@ class InflowEquation(DifferentialEquation):
     :param inflow: The symbolic inflow volume rate.
     """
 
-    container_geometry: ContainerGeometry
+    container_height: float
+    container_width: float
     inflow: Scalar = field(default_factory=lambda: sm.Scalar(0.0))
 
     def symbolic_velocity(self) -> Scalar:
         """
         :return: Normalised fill velocity from inflow.
         """
-        receiver_volume = (
-            self.container_geometry.half_width * self.container_geometry.height
-        )
+        receiver_volume = self.container_width / 2 * self.container_height
         return self.inflow / receiver_volume
