@@ -1,12 +1,16 @@
 import pytest
 import time
 
-from semantic_digital_twin.semantic_annotations.object_state import ObjectState, CutState, FillState
+from semantic_digital_twin.semantic_annotations.object_state import (
+    ObjectState,
+    CutState,
+    FillState,
+)
 from semantic_digital_twin.semantic_annotations.state_manager import (
     DynamicStateManager,
     StateUnknownError,
     LowConfidenceError,
-    StaleStateError
+    StaleStateError,
 )
 
 
@@ -14,14 +18,16 @@ class DummyTarget:
     pass
 
 
-def make_state(cut_state=None, fill_state=None, confidence=1.0, timestamp=None, source="Test"):
+def make_state(
+    cut_state=None, fill_state=None, confidence=1.0, timestamp=None, source="Test"
+):
     return ObjectState(
         target=DummyTarget(),
         cut_state=cut_state,
         fill_state=fill_state,
         confidence=confidence,
         timestamp=timestamp,
-        source=source
+        source=source,
     )
 
 
@@ -53,7 +59,9 @@ def test_duplicate_filtering(manager):
 
 def test_ring_buffer_pruning(manager):
     for i in range(5):
-        manager.update_state("cup_1", make_state(fill_state=FillState.EMPTY, confidence=0.1 * i))
+        manager.update_state(
+            "cup_1", make_state(fill_state=FillState.EMPTY, confidence=0.1 * i)
+        )
 
     history = manager.get_state_history("cup_1")
     assert len(history) == 3
@@ -63,7 +71,9 @@ def test_ring_buffer_pruning(manager):
 def test_time_based_pruning():
     """Ensure _cleanup_old drops states that age out of the buffer."""
     # Create a local manager with a tiny 0.2-second memory limit
-    fast_manager = DynamicStateManager(max_history_per_object=3, max_history_seconds=0.2)
+    fast_manager = DynamicStateManager(
+        max_history_per_object=3, max_history_seconds=0.2
+    )
 
     # 1. Insert a fresh state
     fast_manager.update_state("cup_1", make_state(fill_state=FillState.EMPTY))
@@ -80,6 +90,7 @@ def test_time_based_pruning():
     # The length should be 1 because the EMPTY state was pruned out
     assert len(history) == 1
     assert history[0].fill_state == FillState.FILLED
+
 
 def test_robot_api_safety_confidence(manager):
     state = make_state(cut_state=CutState.CUT, confidence=0.6)
@@ -111,13 +122,18 @@ def test_unknown_state_queries(manager):
     with pytest.raises(StateUnknownError, match="is unknown"):
         manager.is_cut("onion_1")
 
+
 def test_temporal_reasoning_get_state_at(manager):
     """Ensure get_state_at correctly fetches the state valid at a given time."""
     now = time.time()
 
     # We must keep these timestamps within the 10.0 second max_history_seconds limit!
-    manager.update_state("onion_1", make_state(cut_state=CutState.UNCUT, timestamp=now - 6.0))
-    manager.update_state("onion_1", make_state(cut_state=CutState.CUT, timestamp=now - 2.0))
+    manager.update_state(
+        "onion_1", make_state(cut_state=CutState.UNCUT, timestamp=now - 6.0)
+    )
+    manager.update_state(
+        "onion_1", make_state(cut_state=CutState.CUT, timestamp=now - 2.0)
+    )
 
     # Query exact time of the newer state (2 seconds ago)
     assert manager.get_state_at("onion_1", now - 2.0).cut_state == CutState.CUT
@@ -128,11 +144,18 @@ def test_temporal_reasoning_get_state_at(manager):
     # Query before history begins (8 seconds ago)
     assert manager.get_state_at("onion_1", now - 8.0) is None
 
+
 def test_transitions(manager):
     now = time.time()
-    manager.update_state("cup_1", make_state(fill_state=FillState.EMPTY, timestamp=now - 3.0))
-    manager.update_state("cup_1", make_state(fill_state=FillState.FILLED, timestamp=now - 2.0))
-    manager.update_state("cup_1", make_state(fill_state=FillState.FULL, timestamp=now - 1.0))
+    manager.update_state(
+        "cup_1", make_state(fill_state=FillState.EMPTY, timestamp=now - 3.0)
+    )
+    manager.update_state(
+        "cup_1", make_state(fill_state=FillState.FILLED, timestamp=now - 2.0)
+    )
+    manager.update_state(
+        "cup_1", make_state(fill_state=FillState.FULL, timestamp=now - 1.0)
+    )
 
     transitions = manager.get_transitions("cup_1")
     assert len(transitions) == 2
