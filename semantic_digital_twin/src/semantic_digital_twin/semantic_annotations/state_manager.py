@@ -1,5 +1,8 @@
 """
 Temporal state management for the Semantic Digital Twin (SDT).
+
+Handles polymorphic state logging, deduplication without freezing timelines,
+out-of-bounds safety validation, and historical trace retrieval.
 """
 
 from __future__ import annotations
@@ -15,14 +18,20 @@ T = TypeVar("T", bound=ObjectState)
 
 
 class StateUnknownError(Exception):
+    """Raised when querying an entity or state type with no recorded tracking history."""
+
     pass
 
 
 class LowConfidenceError(Exception):
+    """Raised when an active state evaluation drops below a predicate's safety threshold."""
+
     pass
 
 
 class StaleStateError(Exception):
+    """Raised when an active state observation age exceeds a predicate's max allowed latency."""
+
     pass
 
 
@@ -50,17 +59,27 @@ class DynamicStateManager:
     # ------------------------------------------------------------------------
 
     def update_state(self, entity_id: str, new_state: ObjectState) -> None:
-        """Appends a new polymorphic state observation into the entity's history tracking thread."""
+        """
+        Appends a new polymorphic state observation into the tracking timeline.
+
+        If the incoming state matches the latest historical state of the same type
+        conceptually, its timestamp and confidence are updated inline to prevent
+        false-positive aging errors during high-frequency VLM stream ingestion.
+        """
         if new_state.timestamp is None:
             new_state.timestamp = time.time()
 
         history = self._state_history[entity_id]
 
         if history:
-            # Drop duplicates by verifying against the last recorded slice of the SAME type
+            # Locate the last recorded slice of the exact same type
             last_matching_type = self._get_latest_of_type(history, type(new_state))
+
             if last_matching_type and self._is_duplicate(last_matching_type, new_state):
-                return  # Block duplicate frame junk
+                # Update timestamp and confidence inline so the state lifecycle doesn't freeze
+                last_matching_type.timestamp = new_state.timestamp
+                last_matching_type.confidence = new_state.confidence
+                return  # Block duplicate instantiation frames cleanly
 
         history.append(new_state)
         self._cleanup_old(entity_id)
@@ -160,6 +179,7 @@ class DynamicStateManager:
         return None
 
     def _cleanup_old(self, entity_id: str) -> None:
+        """Removes tracking logs exceeding the maximum temporal age duration buffer rule."""
         if self.max_history_seconds is None:
             return
 
@@ -177,9 +197,7 @@ class DynamicStateManager:
                 break
 
     def _is_duplicate(self, a: ObjectState, b: ObjectState) -> bool:
+        """Evaluates whether two state snapshots represent structural duplicate values."""
         if type(a) != type(b) or a.source != b.source:
             return False
-        return (
-            getattr(a, "state", None) == getattr(b, "state", None)
-            and abs(a.confidence - b.confidence) < 1e-3
-        )
+        return getattr(a, "state", None) == getattr(b, "state", None)
