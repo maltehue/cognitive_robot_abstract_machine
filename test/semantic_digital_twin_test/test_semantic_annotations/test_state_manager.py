@@ -3,7 +3,7 @@ Unit tests for DynamicStateManager and Entity Query Language (EQL) Predicates.
 
 Validates:
 - Agnostic temporal ring-buffer storage and type-safe retrieval tracks
-- Stream deduplication logic per state classification
+- Inline deduplication logic and sliding-window timestamp extensions per state classification
 - Memory-bounded chronological pruning and aging drop-offs
 - Predicate logic assertion accuracy and validation safety guards
 """
@@ -57,41 +57,69 @@ def test_basic_update_and_retrieve(manager, dummy_target):
 
 
 def test_duplicate_filtering_per_type(manager, dummy_target):
-    """Ensure consecutive duplicates are filtered *within* the same type stream."""
-    manager.update_state(
-        "onion_1", CutState(target=dummy_target, state=CutCondition.CUT)
+    """
+    Ensure consecutive duplicate observations don't bloat history,
+    but do update metadata inline to extend safety-guard lifecycles.
+    """
+    initial_timestamp = time.time() - 5.0
+    state_1 = CutState(
+        target=dummy_target,
+        state=CutCondition.CUT,
+        confidence=0.9,
+        timestamp=initial_timestamp,
     )
-    manager.update_state(
-        "onion_1", CutState(target=dummy_target, state=CutCondition.CUT)
-    )
-
-    history = manager.get_state_history("onion_1")
-    assert len(history) == 1
+    manager.update_state("onion_1", state_1)
 
     # Interleaving a FillState update shouldn't break duplicate checks for CutState
     manager.update_state(
         "onion_1", FillState(target=dummy_target, state=FillLevel.EMPTY)
     )
-    manager.update_state(
-        "onion_1", CutState(target=dummy_target, state=CutCondition.UNCUT)
+
+    # Create an identical CutState observation with a fresher timestamp and tweaked confidence
+    fresh_timestamp = time.time()
+    state_2 = CutState(
+        target=dummy_target,
+        state=CutCondition.CUT,
+        confidence=0.95,
+        timestamp=fresh_timestamp,
     )
+    manager.update_state("onion_1", state_2)
 
     history = manager.get_state_history("onion_1")
-    assert len(history) == 3
+
+    # Structural count must be 2 (1 CutState, 1 FillState) because state_2 updates state_1 inline
+    assert len(history) == 2
+
+    # Check that the inline sliding-window update kept the trace fresh
+    current_cut = manager.get_current_state_by_type("onion_1", CutState)
+    assert current_cut.timestamp == fresh_timestamp
+    assert current_cut.confidence == pytest.approx(0.95)
 
 
 def test_ring_buffer_pruning(manager, dummy_target):
     """Verify maxlen drops oldest elements when max_history_per_object is reached."""
-    for i in range(5):
-        manager.update_state(
-            "cup_1",
-            FillState(target=dummy_target, state=FillLevel.EMPTY, confidence=0.2 * i),
-        )
+    # Using incrementally increasing state enums/values to prevent inline deduplication overwrites
+    manager.update_state(
+        "cup_1", FillState(target=dummy_target, state=FillLevel.EMPTY, confidence=0.1)
+    )
+    manager.update_state(
+        "cup_1", FillState(target=dummy_target, state=FillLevel.FILLED, confidence=0.2)
+    )
+    manager.update_state(
+        "cup_1", FillState(target=dummy_target, state=FillLevel.FULL, confidence=0.3)
+    )
+    manager.update_state(
+        "cup_1", FillState(target=dummy_target, state=FillLevel.EMPTY, confidence=0.4)
+    )
+    manager.update_state(
+        "cup_1", FillState(target=dummy_target, state=FillLevel.FILLED, confidence=0.5)
+    )
 
     history = manager.get_state_history("cup_1")
     assert len(history) == 3
-    # The first two elements (confidence 0.0 and 0.2) should be dropped
-    assert history[0].confidence == pytest.approx(0.4)
+    # The first two elements should be pushed out by the ring-buffer maxlen sequence limits
+    assert history[0].confidence == pytest.approx(0.3)
+    assert history[2].confidence == pytest.approx(0.5)
 
 
 def test_time_based_pruning(dummy_target):
@@ -107,7 +135,7 @@ def test_time_based_pruning(dummy_target):
 
     time.sleep(0.25)
 
-    # Next update triggers cleanup loop
+    # Next disparate update triggers cleanup loop sequence
     fast_manager.update_state(
         "cup_1", FillState(target=dummy_target, state=FillLevel.FILLED)
     )
