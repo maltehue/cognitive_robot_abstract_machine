@@ -34,16 +34,23 @@ installed, because building and simulating a world uses the ROS toolchain.
 
 ## Designing against an existing belief
 
-By default each session starts from a fresh PR2 world. To design against an existing
-semantic digital twin instead, point the server at a callable that returns the belief
-through the ``CORAPLEX_MCP_WORLD`` environment variable, written as ``module:function``.
-The callable may return a ``World`` or a ``Context``:
+By default each session starts from a fresh PR2 world. The ``CORAPLEX_MCP_WORLD``
+environment variable selects a different belief.
+
+Built-in worlds are selected by name. ``pr2_apartment`` loads a PR2 into the apartment,
+built from the PR2 and apartment URDFs with the breakfast objects placed on the counter:
+
+```bash
+CORAPLEX_MCP_WORLD=pr2_apartment coraplex-mcp
+```
+
+For any other belief, point the variable at a ``module:function`` callable returning a
+``World`` or a ``Context`` (build it, deserialize it, or fetch the live twin over ROS):
 
 ```python
 # my_lab/belief.py
 def current_belief():
-    world = load_my_world()  # build, deserialize, or fetch the live twin over ROS
-    return world
+    return load_my_world()
 ```
 
 ```bash
@@ -65,7 +72,7 @@ entry looks like:
     "coraplex-robot-control": {
       "command": "uv",
       "args": ["run", "coraplex-mcp"],
-      "env": {"CORAPLEX_MCP_WORLD": "my_lab.belief:current_belief"}
+      "env": {"CORAPLEX_MCP_WORLD": "pr2_apartment"}
     }
   }
 }

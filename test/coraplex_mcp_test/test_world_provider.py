@@ -3,6 +3,7 @@ import pytest
 from coraplex_mcp.exceptions import MalformedWorldEntryPoint
 from coraplex_mcp.world_provider import (
     CallableWorldProvider,
+    Pr2ApartmentWorldProvider,
     Pr2WorldProvider,
     world_provider_from_environment,
 )
@@ -24,6 +25,20 @@ class TestBeliefBinding:
     def test_absent_entry_point_uses_fresh_world(self):
         provider = world_provider_from_environment({})
         assert isinstance(provider, Pr2WorldProvider)
+
+    def test_named_pr2_apartment_world_is_selected(self):
+        provider = world_provider_from_environment(
+            {"CORAPLEX_MCP_WORLD": "pr2_apartment"}
+        )
+        assert isinstance(provider, Pr2ApartmentWorldProvider)
+
+    def test_named_pr2_world_is_selected(self):
+        provider = world_provider_from_environment({"CORAPLEX_MCP_WORLD": "pr2"})
+        assert isinstance(provider, Pr2WorldProvider)
+
+    def test_unknown_named_world_is_rejected(self):
+        with pytest.raises(MalformedWorldEntryPoint):
+            world_provider_from_environment({"CORAPLEX_MCP_WORLD": "spaceship"})
 
     def test_entry_point_binds_the_referenced_callable(self):
         provider = world_provider_from_environment(

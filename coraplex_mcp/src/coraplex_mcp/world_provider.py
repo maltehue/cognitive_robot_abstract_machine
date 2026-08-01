@@ -74,6 +74,24 @@ class Pr2WorldProvider(WorldProvider):
 
 
 @dataclass
+class Pr2ApartmentWorldProvider(WorldProvider):
+    """
+    Loads a PR2 into the apartment, built from the PR2 and apartment URDFs with the
+    breakfast objects placed on the counter.
+    """
+
+    def create_context(self) -> Context:
+        # ``setup_world`` parses URDFs through the ROS ``xacro`` toolchain; importing it
+        # here keeps that dependency at the deployment boundary.
+        from coraplex.testing import setup_world
+        from semantic_digital_twin.robots.pr2 import PR2
+
+        world = setup_world()
+        robot = PR2.from_world(world)
+        return Context(world=world, robot=robot)
+
+
+@dataclass
 class CallableWorldProvider(WorldProvider):
     """
     Binds sessions to an existing belief supplied by a callable.
@@ -100,21 +118,38 @@ class CallableWorldProvider(WorldProvider):
         )
 
 
+_NAMED_WORLD_PROVIDERS: Mapping[str, Callable[[], WorldProvider]] = {
+    "pr2": Pr2WorldProvider,
+    "pr2_apartment": Pr2ApartmentWorldProvider,
+}
+"""
+The built-in worlds selectable by name through the world entry-point variable.
+"""
+
+
 def world_provider_from_environment(environment: Mapping[str, str]) -> WorldProvider:
     """
     Resolve the world provider from the environment.
 
-    When the world entry-point variable names a ``module:function`` returning a belief,
-    sessions are bound to that belief; otherwise a fresh PR2 world is used.
+    The world entry-point variable selects a built-in world by name (for example
+    ``pr2_apartment``) or names a ``module:function`` returning a belief; when it is
+    unset a fresh PR2 world is used.
 
     :param environment: The process environment to read the entry point from.
     :return: The resolved world provider.
-    :raises MalformedWorldEntryPoint: If the entry point is set but not importable.
+    :raises MalformedWorldEntryPoint: If the entry point is set but names neither a
+        built-in world nor an importable callable.
     """
     entry_point = environment.get(_WORLD_ENTRY_POINT_VARIABLE)
     if not entry_point:
         return Pr2WorldProvider()
-    return CallableWorldProvider(_resolve_entry_point(entry_point))
+    if ":" in entry_point:
+        return CallableWorldProvider(_resolve_entry_point(entry_point))
+    if entry_point in _NAMED_WORLD_PROVIDERS:
+        return _NAMED_WORLD_PROVIDERS[entry_point]()
+    raise MalformedWorldEntryPoint(
+        entry_point, "not a built-in world name or a 'module:function' reference"
+    )
 
 
 def _resolve_entry_point(entry_point: str) -> Callable[[], Any]:
