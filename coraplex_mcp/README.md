@@ -60,6 +60,21 @@ CORAPLEX_MCP_WORLD=my_lab.belief:current_belief coraplex-mcp
 Every opened session designs against that belief. Performing a plan deep-copies the
 world first, so simulating a design never mutates the belief.
 
+## Response contract
+
+Every tool returns an envelope. A success is ``{"ok": true, "data": ...}``; a failure is
+``{"ok": false, "error": {"type", "message", "suggestion"}}``. Tools never raise, so
+malformed input is reported to the agent rather than crashing the server.
+
+## Scope and limits
+
+- Performances run against the simulated robot only; the real robot is not driven.
+- Operations are serialized so overlapping calls keep the shared execution state
+  consistent.
+- The number of open sessions is capped (``max_sessions``); opening beyond it fails with
+  a ``SessionLimitReached`` error.
+- The server logs each tool call under the ``coraplex_mcp`` logger.
+
 ## Connecting a client
 
 Register the server with an MCP client such as Claude Desktop (in its

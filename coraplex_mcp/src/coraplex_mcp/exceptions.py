@@ -104,6 +104,24 @@ class UnknownParameterType(DataclassException):
 
 
 @dataclass
+class SessionLimitReached(DataclassException):
+    """
+    Raised when opening a session would exceed the configured maximum.
+    """
+
+    limit: int
+    """
+    The maximum number of concurrent sessions allowed.
+    """
+
+    def error_message(self) -> str:
+        return f"The session limit of {self.limit} has been reached."
+
+    def suggest_correction(self) -> str:
+        return "Close a session before opening another."
+
+
+@dataclass
 class MalformedBinding(DataclassException):
     """
     Raised when a step argument is neither a field reference nor a literal value.

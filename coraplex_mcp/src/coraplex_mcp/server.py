@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -17,6 +18,8 @@ from coraplex.plans.factories import (
 )
 from coraplex.plans.plan_node import PlanNode
 from coraplex_mcp.authoring import CompositeCapabilitySpec
+from coraplex_mcp.exceptions import SessionLimitReached
+from coraplex_mcp.results import tool_boundary
 from coraplex_mcp.sessions import RobotSession, SessionRegistry
 from coraplex_mcp.validation import SimulationValidator
 from coraplex_mcp.world_provider import (
@@ -74,6 +77,10 @@ class RobotControlServer:
     Binds the CoraPlex capability catalogue, authoring and simulation to MCP tools, so
     an agent can compose robot programs and author new perception and manipulation
     capabilities for them.
+
+    All performances run in the simulated robot; the real robot is not driven. Operations
+    are serialized, so the global execution state CoraPlex uses stays consistent when a
+    client issues overlapping calls.
     """
 
     world_provider: WorldProvider = field(default_factory=Pr2WorldProvider)
@@ -91,27 +98,44 @@ class RobotControlServer:
     The simulator used to perform capabilities and plans.
     """
 
+    max_sessions: int = 32
+    """
+    The maximum number of sessions open at once, bounding memory use.
+    """
+
+    _lock: threading.RLock = field(
+        default_factory=threading.RLock, repr=False, compare=False
+    )
+    """
+    Serializes operations so overlapping calls do not race on shared execution state.
+    """
+
     def open_session(self) -> Dict[str, Any]:
         """
         Open a session on a fresh world and robot.
 
         :return: The session identifier and the robot's name.
+        :raises SessionLimitReached: If the session limit is already reached.
         """
-        session = self.registry.open_session(
-            uuid.uuid4().hex, self.world_provider.create_context()
-        )
-        return {
-            "session_id": session.identifier,
-            "robot": type(session.context.robot).__name__,
-        }
+        with self._lock:
+            if len(self.registry.identifiers()) >= self.max_sessions:
+                raise SessionLimitReached(self.max_sessions)
+            session = self.registry.open_session(
+                uuid.uuid4().hex, self.world_provider.create_context()
+            )
+            return {
+                "session_id": session.identifier,
+                "robot": type(session.context.robot).__name__,
+            }
 
     def list_capabilities(self, session_id: str) -> List[Dict[str, Any]]:
         """
         :param session_id: The session whose capabilities are listed.
         :return: The schema of every capability the session can construct.
         """
-        session = self.registry.session(session_id)
-        return [schema.to_dict() for schema in session.catalogue.schemas()]
+        with self._lock:
+            session = self.registry.session(session_id)
+            return [schema.to_dict() for schema in session.catalogue.schemas()]
 
     def describe_capability(self, session_id: str, name: str) -> Dict[str, Any]:
         """
@@ -119,7 +143,8 @@ class RobotControlServer:
         :param name: The capability name.
         :return: The schema of the capability.
         """
-        return self.registry.session(session_id).catalogue.schema(name).to_dict()
+        with self._lock:
+            return self.registry.session(session_id).catalogue.schema(name).to_dict()
 
     def perform_action(
         self, session_id: str, action_type: str, parameters: Dict[str, Any]
@@ -132,10 +157,11 @@ class RobotControlServer:
         :param parameters: The capability arguments keyed by field name.
         :return: The outcome of the performance.
         """
-        session = self.registry.session(session_id)
-        action = session.construct_capability(action_type, parameters)
-        node = execute_single(action, context=session.context)
-        return self.validator.validate_plan(node).to_dict()
+        with self._lock:
+            session = self.registry.session(session_id)
+            action = session.construct_capability(action_type, parameters)
+            node = execute_single(action, context=session.context)
+            return self.validator.validate_plan(node).to_dict()
 
     def run_plan(
         self, session_id: str, control_flow: str, steps: List[Dict[str, Any]]
@@ -148,9 +174,10 @@ class RobotControlServer:
         :param steps: The actions to compose, each ``{"action_type", "parameters"}``.
         :return: The outcome of the performance.
         """
-        session = self.registry.session(session_id)
-        node = self._build_plan(session, ControlFlow(control_flow), steps)
-        return self.validator.validate_plan(node).to_dict()
+        with self._lock:
+            session = self.registry.session(session_id)
+            node = self._build_plan(session, ControlFlow(control_flow), steps)
+            return self.validator.validate_plan(node).to_dict()
 
     def author_capability(
         self, session_id: str, specification: Dict[str, Any]
@@ -162,25 +189,28 @@ class RobotControlServer:
         :param specification: The declarative capability specification.
         :return: The schema of the authored capability.
         """
-        session = self.registry.session(session_id)
-        session.factory.define(CompositeCapabilitySpec.from_dict(specification))
-        return session.catalogue.schema(specification["name"]).to_dict()
+        with self._lock:
+            session = self.registry.session(session_id)
+            session.factory.define(CompositeCapabilitySpec.from_dict(specification))
+            return session.catalogue.schema(specification["name"]).to_dict()
 
     def world_state(self, session_id: str) -> Dict[str, Any]:
         """
         :param session_id: The session whose world is inspected.
         :return: The names of the bodies in the session's world.
         """
-        session = self.registry.session(session_id)
-        return {"bodies": [body.name.name for body in session.context.world.bodies]}
+        with self._lock:
+            session = self.registry.session(session_id)
+            return {"bodies": [body.name.name for body in session.context.world.bodies]}
 
     def close_session(self, session_id: str) -> Dict[str, Any]:
         """
         :param session_id: The session to close.
         :return: A confirmation the session was closed.
         """
-        self.registry.close_session(session_id)
-        return {"closed": session_id}
+        with self._lock:
+            self.registry.close_session(session_id)
+            return {"closed": session_id}
 
     def _build_plan(
         self,
@@ -203,9 +233,46 @@ class RobotControlServer:
         return _CONTROL_FLOW_FACTORIES[control_flow](actions, context=session.context)
 
 
+_TOOL_DESCRIPTIONS: Dict[str, str] = {
+    "open_session": (
+        "Open a session on a world and robot and return its 'session_id'. Call this "
+        "first; pass the id to every other tool."
+    ),
+    "list_capabilities": (
+        "List every capability the session can construct, each with its name, kind and "
+        "typed parameters."
+    ),
+    "describe_capability": "Return one capability's name, kind and typed parameters.",
+    "perform_action": (
+        "Construct and perform one action in simulation. 'parameters' maps each field "
+        "to a value: enums by name ('RIGHT'), a pose as {x, y, z, qx, qy, qz, qw}, a "
+        "body by its name. Returns the performance status."
+    ),
+    "run_plan": (
+        "Compose actions and perform them. 'control_flow' is one of sequential, "
+        "parallel, try_in_order, try_all. 'steps' is a list of "
+        "{action_type, parameters}."
+    ),
+    "author_capability": (
+        "Author a new action from existing capabilities. 'specification' has name, "
+        "documentation, parameters ([{name, type}]) and steps ([{capability, "
+        "arguments}]); each argument is {from_field: <name>} or {value: <literal>}. The "
+        "authored capability is then usable like a built-in."
+    ),
+    "world_state": "List the names of the bodies in the session's world.",
+    "close_session": "Close a session and release its world.",
+}
+"""
+The client-facing description of each tool, keyed by the backing method name.
+"""
+
+
 def build_mcp_server(server: RobotControlServer) -> MCPServer:
     """
     Register the robot-control tools on an MCP server.
+
+    Each tool is wrapped so it returns a success or failure envelope and never raises, so
+    malformed input is reported rather than crashing the server.
 
     :param server: The robot-control server whose methods back the tools.
     :return: The configured MCP server.
@@ -214,31 +281,15 @@ def build_mcp_server(server: RobotControlServer) -> MCPServer:
         name="coraplex-robot-control",
         instructions=(
             "Compose CoraPlex robot programs and author new perception and "
-            "manipulation capabilities. Open a session, list capabilities, then perform "
-            "actions, run plans, or author capabilities that slot into those plans."
+            "manipulation capabilities against a simulated robot. Open a session, list "
+            "capabilities, then perform actions, run plans, or author capabilities that "
+            "slot into those plans. Every tool returns {ok, data} on success or "
+            "{ok, error} on failure."
         ),
     )
-
-    mcp.tool(description="Open a session on a fresh world and robot.")(
-        server.open_session
-    )
-    mcp.tool(description="List the capabilities a session can construct.")(
-        server.list_capabilities
-    )
-    mcp.tool(description="Describe one capability's parameters.")(
-        server.describe_capability
-    )
-    mcp.tool(description="Construct and perform one action in simulation.")(
-        server.perform_action
-    )
-    mcp.tool(description="Compose actions with a control-flow construct and perform.")(
-        server.run_plan
-    )
-    mcp.tool(description="Author a new action from existing capabilities.")(
-        server.author_capability
-    )
-    mcp.tool(description="List the bodies in a session's world.")(server.world_state)
-    mcp.tool(description="Close a session.")(server.close_session)
+    for method_name, description in _TOOL_DESCRIPTIONS.items():
+        operation = getattr(server, method_name)
+        mcp.tool(description=description)(tool_boundary(operation))
     return mcp
 
 
