@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coraplex_mcp"
+authors = [
+    { name = "AICOR Institute", email = "you@example.com" },
+]
+description = "Model Context Protocol server exposing CoraPlex robot control to agents."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+keywords = ["robotics", "mcp", "agents"]
+dynamic = ["version", "dependencies"]
+license = "LGPL-3.0-only"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["coraplex_mcp*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "coraplex_mcp._version.__version__" }
+dependencies = { file = "requirements.txt" }
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0,<8.0.0",
+]
+
+[project.scripts]
+coraplex-mcp = "coraplex_mcp.server:main"

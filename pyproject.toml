@@ -15,6 +15,7 @@ authors = [{ name = "AICOR Institute", email = "you@example.com" }]
 # uv will resolve these to editable installs via [tool.uv.sources]
 dependencies = [
   "coraplex",
+  "coraplex_mcp",
   "giskardpy",
   "semantic_digital_twin",
   "krrood",
@@ -67,6 +68,7 @@ doc = [
 [tool.uv.workspace]
 members = [
   "coraplex",
+  "coraplex_mcp",
   "giskardpy",
   "semantic_digital_twin",
   "krrood",
@@ -80,6 +82,7 @@ members = [
 
 [tool.uv.sources]
 coraplex       = { workspace = true }
+coraplex_mcp          = { workspace = true }
 giskardpy             = { workspace = true }
 semantic_digital_twin = { workspace = true }
 krrood                = { workspace = true }
@@ -95,6 +98,7 @@ package-mode = false
 
 [tool.poetry.dependencies]
 coraplex = { path = "coraplex", develop = true }
+coraplex_mcp = { path = "coraplex_mcp", develop = true }
 giskardpy = { path = "giskardpy", develop = true }
 semantic_digital_twin = { path = "semantic_digital_twin", develop = true }
 krrood = { path = "krrood", develop = true }
