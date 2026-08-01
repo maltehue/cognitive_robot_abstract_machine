@@ -122,6 +122,33 @@ class MalformedBinding(DataclassException):
 
 
 @dataclass
+class MalformedWorldEntryPoint(DataclassException):
+    """
+    Raised when the configured world entry point is not a ``module:function`` reference
+    or does not resolve to a world source.
+    """
+
+    entry_point: str
+    """
+    The configured entry point.
+    """
+
+    detail: str
+    """
+    Why the entry point could not be used.
+    """
+
+    def error_message(self) -> str:
+        return f"World entry point {self.entry_point!r} is unusable: {self.detail}"
+
+    def suggest_correction(self) -> str:
+        return (
+            "Set it to 'module:function' naming a callable that returns a World or a "
+            "Context."
+        )
+
+
+@dataclass
 class DuplicateCapability(DataclassException):
     """
     Raised when an authored capability reuses the name of an existing capability.

@@ -28,5 +28,49 @@ protocol, so the domain logic is testable without the `mcp` dependency:
 coraplex-mcp
 ```
 
-The server defaults to the simulated robot; the real-robot path requires a running
-ROS 2 environment and is opt-in.
+The server speaks the Model Context Protocol over standard input and output, so an MCP
+client launches it as a subprocess. It must run where the CoraPlex and ROS stack is
+installed, because building and simulating a world uses the ROS toolchain.
+
+## Designing against an existing belief
+
+By default each session starts from a fresh PR2 world. To design against an existing
+semantic digital twin instead, point the server at a callable that returns the belief
+through the ``CORAPLEX_MCP_WORLD`` environment variable, written as ``module:function``.
+The callable may return a ``World`` or a ``Context``:
+
+```python
+# my_lab/belief.py
+def current_belief():
+    world = load_my_world()  # build, deserialize, or fetch the live twin over ROS
+    return world
+```
+
+```bash
+CORAPLEX_MCP_WORLD=my_lab.belief:current_belief coraplex-mcp
+```
+
+Every opened session designs against that belief. Performing a plan deep-copies the
+world first, so simulating a design never mutates the belief.
+
+## Connecting a client
+
+Register the server with an MCP client such as Claude Desktop (in its
+``claude_desktop_config.json``) or Claude Code (``claude mcp add``). A Claude Desktop
+entry looks like:
+
+```json
+{
+  "mcpServers": {
+    "coraplex-robot-control": {
+      "command": "uv",
+      "args": ["run", "coraplex-mcp"],
+      "env": {"CORAPLEX_MCP_WORLD": "my_lab.belief:current_belief"}
+    }
+  }
+}
+```
+
+Set ``command``/``args`` so the server runs inside the environment that has CoraPlex and
+ROS available. Once connected, ask the agent to open a session, list capabilities, then
+perform actions, run plans, or author new capabilities against the belief.

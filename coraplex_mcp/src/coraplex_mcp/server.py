@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -18,7 +19,11 @@ from coraplex.plans.plan_node import PlanNode
 from coraplex_mcp.authoring import CompositeCapabilitySpec
 from coraplex_mcp.sessions import RobotSession, SessionRegistry
 from coraplex_mcp.validation import SimulationValidator
-from coraplex_mcp.world_provider import Pr2WorldProvider, WorldProvider
+from coraplex_mcp.world_provider import (
+    Pr2WorldProvider,
+    WorldProvider,
+    world_provider_from_environment,
+)
 
 # %% control flow
 
@@ -240,8 +245,12 @@ def build_mcp_server(server: RobotControlServer) -> MCPServer:
 def main() -> None:
     """
     Run the robot-control MCP server over standard input and output.
+
+    The world sessions design against is resolved from the environment, so the server
+    can be pointed at an existing belief without code changes.
     """
-    build_mcp_server(RobotControlServer()).run("stdio")
+    provider = world_provider_from_environment(os.environ)
+    build_mcp_server(RobotControlServer(world_provider=provider)).run("stdio")
 
 
 if __name__ == "__main__":
