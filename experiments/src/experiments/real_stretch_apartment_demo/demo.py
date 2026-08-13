@@ -98,7 +98,7 @@ class StretchApartmentDemonstration(RobotDemonstration):
         Put the Stretch on its drive in a world holding nothing but a map body.
         """
         return WorldSpecification(
-            world=World.create_with_root_body(),
+            world_parser=None,
             robots=[
                 RobotSpecification(
                     semantic_annotation_type=self.used_robot,
@@ -123,7 +123,7 @@ class StretchApartmentDemonstration(RobotDemonstration):
         # The cereal is the one body perception moves, and a pose can only be written to
         # a connection that has the degrees of freedom to carry it, so it hangs off a
         # 6DoF connection rather than the default fixed one.
-        CheezeIt.get_specification(
+        CheezeIt.get_annotation_specification(
             CEREAL_NAME,
             BodySpecification.mesh(
                 CEREAL_NAME,

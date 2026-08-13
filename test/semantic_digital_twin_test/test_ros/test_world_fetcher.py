@@ -212,9 +212,9 @@ def test_fetched_world_accepts_new_specification_spawns(rclpy_node):
     fetched_world = fetch_world_from_service(rclpy_node, timeout_seconds=30)
 
     with fetched_world.modify_world():
-        shelf = Shelf.get_specification(
+        shelf = Shelf.get_annotation_specification(
             "shelf",
-            Shelf.get_default_root_specification(
+            Shelf.get_default_root_kinematic_structure_entity_specification(
                 scale=shelf_scale, wall_thickness=0.035
             ),
         ).spawn(

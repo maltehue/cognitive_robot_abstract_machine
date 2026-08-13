@@ -105,7 +105,7 @@ class ActionServerHandler:
     Handover of results back to the rclpy executor thread.
     """
 
-    _result_msg: Any | None = field(init=False, default=None)
+    _result_message: Any | None = field(init=False, default=None)
     """
     Result of the currently accepted goal.
     """
@@ -120,7 +120,7 @@ class ActionServerHandler:
             node=rospy.node,
             action_type=self.action_type,
             action_name=self.action_name,
-            execute_callback=self.execute_cb,
+            execute_callback=self.execute_callback,
             goal_callback=self.default_goal_callback,
             cancel_callback=self.cancel_callback,
         )
@@ -152,7 +152,7 @@ class ActionServerHandler:
         self.loginfo("Cancel request received.")
         return CancelResponse.ACCEPT
 
-    async def execute_cb(self, goal_handle: ServerGoalHandle) -> Any:
+    async def execute_callback(self, goal_handle: ServerGoalHandle) -> Any:
         """
         Queue the goal for the motion server thread and wait for its result.
         """
@@ -164,7 +164,7 @@ class ActionServerHandler:
         outcome = self.outcome
         self.goal_msg = None
         self.goal_handle = None
-        self.result_msg = None
+        self.result_message = None
         self.cancel_requested = False
         self.outcome = None
         self.report_outcome(goal_handle, outcome)
@@ -200,21 +200,21 @@ class ActionServerHandler:
         self.loginfo("Accepted")
 
     @property
-    def result_msg(self) -> Any:
+    def result_message(self) -> Any:
         """
         The result built for the current goal.
 
         :raises MissingActionResultError: If no result was set for the current goal.
         """
-        if self._result_msg is None:
+        if self._result_message is None:
             raise MissingActionResultError(
                 action_server_name=self.action_name, goal_id=self.goal_id
             )
-        return self._result_msg
+        return self._result_message
 
-    @result_msg.setter
-    def result_msg(self, value: Any | None) -> None:
-        self._result_msg = value
+    @result_message.setter
+    def result_message(self, value: Any | None) -> None:
+        self._result_message = value
 
     def has_goal(self) -> bool:
         """
@@ -241,7 +241,7 @@ class ActionServerHandler:
         """
         Hand the result back to the waiting rclpy executor thread.
         """
-        self.result_queue.put(self.result_msg)
+        self.result_queue.put(self.result_message)
 
     def is_cancel_requested(self) -> bool:
         """

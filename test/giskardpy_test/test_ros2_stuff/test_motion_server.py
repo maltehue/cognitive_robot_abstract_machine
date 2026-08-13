@@ -68,7 +68,7 @@ class GoalQueueMimic:
     Request of the accepted goal.
     """
 
-    result_msg: Optional[Any] = field(init=False, default=None)
+    result_message: Optional[Any] = field(init=False, default=None)
     """
     Result built for the accepted goal.
     """
@@ -115,7 +115,7 @@ class GoalQueueMimic:
         self.outcome = GoalOutcome.SUCCEEDED
 
     def send_result(self) -> None:
-        self.sent_results.append(self.result_msg)
+        self.sent_results.append(self.result_message)
 
 
 @dataclass

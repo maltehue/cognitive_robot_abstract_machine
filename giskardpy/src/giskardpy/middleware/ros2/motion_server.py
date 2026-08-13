@@ -222,7 +222,7 @@ class MotionServer:
             self.feedback_publisher.publish()
             self.write_debug_plots()
         finally:
-            self.action_server.result_msg = self.create_result(error)
+            self.action_server.result_message = self.create_result(error)
             self.action_server.send_result()
 
     def create_result(self, error: Exception | None) -> JsonAction.Result:

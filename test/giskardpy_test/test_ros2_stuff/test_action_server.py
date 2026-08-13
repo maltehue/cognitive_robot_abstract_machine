@@ -102,7 +102,7 @@ def test_reading_an_unset_result_reports_which_goal_it_was():
     handler.goal_id = 7
 
     with pytest.raises(MissingActionResultError) as error:
-        handler.result_msg
+        handler.result_message
 
     assert error.value.action_server_name == handler.action_name
     assert error.value.goal_id == handler.goal_id
@@ -113,9 +113,9 @@ def test_a_set_result_is_returned_unchanged():
         action_name="giskard/command", action_type=None
     )
 
-    handler.result_msg = "result"
+    handler.result_message = "result"
 
-    assert handler.result_msg == "result"
+    assert handler.result_message == "result"
 
 
 def test_missing_outcome_message_names_the_action_server_and_the_goal():

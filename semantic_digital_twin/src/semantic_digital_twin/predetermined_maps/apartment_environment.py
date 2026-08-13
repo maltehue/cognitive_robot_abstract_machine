@@ -78,9 +78,9 @@ class ApartmentEnvironment:
         Spawn the shelf with its four layers.
         """
         with world.modify_world():
-            shelf = Shelf.get_specification(
+            shelf = Shelf.get_annotation_specification(
                 "shelf",
-                Shelf.get_default_root_specification(
+                Shelf.get_default_root_kinematic_structure_entity_specification(
                     scale=Scale(0.305, 0.85, 1.9), wall_thickness=0.035
                 ),
             ).spawn(
@@ -136,7 +136,7 @@ class ApartmentEnvironment:
         """
         Spawn the bedside table.
         """
-        SideTable.get_specification(
+        SideTable.get_annotation_specification(
             "bedside_table.dae",
             BodySpecification.mesh(
                 "bedside_table.dae",
@@ -158,7 +158,7 @@ class ApartmentEnvironment:
         sofa_body = BodySpecification.mesh(
             "sofa_bed.obj", self.mesh_path("sofa_bed.obj")
         )
-        Sofa.get_specification("sofa_bed.obj", sofa_body).spawn(
+        Sofa.get_annotation_specification("sofa_bed.obj", sofa_body).spawn(
             world,
             parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(
                 x=1.0, y=3.15, z=sofa_body.scale.z / 2, yaw=17.75 * (-np.pi / 32)
@@ -171,7 +171,7 @@ class ApartmentEnvironment:
         """
         Spawn the apartment's walls as one mesh.
         """
-        Wall.get_specification(
+        Wall.get_annotation_specification(
             "walls.dae",
             BodySpecification.mesh(
                 "walls.dae",
@@ -193,7 +193,7 @@ class ApartmentEnvironment:
         # -x and the leaves reach it from opposite sides, so they swing about the shared
         # vertical axis in opposite directions.
         doors = [
-            Door.get_specification(
+            Door.get_annotation_specification(
                 door_mesh,
                 BodySpecification.mesh(
                     door_mesh,
@@ -203,7 +203,7 @@ class ApartmentEnvironment:
                     ),
                 ),
                 part_specifications={
-                    "handle": Handle.get_specification(
+                    "handle": Handle.get_annotation_specification(
                         f"wardrobe_door_handle_{side}",
                         BodySpecification.mesh(
                             f"wardrobe_door_handle_{side}",
@@ -213,9 +213,9 @@ class ApartmentEnvironment:
                             ),
                         ),
                     ),
-                    "mechanical_joint": Hinge.get_specification(
+                    "mechanical_joint": Hinge.get_annotation_specification(
                         f"wardrobe_hinge_{side}",
-                        Hinge.get_default_root_specification(),
+                        Hinge.get_default_root_kinematic_structure_entity_specification(),
                         parent_connection_specification=Hinge.parent_connection_specification(
                             axis=Vector3.Z(),
                             dof_limits=DegreeOfFreedomLimits(
@@ -238,7 +238,7 @@ class ApartmentEnvironment:
             ]
         ]
 
-        Wardrobe.get_specification(
+        Wardrobe.get_annotation_specification(
             "wardrobe.dae",
             BodySpecification.mesh(
                 "wardrobe.dae",
