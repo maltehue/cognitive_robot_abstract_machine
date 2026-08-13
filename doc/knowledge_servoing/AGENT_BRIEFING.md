@@ -20,23 +20,45 @@ the MuJoCo bridge, arm A, or the experiment drivers.
 ## Environment
 
 - Run everything with `uv run` from the repository root. Do not use a virtualenv under `~/venvs`.
-- Tests are pytest. Reuse fixtures from the relevant `conftest.py`.
+- Tests are pytest, invoked per file or per test — for example
+  `uv run pytest test/giskardpy_test/test_motion_statechart/test_pouring.py -x -q`.
+  **Do not run the whole suite.** It is long, and a full run tells you nothing a targeted run does
+  not.
+- **Establish a baseline before you change anything.** Run the test files you are about to touch and
+  record in your findings which of them pass *now*. Without this you cannot tell your breakage from
+  breakage that was already there, and you will waste the run chasing it.
 - **Known-failing before you start:** HSRB and Justin robot tests fail here for missing ROS
-  packages. They are not your fault and not your problem. If you see them fail, note it and move on.
+  packages. They are not your fault and not your problem. Note and move on.
 - Never edit `ormatic_interface.py` files by hand. If ORM breaks, run
-  `scripts/regenerate_all_orm.py`.
-- Run `scripts/format_docstrings.py` on files you modify.
+  `scripts/regenerate_all_orm.py` — and commit its output as its own commit, separate from your
+  code, because it rewrites many files and an unreviewable mixed diff is worse than no diff.
+- Run `scripts/format_docstrings.py` on files you modify, and only on those.
 
 ## Hard rules
 
+- **Never block on a question.** Nobody will answer. If you find a decision you would normally ask
+  about, choose the option that is easiest to reverse, record the choice and your reasoning in the
+  findings file, and keep going. A night spent waiting on a question is a night lost.
 - **Test-driven.** Every behaviour gets a failing test before its implementation. Never modify an
   existing test to make it pass.
+- **Stay on this branch** (`knowledge-servoing-plan`). Do not create branches, do not rebase, do not
+  merge.
 - **Never push to `mainmain`** (`cram2/cognitive_robot_abstract_machine`). Never open, comment on or
   modify anything upstream. Push only to `origin` (`maltehue/...`), only to this branch.
 - **Commit incrementally**, after each green step. This container may die; anything uncommitted is
   lost. Small commits with honest messages.
 - Commits are authored as the repository user. No `Co-Authored-By` trailer for an assistant, no
   assistant identity as author. A plain `Made with the help of Claude` line in the body is fine.
+- **`krrood` stays self-contained.** Nothing under `krrood/` or `test/krrood_test/` may import from
+  `semantic_digital_twin`, `giskardpy`, `coraplex`, `physics_simulators`, `robokudo` or
+  `experiments` — only `random_events` and `probabilistic_model`. When a krrood test needs to
+  exercise behaviour another package triggers, mimic it in `test/krrood_test/dataset`. This is the
+  rule most easily broken by accident in Task 1.
+- **No drive-by work.** Do not refactor code you are not changing, do not fix unrelated failing
+  tests, do not reformat untouched files, do not tidy the untracked files in the working tree.
+- **Do not re-litigate settled decisions.** Plan §8.0 records what has been decided and why. You may
+  and should report *evidence* against a decision — that is what Task 1 is for — but do not
+  unilaterally implement the alternative.
 
 ## Stop conditions
 
@@ -49,7 +71,10 @@ move to the next task** — do not invent a workaround and build on it:
 - A change would require touching `executor.py`, `qp/qp_data.py`, `motion_statechart.py`,
   `graph_node.py` or `control_loop.py`. The plan explicitly does not touch these.
 - You cannot get a test to pass without weakening what it asserts.
-- More than roughly a third of the run has gone into one task.
+- **Three consecutive failed attempts at the same problem.** A fourth attempt at something that has
+  resisted three is almost never the one that works, and it is how a whole night disappears.
+- **Task 1 has run past about three hours.** Record the wall-clock time with `date` when you start
+  and check it periodically; you have no other sense of elapsed time.
 
 ## Output protocol
 
@@ -121,6 +146,19 @@ Write the failing tests first: rewriting the goal variable mid-motion retargets 
 equals what the strategy computes for that goal; `_fill_goal_reached` reads the live value without
 raising. Also add the regression that pins the plan's §3.2 design constraint — two terminal-fill
 tasks in one chart must raise `MultipleTerminalStateConstraintsError` at compile.
+
+**Regression scope, and the reason this task is riskier than it looks.** You are editing shared QP
+machinery, so the blast radius is much larger than the three files named above. These must stay
+green and you may not touch them:
+
+- `test/giskardpy_test/test_motion_statechart/test_pouring.py`
+- `test/giskardpy_test/test_motion_statechart/test_pouring_learned.py`
+- `test/semantic_digital_twin_test/test_physics/test_pouring_equations.py`
+
+Baseline them before your first edit and re-run them after each step. Existing callers pass plain
+floats and must keep working unchanged — widening a type must not become requiring a symbolic value.
+If keeping them green needs a change to any of those files, that is a stop condition: the design is
+wrong, not the test.
 
 # Task 3 — only if 1 and 2 are both green and time remains
 
