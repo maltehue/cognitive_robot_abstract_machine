@@ -136,17 +136,71 @@ tree. Also note the generated `classify` copies only `Case` objects, not plain d
 generated code is mutated in place — the same item-1 hazard, now on the caller's object.
 
 **Net: Task 1 does not invalidate the plan's design.** All three items confirm §4.1.1/§8.2; item 1
-only forces the already-documented fallback. Task 2 may proceed (subject to its own environment
-blocker below).
+only forces the already-documented fallback. Task 2 was therefore in scope, but is blocked by the
+environment (see below).
 
 ---
 
 ## Task 2 — symbolic `goal_value`
 
-(pending)
+**Not attempted: blocked by the environment, which cannot run two of the three mandated regression
+gates.** This is a stop condition (the briefing's environment rule and Task 2's own "keeping them
+green needs a change is a stop condition"), not a decision to skip.
+
+Task 2 requires, non-negotiably, that three files stay green and be baselined before the first edit
+and re-run after each step:
+
+| Regression gate | Tree | Status here |
+|---|---|---|
+| `test/semantic_digital_twin_test/test_physics/test_pouring_equations.py` | SDT | **collects, 7 passed** (baseline captured) |
+| `test/giskardpy_test/test_motion_statechart/test_pouring.py` | giskardpy | **cannot collect** |
+| `test/giskardpy_test/test_motion_statechart/test_pouring_learned.py` | giskardpy | **cannot collect** |
+
+Both giskardpy gates die at conftest import: `test/giskardpy_test/conftest.py:9` →
+`giskardpy/.../utils_for_tests.py:10` → `giskardpy/.../ros2/giskard.py:9` does a hard `import rclpy`
+(plus the full ROS2 action stack) at module load, before any mock is installed. `rclpy` is not
+installed in this container. A mock exists (`semantic_digital_twin/.../utils.py:213 MockedRCLPY`, and
+`dataclasses.py` installs it) but only on the SDT import path — it never reaches giskardpy's
+top-level `import rclpy`.
+
+Why this stops Task 2 rather than merely slowing it:
+
+- Task 2's own failing tests ("rewriting the goal variable mid-motion retargets the row", etc.) would
+  live in `test/giskardpy_test/test_motion_statechart/` — the tree that cannot be collected. The
+  briefing mandates a failing test *before* each change; that is impossible here.
+- Task 2 edits shared QP machinery (`qp/terminal_state_prediction_strategy.py`,
+  `qp/constraint_collection.py`, `motion_statechart/tasks/pouring.py`) with a large blast radius, and
+  the two giskardpy pouring suites are the instruments that would catch a regression. Editing them
+  blind, unable to baseline or re-run those suites, is exactly the unverified-work / route-around-a-
+  blocker failure the briefing says destroys an unsupervised run.
+- Unblocking would require installing an `rclpy` mock into `sys.modules` ahead of the giskardpy
+  conftest, or editing that conftest — i.e. repairing the ROS environment and/or touching test
+  infrastructure, both explicitly forbidden ("Do not spend the session repairing the environment").
+
+No Task 2 code was written. The one runnable gate's baseline is recorded above so a future session in
+a ROS-capable environment can confirm it stays green.
+
+Tooling note: `scripts/format_docstrings.py` could not run — `docformatter` is not installed in this
+container (`black` is). The two new files were formatted with `black` only. A ROS-capable / fully
+provisioned environment should re-run `scripts/format_docstrings.py` on them.
 
 ---
 
 ## What the next session should do
 
-(to be finalized at end of session)
+1. **Run in a ROS-capable environment** (or one with `rclpy` mocked at the giskardpy conftest level)
+   so `test/giskardpy_test/test_motion_statechart/test_pouring*.py` can be collected. Without this,
+   Task 2 cannot be done test-driven and must not be attempted.
+2. **Re-run `scripts/format_docstrings.py`** on `test/krrood_test/dataset/knowledge_servoing_case.py`
+   and `test/krrood_test/test_ripple_down_rules/test_knowledge_servoing_spike.py` once `docformatter`
+   is available (they are `black`-clean already).
+3. **Task 1 follow-through for WP1:** when authoring `TransferSituation`, keep it a frozen dataclass
+   for the thread hand-off (§2.3) but build a *mutable* working copy reasoner-side inside inference
+   before `classify` — a frozen dataclass used directly as the RDR `Case` either crashes or leaks
+   conclusions into the shared object (item 1 above). Add a regression once `TransferSituation`
+   exists.
+4. **Run the substance-transfer theory from the in-memory MCRDR tree** at control rate; item 3 shows
+   ~10 Hz is cleared by ~200×–2800×, so the generated-code path is an optimization, not a
+   requirement. If it is ever shipped as generated code, regenerate with the *current* writer (the
+   committed world-annotation MCRDR is an older flat form that silently drops intra-pass chaining).
+5. **Then do Task 2** as written, baselining all three regression gates first.
