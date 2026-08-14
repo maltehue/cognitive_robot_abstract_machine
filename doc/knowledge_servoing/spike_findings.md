@@ -263,11 +263,24 @@ New package `semantic_digital_twin/.../reasoning/knowledge_servoing/`:
   application of the spike's item 1: a frozen dataclass cannot be classified in place, so the
   situation is wrapped in a mutable case whose `copy_case` isolates the accumulator and leaves the
   frozen situation untouched.
+- `general_rdr_theory.py` — `GeneralRDRTheory` presents a krrood `GeneralRDR` behind the same
+  interface. `GeneralRDR` is the engine-level counterpart of the plan's *multiple coexisting decision
+  families/theories* (§2.5, §4.1.1's `GeneralRDR` note): it composes one sub-classifier per family
+  and re-runs them to a fixpoint, so a rule in one family can chain on a conclusion another family
+  reached — richer than MCRDR's single-pass chaining. Its working copy carries one accumulator per
+  family (built from the classifier's family names via `make_dataclass`), because
+  `general_rdr_classify` writes each family's conclusions back into the case between rounds. A shared
+  `RippleDownRulesTheory` base and a `DecisionSet.from_conclusions` constructor keep the two adapters
+  free of duplication. Verified against a general-RDR variant of the mimic gauge theory: cross-family
+  chaining, a defeater cascading across families, engine-agreement with the MCRDR mimic on the same
+  situation, and the frozen situation left untouched — part of the **14 passed** in
+  `test_knowledge_servoing_framework.py`.
 
 Verified by `test/semantic_digital_twin_test/test_reasoning/test_knowledge_servoing_framework.py`
 against a domain-free mimic gauge theory (`knowledge_servoing_mimic.py`): both channels, a defeater,
 intra-pass chaining, aggregation across situations, `DecisionSet` channel filtering, and that
-inference does not mutate the frozen situation — **9 passed**. The 9 failures elsewhere in
+inference does not mutate the frozen situation (with the general-RDR cases below, **14 passed**). The
+9 failures elsewhere in
 `test_reasoning` (`test_bmp_predicates.py`) are pre-existing stale-API breakage
 (`create_with_new_body_in_world` no longer takes `active_axis`), unrelated to this change and left
 untouched.
