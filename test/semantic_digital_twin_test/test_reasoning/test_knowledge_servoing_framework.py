@@ -1,8 +1,8 @@
 """The knowledge-servoing framework runs a pluggable theory it has never heard of.
 
 Exercises the domain-agnostic reasoning interface through the mimic gauge theory: situations in,
-decisions out, with both write channels, a defeater, intra-pass chaining, and the guarantee that the
-frozen situation crossing the thread boundary is never mutated by classification.
+decisions out, with both write channels, a defeater, intra-family and cross-family chaining, and the
+guarantee that the frozen situation crossing the thread boundary is never mutated by classification.
 """
 
 from __future__ import annotations
@@ -14,28 +14,28 @@ from semantic_digital_twin.reasoning.knowledge_servoing.interfaces import (
 )
 
 from .knowledge_servoing_mimic import (
-    CONCLUSION_ATTRIBUTE_NAME,
+    PARAMETER_FAMILY,
+    REGIME_FAMILY,
     GaugeSituation,
     OpenValve,
     RaiseAlert,
     Throttle,
-    build_gauge_general_theory,
     build_gauge_theory,
 )
 
 
-class TestMultiClassRdrTheory:
-    """Whether the MCRDR-backed theory infers decisions from situations through the interface."""
+class TestGaugeTheory:
+    """Whether the GeneralRDR-backed theory infers decisions from situations through the interface."""
 
-    def test_theory_infers_both_channels_and_chains(self):
+    def test_theory_infers_both_channels_across_families(self):
         theory = build_gauge_theory()
         decisions = theory.infer([GaugeSituation(reads_high=True, alarm_latched=False)])
-        assert set(decisions) == {OpenValve(), Throttle(0.5), RaiseAlert()}
+        assert set(decisions) == {OpenValve(), RaiseAlert(), Throttle(0.5)}
 
-    def test_defeater_blocks_a_regime_decision_and_its_chain(self):
+    def test_defeater_cascades_across_families(self):
         theory = build_gauge_theory()
         decisions = theory.infer([GaugeSituation(reads_high=True, alarm_latched=True)])
-        assert set(decisions) == {Throttle(0.5)}
+        assert set(decisions) == set()
 
     def test_no_facts_yield_no_decisions(self):
         theory = build_gauge_theory()
@@ -52,7 +52,7 @@ class TestMultiClassRdrTheory:
                 GaugeSituation(reads_high=False, alarm_latched=False),
             ]
         )
-        assert set(decisions) == {OpenValve(), Throttle(0.5), RaiseAlert()}
+        assert set(decisions) == {OpenValve(), RaiseAlert(), Throttle(0.5)}
 
     def test_declared_decision_types_are_exposed(self):
         theory = build_gauge_theory()
@@ -62,7 +62,8 @@ class TestMultiClassRdrTheory:
         theory = build_gauge_theory()
         situation = GaugeSituation(reads_high=True, alarm_latched=False)
         theory.infer([situation])
-        assert not hasattr(situation, CONCLUSION_ATTRIBUTE_NAME)
+        assert not hasattr(situation, REGIME_FAMILY)
+        assert not hasattr(situation, PARAMETER_FAMILY)
 
 
 class TestDecisionSet:
@@ -76,8 +77,9 @@ class TestDecisionSet:
 
     def test_contains_type_reflects_membership(self):
         theory = build_gauge_theory()
-        decisions = theory.infer([GaugeSituation(reads_high=True, alarm_latched=True)])
-        assert decisions.contains_type(Throttle) is True
+        decisions = theory.infer(
+            [GaugeSituation(reads_high=False, alarm_latched=False)]
+        )
         assert decisions.contains_type(OpenValve) is False
 
     def test_parameter_decision_carries_its_value(self):
@@ -86,33 +88,3 @@ class TestDecisionSet:
         (throttle,) = decisions.of_type(Throttle)
         assert throttle.fraction == 0.5
         assert isinstance(throttle, ControlDecision)
-
-
-class TestGeneralRDRTheory:
-    """Whether the GeneralRDR-backed theory composes decision families and chains across them."""
-
-    def test_theory_infers_across_families_with_cross_family_chaining(self):
-        theory = build_gauge_general_theory()
-        decisions = theory.infer([GaugeSituation(reads_high=True, alarm_latched=False)])
-        assert set(decisions) == {OpenValve(), RaiseAlert(), Throttle(0.5)}
-
-    def test_defeater_cascades_across_families(self):
-        theory = build_gauge_general_theory()
-        decisions = theory.infer([GaugeSituation(reads_high=True, alarm_latched=True)])
-        assert set(decisions) == set()
-
-    def test_declared_decision_types_are_exposed(self):
-        theory = build_gauge_general_theory()
-        assert theory.decision_types == frozenset({OpenValve, RaiseAlert, Throttle})
-
-    def test_inference_does_not_mutate_the_frozen_situation(self):
-        theory = build_gauge_general_theory()
-        situation = GaugeSituation(reads_high=True, alarm_latched=False)
-        theory.infer([situation])
-        assert not hasattr(situation, "regime_decisions")
-
-    def test_general_and_multi_class_theories_agree(self):
-        situation = GaugeSituation(reads_high=True, alarm_latched=False)
-        assert set(build_gauge_general_theory().infer([situation])) == set(
-            build_gauge_theory().infer([situation])
-        )

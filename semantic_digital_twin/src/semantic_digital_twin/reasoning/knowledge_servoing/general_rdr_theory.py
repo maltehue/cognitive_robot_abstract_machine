@@ -1,9 +1,9 @@
-"""A symbolic theory backed by a :class:`~krrood.ripple_down_rules.rdr.GeneralRDR`.
+"""The framework's symbolic theory, backed by a :class:`~krrood.ripple_down_rules.rdr.GeneralRDR`.
 
 A general ripple-down-rules classifier composes one sub-classifier per decision family and re-runs
-them to a fixpoint, so a rule in one family can condition on a conclusion another family reached —
-cross-family chaining, the engine-level counterpart of several coexisting decision families. This
-adapter presents it behind the framework's
+them to a fixpoint, so a rule in one family can condition on a conclusion another family reached.
+That subsumes the single-family multi-class case, so it is the only engine the framework needs. This
+adapter presents it behind the
 :class:`~semantic_digital_twin.reasoning.knowledge_servoing.interfaces.SymbolicTheory` interface,
 classifying each frozen situation through a mutable working copy that carries one accumulator per
 family so the situation that crossed the thread boundary is never mutated.
@@ -19,24 +19,30 @@ from krrood.ripple_down_rules.rdr import GeneralRDR
 from krrood.ripple_down_rules.utils import make_set
 
 from semantic_digital_twin.reasoning.knowledge_servoing.interfaces import (
+    ControlDecision,
     DecisionSet,
     Situation,
     SituationType,
-)
-from semantic_digital_twin.reasoning.knowledge_servoing.rdr_theory import (
-    RippleDownRulesTheory,
+    SymbolicTheory,
 )
 
 
 @dataclass
-class GeneralRDRTheory(RippleDownRulesTheory[SituationType]):
+class GeneralRDRTheory(SymbolicTheory[SituationType]):
     """Presents a :class:`GeneralRDR` over situations as a pluggable symbolic theory."""
 
     rule_set: GeneralRDR
     """The general ripple-down-rules classifier composing one sub-classifier per decision family."""
 
+    declared_decision_types: frozenset[Type[ControlDecision]]
+    """The decision types the rules may conclude, declared for the binding policy's build-time checks."""
+
     _working_case_type: Type = field(init=False, repr=False)
     """Mutable working-copy dataclass carrying the frozen situation and one accumulator per family."""
+
+    @property
+    def decision_types(self) -> frozenset[Type[ControlDecision]]:
+        return self.declared_decision_types
 
     def __post_init__(self) -> None:
         family_names = list(self.rule_set.start_rules_dict.keys())
