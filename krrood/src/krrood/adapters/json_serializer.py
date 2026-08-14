@@ -19,11 +19,13 @@ from krrood.adapters.exceptions import (
     UnknownModuleError,
     ClassNotFoundError,
     ClassNotSerializableError,
+    SymbolicValueNotSerializableError,
     JSON_TYPE_NAME,
 )
 from krrood.class_diagrams.attribute_introspector import DataclassOnlyIntrospector
 from krrood.ormatic.data_access_objects.base import HasGeneric
 from krrood.singleton import SingletonMeta
+from krrood.symbolic_math.symbolic_math import SymbolicMathType
 from krrood.utils import (
     get_full_class_name,
     recursive_subclasses,
@@ -502,6 +504,11 @@ class DataclassJSONSerializer(ExternalClassJSONSerializer[None]):
         introspector = DataclassOnlyIntrospector()
         for field_ in introspector.discover(obj.__class__):
             value = getattr(obj, field_.public_name)
+
+            if isinstance(value, SymbolicMathType) and value.free_variables():
+                raise SymbolicValueNotSerializableError(
+                    field_name=field_.public_name, clazz=obj.__class__
+                )
 
             if isinstance(value, (list, set)):
                 current_result = [to_json(item) for item in value]

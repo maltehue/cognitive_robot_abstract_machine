@@ -102,3 +102,31 @@ class ClassNotDeserializableError(JSONSerializationError):
 
     def suggest_correction(self) -> str:
         return ""
+
+
+@dataclass
+class SymbolicValueNotSerializableError(JSONSerializationError):
+    """
+    Raised when a field holds a symbolic value with free variables that cannot round-trip.
+
+    Such a value serializes to a bare type marker and deserializes back to zero, silently
+    discarding the runtime-retargetable parameter it stood for.
+    """
+
+    field_name: str
+    """Name of the field holding the unserializable symbolic value."""
+
+    clazz: Type
+    """Class whose serialization was attempted."""
+
+    def error_message(self) -> str:
+        return (
+            f"Field '{self.field_name}' of '{self.clazz.__name__}' holds a symbolic value "
+            f"with free variables, which has no faithful JSON representation"
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "Resolve the value to a concrete number before serializing, or keep the record "
+            "local instead of shipping it through JSON"
+        )
