@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from typing_extensions import Sequence, Set, Type
+from typing_extensions import Any, List, Sequence, Set
 
 from krrood.ripple_down_rules.rdr import MultiClassRDR
 from krrood.ripple_down_rules.utils import make_set
@@ -21,7 +21,9 @@ from semantic_digital_twin.reasoning.knowledge_servoing.interfaces import (
     DecisionSet,
     Situation,
     SituationType,
-    SymbolicTheory,
+)
+from semantic_digital_twin.reasoning.knowledge_servoing.rdr_theory import (
+    RippleDownRulesTheory,
 )
 
 CONCLUSION_ATTRIBUTE_NAME = "conclusions"
@@ -49,24 +51,15 @@ class ClassificationCase:
 
 
 @dataclass
-class MultiClassRDRTheory(SymbolicTheory[SituationType]):
+class MultiClassRDRTheory(RippleDownRulesTheory[SituationType]):
     """Presents a :class:`MultiClassRDR` over situations as a pluggable symbolic theory."""
 
     rule_set: MultiClassRDR
     """The multi-class ripple-down-rules classifier authored over the situation's facts."""
 
-    declared_decision_types: frozenset[Type[ControlDecision]]
-    """The decision types the rules may conclude, declared for the binding policy's build-time checks."""
-
-    @property
-    def decision_types(self) -> frozenset[Type[ControlDecision]]:
-        return self.declared_decision_types
-
     def infer(self, situations: Sequence[SituationType]) -> DecisionSet:
-        decisions: list[ControlDecision] = []
+        conclusions: List[Any] = []
         for situation in situations:
             working_copy = ClassificationCase(situation=situation)
-            for conclusion in make_set(self.rule_set.classify(working_copy)):
-                if isinstance(conclusion, ControlDecision):
-                    decisions.append(conclusion)
-        return DecisionSet(tuple(decisions))
+            conclusions.extend(make_set(self.rule_set.classify(working_copy)))
+        return DecisionSet.from_conclusions(conclusions)

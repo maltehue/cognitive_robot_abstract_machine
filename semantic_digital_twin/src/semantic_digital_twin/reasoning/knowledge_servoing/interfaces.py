@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from typing_extensions import Iterator, Sequence, Tuple, Type
+from typing_extensions import Any, Iterable, Iterator, Sequence, Tuple, Type
 
 if TYPE_CHECKING:
     from semantic_digital_twin.world import World
@@ -51,6 +51,17 @@ class DecisionSet:
 
     decisions: Tuple[ControlDecision, ...] = ()
     """The concluded decisions, in the order inference produced them."""
+
+    @classmethod
+    def from_conclusions(cls, conclusions: Iterable[Any]) -> DecisionSet:
+        """Builds a decision set from raw engine conclusions, keeping only control decisions."""
+        return cls(
+            tuple(
+                conclusion
+                for conclusion in conclusions
+                if isinstance(conclusion, ControlDecision)
+            )
+        )
 
     def __iter__(self) -> Iterator[ControlDecision]:
         return iter(self.decisions)

@@ -19,6 +19,7 @@ from .knowledge_servoing_mimic import (
     OpenValve,
     RaiseAlert,
     Throttle,
+    build_gauge_general_theory,
     build_gauge_theory,
 )
 
@@ -85,3 +86,33 @@ class TestDecisionSet:
         (throttle,) = decisions.of_type(Throttle)
         assert throttle.fraction == 0.5
         assert isinstance(throttle, ControlDecision)
+
+
+class TestGeneralRDRTheory:
+    """Whether the GeneralRDR-backed theory composes decision families and chains across them."""
+
+    def test_theory_infers_across_families_with_cross_family_chaining(self):
+        theory = build_gauge_general_theory()
+        decisions = theory.infer([GaugeSituation(reads_high=True, alarm_latched=False)])
+        assert set(decisions) == {OpenValve(), RaiseAlert(), Throttle(0.5)}
+
+    def test_defeater_cascades_across_families(self):
+        theory = build_gauge_general_theory()
+        decisions = theory.infer([GaugeSituation(reads_high=True, alarm_latched=True)])
+        assert set(decisions) == set()
+
+    def test_declared_decision_types_are_exposed(self):
+        theory = build_gauge_general_theory()
+        assert theory.decision_types == frozenset({OpenValve, RaiseAlert, Throttle})
+
+    def test_inference_does_not_mutate_the_frozen_situation(self):
+        theory = build_gauge_general_theory()
+        situation = GaugeSituation(reads_high=True, alarm_latched=False)
+        theory.infer([situation])
+        assert not hasattr(situation, "regime_decisions")
+
+    def test_general_and_multi_class_theories_agree(self):
+        situation = GaugeSituation(reads_high=True, alarm_latched=False)
+        assert set(build_gauge_general_theory().infer([situation])) == set(
+            build_gauge_theory().infer([situation])
+        )
