@@ -180,6 +180,24 @@ Why this stops Task 2 rather than merely slowing it:
 No Task 2 code was written. The one runnable gate's baseline is recorded above so a future session in
 a ROS-capable environment can confirm it stays green.
 
+### Attempt to install ROS with the repo's script — blocked by egress policy
+
+The repo ships `scripts/setup_ros_workspace.sh` → `.github/docker/setup_workspace.py`. Two facts make
+it unusable in *this* container:
+
+1. It presupposes a ROS Jazzy **base image**. It only `apt install`s `ros-jazzy-*` *overlay*
+   packages and sources `/opt/ros/jazzy/setup.bash` to `colcon build`; it never installs `ros-base`
+   or `rclpy` themselves. This container has no `/opt/ros` at all, no `rclpy` anywhere on disk, and no
+   ROS apt source configured (Ubuntu Noble, root, `apt` present).
+2. The ROS package mirrors needed to create that base are **denied by this session's egress policy**
+   (proxy `403 host_not_allowed`, which `/root/.ccr/README.md` says to report, not route around):
+   `packages.ros.org` → 403, `snapshots.ros.org` → 403, and even the `ros-apt-source` GitHub release
+   → 403. `github.com` itself is reachable, but the base packages are not on it.
+
+So ROS cannot be installed here regardless of the script. Unblocking Task 2 requires either a
+container built **from** a `ros:jazzy` base image (then the repo script applies as intended), or an
+egress-policy change that allows `packages.ros.org`. Neither is doable from inside this session.
+
 Tooling note: `scripts/format_docstrings.py` could not run — `docformatter` is not installed in this
 container (`black` is). The two new files were formatted with `black` only. A ROS-capable / fully
 provisioned environment should re-run `scripts/format_docstrings.py` on them.
