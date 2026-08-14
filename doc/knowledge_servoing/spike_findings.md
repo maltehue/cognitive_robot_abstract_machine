@@ -143,18 +143,76 @@ environment (see below).
 
 ## Task 2 — symbolic `goal_value`
 
-**Not attempted: blocked by the environment, which cannot run two of the three mandated regression
-gates.** This is a stop condition (the briefing's environment rule and Task 2's own "keeping them
-green needs a change is a stop condition"), not a decision to skip.
+**Implemented, on explicit user instruction to "continue without running the tests"** after ROS
+could not be installed here (see below). The change is the type-widening slice of plan §3.1 plus its
+tick-time and JSON consequences. What could be verified here was; the two giskardpy pouring
+regression suites could not be run, so their green-ness is **unverified in this environment** and
+must be confirmed in a ROS-capable one.
 
-Task 2 requires, non-negotiably, that three files stay green and be baselined before the first edit
-and re-run after each step:
+### What was changed
+
+- `TerminalStatePredictionConstraint.goal_value`, `TerminalFillConstraintTask.goal_value` and
+  `ConstraintCollection.add_terminal_state_prediction_constraint`'s `goal_value` widened from `float`
+  to `sm.ScalarData`. The bound `sm.Scalar(constraint.goal_value) - free_response()`
+  (`terminal_state_prediction_strategy.py:275`) already accepted a symbolic value, so no bound change
+  was needed.
+- `TerminalFillConstraintTask.on_tick` now resolves the goal to a live float via a new
+  `_current_goal_value` (`FloatVariableData.get_value` for a `FloatVariable`, `evaluate()` for a
+  general symbolic value, `float()` otherwise), and `_fill_goal_reached` takes that float. This is the
+  §3.1 fix for the `<=`/`>=` sites at `tasks/pouring.py:241,281` that would otherwise raise
+  `HasFreeVariablesError` on a symbolic goal. Plain-float goals behave exactly as before.
+- JSON guard (committed separately): `DataclassJSONSerializer.to_json` now raises
+  `SymbolicValueNotSerializableError` when a field holds a symbolic value with free variables, so a
+  symbolic-goal task fails loudly instead of round-tripping to goal 0
+  (`json_serializer.py`, `adapters/exceptions.py`). The guard triggers only on free variables, so
+  constant serialization is unchanged.
+
+The guard at `tasks/pouring.py:468` (`minimum_clearance <= 0.0`) was **not** touched: it belongs to
+`KeepSourceRimAboveReceiverRim` and only breaks if `minimum_clearance` becomes symbolic, which is
+plan §3.3, not the §3.1 `goal_value` widening. Changing it would be out-of-scope drive-by work.
+
+### What was verified, and how
+
+`rclpy` is only needed by giskardpy's ROS2 middleware; the QP and task modules import without it, so
+the changes were exercised by importing the test modules directly (bypassing the ROS conftest) and
+running the test methods, plus the runnable SDT gate:
+
+| Check | How | Result |
+|---|---|---|
+| retargeted bound == float-goal bound; tracks live changes; goal is a free var of the bound | `test_qp/test_terminal_state_symbolic_goal.py` run standalone | pass |
+| `_current_goal_value` resolves a live symbolic goal; `_fill_goal_reached` uses it without raising; float goal unchanged | `test_motion_statechart/test_terminal_fill_symbolic_goal.py` run standalone | pass |
+| symbolic-goal task refuses JSON serialization | same file, standalone | pass |
+| generic JSON guard + no serialization regression | `test/krrood_test/.../test_symbolic_field_serialization_guard.py` + existing json tests under pytest | 2 + 21 pass |
+| no krrood regression from the guard import | `test_ripple_down_rules`, `test_symbolic_math`, `test_utils` under pytest | 363 passed, 36 skipped |
+| SDT pouring-equations gate still green | `test_pouring_equations.py` under pytest | 7 passed |
+
+The §3.2 single-terminal-row regression the briefing asked for **already exists** as
+`test_terminal_state_prediction_strategy.py::TestTerminalStateConstraintValidation::test_two_terminal_constraints_raise_dedicated_error`,
+so it was not duplicated.
+
+### What remains unverified (the honest gap)
+
+- `test/giskardpy_test/test_motion_statechart/test_pouring.py` and `..._learned.py` — the two named
+  regression gates that exercise full pouring motions through `on_tick` — **could not be run** (see
+  the rclpy blocker below). The `_fill_goal_reached`/`on_tick` change preserves float-goal behavior by
+  construction and the standalone task tests confirm the resolution path, but the end-to-end pour has
+  not been re-run here. **Run both in a ROS-capable environment before relying on this.**
+- The new giskardpy-tree tests cannot be collected here either (same conftest blocker); they were
+  verified by direct import. They will run under pytest in CI.
+- **ORM not regenerated.** The `sm.ScalarData` type means ormatic emits no column for `goal_value`
+  (§3.1, decided). Regeneration was **not** run: in this container ormatic misfires (it drops
+  unrelated coraplex/SDT imports because those packages are not fully importable), so
+  `scripts/regenerate_all_orm.py` would produce a corrupt mass-diff, not the clean "column
+  disappears" diff. The consequence is documented in the field docstrings; **regenerate ORM in a
+  fully provisioned environment** and commit that as its own change.
+
+### The three regression gates
 
 | Regression gate | Tree | Status here |
 |---|---|---|
-| `test/semantic_digital_twin_test/test_physics/test_pouring_equations.py` | SDT | **collects, 7 passed** (baseline captured) |
-| `test/giskardpy_test/test_motion_statechart/test_pouring.py` | giskardpy | **cannot collect** |
-| `test/giskardpy_test/test_motion_statechart/test_pouring_learned.py` | giskardpy | **cannot collect** |
+| `test/semantic_digital_twin_test/test_physics/test_pouring_equations.py` | SDT | **7 passed** (before and after the change) |
+| `test/giskardpy_test/test_motion_statechart/test_pouring.py` | giskardpy | **cannot collect** (rclpy) |
+| `test/giskardpy_test/test_motion_statechart/test_pouring_learned.py` | giskardpy | **cannot collect** (rclpy) |
 
 Both giskardpy gates die at conftest import: `test/giskardpy_test/conftest.py:9` →
 `giskardpy/.../utils_for_tests.py:10` → `giskardpy/.../ros2/giskard.py:9` does a hard `import rclpy`
@@ -162,23 +220,6 @@ Both giskardpy gates die at conftest import: `test/giskardpy_test/conftest.py:9`
 installed in this container. A mock exists (`semantic_digital_twin/.../utils.py:213 MockedRCLPY`, and
 `dataclasses.py` installs it) but only on the SDT import path — it never reaches giskardpy's
 top-level `import rclpy`.
-
-Why this stops Task 2 rather than merely slowing it:
-
-- Task 2's own failing tests ("rewriting the goal variable mid-motion retargets the row", etc.) would
-  live in `test/giskardpy_test/test_motion_statechart/` — the tree that cannot be collected. The
-  briefing mandates a failing test *before* each change; that is impossible here.
-- Task 2 edits shared QP machinery (`qp/terminal_state_prediction_strategy.py`,
-  `qp/constraint_collection.py`, `motion_statechart/tasks/pouring.py`) with a large blast radius, and
-  the two giskardpy pouring suites are the instruments that would catch a regression. Editing them
-  blind, unable to baseline or re-run those suites, is exactly the unverified-work / route-around-a-
-  blocker failure the briefing says destroys an unsupervised run.
-- Unblocking would require installing an `rclpy` mock into `sys.modules` ahead of the giskardpy
-  conftest, or editing that conftest — i.e. repairing the ROS environment and/or touching test
-  infrastructure, both explicitly forbidden ("Do not spend the session repairing the environment").
-
-No Task 2 code was written. The one runnable gate's baseline is recorded above so a future session in
-a ROS-capable environment can confirm it stays green.
 
 ### Attempt to install ROS with the repo's script — blocked by egress policy
 
@@ -199,26 +240,40 @@ container built **from** a `ros:jazzy` base image (then the repo script applies 
 egress-policy change that allows `packages.ros.org`. Neither is doable from inside this session.
 
 Tooling note: `scripts/format_docstrings.py` could not run — `docformatter` is not installed in this
-container (`black` is). The two new files were formatted with `black` only. A ROS-capable / fully
-provisioned environment should re-run `scripts/format_docstrings.py` on them.
+container (`black` is). All new/changed files were formatted with `black` only. A fully provisioned
+environment should re-run `scripts/format_docstrings.py` on them.
 
 ---
 
 ## What the next session should do
 
-1. **Run in a ROS-capable environment** (or one with `rclpy` mocked at the giskardpy conftest level)
-   so `test/giskardpy_test/test_motion_statechart/test_pouring*.py` can be collected. Without this,
-   Task 2 cannot be done test-driven and must not be attempted.
-2. **Re-run `scripts/format_docstrings.py`** on `test/krrood_test/dataset/knowledge_servoing_case.py`
-   and `test/krrood_test/test_ripple_down_rules/test_knowledge_servoing_spike.py` once `docformatter`
-   is available (they are `black`-clean already).
-3. **Task 1 follow-through for WP1:** when authoring `TransferSituation`, keep it a frozen dataclass
+1. **Confirm the Task 2 change in a ROS-capable environment.** Collect and run
+   `test/giskardpy_test/test_motion_statechart/test_pouring.py` and `..._learned.py` (the two gates
+   that could not run here) and the two new files
+   (`test_qp/test_terminal_state_symbolic_goal.py`,
+   `test_motion_statechart/test_terminal_fill_symbolic_goal.py`). These verify the `goal_value`
+   widening did not regress the end-to-end pour.
+2. **Regenerate ORM** with `scripts/regenerate_all_orm.py` in a fully provisioned environment and
+   commit it on its own — `goal_value`'s `ScalarData` type drops its column, which cannot be
+   regenerated correctly in this container.
+3. **Re-run `scripts/format_docstrings.py`** on all files this branch added/changed once
+   `docformatter` is available (they are `black`-clean already):
+   `test/krrood_test/dataset/knowledge_servoing_case.py`,
+   `test/krrood_test/test_ripple_down_rules/test_knowledge_servoing_spike.py`,
+   `test/krrood_test/test_utils/test_symbolic_field_serialization_guard.py`,
+   `krrood/src/krrood/adapters/{exceptions,json_serializer}.py`,
+   `giskardpy/src/giskardpy/motion_statechart/tasks/pouring.py`,
+   `giskardpy/src/giskardpy/qp/{terminal_state_prediction_strategy,constraint_collection}.py`,
+   and the two new giskardpy test files.
+4. **Task 1 follow-through for WP1:** when authoring `TransferSituation`, keep it a frozen dataclass
    for the thread hand-off (§2.3) but build a *mutable* working copy reasoner-side inside inference
    before `classify` — a frozen dataclass used directly as the RDR `Case` either crashes or leaks
    conclusions into the shared object (item 1 above). Add a regression once `TransferSituation`
    exists.
-4. **Run the substance-transfer theory from the in-memory MCRDR tree** at control rate; item 3 shows
+5. **Run the substance-transfer theory from the in-memory MCRDR tree** at control rate; item 3 shows
    ~10 Hz is cleared by ~200×–2800×, so the generated-code path is an optimization, not a
    requirement. If it is ever shipped as generated code, regenerate with the *current* writer (the
    committed world-annotation MCRDR is an older flat form that silently drops intra-pass chaining).
-5. **Then do Task 2** as written, baselining all three regression gates first.
+6. **Continue WP0 §3.3** (symbolic `minimum_clearance`/`clearance_band`, per-task weight variable,
+   etc.); the `minimum_clearance <= 0.0` guard at `tasks/pouring.py:468` needs the same live-value
+   treatment as `_fill_goal_reached` once that field is widened.
