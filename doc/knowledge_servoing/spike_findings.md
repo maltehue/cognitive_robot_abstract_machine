@@ -295,6 +295,45 @@ Two things recorded for the next session:
 
 ---
 
+## WP2 — statechart binding (slice 1, post-spike)
+
+Connected the theory to the controller. New package
+`giskardpy/.../motion_statechart/knowledge_servoing/` wires a `SymbolicTheory`'s decisions to the two
+write channels (§2.2):
+
+- `SymbolicTheoryNode` — on each control tick grounds the world, runs the theory, publishes the
+  decision set to a `DecisionSlot`, and applies the parameter decisions to their float variables.
+- `ConcludedMonitor` — observation TRUE while the latest decision set contains a given decision type,
+  FALSE after an inference without it, UNKNOWN before the first (channel 1: gate a task's start
+  condition on it).
+- `DecisionBindingPolicy` — the declarative map from decision types onto task activations and
+  float-variable writes, validated at `build()` (unbound type, double binding, wrong channel,
+  unregistered target all raise). This is the "pluggable part of the controller" (§2.5.2).
+- `DecisionSlot` — the single-writer hand-off between node and monitors.
+
+**Decision, at the user's request (keep it simple): the reasoner runs synchronously on the control
+tick, not on a separate thread.** The spike measured inference at ~35–120 µs over a handful of
+situations — far inside a 10 Hz (or 50 Hz) control budget — so the plan's §2.3 thread-safety
+apparatus is unnecessary: §2.3 existed to protect the reasoner's *off-thread reads* of live world
+state, and with grounding+inference on the one thread that owns the world there is no cross-thread
+read at all. The frozen-situation / mutable-working-copy hygiene is kept (cheap, and keeps the door
+open). A reasoner thread can return later if a much heavier theory ever exceeds the budget — a
+reversible change, since `SymbolicTheoryNode` is the only place that would move.
+
+Verified end to end without a robot or ROS (`test_knowledge_servoing_binding.py`, run by importing
+the module directly, as the giskardpy conftest needs `rclpy`): a fake grounding + theory drive a
+tick that publishes decisions, flips a `ConcludedMonitor` to TRUE, and lands a parameter decision's
+value in its float variable; the build-time checks all raise — **10 passed**. These run under pytest
+in a ROS-capable CI.
+
+What remains for WP2 (needs a ROS-capable env to exercise fully): assembling a real `MotionStatechart`
+that gates actual tasks off `ConcludedMonitor`s with a `SymbolicTheoryNode` sibling, ticked by a real
+`Executor`; the `DecisionTranscript` (§5); and wiring the deferred symbolic `goal_value` as the
+`RetargetFillLevel` `ParameterDecision`'s target (this is exactly where WP0's `goal_value` widening
+reconnects).
+
+---
+
 ## What the next session should do
 
 1. **Confirm the Task 2 change in a ROS-capable environment.** Collect and run
