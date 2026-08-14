@@ -245,6 +245,48 @@ environment should re-run `scripts/format_docstrings.py` on them.
 
 ---
 
+## WP1 — reasoning framework (slice 1, post-spike)
+
+Built the plan's domain-agnostic framework interface layer (§2.5.1) plus a concrete MCRDR-backed
+theory, on the reasoning side only — no controller, no QP, no pouring vocabulary, no ROS. Fully
+runnable and verified here.
+
+New package `semantic_digital_twin/.../reasoning/knowledge_servoing/`:
+
+- `interfaces.py` — `Situation` (frozen), `ControlDecision` → `RegimeDecision`/`ParameterDecision`
+  (the two write channels), `DecisionSet` (with `of_type`/`contains_type`), `SituationGrounding` and
+  `SymbolicTheory` (the latter declares `decision_types` for the future binding policy's build-time
+  checks).
+- `multi_class_rdr_theory.py` — `MultiClassRDRTheory` presents a krrood `MultiClassRDR` behind
+  `SymbolicTheory`. It classifies each frozen situation through a mutable `ClassificationCase`
+  wrapper (`case.situation.<fact>` for reads, `case.conclusions` for chaining), which is the direct
+  application of the spike's item 1: a frozen dataclass cannot be classified in place, so the
+  situation is wrapped in a mutable case whose `copy_case` isolates the accumulator and leaves the
+  frozen situation untouched.
+
+Verified by `test/semantic_digital_twin_test/test_reasoning/test_knowledge_servoing_framework.py`
+against a domain-free mimic gauge theory (`knowledge_servoing_mimic.py`): both channels, a defeater,
+intra-pass chaining, aggregation across situations, `DecisionSet` channel filtering, and that
+inference does not mutate the frozen situation — **9 passed**. The 9 failures elsewhere in
+`test_reasoning` (`test_bmp_predicates.py`) are pre-existing stale-API breakage
+(`create_with_new_body_in_world` no longer takes `active_axis`), unrelated to this change and left
+untouched.
+
+Two things recorded for the next session:
+
+- **ORM:** ormatic auto-discovers these dataclasses (it wanted `DecisionSetDAO`,
+  `ControlDecisionDAO`, …). They are transient per-cycle reasoning objects and almost certainly
+  should not be persisted; whether to add them to `generate_orm.py`'s `ignore_classes` or map them is
+  an open decision. No regen was committed (the container regenerates ORM incorrectly). No runnable
+  test gates on this, so nothing here is red because of it.
+- **Rule-authoring convention:** rules read facts as `case.situation.<fact>` and earlier conclusions
+  as `case.conclusions`. That is the explicit-wrapper convention; the world annotation RDR instead
+  classifies the domain object directly. WP1's real `TransferSituation` theory should settle which
+  convention it uses (wrapper vs a flat delegating case) — a reversible choice, wrapper chosen here
+  for clarity.
+
+---
+
 ## What the next session should do
 
 1. **Confirm the Task 2 change in a ROS-capable environment.** Collect and run
@@ -265,11 +307,10 @@ environment should re-run `scripts/format_docstrings.py` on them.
    `giskardpy/src/giskardpy/motion_statechart/tasks/pouring.py`,
    `giskardpy/src/giskardpy/qp/{terminal_state_prediction_strategy,constraint_collection}.py`,
    and the two new giskardpy test files.
-4. **Task 1 follow-through for WP1:** when authoring `TransferSituation`, keep it a frozen dataclass
-   for the thread hand-off (§2.3) but build a *mutable* working copy reasoner-side inside inference
-   before `classify` — a frozen dataclass used directly as the RDR `Case` either crashes or leaks
-   conclusions into the shared object (item 1 above). Add a regression once `TransferSituation`
-   exists.
+4. **Author the real substance-transfer theory on top of the slice-1 framework.** `TransferSituation`
+   subclasses `Situation` (frozen), and `SubstanceTransferTheory` is a `MultiClassRDRTheory` — the
+   mutable-working-copy handling (spike item 1) is already done by the framework, so this is rule
+   authoring plus the grounding, not engine plumbing. Reuse the mimic-theory test as the pattern.
 5. **Run the substance-transfer theory from the in-memory MCRDR tree** at control rate; item 3 shows
    ~10 Hz is cleared by ~200×–2800×, so the generated-code path is an optimization, not a
    requirement. If it is ever shipped as generated code, regenerate with the *current* writer (the
