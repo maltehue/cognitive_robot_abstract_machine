@@ -50,9 +50,16 @@ class TerminalFillConstraintTask(Task, ABC):
     reports convergence once the fill reaches the goal and its rate has settled to zero.
     """
 
-    goal_value: float
+    goal_value: sm.ScalarData
     """
     Target fill level to achieve in terms of percentage.
+
+    A registered :class:`~krrood.symbolic_math.symbolic_math.FloatVariable` may be passed instead of a
+    plain float, so the goal can be retargeted at runtime through the QP's float-variable channel
+    without recompiling the terminal-state row.
+
+    .. warning:: A symbolic goal has no faithful ORM column (ormatic emits none for a ``ScalarData``
+        field) and cannot be JSON-serialized, so a task carrying one is local-only.
     """
 
     fill_level_tolerance: float
@@ -115,12 +122,32 @@ class TerminalFillConstraintTask(Task, ABC):
         """
 
     @abstractmethod
-    def _fill_goal_reached(self, fill_level: float) -> bool:
+    def _fill_goal_reached(self, fill_level: float, goal_value: float) -> bool:
         """
         Whether the fill level has reached the goal in the task's fill direction.
 
         :param fill_level: The current normalized fill level.
+        :param goal_value: The current goal fill level as a live float.
         """
+
+    def _current_goal_value(self, context: MotionStatechartContext) -> float:
+        """
+        Reads the goal as a live float, resolving a symbolic goal through the float-variable channel.
+
+        A plain-float goal is returned as is; a registered
+        :class:`~krrood.symbolic_math.symbolic_math.FloatVariable` is read through
+        :meth:`~krrood.symbolic_math.float_variable_data.FloatVariableData.get_value` so no symbolic
+        comparison is attempted at tick time.
+
+        :param context: The runtime context holding the float-variable data.
+        :return: The current goal fill level.
+        """
+        goal_value = self.goal_value
+        if isinstance(goal_value, sm.FloatVariable):
+            return float(context.float_variable_data.get_value(goal_value))
+        if isinstance(goal_value, sm.SymbolicMathType):
+            return float(goal_value.evaluate().item())
+        return float(goal_value)
 
     def build(self, context: MotionStatechartContext) -> NodeArtifacts:
         """
@@ -174,7 +201,8 @@ class TerminalFillConstraintTask(Task, ABC):
         fill_level = float(self.fill_connection.position)
         fill_rate = float(self._compiled_fill_velocity.evaluate()[0])
         rate_settled = -self.outflow_tolerance < fill_rate < self.outflow_tolerance
-        if rate_settled and self._fill_goal_reached(fill_level):
+        goal_value = self._current_goal_value(context)
+        if rate_settled and self._fill_goal_reached(fill_level, goal_value):
             return ObservationStateValues.TRUE
         return None
 
@@ -237,8 +265,8 @@ class PouringTask(TerminalFillConstraintTask):
             )
         )
 
-    def _fill_goal_reached(self, fill_level: float) -> bool:
-        return fill_level <= self.goal_value + self.fill_level_tolerance
+    def _fill_goal_reached(self, fill_level: float, goal_value: float) -> bool:
+        return fill_level <= goal_value + self.fill_level_tolerance
 
 
 @dataclass(eq=False, repr=False)
@@ -277,8 +305,8 @@ class FillByTransferTask(TerminalFillConstraintTask):
         inflow_equation = self.fill_connection.inflow_equation
         return inflow_equation.symbolic_velocity(self.fill_connection)
 
-    def _fill_goal_reached(self, fill_level: float) -> bool:
-        return fill_level >= self.goal_value - self.fill_level_tolerance
+    def _fill_goal_reached(self, fill_level: float, goal_value: float) -> bool:
+        return fill_level >= goal_value - self.fill_level_tolerance
 
 
 @dataclass(eq=False, repr=False)

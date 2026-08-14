@@ -173,8 +173,13 @@ class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
     state_variable: Scalar = field(kw_only=True)
     """Symbolic current state x₀ (passive DOF position variable); the rate is differentiated w.r.t. it."""
 
-    goal_value: float = field(kw_only=True)
-    """Target state value at the end of the horizon."""
+    goal_value: sm.ScalarData = field(kw_only=True)
+    """Target state value at the end of the horizon.
+
+    May be a registered :class:`~krrood.symbolic_math.symbolic_math.FloatVariable`, so the goal is a
+    live QP parameter that retargets the terminal bound without recompiling; the bound reads it
+    through ``sm.Scalar(goal_value)`` either way.
+    """
 
     bound: Scalar = field(default_factory=lambda: sm.Scalar(0.0), kw_only=True)
     """Unused inherited equality bound; the strategy computes the terminal bound ``goal − x_free`` instead."""

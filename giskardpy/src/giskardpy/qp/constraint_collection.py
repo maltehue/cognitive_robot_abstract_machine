@@ -329,7 +329,7 @@ class ConstraintCollection:
         self,
         state_velocity: sm.SymbolicScalar,
         state_variable: sm.SymbolicScalar,
-        goal_value: float,
+        goal_value: sm.ScalarData,
         quadratic_weight: sm.ScalarData,
         reference_velocity: sm.ScalarData,
         name: Optional[str] = None,
@@ -353,7 +353,9 @@ class ConstraintCollection:
             point; its jacobian w.r.t. the joint variables drives the prediction.
         :param state_variable: Symbolic current state x₀ (passive DOF position
             variable).
-        :param goal_value: Target state value at the end of the horizon.
+        :param goal_value: Target state value at the end of the horizon; a registered
+            :class:`~krrood.symbolic_math.symbolic_math.FloatVariable` retargets it at runtime with
+            no recompile.
         :param quadratic_weight: Cost weight for violating the constraint.
         :param reference_velocity: Expected state change rate; used for normalization
             and bound capping.
