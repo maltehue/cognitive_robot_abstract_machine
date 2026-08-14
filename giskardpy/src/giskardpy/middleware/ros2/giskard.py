@@ -20,6 +20,7 @@ from giskardpy.middleware.ros2.cycle_counter import CycleCounter
 from giskardpy.middleware.ros2.input_synchronization import WorldStateInputs
 from giskardpy.middleware.ros2.motion_server import MotionServer
 from giskardpy.middleware.ros2.post_goal_plotters import (
+    GoalControlCycleRecorder,
     GoalGanttChartPlotter,
     GoalTrajectoryPlotter,
     MotionStatechartPlotter,
@@ -164,6 +165,8 @@ class Giskard:
             plotters.append(GoalGanttChartPlotter(executor=self.executor))
         if self.server_config.plot_motion_statechart:
             plotters.append(MotionStatechartPlotter(executor=self.executor))
+        if self.server_config.record_control_cycles:
+            plotters.append(GoalControlCycleRecorder(executor=self.executor))
         for plotter in plotters:
             plotter.start_recording()
         return plotters

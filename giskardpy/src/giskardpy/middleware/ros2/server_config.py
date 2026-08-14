@@ -54,6 +54,15 @@ class GiskardServerConfig:
     Draw the structure of every executed motion statechart, requires ``debug_mode``.
     """
 
+    record_control_cycles: bool = False
+    """
+    Record what every control cycle asked of the quadratic program, requires
+    ``debug_mode``.
+
+    .. note:: The recording is written on the machine that runs Giskard and is read with
+        :mod:`giskardpy.qp.constraint_inspector`.
+    """
+
     idle_frequency: float = 20.0
     """
     Frequency in hertz at which Giskard waits for goals.

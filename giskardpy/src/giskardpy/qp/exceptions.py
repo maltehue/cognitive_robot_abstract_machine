@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing_extensions import TYPE_CHECKING, Type
 
 from giskardpy.data_types.exceptions import GiskardException, DontPrintStackTrace
+from giskardpy.qp.qp_data import QPDataExplicit
 
 if TYPE_CHECKING:
     from giskardpy.qp.constraint import GiskardConstraint
@@ -233,3 +234,78 @@ class NoFactoryForQPDataTypeError(QPSolverException):
 
     def suggest_correction(self) -> str:
         return ""
+
+
+# %% control cycle recording
+
+
+@dataclass
+class UnrecordableQPDataFormatError(QPSolverException):
+    """
+    Raised when control cycles are recorded from a quadratic program whose format keeps
+    no separate equality and inequality blocks.
+    """
+
+    qp_data_type: Type[QPData]
+    """
+    The QPData type that was handed to the recorder.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Control cycles can only be recorded from {QPDataExplicit.__name__}, "
+            f"but the solver produced {self.qp_data_type.__name__}."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "configure a solver that uses the explicit format, for example "
+            "QPSolverPIQP, or turn the control cycle recording off."
+        )
+
+
+@dataclass
+class EmptyControlCycleRecordingError(QPSolverException):
+    """
+    Raised when a recording is built from a recorder that has not seen a control cycle.
+    """
+
+    def error_message(self) -> str:
+        return "No control cycle was recorded."
+
+    def suggest_correction(self) -> str:
+        return (
+            "attach the recorder before compiling the motion statechart and make sure "
+            "the motion ticks at least once."
+        )
+
+
+@dataclass
+class UnknownRecordingFormatVersionError(QPSolverException):
+    """
+    Raised when a stored recording was written by an incompatible format version.
+    """
+
+    file_path: str
+    """
+    The recording that was read.
+    """
+
+    found_version: int
+    """
+    The format version the file declares.
+    """
+
+    expected_version: int
+    """
+    The format version this code writes and reads.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"{self.file_path} declares control cycle recording format version "
+            f"{self.found_version}, but version {self.expected_version} was expected."
+        )
+
+    def suggest_correction(self) -> str:
+        return "record the motion again with the current version."

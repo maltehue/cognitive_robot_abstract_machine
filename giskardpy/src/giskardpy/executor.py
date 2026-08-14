@@ -9,6 +9,7 @@ from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.plotters.debug_expression_trajectory_plotter import (
     DebugExpressionTrajectoryPlotter,
 )
+from giskardpy.qp.control_cycle_recording import ControlCycleRecorder
 from giskardpy.qp.exceptions import EmptyProblemException
 from giskardpy.qp.qp_controller import QPController
 from giskardpy.qp.qp_controller_config import QPControllerConfig
@@ -133,6 +134,11 @@ class Executor:
     Records and plots how the debug expressions evolved during the motion.
     """
 
+    control_cycle_recorder: ControlCycleRecorder | None = field(default=None)
+    """
+    Records what every control cycle asked of the quadratic program and got back.
+    """
+
     pacer: Pacer = field(default_factory=NoPacing)
     """
     Paces the loop that ticks this executor.
@@ -182,6 +188,11 @@ class Executor:
         self.control_cycles = 0
         self.motion_statechart.compile(self.context)
         self._compile_qp_controller(self.context.qp_controller_config)
+        if self.control_cycle_recorder is not None and self.qp_controller is not None:
+            self.control_cycle_recorder.reset(
+                self.qp_controller.qp_data_factory.qp_data,
+                [str(dof_id) for dof_id in self.context.world.state],
+            )
         if self.trajectory_plotter is not None:
             self.trajectory_plotter.reset(self.context.world.state, self.time)
         if self.debug_expression_plotter is not None:
@@ -202,13 +213,17 @@ class Executor:
             self.debug_expression_plotter.debug_expression_trajectory.append(self.time)
         if self.qp_controller is None:
             return
-        next_cmd = self.qp_controller.compute_command(
+        solution = self.qp_controller.compute_command(
             world_state=self.context.world.state._data,
             life_cycle_state=self.motion_statechart.life_cycle_state.data,
             float_variables=self.context.float_variable_data.data,
         )
+        if self.control_cycle_recorder is not None:
+            self.control_cycle_recorder.record(
+                self.time, solution, self.context.world.state.positions
+            )
         self.context.world.apply_control_commands(
-            next_cmd,
+            solution.control_commands,
             self.qp_controller.config.control_dt,
             self.qp_controller.config.max_derivative,
         )

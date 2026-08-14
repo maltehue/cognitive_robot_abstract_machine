@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from giskardpy.executor import Executor
 from giskardpy.middleware.ros2 import rospy
+from giskardpy.qp.control_cycle_recording import ControlCycleRecorder
 from giskardpy.utils.utils import create_path
 from semantic_digital_twin.world_description.world_state_trajectory_plotter import (
     WorldStateTrajectoryPlotter,
@@ -38,13 +39,15 @@ class PostGoalPlotter(ABC):
         Plot the data recorded for the goal with the given id.
         """
 
-    def create_file_name(self, folder_name: str, goal_id: int) -> str:
+    def create_file_name(
+        self, folder_name: str, goal_id: int, extension: str = ".pdf"
+    ) -> str:
         """
-        Build the path of a per-goal pdf inside the temporary directory and make sure
+        Build the path of a per-goal file inside the temporary directory and make sure
         its folder exists.
         """
         file_name = os.path.join(
-            tempfile.gettempdir(), folder_name, f"goal_{goal_id}.pdf"
+            tempfile.gettempdir(), folder_name, f"goal_{goal_id}{extension}"
         )
         create_path(file_name)
         return file_name
@@ -95,6 +98,35 @@ class GoalGanttChartPlotter(PostGoalPlotter):
             context=self.executor.context,
             second_length_in_cm=self.second_length_in_cm,
         )
+        rospy.node.get_logger().info(f"saved {file_name}")
+
+
+@dataclass
+class GoalControlCycleRecorder(PostGoalPlotter):
+    """
+    Writes what every control cycle asked of the quadratic program to a file.
+
+    The result is read by
+    :mod:`giskardpy.qp.constraint_inspector`, which scrubs through the motion cycle by
+    cycle instead of summarizing it into a single plot.
+    """
+
+    control_cycle_recorder: ControlCycleRecorder = field(
+        default_factory=ControlCycleRecorder
+    )
+    """
+    Collects the cycles while the executor ticks; only recorded once
+    :meth:`start_recording` handed it to the executor.
+    """
+
+    def start_recording(self) -> None:
+        self.executor.control_cycle_recorder = self.control_cycle_recorder
+
+    def plot(self, goal_id: int) -> None:
+        if not self.control_cycle_recorder.has_recorded_cycles:
+            return
+        file_name = self.create_file_name("control_cycles", goal_id, extension=".npz")
+        self.control_cycle_recorder.build_recording().save(file_name)
         rospy.node.get_logger().info(f"saved {file_name}")
 
 

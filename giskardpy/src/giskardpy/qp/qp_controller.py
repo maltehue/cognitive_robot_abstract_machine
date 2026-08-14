@@ -8,6 +8,7 @@ import numpy as np
 
 import krrood.symbolic_math.symbolic_math as sm
 from giskardpy.qp.constraint_collection import ConstraintCollection
+from giskardpy.qp.control_cycle_solution import ControlCycleSolution
 from giskardpy.qp.qp_data_factories import QPDataFactory
 from giskardpy.qp.qp_data_symbolic import QPDataSymbolic
 from giskardpy.qp.qp_debugger import QuadraticProgramDebugger
@@ -112,16 +113,23 @@ class QPController:
         world_state: np.ndarray,
         life_cycle_state: np.ndarray,
         float_variables: np.ndarray,
-    ) -> np.ndarray:
+    ) -> ControlCycleSolution:
         """
         Uses substitutions for each symbol to compute the next commands for each joint.
+
+        The solved problem is returned alongside its commands so diagnostics can explain
+        the commands without evaluating or solving anything a second time.
         """
         qp_data_raw = self.qp_data_factory.evaluate(
             world_state, life_cycle_state, float_variables
         )
         qp_data_filtered = qp_data_raw.apply_filters()
         solution = self.qp_solver.solver_call(qp_data_filtered)
-        return self.xdot_to_control_commands(solution)
+        return ControlCycleSolution(
+            control_commands=self.xdot_to_control_commands(solution),
+            qp_data=qp_data_raw,
+            decision_variables=solution,
+        )
 
     def xdot_to_control_commands(self, xdot: np.ndarray) -> np.ndarray:
         offset = len(self.active_dofs) * (self.config.prediction_horizon - 2)
