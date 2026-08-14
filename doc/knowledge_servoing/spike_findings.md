@@ -247,40 +247,35 @@ environment should re-run `scripts/format_docstrings.py` on them.
 
 ## WP1 — reasoning framework (slice 1, post-spike)
 
-Built the plan's domain-agnostic framework interface layer (§2.5.1) plus a concrete MCRDR-backed
-theory, on the reasoning side only — no controller, no QP, no pouring vocabulary, no ROS. Fully
-runnable and verified here.
+Built the plan's domain-agnostic framework interface layer (§2.5.1) plus a single concrete theory, on
+the reasoning side only — no controller, no QP, no pouring vocabulary, no ROS. Fully runnable and
+verified here.
 
 New package `semantic_digital_twin/.../reasoning/knowledge_servoing/`:
 
 - `interfaces.py` — `Situation` (frozen), `ControlDecision` → `RegimeDecision`/`ParameterDecision`
-  (the two write channels), `DecisionSet` (with `of_type`/`contains_type`), `SituationGrounding` and
-  `SymbolicTheory` (the latter declares `decision_types` for the future binding policy's build-time
-  checks).
-- `multi_class_rdr_theory.py` — `MultiClassRDRTheory` presents a krrood `MultiClassRDR` behind
-  `SymbolicTheory`. It classifies each frozen situation through a mutable `ClassificationCase`
-  wrapper (`case.situation.<fact>` for reads, `case.conclusions` for chaining), which is the direct
-  application of the spike's item 1: a frozen dataclass cannot be classified in place, so the
-  situation is wrapped in a mutable case whose `copy_case` isolates the accumulator and leaves the
-  frozen situation untouched.
-- `general_rdr_theory.py` — `GeneralRDRTheory` presents a krrood `GeneralRDR` behind the same
-  interface. `GeneralRDR` is the engine-level counterpart of the plan's *multiple coexisting decision
-  families/theories* (§2.5, §4.1.1's `GeneralRDR` note): it composes one sub-classifier per family
-  and re-runs them to a fixpoint, so a rule in one family can chain on a conclusion another family
-  reached — richer than MCRDR's single-pass chaining. Its working copy carries one accumulator per
-  family (built from the classifier's family names via `make_dataclass`), because
-  `general_rdr_classify` writes each family's conclusions back into the case between rounds. A shared
-  `RippleDownRulesTheory` base and a `DecisionSet.from_conclusions` constructor keep the two adapters
-  free of duplication. Verified against a general-RDR variant of the mimic gauge theory: cross-family
-  chaining, a defeater cascading across families, engine-agreement with the MCRDR mimic on the same
-  situation, and the frozen situation left untouched — part of the **14 passed** in
-  `test_knowledge_servoing_framework.py`.
+  (the two write channels), `DecisionSet` (with `of_type`/`contains_type`/`from_conclusions`),
+  `SituationGrounding` and `SymbolicTheory` (the latter declares `decision_types` for the future
+  binding policy's build-time checks).
+- `general_rdr_theory.py` — `GeneralRDRTheory` is the **only** theory adapter. A `GeneralRDR`
+  composes one sub-classifier per decision family and re-runs them to a fixpoint, so a rule in one
+  family can chain on a conclusion another family reached (§2.5, §4.1.1's `GeneralRDR` note). A
+  `GeneralRDR` with a single sub-classifier is exactly a `MultiClassRDR`, so this one engine subsumes
+  the multi-class case — the earlier separate `MultiClassRDRTheory` adapter and its base class were
+  removed as needless surface area (**decision, at the user's request: keep it simple**). It
+  classifies each frozen situation through a mutable working copy carrying one accumulator per family
+  (built from the classifier's family names via `make_dataclass`), because `general_rdr_classify`
+  writes each family's conclusions back into the case between rounds. This is the direct application
+  of the spike's item 1: a frozen dataclass cannot be classified in place (it crashes or leaks), so
+  the situation is wrapped in a mutable case whose `copy_case` isolates the accumulators and leaves
+  the frozen situation untouched. Rules read facts as `case.situation.<fact>` and other families'
+  conclusions as `case.<family>`.
 
 Verified by `test/semantic_digital_twin_test/test_reasoning/test_knowledge_servoing_framework.py`
-against a domain-free mimic gauge theory (`knowledge_servoing_mimic.py`): both channels, a defeater,
-intra-pass chaining, aggregation across situations, `DecisionSet` channel filtering, and that
-inference does not mutate the frozen situation (with the general-RDR cases below, **14 passed**). The
-9 failures elsewhere in
+against a domain-free mimic gauge theory (`knowledge_servoing_mimic.py`, a regime family and a
+parameter family): both write channels, a defeater cascading across families, intra-family and
+cross-family chaining, aggregation across situations, `DecisionSet` channel filtering, and that
+inference does not mutate the frozen situation — **9 passed**. The 9 failures elsewhere in
 `test_reasoning` (`test_bmp_predicates.py`) are pre-existing stale-API breakage
 (`create_with_new_body_in_world` no longer takes `active_axis`), unrelated to this change and left
 untouched.
@@ -321,7 +316,7 @@ Two things recorded for the next session:
    `giskardpy/src/giskardpy/qp/{terminal_state_prediction_strategy,constraint_collection}.py`,
    and the two new giskardpy test files.
 4. **Author the real substance-transfer theory on top of the slice-1 framework.** `TransferSituation`
-   subclasses `Situation` (frozen), and `SubstanceTransferTheory` is a `MultiClassRDRTheory` — the
+   subclasses `Situation` (frozen), and `SubstanceTransferTheory` is a `GeneralRDRTheory` — the
    mutable-working-copy handling (spike item 1) is already done by the framework, so this is rule
    authoring plus the grounding, not engine plumbing. Reuse the mimic-theory test as the pattern.
 5. **Run the substance-transfer theory from the in-memory MCRDR tree** at control rate; item 3 shows
