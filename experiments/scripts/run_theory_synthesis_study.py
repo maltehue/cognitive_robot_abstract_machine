@@ -26,6 +26,11 @@ def main() -> None:
         help="Where each sentence's artifacts are written.",
     )
     parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Publish each run's world to RViz while it executes.",
+    )
+    parser.add_argument(
         "--model",
         default=None,
         help="Model identifier to pin, or the command line's default when omitted.",
@@ -33,7 +38,8 @@ def main() -> None:
     arguments = parser.parse_args()
 
     study = SynthesisStudy(
-        generator_factory=lambda: ClaudeCommandLineGenerator(model=arguments.model)
+        generator_factory=lambda: ClaudeCommandLineGenerator(model=arguments.model),
+        visualize=arguments.visualize,
     )
     for outcome in study.run():
         sentence_directory = arguments.output_directory / outcome.sentence.identifier

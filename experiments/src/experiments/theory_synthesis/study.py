@@ -202,6 +202,9 @@ class SynthesisStudy:
     generator_factory: Callable[[], SpecificationGenerator]
     """Builds a fresh generator per sentence, so sentences cannot leak into each other."""
 
+    visualize: bool = False
+    """Whether to publish each run's world to RViz while it executes."""
+
     def run(self) -> List[SentenceOutcome]:
         """Runs every sentence of the study.
 
@@ -256,6 +259,13 @@ class SynthesisStudy:
         :param outcome: The record the run is written into.
         """
         scenario = build_transfer_scenario()
+        visualization = None
+        if self.visualize:
+            from experiments.knowledge_servoing.visualization import (
+                WorldVisualization,
+            )
+
+            visualization = WorldVisualization.attach(scenario.world)
         statechart = MotionStatechart()
         assembler = TheoryChartAssembler(
             catalog=build_transfer_catalog(), world=scenario.world
@@ -297,6 +307,8 @@ class SynthesisStudy:
         outcome.final_fill_level = float(scenario.receiving_cup.fill_level)
         outcome.control_cycles = float(executor.control_cycles)
         outcome.decision_transcript = str(transcript)
+        if visualization is not None:
+            visualization.close()
 
 
 def _inert_goal_grounding(scenario: TransferScenario) -> TransferSituationGrounding:

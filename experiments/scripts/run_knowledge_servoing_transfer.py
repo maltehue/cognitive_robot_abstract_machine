@@ -27,6 +27,11 @@ def main() -> None:
         help="Where to write the Gantt chart and transcripts.",
     )
     parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Publish the run's world to RViz while it executes.",
+    )
+    parser.add_argument(
         "--requested-fill-level",
         type=float,
         default=REQUESTED_FILL_LEVEL,
@@ -36,10 +41,17 @@ def main() -> None:
     arguments.output_directory.mkdir(parents=True, exist_ok=True)
 
     scenario = build_transfer_scenario()
+    visualization = None
+    if arguments.visualize:
+        from experiments.knowledge_servoing.visualization import WorldVisualization
+
+        visualization = WorldVisualization.attach(scenario.world)
     demonstration = build_transfer_demonstration(
         scenario, requested_fill_level=arguments.requested_fill_level
     )
     demonstration.run()
+    if visualization is not None:
+        visualization.close()
 
     gantt_path = arguments.output_directory / "knowledge_servoing_gantt.pdf"
     demonstration.plot_gantt_chart(str(gantt_path))
