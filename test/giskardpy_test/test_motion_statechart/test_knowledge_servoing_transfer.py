@@ -27,6 +27,9 @@ from giskardpy.motion_statechart.knowledge_servoing.decision_binding_policy impo
     DecisionBindingPolicy,
 )
 from giskardpy.motion_statechart.knowledge_servoing.decision_slot import DecisionSlot
+from giskardpy.motion_statechart.knowledge_servoing.decision_transcript import (
+    DecisionTranscript,
+)
 from giskardpy.motion_statechart.knowledge_servoing.symbolic_theory_node import (
     SymbolicTheoryNode,
 )
@@ -254,3 +257,55 @@ class TestReasonerDrivenTransfer:
         executor, transfer, pour_monitor, _goal, _cup = transfer_statechart
         assert pour_monitor.observation_state == ObservationStateValues.UNKNOWN
         assert transfer.life_cycle_state == LifeCycleValues.NOT_STARTED
+
+
+class TestTransferDecisionTranscript:
+    """Whether a completed run can be explained afterwards in the theory's own vocabulary."""
+
+    def test_the_transcript_records_the_regime_sequence_of_a_full_transfer(
+        self, transfer_statechart
+    ):
+        executor, _transfer, _pour_monitor, _goal, receiving_cup = transfer_statechart
+        transcript = DecisionTranscript()
+        decision_slot = next(
+            node.decision_slot
+            for node in executor.motion_statechart.nodes
+            if isinstance(node, SymbolicTheoryNode)
+        )
+
+        for control_cycle in range(2000):
+            executor.tick()
+            transcript.record(decision_slot.latest, control_cycle)
+            if executor.motion_statechart.is_end_motion():
+                break
+
+        assert transcript.cycle_of_first(AlignSourceOverReceiver) is not None
+        assert transcript.cycle_of_first(PourIntoReceiver) > transcript.cycle_of_first(
+            AlignSourceOverReceiver
+        )
+        assert transcript.cycle_of_first(ConcludeTransfer) > transcript.cycle_of_first(
+            PourIntoReceiver
+        )
+        assert transcript.cycle_of_first(AbandonTransfer) is None
+
+    def test_the_transcript_records_the_goal_the_theory_supplied(
+        self, transfer_statechart
+    ):
+        executor, _transfer, pour_monitor, _goal, _cup = transfer_statechart
+        transcript = DecisionTranscript()
+        decision_slot = next(
+            node.decision_slot
+            for node in executor.motion_statechart.nodes
+            if isinstance(node, SymbolicTheoryNode)
+        )
+
+        while pour_monitor.observation_state != ObservationStateValues.TRUE:
+            executor.tick()
+            transcript.record(decision_slot.latest, executor.control_cycles)
+
+        [retarget] = [
+            decision
+            for decision in transcript.changes[-1].decisions
+            if isinstance(decision, RetargetFillLevel)
+        ]
+        assert retarget.goal_fill_level == pytest.approx(REQUESTED_FILL_LEVEL)
