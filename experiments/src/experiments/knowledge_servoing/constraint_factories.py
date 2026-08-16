@@ -22,12 +22,14 @@ from giskardpy.motion_statechart.knowledge_servoing.constraint_catalog import (
 )
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianVelocityLimit
+from giskardpy.motion_statechart.tasks.keep_clear import MaintainHorizontalClearance
 from giskardpy.motion_statechart.tasks.pouring import (
     FillByTransferTask,
     KeepProjectileInReceiver,
     KeepSourceRimAboveReceiverRim,
 )
 from semantic_digital_twin.reasoning.knowledge_servoing.constraint_declarations import (
+    HorizontalClearanceDeclaration,
     MotionAbortDeclaration,
     ToolSpeedLimitDeclaration,
 )
@@ -144,6 +146,24 @@ def _tool_speed_limit(
     )
 
 
+def _horizontal_clearance(
+    declaration: HorizontalClearanceDeclaration, world: World
+) -> ConstraintInstantiation:
+    """
+    Builds the planar keep-clear between a named annotation's body and a named body.
+    """
+    subject = world.get_semantic_annotation_by_name(declaration.subject_name)
+    return ConstraintInstantiation(
+        node=MaintainHorizontalClearance(
+            name=declaration.identifier,
+            root_link=world.root,
+            subject_link=subject.root,
+            obstacle_link=world.get_body_by_name(declaration.obstacle_name),
+            minimum_clearance=declaration.minimum_clearance,
+        )
+    )
+
+
 def _motion_abort(
     declaration: MotionAbortDeclaration, world: World
 ) -> ConstraintInstantiation:
@@ -170,5 +190,6 @@ def build_transfer_catalog() -> ConstraintCatalog:
     catalog.register(TransferQuantityDeclaration, _transfer_quantity)
     catalog.register(ReturnUprightDeclaration, _return_upright)
     catalog.register(ToolSpeedLimitDeclaration, _tool_speed_limit)
+    catalog.register(HorizontalClearanceDeclaration, _horizontal_clearance)
     catalog.register(MotionAbortDeclaration, _motion_abort)
     return catalog

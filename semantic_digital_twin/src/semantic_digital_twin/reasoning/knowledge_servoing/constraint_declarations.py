@@ -86,6 +86,28 @@ class ToolSpeedLimitDeclaration(ConstraintDeclaration):
 
 
 @dataclass(frozen=True)
+class HorizontalClearanceDeclaration(ConstraintDeclaration):
+    """
+    Keep a named annotation's body at least a planar distance from a named object.
+    """
+
+    subject_name: str = field(kw_only=True)
+    """
+    Name of the annotation whose body is kept clear.
+    """
+
+    obstacle_name: str = field(kw_only=True)
+    """
+    Name of the body to keep clear of.
+    """
+
+    minimum_clearance: float = field(kw_only=True)
+    """
+    Lower bound on the planar distance, in metres.
+    """
+
+
+@dataclass(frozen=True)
 class MotionAbortDeclaration(ConstraintDeclaration):
     """Abort the whole motion when the gating decision is concluded.
 
@@ -99,6 +121,7 @@ class MotionAbortDeclaration(ConstraintDeclaration):
 
 GENERIC_DECLARATION_KINDS = {
     "tool_speed_limit": ToolSpeedLimitDeclaration,
+    "horizontal_clearance": HorizontalClearanceDeclaration,
     "motion_abort": MotionAbortDeclaration,
 }
 """The domain-free declaration kinds, by the name a specification declares them under."""

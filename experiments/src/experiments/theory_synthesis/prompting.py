@@ -54,12 +54,19 @@ Express quantities as fill fractions of the receiving container, computed from t
 scene states. Answer with the JSON object only."""
 
 _REFERENCE_EXAMPLE = """\
+Write the quantities you computed into the rules themselves — for a target fill fraction of 0.33,
+compare case.situation.receiver_fill_level against 0.33 directly. The specification must be
+self-contained: it, not the surrounding system, knows what the instruction asked for.
+
 Example. Instruction: "Fill the bowl to about a third from the jug." — with the jug named
-example_jug and the bowl named example_bowl, a correct specification is:
+example_jug and the bowl named example_bowl, each holding 100 ml, a correct specification is:
 
 {
   "constraints": [
     {"identifier": "aim", "kind": "aimed_transfer",
+     "parameters": {"source_name": "example_jug", "receiver_name": "example_bowl"},
+     "gated_by": "Align"},
+    {"identifier": "rim_clearance", "kind": "rim_clearance",
      "parameters": {"source_name": "example_jug", "receiver_name": "example_bowl"},
      "gated_by": "Align"},
     {"identifier": "quantity", "kind": "transfer_quantity",
@@ -72,16 +79,21 @@ example_jug and the bowl named example_bowl, a correct specification is:
   ],
   "rules": [
     {"concludes": "Align",
-     "condition": "case.situation.near and not case.situation.goal_reached"},
+     "condition": "case.situation.near and case.situation.receiver_fill_level < 0.33"},
     {"concludes": "Pour",
-     "condition": "case.situation.opening_within and case.situation.source_above_receiver and not case.situation.goal_reached",
+     "condition": "case.situation.opening_within and case.situation.source_above_receiver and case.situation.receiver_fill_level < 0.33",
      "defeated_by": ["case.situation.receiver_overflowing"]},
-    {"concludes": "Finish", "condition": "case.situation.goal_reached"},
+    {"concludes": "Finish", "condition": "case.situation.receiver_fill_level >= 0.33"},
     {"concludes": "Abort", "condition": "case.situation.receiver_overflowing"},
     {"concludes": "SetGoal", "condition": "True",
      "requires_concluded": ["Pour"], "value": "0.33"}
   ]
-}"""
+}
+
+Always include the aim, rim_clearance, quantity and return_upright constraints for a transfer —
+they are what makes the pour physically executable. Add further constraints exactly when the
+instruction warrants them. If the instruction asks for something no constraint kind can express,
+answer with the JSON object {"constraints": [], "rules": []} and nothing else."""
 
 
 @dataclass(frozen=True)

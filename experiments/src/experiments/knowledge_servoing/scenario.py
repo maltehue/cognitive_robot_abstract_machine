@@ -61,6 +61,9 @@ class TransferScenario:
     sensitive_body: Body
     """A body beside the receiving cup that must not be spilled on."""
 
+    balance_body: Body
+    """A laboratory balance standing apart from the cups, to be kept clear of."""
+
     tool_frame: Body
     """The gripper frame the source cup is attached to."""
 
@@ -202,10 +205,29 @@ def build_transfer_scenario(
             )
         )
 
+    balance_body = Body.from_shape_collection(
+        shape_collection=ShapeCollection([Box(scale=Scale(0.2, 0.2, 0.05))]),
+        name=PrefixedName("balance"),
+    )
+    with world.modify_world():
+        world.add_body(balance_body)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=world.root,
+                child=balance_body,
+                name=PrefixedName("table_T_balance"),
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    1.0, 0.5, TABLE_SURFACE_HEIGHT
+                ),
+            )
+        )
+
     return TransferScenario(
         world=world,
         source_cup=source_cup,
         receiving_cup=receiving_cup,
         sensitive_body=sensitive_body,
+        balance_body=balance_body,
         tool_frame=tool_frame,
     )
