@@ -202,6 +202,108 @@ Two claims that the paper somewhat conflates, and that this plan keeps apart:
 The second is the stronger claim and the cheaper demonstration. The paper only ever showed the
 first.
 
+**Correction, 2026-08-16.** As built, "theory pluggability" is narrower than stated above: the
+statechart's *action vocabulary* is fixed by whoever assembles it, and the binding policy enforces
+the fit — `validate()` raises when a theory declares a decision no pre-declared node enacts. The
+contextual-safety theory reads as a clean demonstration only because its remedy, a velocity limit,
+was put in the chart by the assembler who already knew what it would conclude. What is genuinely
+pluggable is the **decision layer**: arbitrary facts, arbitrary rule structure, arbitrary decision
+vocabulary, choosing among constraints that already exist. §1.5 states the resolution.
+
+---
+
+### 1.5 Where this sits in the thesis arc
+
+Everything above serves one claim, and it is worth stating before the work packages, because it
+decides which of them matter.
+
+**The contribution is the target language for synthesis** — an interface expressive enough to
+specify both what a task means and how its effect must evolve, and constrained enough that what
+comes out of it can be checked before it runs. Not the reasoner, not the effect model, not the
+language model that will eventually write into it.
+
+#### 1.5.1 The two halves are failures of interface width in opposite directions
+
+| | narrow domain | general domain |
+|---|---|---|
+| **narrow interface** | — | the paper: any theory reducible to a 6-D end-effector twist. Adapts to context, cannot say *how much* |
+| **rich interface** | the VJDF: says exactly how a quantity evolves, but only where someone wrote the effect model | **this thesis: theories declare their own regime *and* effect constraints** |
+
+The paper's expressiveness is bounded by the twist; the VJDF's generality is bounded by hand-written
+effect models. Letting a theory declare the constraints it needs moves expressiveness into the
+constraint vocabulary, which extends without touching either the reasoner or the controller. That is
+also the resolution of §1.4's correction: the chart is assembled *from* the theories rather than the
+theories having to fit a chart, so `SymbolicTheory` gains a way to state the constraints it requires
+alongside the decisions it concludes.
+
+#### 1.5.2 Effect-model structure is hand-built; its parameters are open
+
+The honest boundary is not "effect models are hand-built" but "their *structure* is". Every effect
+model in this tree is already a parameterized family —
+`ArticulatedPouringEquation(container_height, container_width, outflow_rate_constant,
+discharge_coefficient)` — and those parameters have three distinct consumers:
+
+- **tuned**, by hand or by an experiment sweep (§6.2.1's mismatch sweep is exactly this);
+- **learned**, by distillation — the head surrogate path exists, and `test_pouring_learned` shows
+  the controller is agnostic to whether the head model is analytic or learned;
+- **reasoned about**, by a theory concluding a parameter the way it already concludes a fill goal.
+
+Only the third is missing: `goal_value` is a live float variable, but equation parameters are baked
+in when the coupling is built. Making them symbolic is the WP0 §3.1 pattern applied to the equations
+rather than the tasks.
+
+It is worth the work, because it produces the thesis's crispest single demonstration of the
+combination: *a viscous substance implies a lower outflow-rate constant*. A semantic annotation
+selects a dynamic parameter, which changes how the optimizer predicts the effect, which changes the
+motion — semantics to dynamics to motion in one rule, and neither half of the thesis can produce it
+alone. It also gives the expectation layer's model-audit job (§4.5) something to *do*: a measured
+flow diverging from the predicted one is a parameter to correct, not only a transfer to abandon.
+
+#### 1.5.3 The need: tasks neither half can execute
+
+The running example has to require both from the first chapter, or the combination reads as
+engineering. It requires both when a quantity must be hit precisely *and* which constraints hold
+depends on context: *"transfer 50 ml of reagent B into the flask; it is corrosive, so keep clear of
+the balance and pour slowly."* Theories alone give ~6 % on the quantity; effect models alone need
+someone to have foreseen the corrosive case when the goal was authored.
+
+Drawing the example set from real laboratory protocols rather than authoring it makes the input
+distribution independent of the person being evaluated, and the lab assets already in this tree make
+that cheap. Note the current two-theory demonstration is *nearly* this but not yet: its safety
+theory changes the speed, not the quantity. Making it change the quantity — a smaller aliquot or a
+tighter tolerance when the substance is hazardous — turns the necessity argument into one figure.
+
+#### 1.5.4 "Correct by construction" is two claims, and only one is by construction
+
+- **Well-formedness by construction.** Already true and already enforced: an unbound decision type,
+  a decision bound to the wrong channel, or a parameter target that was never registered all raise
+  at build time. A synthesized theory cannot produce an ill-formed controller. This is a property of
+  the interface and it is what makes synthesis into it safe.
+- **Semantic correctness by verification.** Not by construction — a language model can emit a
+  well-formed theory that is wrong. This is where the companion report's §4 pays off: `Causes`,
+  `SatisfiesRequest`, the typed-verdict hierarchy and the repair loop are already implemented. **The
+  final chapter is the marriage of report §4 and §5**, not a new component: synthesize into this
+  interface, check with those predicates, repair on the typed verdict. §4's designed
+  typed-versus-binary feedback ablation becomes the evaluation of the synthesis loop.
+
+#### 1.5.5 Boundaries to state, in the order an examiner will find them
+
+1. **Pre-declaration.** Constraints must exist before the motion compiles, so this is
+   plug-in-at-assembly, not mid-motion (§8.1). Accepted.
+2. **Effect-model structure.** Synthesis selects and parameterizes a model from the library; it does
+   not write a new one. Say which is claimed (§1.5.2).
+3. **The constraint vocabulary is a library with finite coverage.** A theory may declare constraints
+   of forms someone implemented, so "any task" means "any task expressible in the available
+   vocabulary". That makes coverage an *empirical* claim — of N protocol sentences, how many are
+   expressible and what do the failures share? — which is a better result than an unbounded
+   assertion.
+
+#### 1.5.6 What the arc still needs evidentially
+
+In order: the **necessity figure** (§1.5.3, a task needing both halves); the **precision result**
+(arms A vs B, §6.2, in progress); **synthesis tractability** into this interface; and the
+**coverage number** from §1.5.5.
+
 ---
 
 ## 2. Architecture
