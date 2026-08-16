@@ -54,19 +54,35 @@ _ALLOWED_NODE_TYPES = (
 The whole grammar a condition may use.
 """
 
+_SCALAR_ANNOTATIONS = {"bool", "float", "int", bool, float, int}
+"""
+The annotations that make a field or property a readable fact.
+"""
+
 
 def situation_fact_names(situation_type: Type[Situation]) -> FrozenSet[str]:
     """
-    The facts a situation type exposes: its fields plus its derived properties.
+    The scalar facts a situation type exposes: its bool and numeric fields and
+    properties.
+
+    Object-valued fields — the situation's subjects — are deliberately not facts: a
+    condition reasons about the situation's state, and reaching into a subject would be
+    a read of live world objects the validator could not bound.
 
     :param situation_type: The situation type conditions read from.
     :return: The readable fact names.
     """
-    names = {declared_field.name for declared_field in dataclass_fields(situation_type)}
+    names = {
+        declared_field.name
+        for declared_field in dataclass_fields(situation_type)
+        if declared_field.type in _SCALAR_ANNOTATIONS
+    }
     for klass in situation_type.__mro__:
         for attribute_name, attribute in vars(klass).items():
-            if isinstance(attribute, property):
-                names.add(attribute_name)
+            if isinstance(attribute, property) and attribute.fget is not None:
+                return_annotation = attribute.fget.__annotations__.get("return")
+                if return_annotation in _SCALAR_ANNOTATIONS:
+                    names.add(attribute_name)
     return frozenset(names)
 
 
