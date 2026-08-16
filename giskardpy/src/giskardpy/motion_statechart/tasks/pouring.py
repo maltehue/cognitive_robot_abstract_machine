@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Optional
 
 import krrood.symbolic_math.symbolic_math as sm
+from krrood.adapters.json_serializer import REJECTS_SYMBOLIC_VALUES
 from krrood.symbolic_math.symbolic_math import (
     CompiledFunction,
     Scalar,
@@ -50,7 +51,9 @@ class TerminalFillConstraintTask(Task, ABC):
     reports convergence once the fill reaches the goal and its rate has settled to zero.
     """
 
-    goal_value: sm.ScalarData
+    goal_value: sm.ScalarData = field(
+        metadata={REJECTS_SYMBOLIC_VALUES: True}, kw_only=False
+    )
     """
     Target fill level to achieve in terms of percentage.
 
@@ -132,7 +135,8 @@ class TerminalFillConstraintTask(Task, ABC):
 
     def _current_goal_value(self, context: MotionStatechartContext) -> float:
         """
-        Reads the goal as a live float, resolving a symbolic goal through the float-variable channel.
+        Reads the goal as a live float, resolving a symbolic goal through the float-
+        variable channel.
 
         A plain-float goal is returned as is; a registered
         :class:`~krrood.symbolic_math.symbolic_math.FloatVariable` is read through

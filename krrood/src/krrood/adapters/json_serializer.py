@@ -489,6 +489,36 @@ class NumpyNDarrayJSONSerializer(ExternalClassJSONSerializer[np.ndarray]):
         return np.array(data["data"], dtype=data["type"])
 
 
+# %% symbolic-value serialization opt-in
+
+REJECTS_SYMBOLIC_VALUES = "rejects_symbolic_values"
+"""
+Field metadata key marking a field that must never be serialized as a symbolic value.
+
+Declare it as ``field(metadata={REJECTS_SYMBOLIC_VALUES: True})`` on a field whose
+symbolic form carries meaning that JSON cannot express, so serialization fails loudly
+instead of writing a bare type marker that reads back as zero. Fields holding symbolic
+expressions as their normal content do not set it and serialize unchanged.
+"""
+
+
+def field_rejects_symbolic_values(clazz: Type, field_name: str) -> bool:
+    """
+    Whether a field opted out of being serialized as a symbolic value.
+
+    :param clazz: The dataclass owning the field.
+    :param field_name: Name of the field being serialized.
+    :return:``True`` if the field declared :data:`REJECTS_SYMBOLIC_VALUES`.
+    """
+    if not is_dataclass(clazz):
+        return False
+    return any(
+        field_.name == field_name
+        and field_.metadata.get(REJECTS_SYMBOLIC_VALUES, False)
+        for field_ in fields(clazz)
+    )
+
+
 @dataclass
 class DataclassJSONSerializer(ExternalClassJSONSerializer[None]):
     """
@@ -505,7 +535,11 @@ class DataclassJSONSerializer(ExternalClassJSONSerializer[None]):
         for field_ in introspector.discover(obj.__class__):
             value = getattr(obj, field_.public_name)
 
-            if isinstance(value, SymbolicMathType) and value.free_variables():
+            if (
+                isinstance(value, SymbolicMathType)
+                and value.free_variables()
+                and field_rejects_symbolic_values(obj.__class__, field_.public_name)
+            ):
                 raise SymbolicValueNotSerializableError(
                     field_name=field_.public_name, clazz=obj.__class__
                 )
