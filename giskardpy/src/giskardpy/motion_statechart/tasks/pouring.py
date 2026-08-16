@@ -28,6 +28,7 @@ from giskardpy.motion_statechart.graph_node import (
     NodeArtifacts,
     Task,
 )
+from giskardpy.qp.constraint import LargeNumber
 from semantic_digital_twin.physics.equations.pouring_equations import (
     GatedInflowEquation,
     PouringEquation,
@@ -518,3 +519,107 @@ class KeepSourceRimAboveReceiverRim(Task):
             sm.if_greater_eq(clearance, self.minimum_clearance, 1, 0),
         )
         return artifacts
+
+
+@dataclass(eq=False, repr=False)
+class BoundedPourHead(Task):
+    """
+    Keeps the liquid's head above the pouring lip within a bound.
+
+    The head is the height of the liquid surface above the lip, and it is what drives the pour:
+    the exit speed is Torricelli's law applied to it and the outflow rate is proportional to it.
+    Bounding it therefore bounds how hard the container pours, in the effect model's own terms —
+    the constraint names no end effector, no direction and no velocity, so the optimizer is free
+    to realize it however the embodiment allows.
+
+    Because the head depends on the fill level as well as the tilt, a fixed bound yields a
+    fill-dependent tilt limit without anyone writing that rule: a fuller container is held closer
+    to upright than an emptier one for the same allowed head.
+
+    .. warning:: Measured as ineffective against :class:`TerminalFillConstraintTask`. That task's
+        terminal-state row is an equality constraint unrolled over the whole prediction horizon,
+        while this is one soft inequality row on the current step, so the pour outweighs the bound
+        and the head runs far past it. Against motions driven by ordinary position goals the bound
+        holds at its limit. Combining a bounded head with a terminal fill goal needs the bound
+        enforced over the horizon too, which the current inequality builder does not do.
+    """
+
+    source: LiquidSource
+    """
+    The container whose pour is bounded.
+    """
+
+    maximum_head: sm.ScalarData = field(
+        metadata={REJECTS_SYMBOLIC_VALUES: True}, kw_only=True
+    )
+    """
+    Upper bound on the head above the lip, in metres.
+
+    May be a registered :class:`~krrood.symbolic_math.symbolic_math.FloatVariable`, so a theory can
+    tighten or relax the pour at runtime through the float-variable channel.
+    """
+
+    root_link: Body = field(kw_only=True)
+    """
+    Root of the kinematic chain the tilt is derived against; must be the world root.
+    """
+
+    reference_velocity: float = field(default=0.05, kw_only=True)
+    """
+    Reference rate of change of the head, in metres per second.
+    """
+
+    weight: float = field(
+        default=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE, kw_only=True
+    )
+    """
+    QP constraint weight for the head bound.
+    """
+
+    def build(self, context: MotionStatechartContext) -> NodeArtifacts:
+        """
+        Creates the one-sided constraint holding the head below its bound.
+
+        :param context: The build context.
+        :return: The generated task artifacts.
+        :raises RootLinkNotWorldRootError: if ``root_link`` is not the world root, since
+            the tilt the head depends on is only meaningful against the vertical world-
+            root frame.
+        """
+        if self.root_link is not context.world.root:
+            raise RootLinkNotWorldRootError(
+                node=self, root_link=self.root_link, world_root=context.world.root
+            )
+        artifacts = NodeArtifacts()
+        head = self._head_expression(context)
+        artifacts.constraints.add_inequality_constraint(
+            name=f"{self.name}_head_bound",
+            reference_velocity=self.reference_velocity,
+            lower_error=-LargeNumber,
+            upper_error=self.maximum_head - head,
+            quadratic_weight=self.weight,
+            task_expression=head,
+        )
+        artifacts.observation = head <= self.maximum_head
+        return artifacts
+
+    def _head_expression(self, context: MotionStatechartContext) -> Scalar:
+        """
+        Builds the symbolic head above the lip from the source's live kinematics and
+        fill.
+
+        :param context: The build context.
+        :return: Symbolic head above the lip, in metres.
+        """
+        fill_connection = context.world.get_connection(
+            self.source.fill_connection.parent, self.source.fill_connection.child
+        )
+        root_T_source = context.world.compose_forward_kinematics_expression(
+            self.root_link, self.source.root
+        )
+        return self.source.fill_equation.head_above_lip(
+            SymbolicFillContext(
+                tilt_expression=tilt_expression_from_fk(root_T_source),
+                fill_position=fill_connection.dof.variables.position,
+            )
+        )
