@@ -101,6 +101,20 @@ class TransferSituationGrounding(SituationGrounding[TransferSituation]):
     Compiled horizontal distance between the source's lip and the receiver's opening.
     """
 
+    _offset_forward: Optional[CompiledFunction] = field(
+        default=None, init=False, repr=False
+    )
+    """
+    Compiled signed lip-to-opening distance along world x, in metres.
+    """
+
+    _offset_left: Optional[CompiledFunction] = field(
+        default=None, init=False, repr=False
+    )
+    """
+    Compiled signed lip-to-opening distance along world y, in metres.
+    """
+
     _tilt: Optional[CompiledFunction] = field(default=None, init=False, repr=False)
     """
     Compiled tilt angle of the source, in radians.
@@ -136,6 +150,10 @@ class TransferSituationGrounding(SituationGrounding[TransferSituation]):
                 is_tilted=abs(float(self._tilt.evaluate()[0])) >= self.tilt_threshold,
                 pours_to=float(self._inflow_rate.evaluate()[0]) > self.inflow_threshold,
                 goal_reached=receiver_fill_level >= self.requested_fill_level,
+                almost_goal_reached=receiver_fill_level
+                >= self.requested_fill_level - self.fill_level_tolerance,
+                receiver_offset_forward=float(self._offset_forward.evaluate()[0]),
+                receiver_offset_left=float(self._offset_left.evaluate()[0]),
                 receiver_overflowing=receiver_fill_level >= 1.0 - self.overflow_margin,
             )
         ]
@@ -170,6 +188,12 @@ class TransferSituationGrounding(SituationGrounding[TransferSituation]):
                 + (source_lip.y - receiver_opening.y) ** 2
             ),
             world,
+        )
+        self._offset_forward = self._bound_to_world_state(
+            receiver_opening.x - source_lip.x, world
+        )
+        self._offset_left = self._bound_to_world_state(
+            receiver_opening.y - source_lip.y, world
         )
         self._tilt = self._bound_to_world_state(self.source.pour_tilt_expression, world)
         inflow_equation = self.receiver.fill_connection.inflow_equation

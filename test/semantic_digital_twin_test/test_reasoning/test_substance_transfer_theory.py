@@ -43,6 +43,9 @@ def situation(**overrides) -> TransferSituation:
         "is_tilted": True,
         "pours_to": True,
         "goal_reached": False,
+        "almost_goal_reached": False,
+        "receiver_offset_forward": 0.0,
+        "receiver_offset_left": 0.0,
         "receiver_overflowing": False,
     }
     facts.update(overrides)

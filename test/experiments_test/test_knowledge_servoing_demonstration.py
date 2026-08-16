@@ -12,6 +12,7 @@ import pytest
 from experiments.knowledge_servoing.demonstration import (
     FILL_LEVEL_TOLERANCE,
     REQUESTED_FILL_LEVEL,
+    build_primitive_arm_demonstration,
     build_transfer_demonstration,
 )
 from experiments.knowledge_servoing.scenario import build_transfer_scenario
@@ -78,3 +79,41 @@ class TestTransferDemonstration:
         chart_path = tmp_path / "gantt.pdf"
         completed_demonstration.plot_gantt_chart(str(chart_path))
         assert chart_path.stat().st_size > 0
+
+
+@pytest.fixture(scope="module")
+def completed_primitive_arm():
+    """
+    Runs the replication arm once, driven through the fixed-gain twist bridge.
+    """
+    if not tracy_installed():
+        pytest.skip("Tracy not installed")
+    demonstration = build_primitive_arm_demonstration(build_transfer_scenario())
+    demonstration.run(maximum_control_cycles=4000)
+    return demonstration
+
+
+class TestPrimitiveArm:
+    """
+    What the replication arm does with the same facts and a fixed-gain bridge.
+    """
+
+    def test_the_bridge_drives_a_real_transfer(self, completed_primitive_arm):
+        """
+        The commanded twist reaches the QP and moves substance, which is what makes the
+        arm a comparison rather than a straw man.
+        """
+        assert completed_primitive_arm.scenario.receiving_cup.fill_level > 0.1
+        assert completed_primitive_arm.scenario.source_cup.fill_level < 1.0
+
+    def test_the_fixed_gain_bridge_churns_far_more_than_the_regime_arm(
+        self, completed_primitive_arm, completed_demonstration
+    ):
+        """
+        Bang-bang primitives re-decide constantly around their thresholds where regime
+        decisions turn over a handful of times, which is the qualitative difference the
+        comparison measures.
+        """
+        primitive_changes = len(completed_primitive_arm.transfer_transcript.changes)
+        regime_changes = len(completed_demonstration.transfer_transcript.changes)
+        assert primitive_changes > 10 * regime_changes

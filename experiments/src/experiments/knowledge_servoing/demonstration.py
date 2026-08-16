@@ -32,6 +32,10 @@ from giskardpy.motion_statechart.knowledge_servoing.symbolic_theory_node import 
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianVelocityLimit
+from giskardpy.motion_statechart.tasks.commanded_velocity import (
+    CommandedTiltVelocity,
+    CommandedTranslationVelocity,
+)
 from giskardpy.motion_statechart.tasks.pouring import (
     FillByTransferTask,
     KeepProjectileInReceiver,
@@ -51,9 +55,21 @@ from semantic_digital_twin.reasoning.substance_transfer import (
     TransferSituationGrounding,
     build_substance_transfer_theory,
 )
+from semantic_digital_twin.reasoning.substance_transfer.motion_primitives import (
+    DecreaseTilt,
+    IncreaseTilt,
+    MoveBack,
+    MoveForward,
+    MoveLeft,
+    MoveRight,
+)
+from semantic_digital_twin.reasoning.substance_transfer.primitive_theory import (
+    build_motion_primitive_theory,
+)
 from semantic_digital_twin.spatial_types import Vector3
 
 from experiments.knowledge_servoing.scenario import TransferScenario
+from experiments.knowledge_servoing.twist_bridge import TwistBridgeNode
 
 REQUESTED_FILL_LEVEL = 0.4
 """Fill level the transfer theory is asked to reach."""
@@ -237,4 +253,84 @@ def build_transfer_demonstration(
         scenario=scenario,
         transfer_decisions=transfer_decisions,
         safety_decisions=safety_decisions,
+    )
+
+
+def build_primitive_arm_demonstration(
+    scenario: TransferScenario,
+    requested_fill_level: float = REQUESTED_FILL_LEVEL,
+) -> TransferDemonstration:
+    """Wires the replication arm: the same facts, driven through the fixed-gain twist bridge.
+
+    The reasoner, the grounding, the scene and the robot are the ones the regime arm uses. What
+    differs is the vocabulary the theory concludes and the bridge that turns it into motion, so a
+    difference in the outcome is attributable to the bridge.
+
+    :param scenario: The world to manipulate.
+    :param requested_fill_level: Fill level the theory is asked to reach.
+    :return: The compiled demonstration, ready to run.
+    """
+    world = scenario.world
+    translation = CommandedTranslationVelocity(
+        name="commanded_translation",
+        root_link=world.root,
+        tip_link=scenario.source_cup.root,
+    )
+    tilt = CommandedTiltVelocity(
+        name="commanded_tilt",
+        root_link=world.root,
+        tip_link=scenario.source_cup.root,
+    )
+
+    primitive_decisions = DecisionSlot()
+    bridge = TwistBridgeNode(
+        name="twist_bridge",
+        decision_slot=primitive_decisions,
+        translation=translation,
+        tilt=tilt,
+    )
+    goal_reached_monitor = ConcludedMonitor(
+        name="tilting_back",
+        decision_type=DecreaseTilt,
+        decision_slot=primitive_decisions,
+    )
+
+    policy = DecisionBindingPolicy()
+    for primitive in (
+        MoveForward,
+        MoveBack,
+        MoveLeft,
+        MoveRight,
+        IncreaseTilt,
+        DecreaseTilt,
+    ):
+        policy.activate(primitive, bridge)
+
+    theory_node = SymbolicTheoryNode(
+        name="primitive_theory",
+        grounding=TransferSituationGrounding(
+            source=scenario.source_cup,
+            receiver=scenario.receiving_cup,
+            requested_fill_level=requested_fill_level,
+            fill_level_tolerance=FILL_LEVEL_TOLERANCE,
+        ),
+        theory=build_motion_primitive_theory(),
+        binding_policy=policy,
+        decision_slot=primitive_decisions,
+    )
+
+    statechart = MotionStatechart()
+    for node in (theory_node, bridge, goal_reached_monitor, translation, tilt):
+        statechart.add_node(node)
+    statechart.add_node(EndMotion.when_true(goal_reached_monitor))
+
+    executor = Executor(
+        MotionStatechartContext(world=world), pacer=SimulationPacer(real_time_factor=1)
+    )
+    executor.compile(motion_statechart=statechart)
+    return TransferDemonstration(
+        executor=executor,
+        scenario=scenario,
+        transfer_decisions=primitive_decisions,
+        safety_decisions=primitive_decisions,
     )

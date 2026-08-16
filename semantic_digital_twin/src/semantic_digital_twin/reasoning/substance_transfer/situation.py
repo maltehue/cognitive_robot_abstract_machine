@@ -71,6 +71,26 @@ class TransferSituation(Situation):
     Whether the receiver has reached the requested fill level.
     """
 
+    almost_goal_reached: bool
+    """
+    Whether the receiver is within a band below the requested fill level.
+
+    Only the primitive rules use this: it is how the original theory anticipated the goal, and the
+    terminal-state row makes it redundant whenever its horizon outlasts the actuation.
+    """
+
+    receiver_offset_forward: float
+    """
+    Signed distance from the source's lip to the receiver's opening along world x, in
+    metres.
+    """
+
+    receiver_offset_left: float
+    """
+    Signed distance from the source's lip to the receiver's opening along world y, in
+    metres.
+    """
+
     receiver_overflowing: bool
     """
     Whether the receiver is at capacity, so further transfer would be lost.
