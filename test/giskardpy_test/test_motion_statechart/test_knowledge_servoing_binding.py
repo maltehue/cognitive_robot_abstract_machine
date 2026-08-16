@@ -1,9 +1,11 @@
-"""Binding a symbolic theory's decisions to the controller's two write channels.
+"""
+Binding a symbolic theory's decisions to the controller's two write channels.
 
-Exercises the statechart binding end to end without a robot: a theory node runs a (fake) theory each
-tick, publishes its decisions to a slot a :class:`ConcludedMonitor` reads (channel 1), and writes a
-parameter decision into a registered float variable through the :class:`DecisionBindingPolicy`
-(channel 2). The build-time checks that make the policy hard to misuse are pinned too.
+Exercises the statechart binding end to end without a robot: a theory node runs a (fake)
+theory each tick, publishes its decisions to a slot a :class:`ConcludedMonitor` reads
+(channel 1), and writes a parameter decision into a registered float variable through
+the :class:`DecisionBindingPolicy` (channel 2). The build-time checks that make the
+policy hard to misuse are pinned too.
 """
 
 from __future__ import annotations
@@ -46,19 +48,25 @@ from giskardpy.motion_statechart.knowledge_servoing.symbolic_theory_node import 
 
 @dataclass(frozen=True)
 class Advance(RegimeDecision):
-    """A regime decision that gates a task."""
+    """
+    A regime decision that gates a task.
+    """
 
 
 @dataclass(frozen=True)
 class SetSpeed(ParameterDecision):
-    """A parameter decision carrying a speed to write into a float variable."""
+    """
+    A parameter decision carrying a speed to write into a float variable.
+    """
 
     speed: float
 
 
 @dataclass
 class FixedGrounding(SituationGrounding):
-    """A grounding that returns preset situations regardless of the world."""
+    """
+    A grounding that returns preset situations regardless of the world.
+    """
 
     situations: list
 
@@ -68,7 +76,9 @@ class FixedGrounding(SituationGrounding):
 
 @dataclass
 class FixedTheory(SymbolicTheory):
-    """A theory that returns a preset decision set, standing in for a real reasoner."""
+    """
+    A theory that returns a preset decision set, standing in for a real reasoner.
+    """
 
     decisions: DecisionSet
     declared_decision_types: frozenset
@@ -88,7 +98,10 @@ def _context() -> MotionStatechartContext:
 
 
 class TestConcludedMonitor:
-    """Whether the monitor reflects the presence of a decision type in the latest decision set."""
+    """
+    Whether the monitor reflects the presence of a decision type in the latest decision
+    set.
+    """
 
     def test_unknown_before_first_inference(self):
         monitor = ConcludedMonitor(
@@ -114,7 +127,9 @@ class TestConcludedMonitor:
 
 
 class TestDecisionBindingPolicy:
-    """Whether the policy binds channels, refuses misuse, and applies parameter writes."""
+    """
+    Whether the policy binds channels, refuses misuse, and applies parameter writes.
+    """
 
     def test_validate_raises_for_an_unbound_decision_type(self):
         policy = DecisionBindingPolicy()
@@ -168,7 +183,9 @@ class TestDecisionBindingPolicy:
 
 
 class TestSymbolicTheoryNode:
-    """Whether the node drives both channels from a theory's decisions on each tick."""
+    """
+    Whether the node drives both channels from a theory's decisions on each tick.
+    """
 
     def _node_and_monitor(self):
         slot = DecisionSlot()
@@ -219,3 +236,69 @@ class TestSymbolicTheoryNode:
         )
         with pytest.raises(UnboundDecisionTypeError):
             node.build(_context())
+
+
+@dataclass
+class CountingTheory(SymbolicTheory):
+    """
+    A theory that records how often it was asked to infer.
+    """
+
+    decisions: DecisionSet
+    declared_decision_types: frozenset
+    inference_count: int = 0
+
+    @property
+    def decision_types(self) -> frozenset:
+        return self.declared_decision_types
+
+    def infer(self, situations) -> DecisionSet:
+        self.inference_count += 1
+        return self.decisions
+
+
+class TestInferenceRate:
+    """
+    Whether the node reasons at its own rate rather than once per control cycle.
+    """
+
+    def _node(self, control_cycles_per_inference: int):
+        slot = DecisionSlot()
+        policy = DecisionBindingPolicy()
+        policy.activate(
+            Advance,
+            ConcludedMonitor(name="advance", decision_type=Advance, decision_slot=slot),
+        )
+        theory = CountingTheory(
+            decisions=DecisionSet((Advance(),)),
+            declared_decision_types=frozenset({Advance}),
+        )
+        node = SymbolicTheoryNode(
+            name="theory",
+            grounding=FixedGrounding(situations=[object()]),
+            theory=theory,
+            binding_policy=policy,
+            decision_slot=slot,
+            control_cycles_per_inference=control_cycles_per_inference,
+        )
+        return node, theory
+
+    def test_inference_runs_once_per_configured_number_of_cycles(self):
+        node, theory = self._node(control_cycles_per_inference=5)
+        context = _context()
+        for _ in range(10):
+            node.on_tick(context)
+        assert theory.inference_count == 2
+
+    def test_the_first_tick_always_infers_so_monitors_are_never_left_unknown(self):
+        node, theory = self._node(control_cycles_per_inference=5)
+        node.on_tick(_context())
+        assert theory.inference_count == 1
+        assert node.decision_slot.latest.contains_type(Advance)
+
+    def test_decisions_persist_between_inferences(self):
+        node, _theory = self._node(control_cycles_per_inference=5)
+        context = _context()
+        node.on_tick(context)
+        node.on_tick(context)
+        assert node.decision_slot.latest.contains_type(Advance)

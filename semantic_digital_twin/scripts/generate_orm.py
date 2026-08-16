@@ -32,6 +32,19 @@ from semantic_digital_twin.semantic_annotations.position_descriptions import (
 from semantic_digital_twin.spatial_computations.forward_kinematics import (
     ForwardKinematicsManager,
 )
+from semantic_digital_twin.reasoning.knowledge_servoing.general_rdr_theory import (
+    GeneralRDRTheory,
+)
+from semantic_digital_twin.reasoning.knowledge_servoing.interfaces import (
+    ControlDecision,
+    DecisionSet,
+    Situation,
+    SituationGrounding,
+    SymbolicTheory,
+)
+from semantic_digital_twin.reasoning.substance_transfer.grounding import (
+    TransferSituationGrounding,
+)
 from semantic_digital_twin.testing import StateChangeCounter
 from semantic_digital_twin.world import (
     ResetStateContextManager,
@@ -56,6 +69,16 @@ ignore_classes = {
     # DAOs in the single PouringEquation hierarchy their fields are persisted in.
     HasLearnedHead,
     RectangularContainerGeometry,
+    # Knowledge-servoing reasoning objects. A situation and the decisions inferred from it live for
+    # one control cycle and are rebuilt from world state on the next, so there is nothing about them
+    # worth persisting; the grounding and theory that produce them are behaviour, not state.
+    ControlDecision,
+    DecisionSet,
+    GeneralRDRTheory,
+    Situation,
+    SituationGrounding,
+    SymbolicTheory,
+    TransferSituationGrounding,
 }
 
 # The trainer is a training procedure, not world state, and its module requires torch at import
