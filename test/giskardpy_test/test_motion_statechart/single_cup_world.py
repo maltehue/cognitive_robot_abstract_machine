@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass
 
 from krrood.ormatic.utils import classproperty
+from semantic_digital_twin.api import RevoluteConnectionSpecification
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.spatial_types import Vector3
@@ -19,6 +20,7 @@ from semantic_digital_twin.world_description.degree_of_freedom import (
 )
 from semantic_digital_twin.world_description.geometry import Scale
 from semantic_digital_twin.world_description.world_entity import Body
+from semantic_digital_twin.datastructures.joint_state import JointState
 
 # %% shared pourable container mimic
 
@@ -56,12 +58,14 @@ def build_single_cup_world(
         world.add_body(Body(name=PrefixedName("map")))
     with world.modify_world():
         cup = PourableContainer.create_with_new_body_in_world(
-            name=PrefixedName("cup"),
+            name="cup",
             world=world,
-            active_axis=Vector3(0, 1, 0),
-            connection_limits=DegreeOfFreedomLimits(
-                lower=DerivativeMap(position=0.0, velocity=-2.0),
-                upper=DerivativeMap(position=math.pi / 2, velocity=2.0),
+            parent_connection_specification=RevoluteConnectionSpecification(
+                axis=Vector3(0, 1, 0),
+                dof_limits=DegreeOfFreedomLimits(
+                    lower=DerivativeMap(position=0.0, velocity=-2.0),
+                    upper=DerivativeMap(position=math.pi / 2, velocity=2.0),
+                ),
             ),
             scale=Scale(0.4, 0.4, 1.0),
         )
@@ -70,5 +74,5 @@ def build_single_cup_world(
         initial_fill=1.0,
         outflow_rate_constant=outflow_rate_constant,
     )
-    world.set_positions_1DOF_connection({cup.root.parent_connection: initial_tilt})
+    JointState.from_mapping({cup.root.parent_connection: initial_tilt}).apply_to(world)
     return world, cup

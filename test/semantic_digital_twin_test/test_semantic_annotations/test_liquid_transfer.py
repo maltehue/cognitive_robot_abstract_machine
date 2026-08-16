@@ -49,6 +49,7 @@ from semantic_digital_twin.world_description.degree_of_freedom import (
 )
 from semantic_digital_twin.world_description.geometry import Scale
 from semantic_digital_twin.world_description.world_entity import Body
+from semantic_digital_twin.datastructures.joint_state import JointState
 
 _INFLOW_CONTEXT = SymbolicFillContext(sm.Scalar(0.0), sm.Scalar(0.0))
 """
@@ -196,7 +197,7 @@ def _set_source_offset(world: World, source: HasFillLevel, offset: float) -> Non
     """
     Sets the position of the source's single DOF.
     """
-    world.set_positions_1DOF_connection({source.root.parent_connection: offset})
+    JointState.from_mapping({source.root.parent_connection: offset}).apply_to(world)
 
 
 # %% gated inflow equation
@@ -664,11 +665,11 @@ class TestProjectileLandingPoint:
             source_axis=Vector3(0, 1, 0),
             source_height=0.7,
         )
-        low_world.set_positions_1DOF_connection(
-            {low_source.root.parent_connection: 0.5}
+        JointState.from_mapping({low_source.root.parent_connection: 0.5}).apply_to(
+            low_world
         )
-        high_world.set_positions_1DOF_connection(
-            {high_source.root.parent_connection: 0.5}
+        JointState.from_mapping({high_source.root.parent_connection: 0.5}).apply_to(
+            high_world
         )
         low_landing = low_receiver.projectile_landing_point(
             low_source, low_world, exit_speed=0.2
@@ -872,11 +873,11 @@ class TestCouplingReconstruction:
         assert inflow_equation is not None
         # The gate is a symbolic function of the source's DOF in this world; evaluating it proves
         # the rebuilt coupling is bound to this world's symbols, not the ones it was first built in.
-        world.set_positions_1DOF_connection({source.root.parent_connection: 0.0})
+        JointState.from_mapping({source.root.parent_connection: 0.0}).apply_to(world)
         assert inflow_equation.gate.evaluate()[0] == pytest.approx(1.0, abs=1e-2)
         # The inflow tracks the source's outflow: zero while upright, positive once the source tilts.
         assert inflow_equation.inflow.evaluate()[0] == pytest.approx(0.0)
-        world.set_positions_1DOF_connection({source.root.parent_connection: 1.0})
+        JointState.from_mapping({source.root.parent_connection: 1.0}).apply_to(world)
         assert inflow_equation.inflow.evaluate()[0] > 0.0
 
     def test_rebuild_regates_source_outflow(self):
@@ -891,7 +892,7 @@ class TestCouplingReconstruction:
 
         source_outflow = source.fill_connection.outflow_equation
         assert isinstance(source_outflow, GatedArticulatedPouringEquation)
-        world.set_positions_1DOF_connection({source.root.parent_connection: 0.0})
+        JointState.from_mapping({source.root.parent_connection: 0.0}).apply_to(world)
         assert source_outflow.gate.evaluate()[0] == pytest.approx(1.0, abs=1e-2)
 
     def test_rebuild_is_noop_when_inflow_already_present(self):
@@ -992,7 +993,7 @@ class TestCouplingModelSwitch:
 
         receiver.ensure_inflow_coupling(world)
 
-        world.set_positions_1DOF_connection({source.root.parent_connection: 1.0})
+        JointState.from_mapping({source.root.parent_connection: 1.0}).apply_to(world)
         rebuilt_inflow = receiver.fill_connection.inflow_equation
         assert rebuilt_inflow.inflow.evaluate()[0] == pytest.approx(
             2 * stale_inflow.inflow.evaluate()[0]
@@ -1139,7 +1140,7 @@ class TestFillLevelIntegrationLimits:
         """
         world, cup = self._lone_tilting_cup()
         cup.initialize_fill_level(world=world, initial_fill=0.0)
-        world.set_positions_1DOF_connection({cup.root.parent_connection: 1.5})
+        JointState.from_mapping({cup.root.parent_connection: 1.5}).apply_to(world)
 
         for _ in range(50):
             world.step_physics(0.05)

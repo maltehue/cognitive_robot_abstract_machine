@@ -59,6 +59,7 @@ from semantic_digital_twin.datastructures.definitions import StaticJointState
 from semantic_digital_twin.world_description.world_entity import Body, Region
 
 from ..giskardpy_test.test_motion_statechart.single_cup_world import (
+from semantic_digital_twin.datastructures.joint_state import JointState
     PourableContainer,
     build_single_cup_world,
 )
@@ -135,7 +136,7 @@ def _add_pourable_cup(
         world=world,
         initial_fill=1.0,
     )
-    world.set_positions_1DOF_connection({cup.root.parent_connection: 0.1})
+    JointState.from_mapping({cup.root.parent_connection: 0.1}).apply_to(world)
     return cup
 
 
@@ -456,8 +457,8 @@ class TestContainerManipulationPredicates:
 
         left_arm_park = robot.left_arm.get_joint_state_by_type(StaticJointState.PARK)
         right_arm_park = robot.right_arm.get_joint_state_by_type(StaticJointState.PARK)
-        world.set_positions_1DOF_connection(dict(left_arm_park.items()))
-        world.set_positions_1DOF_connection(dict(right_arm_park.items()))
+        JointState.from_mapping(dict(left_arm_park.items())).apply_to(world)
+        JointState.from_mapping(dict(right_arm_park.items())).apply_to(world)
 
         reachable_drawer = next(
             drawer
@@ -809,7 +810,7 @@ class TestPouringPredicates:
         Causes returns False when the fill level is already at or below the goal.
         """
         world, cup = world_with_cup
-        world.set_positions_1DOF_connection({cup.fill_connection: 0.5})
+        JointState.from_mapping({cup.fill_connection: 0.5}).apply_to(world)
         effect = PouringEffect(
             target_object=cup, property_getter=lambda c: c.fill_level, goal_value=0.6
         )
@@ -1169,8 +1170,8 @@ class TestRobotIntegration:
         right_arm_park = robot.get_right_arm_if_specified().get_joint_state_by_type(
             StaticJointState.PARK
         )
-        world.set_positions_1DOF_connection(dict(left_arm_park.items()))
-        world.set_positions_1DOF_connection(dict(right_arm_park.items()))
+        JointState.from_mapping(dict(left_arm_park.items())).apply_to(world)
+        JointState.from_mapping(dict(right_arm_park.items())).apply_to(world)
 
         query = an(
             set_of(task_sym, motion_sym, effect_sym).where(
@@ -1211,8 +1212,8 @@ class TestRobotIntegration:
         [robot] = world.get_semantic_annotations_by_type(PR2)
         left_arm_park = robot.left_arm.get_joint_state_by_type(StaticJointState.PARK)
         right_arm_park = robot.right_arm.get_joint_state_by_type(StaticJointState.PARK)
-        world.set_positions_1DOF_connection(dict(left_arm_park.items()))
-        world.set_positions_1DOF_connection(dict(right_arm_park.items()))
+        JointState.from_mapping(dict(left_arm_park.items())).apply_to(world)
+        JointState.from_mapping(dict(right_arm_park.items())).apply_to(world)
 
         query = an(
             set_of(motion_sym, effect_sym, task_sym).where(

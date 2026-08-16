@@ -67,6 +67,7 @@ from semantic_digital_twin.world_description.geometry import (
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 from dataclasses import dataclass
+from semantic_digital_twin.datastructures.joint_state import JointState
 
 _JEROEN_CUP_STL = str(
     Path(files("semantic_digital_twin")).parent.parent
@@ -137,8 +138,8 @@ def tracy_pouring_world(tracy_world):
 
     left_park = tracy.left_arm.get_joint_state_by_type(StaticJointState.PARK)
     right_park = tracy.right_arm.get_joint_state_by_type(StaticJointState.PARK)
-    world.set_positions_1DOF_connection(dict(left_park.items()))
-    world.set_positions_1DOF_connection(dict(right_park.items()))
+    JointState.from_mapping(dict(left_park.items())).apply_to(world)
+    JointState.from_mapping(dict(right_park.items())).apply_to(world)
 
     table_cup_body = _spawn_jeroen_cup_body("table_cup")
     with world.modify_world():
@@ -245,9 +246,9 @@ def tracy_transfer_world(tracy_pouring_world):
     receiving_cup.receive_outflow_from(source=source_cup, world=world)
 
     left_wrist_joint = world.get_connection_by_name("left_wrist_3_joint")
-    world.set_positions_1DOF_connection(
+    JointState.from_mapping(
         {left_wrist_joint: left_wrist_joint.position + 0.1}
-    )
+    ).apply_to(world)
 
     return world, source_cup, receiving_cup, left_tool_frame
 
@@ -427,7 +428,7 @@ def _tick_with_perception_correction(
                 noisy_fill = float(
                     np.clip(true_fill + rng.normal(0.0, sigma), 0.0, 1.0)
                 )
-                world.set_positions_1DOF_connection({fill_connection: noisy_fill})
+                JointState.from_mapping({fill_connection: noisy_fill}).apply_to(world)
             executor.pacer.sleep()
             if executor.motion_statechart.is_end_motion():
                 return
@@ -527,9 +528,9 @@ class TestPouringTask:
         pouring_task.build(context)
 
         flowing_tilt = 1.3
-        world.set_positions_1DOF_connection(
+        JointState.from_mapping(
             {cup.root.parent_connection: flowing_tilt, cup.fill_connection: goal_fill}
-        )
+        ).apply_to(world)
         fill_rate = cup.fill_equation.symbolic_velocity(cup.fill_connection).evaluate()[
             0
         ]
@@ -687,7 +688,7 @@ class TestTracyPouring:
         Add an angular offset to the current left_wrist_3_joint position.
         """
         joint = world.get_connection_by_name("left_wrist_3_joint")
-        world.set_positions_1DOF_connection({joint: joint.position + offset})
+        JointState.from_mapping({joint: joint.position + offset}).apply_to(world)
 
     def test_tracy_pouring(self, tracy_pouring_world) -> None:
         """

@@ -17,6 +17,7 @@ from giskardpy.ros_executor import Ros2Executor
 from semantic_digital_twin.spatial_types import Point3, Vector3
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import RevoluteConnection
+from semantic_digital_twin.datastructures.joint_state import JointState
 
 
 def align_planes_statechart(world: World) -> MotionStatechart:
@@ -156,7 +157,7 @@ def test_anchored_vector_tracks_moving_visualisation_frame(
 
     publisher = DebugExpressionPublisher(world=mini_world, node=rclpy_node)
     anchored = publisher._anchored_expression(tip_axis_in_world)
-    mini_world.set_positions_1DOF_connection({joint: 1.0})
+    JointState.from_mapping({joint: 1.0}).apply_to(mini_world)
 
     # The frame must actually have rotated: in the world the tip axis now points at the
     # rotated direction, so the constant anchored value below is not a silent no-op.

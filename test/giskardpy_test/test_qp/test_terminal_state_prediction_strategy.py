@@ -25,6 +25,7 @@ from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import PrismaticConnection
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
 from semantic_digital_twin.world_description.world_entity import Body
+from semantic_digital_twin.datastructures.joint_state import JointState
 
 # %% operating point constants
 
@@ -109,9 +110,9 @@ def _world_with_joint_and_state() -> tuple[World, DegreeOfFreedom, DegreeOfFreed
             world=world, parent=map_body, child=state_body, axis=Vector3.X()
         )
         world.add_connection(state_connection)
-    world.set_positions_1DOF_connection(
+    JointState.from_mapping(
         {joint_connection: _JOINT_POSITION, state_connection: _STATE_POSITION}
-    )
+    ).apply_to(world)
     return world, joint_connection.dof, state_connection.dof
 
 
