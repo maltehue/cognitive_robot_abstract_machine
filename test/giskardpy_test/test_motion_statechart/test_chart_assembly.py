@@ -198,6 +198,28 @@ class TestAssemblyFromDeclarations:
         ]
         assert context.float_variable_data.get_value(target) == 0.7
 
+    def test_two_declarations_gated_by_one_decision_share_a_monitor(self):
+        """
+        Constraints gated by the same decision read the same conclusion, so they share one monitor
+        instead of duplicating it per declaration.
+        """
+        theory = DeclaringTheory(
+            decisions=DecisionSet((Restrict(),)),
+            declared_decision_types=frozenset({Restrict}),
+            declarations=(
+                LimitDeclaration(identifier="first", gating_decision_type=Restrict),
+                LimitDeclaration(identifier="second", gating_decision_type=Restrict),
+            ),
+        )
+        assembled, _statechart = _assemble(theory)
+
+        assert assembled.monitors["first"] is assembled.monitors["second"]
+        first = assembled.constraint_nodes["first"]
+        second = assembled.constraint_nodes["second"]
+        shared_variable = assembled.monitors["first"].observation_variable
+        assert shared_variable in first.start_condition.free_variables()
+        assert shared_variable in second.start_condition.free_variables()
+
     def test_a_declared_decision_type_nothing_enacts_still_raises_at_build(self):
         theory = DeclaringTheory(
             decisions=DecisionSet((Restrict(),)),

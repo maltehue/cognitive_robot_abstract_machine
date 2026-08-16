@@ -69,3 +69,29 @@ class ConstraintDeclaration(ABC):
     """
     How the constraint's runtime value is supplied, if it has one.
     """
+
+
+# %% domain-free declaration kinds
+
+
+@dataclass(frozen=True)
+class ToolSpeedLimitDeclaration(ConstraintDeclaration):
+    """Cap the translational speed of a named annotation's body."""
+
+    subject_name: str = field(kw_only=True)
+    """Name of the annotation whose body the cap applies to."""
+
+    maximum_speed: float = field(kw_only=True)
+    """Maximum allowed linear speed, in metres per second."""
+
+
+@dataclass(frozen=True)
+class MotionAbortDeclaration(ConstraintDeclaration):
+    """Abort the whole motion when the gating decision is concluded.
+
+    The one declaration kind that is a remedy of last resort rather than a constraint: it exists so
+    a theory's defeat decisions have a declared enactment instead of a hand-wired one.
+    """
+
+    reason: str = field(kw_only=True)
+    """Why the motion is aborted, reported by the raised error."""

@@ -133,6 +133,7 @@ class TheoryChartAssembler:
         binding_policy = DecisionBindingPolicy()
         constraint_nodes: Dict[str, MotionStatechartNode] = {}
         monitors: Dict[str, ConcludedMonitor] = {}
+        monitors_by_decision_type: Dict[type, ConcludedMonitor] = {}
 
         for declaration in plugged.theory.required_constraints:
             instantiation = self.catalog.instantiate(declaration, self.world)
@@ -140,16 +141,25 @@ class TheoryChartAssembler:
             constraint_nodes[declaration.identifier] = instantiation.node
 
             if declaration.gating_decision_type is not None:
-                monitor = ConcludedMonitor(
-                    name=f"{plugged.name}_{declaration.identifier}_concluded",
-                    decision_type=declaration.gating_decision_type,
-                    decision_slot=decision_slot,
+                # One monitor per gating decision type: several constraints gated by the same
+                # decision share it, since they all read the same conclusion.
+                monitor = monitors_by_decision_type.get(
+                    declaration.gating_decision_type
                 )
-                statechart.add_node(monitor)
+                if monitor is None:
+                    monitor = ConcludedMonitor(
+                        name=f"{plugged.name}_{declaration.gating_decision_type.__name__}_concluded",
+                        decision_type=declaration.gating_decision_type,
+                        decision_slot=decision_slot,
+                    )
+                    statechart.add_node(monitor)
+                    binding_policy.activate(
+                        declaration.gating_decision_type, instantiation.node
+                    )
+                    monitors_by_decision_type[declaration.gating_decision_type] = (
+                        monitor
+                    )
                 instantiation.node.start_condition = monitor.observation_variable
-                binding_policy.activate(
-                    declaration.gating_decision_type, instantiation.node
-                )
                 monitors[declaration.identifier] = monitor
 
             if declaration.parameter_channel is not None:

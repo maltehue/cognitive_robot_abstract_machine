@@ -13,6 +13,8 @@ transfer theory and proving the framework is not shaped around either of them.
 
 from __future__ import annotations
 
+from typing_extensions import Tuple
+
 from krrood.ripple_down_rules.datastructures.callable_expression import (
     CallableExpression,
 )
@@ -24,6 +26,9 @@ from semantic_digital_twin.reasoning.contextual_safety.decisions import (
     EnforceCaution,
 )
 from semantic_digital_twin.reasoning.contextual_safety.situation import SafetySituation
+from semantic_digital_twin.reasoning.knowledge_servoing.constraint_declarations import (
+    ConstraintDeclaration,
+)
 from semantic_digital_twin.reasoning.knowledge_servoing.general_rdr_theory import (
     GeneralRDRTheory,
 )
@@ -58,7 +63,9 @@ def _caution(reason: CautionReason) -> CallableExpression:
     )
 
 
-def build_contextual_safety_theory() -> GeneralRDRTheory[SafetySituation]:
+def build_contextual_safety_theory(
+    constraint_declarations: Tuple[ConstraintDeclaration, ...] = (),
+) -> GeneralRDRTheory[SafetySituation]:
     """
     Assembles the contextual-safety theory.
 
@@ -67,6 +74,8 @@ def build_contextual_safety_theory() -> GeneralRDRTheory[SafetySituation]:
     merely carried above one. Pouring is the sharper case, so its rule comes first and
     its reason is the one reported when both hold.
 
+    :param constraint_declarations: The constraints the theory requires the controller
+        to enforce, typically a gated tool-speed limit.
     :return: The theory, ready to plug into a symbolic theory node.
     """
     pouring_over_sensitive_object = MultiClassTopRule(
@@ -92,5 +101,7 @@ def build_contextual_safety_theory() -> GeneralRDRTheory[SafetySituation]:
     caution_family.name = CAUTION_FAMILY
     rule_set.add_rdr(caution_family)
     return GeneralRDRTheory(
-        rule_set=rule_set, declared_decision_types=frozenset({EnforceCaution})
+        rule_set=rule_set,
+        declared_decision_types=frozenset({EnforceCaution}),
+        constraint_declarations=constraint_declarations,
     )

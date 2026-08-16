@@ -11,11 +11,13 @@ from dataclasses import dataclass, field
 
 from typing_extensions import Optional
 
-import krrood.symbolic_math.symbolic_math as sm
 from giskardpy.executor import Executor, SimulationPacer
 from giskardpy.motion_statechart.context import MotionStatechartContext
-from giskardpy.motion_statechart.data_types import DefaultWeights
 from giskardpy.motion_statechart.graph_node import EndMotion
+from giskardpy.motion_statechart.knowledge_servoing.chart_assembler import (
+    PluggedTheory,
+    TheoryChartAssembler,
+)
 from giskardpy.motion_statechart.knowledge_servoing.concluded_monitor import (
     ConcludedMonitor,
 )
@@ -30,16 +32,12 @@ from giskardpy.motion_statechart.knowledge_servoing.symbolic_theory_node import 
     SymbolicTheoryNode,
 )
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
-from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
-from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianVelocityLimit
 from giskardpy.motion_statechart.tasks.commanded_velocity import (
     CommandedTiltVelocity,
     CommandedTranslationVelocity,
 )
-from giskardpy.motion_statechart.tasks.pouring import (
-    FillByTransferTask,
-    KeepProjectileInReceiver,
-    KeepSourceRimAboveReceiverRim,
+from semantic_digital_twin.reasoning.knowledge_servoing.constraint_declarations import (
+    ToolSpeedLimitDeclaration,
 )
 from semantic_digital_twin.reasoning.contextual_safety import (
     EnforceCaution,
@@ -47,13 +45,11 @@ from semantic_digital_twin.reasoning.contextual_safety import (
     build_contextual_safety_theory,
 )
 from semantic_digital_twin.reasoning.substance_transfer import (
-    AbandonTransfer,
-    AlignSourceOverReceiver,
-    ConcludeTransfer,
-    PourIntoReceiver,
-    RetargetFillLevel,
     TransferSituationGrounding,
     build_substance_transfer_theory,
+)
+from semantic_digital_twin.reasoning.substance_transfer.declarations import (
+    transfer_constraint_declarations,
 )
 from semantic_digital_twin.reasoning.substance_transfer.motion_primitives import (
     DecreaseTilt,
@@ -66,8 +62,8 @@ from semantic_digital_twin.reasoning.substance_transfer.motion_primitives import
 from semantic_digital_twin.reasoning.substance_transfer.primitive_theory import (
     build_motion_primitive_theory,
 )
-from semantic_digital_twin.spatial_types import Vector3
 
+from experiments.knowledge_servoing.constraint_factories import build_transfer_catalog
 from experiments.knowledge_servoing.scenario import TransferScenario
 from experiments.knowledge_servoing.twist_bridge import TwistBridgeNode
 
@@ -132,117 +128,64 @@ def build_transfer_demonstration(
     scenario: TransferScenario,
     requested_fill_level: float = REQUESTED_FILL_LEVEL,
 ) -> TransferDemonstration:
-    """Wires both theories to the controller and compiles the statechart.
+    """Assembles the statechart from what both theories declare, and compiles it.
+
+    Nothing about the chart is wired by hand: every task, gate and parameter binding follows from
+    the theories' constraint declarations, so plugging in a further theory would be one more entry
+    in the assembler's input. Only termination is stated here, because what ends the motion is a
+    property of the demonstration, not of any one theory.
 
     :param scenario: The world to manipulate.
     :param requested_fill_level: Fill level the transfer theory is asked to reach.
     :return: The compiled demonstration, ready to run.
     """
     world = scenario.world
-    goal_fill_variable = sm.FloatVariable(name="transfer_goal_fill_level")
-
-    aim = KeepProjectileInReceiver(
-        receiver=scenario.receiving_cup,
-        source=scenario.source_cup,
-        weight=DefaultWeights.WEIGHT_MAXIMUM,
-    )
-    clearance = KeepSourceRimAboveReceiverRim(
-        receiver=scenario.receiving_cup,
-        source=scenario.source_cup,
-        minimum_clearance=0.08,
-    )
-    transfer = FillByTransferTask(
-        receiver=scenario.receiving_cup,
-        goal_value=goal_fill_variable,
-        fill_level_tolerance=FILL_LEVEL_TOLERANCE,
-    )
-    return_upright = AlignPlanes(
-        root_link=world.root,
-        tip_link=scenario.source_cup.root,
-        goal_normal=Vector3.Z(reference_frame=world.root),
-        tip_normal=Vector3.Z(reference_frame=scenario.source_cup.root),
-    )
-    speed_cap = CartesianVelocityLimit(
-        root_link=world.root,
-        tip_link=scenario.source_cup.root,
-        max_linear_velocity=CAUTIOUS_LINEAR_VELOCITY,
-    )
-
-    transfer_decisions = DecisionSlot()
-    safety_decisions = DecisionSlot()
-    align_monitor = ConcludedMonitor(
-        name="aligned",
-        decision_type=AlignSourceOverReceiver,
-        decision_slot=transfer_decisions,
-    )
-    pour_monitor = ConcludedMonitor(
-        name="pouring", decision_type=PourIntoReceiver, decision_slot=transfer_decisions
-    )
-    concluded_monitor = ConcludedMonitor(
-        name="concluded",
-        decision_type=ConcludeTransfer,
-        decision_slot=transfer_decisions,
-    )
-    caution_monitor = ConcludedMonitor(
-        name="cautious", decision_type=EnforceCaution, decision_slot=safety_decisions
-    )
-
-    transfer_policy = DecisionBindingPolicy()
-    transfer_policy.activate(AlignSourceOverReceiver, aim)
-    transfer_policy.activate(PourIntoReceiver, transfer)
-    transfer_policy.activate(ConcludeTransfer, return_upright)
-    transfer_policy.activate(AbandonTransfer, concluded_monitor)
-    transfer_policy.parameterize(
-        RetargetFillLevel, lambda decision: decision.goal_fill_level, goal_fill_variable
-    )
-    safety_policy = DecisionBindingPolicy()
-    safety_policy.activate(EnforceCaution, speed_cap)
-
-    transfer_node = SymbolicTheoryNode(
-        name="transfer_theory",
-        grounding=TransferSituationGrounding(
-            source=scenario.source_cup,
-            receiver=scenario.receiving_cup,
-            requested_fill_level=requested_fill_level,
+    transfer_theory = build_substance_transfer_theory(
+        transfer_constraint_declarations(
+            source_name="source_cup",
+            receiver_name="receiving_cup",
             fill_level_tolerance=FILL_LEVEL_TOLERANCE,
-        ),
-        theory=build_substance_transfer_theory(),
-        binding_policy=transfer_policy,
-        decision_slot=transfer_decisions,
+        )
     )
-    safety_node = SymbolicTheoryNode(
-        name="safety_theory",
-        grounding=SafetySituationGrounding(
-            carried_container=scenario.source_cup,
-            sensitive_bodies=[scenario.sensitive_body],
-        ),
-        theory=build_contextual_safety_theory(),
-        binding_policy=safety_policy,
-        decision_slot=safety_decisions,
+    safety_theory = build_contextual_safety_theory(
+        (
+            ToolSpeedLimitDeclaration(
+                identifier="caution_speed_cap",
+                subject_name="source_cup",
+                maximum_speed=CAUTIOUS_LINEAR_VELOCITY,
+                gating_decision_type=EnforceCaution,
+            ),
+        )
     )
-
-    aim.start_condition = align_monitor.observation_variable
-    clearance.start_condition = align_monitor.observation_variable
-    transfer.start_condition = pour_monitor.observation_variable
-    return_upright.start_condition = concluded_monitor.observation_variable
-    speed_cap.start_condition = caution_monitor.observation_variable
 
     statechart = MotionStatechart()
-    for node in (
-        transfer_node,
-        safety_node,
-        align_monitor,
-        pour_monitor,
-        concluded_monitor,
-        caution_monitor,
-        aim,
-        clearance,
-        transfer,
-        return_upright,
-        speed_cap,
-    ):
-        statechart.add_node(node)
-    statechart.add_node(EndMotion.when_true(concluded_monitor))
+    assembler = TheoryChartAssembler(catalog=build_transfer_catalog(), world=world)
+    transfer_assembled, safety_assembled = assembler.assemble(
+        [
+            PluggedTheory(
+                name="transfer_theory",
+                theory=transfer_theory,
+                grounding=TransferSituationGrounding(
+                    source=scenario.source_cup,
+                    receiver=scenario.receiving_cup,
+                    requested_fill_level=requested_fill_level,
+                    fill_level_tolerance=FILL_LEVEL_TOLERANCE,
+                ),
+            ),
+            PluggedTheory(
+                name="safety_theory",
+                theory=safety_theory,
+                grounding=SafetySituationGrounding(
+                    carried_container=scenario.source_cup,
+                    sensitive_bodies=[scenario.sensitive_body],
+                ),
+            ),
+        ],
+        statechart,
+    )
+    statechart.add_node(
+        EndMotion.when_true(transfer_assembled.monitors["return_upright"])
+    )
 
     executor = Executor(
         MotionStatechartContext(world=world), pacer=SimulationPacer(real_time_factor=1)
@@ -251,8 +194,8 @@ def build_transfer_demonstration(
     return TransferDemonstration(
         executor=executor,
         scenario=scenario,
-        transfer_decisions=transfer_decisions,
-        safety_decisions=safety_decisions,
+        transfer_decisions=transfer_assembled.decision_slot,
+        safety_decisions=safety_assembled.decision_slot,
     )
 
 

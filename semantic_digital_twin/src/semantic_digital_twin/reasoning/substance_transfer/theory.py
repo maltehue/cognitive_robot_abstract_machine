@@ -15,12 +15,17 @@ family supplies the numeric goal.
 
 from __future__ import annotations
 
+from typing_extensions import Tuple
+
 from krrood.ripple_down_rules.datastructures.callable_expression import (
     CallableExpression,
 )
 from krrood.ripple_down_rules.rdr import GeneralRDR, MultiClassRDR
 from krrood.ripple_down_rules.rules import MultiClassStopRule, MultiClassTopRule
 
+from semantic_digital_twin.reasoning.knowledge_servoing.constraint_declarations import (
+    ConstraintDeclaration,
+)
 from semantic_digital_twin.reasoning.knowledge_servoing.general_rdr_theory import (
     GeneralRDRTheory,
 )
@@ -85,22 +90,27 @@ def _family(start_rule: MultiClassTopRule, family: str) -> MultiClassRDR:
     return rule_set
 
 
-def build_substance_transfer_theory() -> GeneralRDRTheory[TransferSituation]:
+def build_substance_transfer_theory(
+    constraint_declarations: Tuple[ConstraintDeclaration, ...] = (),
+) -> GeneralRDRTheory[TransferSituation]:
     """
     Assembles the substance-transfer theory.
 
-    Regime rules, in top-rule order so each may see what the previous concluded:
+        Regime rules, in top-rule order so each may see what the previous concluded:
 
-    - *align* whenever the source is near the receiver and the goal is not yet reached;
-    - *pour* once the pour would land in the opening, defeated while the receiver is overflowing;
-    - *conclude* once the goal is reached;
-    - *abandon* while the receiver is overflowing.
+        - *align* whenever the source is near the receiver and the goal is not yet reached;
+        - *pour* once the pour would land in the opening, defeated while the receiver is overflowing;
+        - *conclude* once the goal is reached;
+        - *abandon* while the receiver is overflowing.
 
-    The parameter family then supplies the requested fill level as the terminal-fill goal whenever
-    pouring is active, so the numeric target is a conclusion of the theory rather than a constant
-    compiled into the task.
+        The parameter family then supplies the requested fill level as the terminal-fill goal whenever
+        pouring is active, so the numeric target is a conclusion of the theory rather than a constant
+        compiled into the task.
 
-    :return: The theory, ready to plug into a symbolic theory node.
+        :param constraint_declarations: The constraints the theory requires the controller to enforce;
+            pass :func:`~semantic_digital_twin.reasoning.substance_transfer.declarations.\
+    transfer_constraint_declarations` to make the theory chart-assemblable.
+        :return: The theory, ready to plug into a symbolic theory node.
     """
     align = MultiClassTopRule(
         conditions=_condition(
@@ -184,4 +194,5 @@ def build_substance_transfer_theory() -> GeneralRDRTheory[TransferSituation]:
                 RetargetFillLevel,
             }
         ),
+        constraint_declarations=constraint_declarations,
     )
