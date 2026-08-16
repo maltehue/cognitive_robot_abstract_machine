@@ -95,3 +95,10 @@ class MotionAbortDeclaration(ConstraintDeclaration):
 
     reason: str = field(kw_only=True)
     """Why the motion is aborted, reported by the raised error."""
+
+
+GENERIC_DECLARATION_KINDS = {
+    "tool_speed_limit": ToolSpeedLimitDeclaration,
+    "motion_abort": MotionAbortDeclaration,
+}
+"""The domain-free declaration kinds, by the name a specification declares them under."""

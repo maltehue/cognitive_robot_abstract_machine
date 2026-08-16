@@ -116,3 +116,12 @@ def transfer_constraint_declarations(
             gating_decision_type=AbandonTransfer,
         ),
     )
+
+
+TRANSFER_DECLARATION_KINDS = {
+    "aimed_transfer": AimedTransferDeclaration,
+    "rim_clearance": RimClearanceDeclaration,
+    "transfer_quantity": TransferQuantityDeclaration,
+    "return_upright": ReturnUprightDeclaration,
+}
+"""The transfer domain's declaration kinds, by the name a specification declares them under."""
