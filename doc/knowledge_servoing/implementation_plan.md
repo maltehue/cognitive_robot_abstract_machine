@@ -6,8 +6,86 @@ motion-statechart stack, with the virtual-joint dynamics framework (VJDF — pas
 `LiquidConnection` DOF + fill equation + terminal-state prediction row) supplying the numeric
 effect model in place of the paper's fixed-gain twist bridge.
 
-Branch `bmp`, 2026-08-13. Revision 2, after a code-grounded review; every claim below was checked
-against the files it cites. §9 lists what the review changed and what it killed.
+Branch `bmp`, 2026-08-13. Revision 3, after a code-grounded review and a first implementation pass;
+every claim below was checked against the files it cites. §9 lists what earlier revisions got wrong.
+
+> **Status, 2026-08-16 — Stage A is built and running.** The framework, both instantiations, the
+> binding layer, the decision transcript and the demonstration exist on branch
+> `knowledge-servoing-plan` and are green. What the plan below still describes as future work is
+> Stage B onward. §0 records what was built and, more usefully, the four places where building it
+> contradicted the plan.
+
+---
+
+## 0. What Stage A actually built, and where it contradicted this plan
+
+### 0.1 Built
+
+| Piece | Where |
+|---|---|
+| Framework interfaces (`Situation`, `ControlDecision` → `RegimeDecision`/`ParameterDecision`, `DecisionSet`, `SituationGrounding`, `SymbolicTheory`) | `semantic_digital_twin/.../reasoning/knowledge_servoing/` |
+| Theory engine adapter over `GeneralRDR` | same, `general_rdr_theory.py` |
+| Statechart binding (`SymbolicTheoryNode`, `ConcludedMonitor`, `DecisionBindingPolicy`, `DecisionSlot`, `DecisionTranscript`) | `giskardpy/.../motion_statechart/knowledge_servoing/` |
+| Symbolic `goal_value` (WP0 §3.1) | `qp/terminal_state_prediction_strategy.py`, `qp/constraint_collection.py`, `tasks/pouring.py` |
+| Substance-transfer instantiation | `semantic_digital_twin/.../reasoning/substance_transfer/` |
+| Contextual-safety instantiation (§2.5.4 demonstration 2) | `semantic_digital_twin/.../reasoning/contextual_safety/` |
+| Demonstration, Gantt chart and transcripts | `experiments/.../knowledge_servoing/`, `experiments/scripts/run_knowledge_servoing_transfer.py` |
+
+The demonstration reaches a theory-set fill goal of 0.4 at 0.444 and ends because the theory
+concludes the transfer is finished. Its transcript:
+
+```
+substance transfer
+cycle 1:   +AlignSourceOverReceiver
+cycle 11:  +PourIntoReceiver, RetargetFillLevel
+cycle 171: +ConcludeTransfer  −AlignSourceOverReceiver, PourIntoReceiver, RetargetFillLevel
+contextual safety
+cycle 1:   +EnforceCaution
+```
+
+### 0.2 Four things building it contradicted
+
+**The near-goal rule does not dissolve (contradicts §1.3).** §1.3 claims the paper's `25a > 18c` —
+near-goal ⇒ decrease tilt — dissolves entirely under the terminal-state row's anticipation. Measured:
+it dissolves *only while actuation is fast relative to flow*. At the shared fixture's coupling the
+source empties in under two seconds, the arm needs ~40 cycles to close the geometric outflow gate,
+and the MPC horizon is far shorter than that, so the transfer overshot by ~47 % and no controller
+could have done better. Slowing the coupling to a rate the actuation can track brought overshoot to
+~3 %. **The honest claim is conditional**: MPC anticipation subsumes the near-goal rule when the
+control horizon exceeds the actuation time constant, and the symbolic rule earns its keep when it
+does not. That is a more interesting statement than the flat one and it is now backed by a
+measurement.
+
+**Concluding a transfer must actively command the source upright.** The outflow gate is geometric,
+so a statechart that merely stops driving the fill leaves the source tilted and aimed and the
+receiver keeps filling. `ConcludeTransfer` gates a return-to-upright task; without it the run has no
+way to stop pouring. This is a real property of the effect model, not an implementation detail, and
+any new VJDF domain will have the analogous question.
+
+**The reasoner runs synchronously, so §2.3's threading design is not built.** Inference measured at
+tens of microseconds, so grounding, inference and application all run on the control thread and the
+cross-thread hand-off §2.3 designs against is unnecessary. The frozen-situation discipline is kept —
+it costs nothing and keeps the door open — but the thread-safety analysis in §2.3 now describes a
+contingency, not the system. The node infers every fifth control cycle rather than every one.
+
+**Grounding must bind its compiled expressions to the world's state array.** Compiling without
+parameters produces a function that evaluates at an all-zero configuration and *fails silently*,
+returning plausible-looking wrong facts rather than raising. Both groundings use
+`VariableParameters.from_lists(world.state.position_float_variables)` with
+`bind_args_to_memory_view`. Any future grounding must do the same; it is the single easiest way to
+get a theory that reasons confidently about a world it cannot see.
+
+### 0.3 Two repository defects found while verifying
+
+Neither is caused by this work and both were hiding evidence:
+
+- **`pytest test/giskardpy_test/test_motion_statechart/` collected zero tests and exited zero.** A
+  module-scope `importorskip` in `test_pouring_learned.py` aborts collection for everything
+  requested alongside it. Fixed with a `collect_ignore` conftest; the directory now collects 273.
+- **The pouring suite could not build its fixtures**, so 18 tests errored in setup before asserting
+  anything, from three accumulated API drifts (`set_positions_1DOF_connection` removed,
+  `create_with_new_body_in_world` signature changed, and a `PrefixedName` nested inside another so
+  any error message naming the body raised `TypeError`). Migrated; the suite is green.
 
 ---
 
@@ -73,12 +151,20 @@ So the defensible form is: *the derivational semantics survives intact; what dis
 precisely the part of the theory that existed to compensate for the bridge.* State the rule-count
 number too — an examiner will compute it.
 
-### 1.3 One casualty to declare up front
+### 1.3 One casualty to declare up front — now measured, and conditional
 
-**The paper's flagship superiority pair `25a > 18c` dissolves entirely in arm B.** Near-goal
-decrease-tilt overriding slow-flow increase-tilt *is* MPC anticipation, and the terminal-state row
-does it continuously and optimally ("the optimizer eases off before overshooting rather than
-reacting late", `tasks/pouring.py:132-134`). The pair survives verbatim only in arm A.
+**The paper's flagship superiority pair `25a > 18c` dissolves in arm B only when the control horizon
+outlasts the actuation.** Near-goal decrease-tilt overriding slow-flow increase-tilt *is* MPC
+anticipation, and the terminal-state row does it continuously ("the optimizer eases off before
+overshooting rather than reacting late", `tasks/pouring.py:132-134`).
+
+Stage A measured the boundary (§0.2). When the pour outruns the arm — the source emptying in under
+two seconds against ~40 cycles to close the geometric gate — the row's horizon is far too short and
+the transfer overshoots by ~47 %. At a coupling the actuation can track, overshoot falls to ~3 % and
+the rule is genuinely redundant. So the claim to make is that **the symbolic near-goal rule is a
+horizon extension**, subsumed by MPC exactly when the horizon is long enough and load-bearing when
+it is not. Arm A keeps the pair verbatim regardless; a mismatch or flow-rate sweep (§6.2.1) turns
+this from an anecdote into the curve where the two layers trade off.
 
 Arm B's defeasible interactions are different and real, and the chapter must substitute them
 explicitly rather than claim the old pair survived:
@@ -152,6 +238,13 @@ sets *what the constraint means*, the QP decides *how fast to move*.
 **No third channel.** The reasoner never modifies the world model during a motion (§7.1).
 
 ### 2.3 Data flow, and why grounding runs on the control thread
+
+> **Superseded by measurement, 2026-08-16.** Inference costs tens of microseconds, so the built
+> system runs grounding, inference and application synchronously on the control thread, every fifth
+> cycle. There is no reasoner thread and therefore no cross-thread read at all. What follows remains
+> the design of record for the day a theory is heavy enough to need its own thread — and the
+> hazards it catalogues are real, so anything that moves inference off-thread must satisfy it. The
+> frozen-situation discipline is kept in the built system precisely to keep that door open.
 
 The obvious design — reasoner thread reads the twin — is **unsafe**, and this is the largest
 correction the review produced. The reasoner thread's *reads* race the 50 Hz control loop in at
@@ -1003,14 +1096,23 @@ None of these is a design debt — each is closed by the same later step, wiring
 §2.6. Open item 6 becomes more valuable meanwhile, since it is the cleanest available source of a
 mid-motion regime flip that needs no particles.
 
-### 8.0.2 Still open
+### 8.0.2 Taken since, 2026-08-16
 
-6. **§2.5.4 — is the contextual safety theory in scope?** ~3 days for phase 1. It is the only
-   demonstration of theory pluggability as opposed to rule-set extension, the best candidate for
-   Stage A's headline figure (§8.0.1), *and* the evaluation domain that a later fact source turns on
-   (§2.6, §8.4). Three jobs for one item; recommended, and it should be built as production code so
-   phase 2 needs no rewrite.
-7. **Thesis placement** (§8.5) — determines how much of Stage C is required.
+| # | Decision | Consequence |
+|---|---|---|
+| 6 | **The contextual safety theory is in scope**, and is built as production code (`reasoning/contextual_safety/`) | Pluggability is demonstrated rather than asserted: two theories with different situation types run over one motion and meet only at their binding policies. Phase 2 (the same theory on perceived facts) needs no rewrite |
+| 7 | **The reasoner runs synchronously**, every fifth control cycle | §2.3's threading design becomes a contingency (see its note). Reversible: `SymbolicTheoryNode` is the only place that would move |
+| 8 | **MCRDR confirmed as the engine** by the Stage A spike | Stop rules, multi-conclusion and intra-pass chaining all behave as §4.1.1 claims; `copy_case` does *not* survive a frozen dataclass, so the theory builds a mutable working copy internally — the fallback §4.1.1 anticipated |
+
+### 8.0.3 Still open
+
+9. **Thesis placement** (§8.5) — determines how much of Stage C is required.
+10. **WP0 §3.3** — symbolic `minimum_clearance`/`clearance_band` and per-task weight variables. The
+    parameter channel currently reaches exactly one knob (the fill goal), which is why the safety
+    theory is regime-only. Widening it is what lets a theory tune a constraint rather than only
+    switch it.
+11. **Arm A** (§6.1) and the **B1 ablation with the mismatch sweep** (§6.2, §6.2.1) — the experiment
+    proper, now unblocked.
 
 ### 8.1 In-motion inference — the hard blocker
 
@@ -1096,8 +1198,10 @@ comparison goes into the document.
 
 ## 9. Staging and surface
 
-- **Stage A — demonstrator (~3.5 weeks).** WP0 + WP1a + WP1b + WP2 + the analytic closed-loop test
-  and the framework-isolation/mimic-theory tests.
+- **Stage A — demonstrator. Done, 2026-08-16** (§0). WP0's symbolic goal, the framework, both
+  instantiations, the binding layer, the transcript, the Gantt chart and the demonstration, with the
+  contextual safety theory pulled forward from the optional list because it is what makes the
+  headline figure a context-driven regime change rather than a task progression.
   Deliverable: a semantic rule, not a topic publish, flips the constraint regime mid-pour at VJDF
   precision, with a decision transcript, retraction explanations and a Gantt figure. Measure
   reasoner latency here before committing to B.
