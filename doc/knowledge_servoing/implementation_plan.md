@@ -252,12 +252,42 @@ Only the third is missing: `goal_value` is a live float variable, but equation p
 in when the coupling is built. Making them symbolic is the WP0 §3.1 pattern applied to the equations
 rather than the tasks.
 
-It is worth the work, because it produces the thesis's crispest single demonstration of the
-combination: *a viscous substance implies a lower outflow-rate constant*. A semantic annotation
-selects a dynamic parameter, which changes how the optimizer predicts the effect, which changes the
-motion — semantics to dynamics to motion in one rule, and neither half of the thesis can produce it
-alone. It also gives the expectation layer's model-audit job (§4.5) something to *do*: a measured
-flow diverging from the predicted one is a parameter to correct, not only a transfer to abandon.
+#### 1.5.2.1 The demonstration: a theory that bounds the head
+
+The crispest single demonstration of the combination is a theory concluding **a bound on the
+allowed head above the lip** — the hydrostatic head that drives the pour
+(`PouringEquation.head_above_lip`, `pouring_equations.py:293`, which feeds both the Torricelli exit
+speed and the outflow rate).
+
+Three properties make it the right example, and none of them holds for a parameter-identification
+example such as inferring a substance's viscosity:
+
+1. **It is a control decision, not a measurement.** Viscosity is a property of the world that
+   perception or annotation supplies; bounding the head is something the reasoner *decides*.
+2. **It is stated at the abstraction level of the effect, not the robot.** The decision names no
+   end effector, no direction, no velocity, not even a tilt. The optimizer finds whatever arm motion
+   keeps the head within bound — which, since head is a function of fill *and* tilt, yields a
+   fill-dependent tilt limit for free: the container is tilted less when fuller, without anyone
+   writing that rule.
+3. **It is therefore embodiment-independent.** Compare the same semantic decision — "be careful" —
+   realized at three levels: joint velocity limits (robot-specific), a tool-speed cap (what the
+   safety theory does today, still end-effector-specific and not actually a bound on the pour), and
+   a head bound (physically meaningful and portable across embodiments). Only the last one says
+   something true about the task rather than about this robot.
+
+It is also where the declared-constraint idea (§1.5.1) and the effect model meet: the theory
+declares an *inequality over an effect-model quantity*, using both channels for one decision — the
+regime channel gates the constraint, the parameter channel supplies the bound.
+
+And it is the necessity argument in one figure (§1.5.3): a theory alone has no quantity to bound,
+an effect model alone has no reason to bound it. The transfer theory's terminal-state row then plans
+against the restricted dynamics and still reaches its goal, only more slowly — so the two theories
+interact **through the physics rather than through the robot**.
+
+Implementation is small: a task constraining `head_above_lip` from above, with the bound as a
+`ScalarData` so channel 2 can write it, plus a safety rule concluding it. The parameter surface also
+gives the expectation layer's model-audit job (§4.5) something to *do*: a measured flow diverging
+from the predicted one is a parameter to correct, not only a transfer to abandon.
 
 #### 1.5.3 The need: tasks neither half can execute
 
