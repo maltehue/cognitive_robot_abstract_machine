@@ -1,4 +1,6 @@
-"""The framework's symbolic theory, backed by a :class:`~krrood.ripple_down_rules.rdr.GeneralRDR`.
+"""
+The framework's symbolic theory, backed by a
+:class:`~krrood.ripple_down_rules.rdr.GeneralRDR`.
 
 A general ripple-down-rules classifier composes one sub-classifier per decision family and re-runs
 them to a fixpoint, so a rule in one family can condition on a conclusion another family reached.
@@ -13,11 +15,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, make_dataclass
 
-from typing_extensions import Any, List, Sequence, Set, Type
+from typing_extensions import Any, List, Sequence, Set, Tuple, Type
 
 from krrood.ripple_down_rules.rdr import GeneralRDR
 from krrood.ripple_down_rules.utils import make_set
 
+from semantic_digital_twin.reasoning.knowledge_servoing.constraint_declarations import (
+    ConstraintDeclaration,
+)
 from semantic_digital_twin.reasoning.knowledge_servoing.interfaces import (
     ControlDecision,
     DecisionSet,
@@ -29,20 +34,38 @@ from semantic_digital_twin.reasoning.knowledge_servoing.interfaces import (
 
 @dataclass
 class GeneralRDRTheory(SymbolicTheory[SituationType]):
-    """Presents a :class:`GeneralRDR` over situations as a pluggable symbolic theory."""
+    """
+    Presents a :class:`GeneralRDR` over situations as a pluggable symbolic theory.
+    """
 
     rule_set: GeneralRDR
     """The general ripple-down-rules classifier composing one sub-classifier per decision family."""
 
     declared_decision_types: frozenset[Type[ControlDecision]]
-    """The decision types the rules may conclude, declared for the binding policy's build-time checks."""
+    """
+    The decision types the rules may conclude, declared for the binding policy's build-
+    time checks.
+    """
+
+    constraint_declarations: Tuple[ConstraintDeclaration, ...] = ()
+    """
+    The constraints this theory requires the controller to enforce; the chart is
+    assembled from them.
+    """
 
     _working_case_type: Type = field(init=False, repr=False)
-    """Mutable working-copy dataclass carrying the frozen situation and one accumulator per family."""
+    """
+    Mutable working-copy dataclass carrying the frozen situation and one accumulator per
+    family.
+    """
 
     @property
     def decision_types(self) -> frozenset[Type[ControlDecision]]:
         return self.declared_decision_types
+
+    @property
+    def required_constraints(self) -> Tuple[ConstraintDeclaration, ...]:
+        return self.constraint_declarations
 
     def __post_init__(self) -> None:
         family_names = list(self.rule_set.start_rules_dict.keys())

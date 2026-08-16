@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 from typing_extensions import Any, Iterable, Iterator, Sequence, Tuple, Type
 
 if TYPE_CHECKING:
+    from semantic_digital_twin.reasoning.knowledge_servoing.constraint_declarations import (
+        ConstraintDeclaration,
+    )
     from semantic_digital_twin.world import World
 
 SituationType = TypeVar("SituationType", bound="Situation")
@@ -101,6 +104,16 @@ class SymbolicTheory(Generic[SituationType], ABC):
     @abstractmethod
     def decision_types(self) -> frozenset[Type[ControlDecision]]:
         """The decision types this theory may conclude, declared for build-time binding checks."""
+
+    @property
+    def required_constraints(self) -> Tuple[ConstraintDeclaration, ...]:
+        """The constraints this theory needs the controller to enforce.
+
+        The statechart is assembled from these, so a theory that declares them plugs in by being
+        added rather than by fitting a chart someone else wired. A theory that declares none can
+        only gate and parameterize constraints assembled for it by hand.
+        """
+        return ()
 
     @abstractmethod
     def infer(self, situations: Sequence[SituationType]) -> DecisionSet:
