@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from importlib.resources import files
+from pathlib import Path
 
 from giskardpy.executor import Executor, SimulationPacer
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
+from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.datastructures.joint_state import JointState
@@ -24,20 +27,34 @@ from semantic_digital_twin.physics.equations.pouring_equations import (
 )
 from semantic_digital_twin.robots.tracy import Tracy
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from semantic_digital_twin.spatial_types import (
+    HomogeneousTransformationMatrix,
+    Vector3,
+)
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     FixedConnection,
 )
-from semantic_digital_twin.world_description.geometry import Box, Scale
+from semantic_digital_twin.world_description.geometry import Box, Mesh, Scale
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 
 TABLE_SURFACE_HEIGHT = 0.975
 """Height of the table surface the receiving cup stands on, in metres."""
 
-POURING_OUTFLOW_RATE_CONSTANT = 0.12
+_JEROEN_CUP_MESH_PATH = str(
+    Path(files("semantic_digital_twin")).parent.parent
+    / "resources"
+    / "stl"
+    / "jeroen_cup.stl"
+)
+"""The cup mesh both containers use, as in the Tracy liquid-transfer demo."""
+
+CARRY_POSE_YAW = 0.1
+"""Yaw of the carry pose, giving the pour a defined tilt direction from the start."""
+
+POURING_OUTFLOW_RATE_CONSTANT = 0.08
 """Outflow rate the transfer is coupled at.
 
 Slow enough that the arm can tilt the source back before the receiver overfills; a faster coupling
@@ -77,15 +94,19 @@ def _move_gripper_to_carry_pose(world: World, tool_frame: Body) -> None:
     :param world: The world to move the robot in.
     :param tool_frame: The gripper frame to position.
     """
-    carry_pose = HomogeneousTransformationMatrix.from_xyz_quaternion(
+    upright_orientation = HomogeneousTransformationMatrix.from_xyz_quaternion(
         pos_x=1.0,
-        pos_y=0.2,
-        pos_z=TABLE_SURFACE_HEIGHT + 0.3,
+        pos_y=0.3,
+        pos_z=TABLE_SURFACE_HEIGHT + 0.15,
         quat_x=0.5,
         quat_y=0.5,
         quat_z=0.5,
         quat_w=0.5,
         reference_frame=world.root,
+    )
+    carry_pose = (
+        upright_orientation
+        @ HomogeneousTransformationMatrix.from_xyz_rpy(yaw=CARRY_POSE_YAW)
     ).to_pose()
     statechart = MotionStatechart()
     reach = CartesianPose(
@@ -150,7 +171,10 @@ def build_transfer_scenario(
     with world.modify_world():
         world.add_semantic_annotation(source_cup)
     source_cup.initialize_fill_level(
-        world=world, initial_fill=source_fill_level, outflow_rate_constant=1.0
+        world=world,
+        initial_fill=source_fill_level,
+        outflow_rate_constant=0.8,
+        discharge_coefficient=0.2,
     )
 
     receiving_cup_body = _cup_body("receiving_cup")
@@ -163,7 +187,7 @@ def build_transfer_scenario(
                 receiving_cup_body,
                 name=PrefixedName("table_T_receiving_cup"),
                 parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    1.0, 0.1, TABLE_SURFACE_HEIGHT
+                    1.0, 0.099, TABLE_SURFACE_HEIGHT
                 ),
             )
         )
@@ -201,7 +225,9 @@ def build_transfer_scenario(
                 parent=receiving_cup_body,
                 child=sensitive_body,
                 name=PrefixedName("receiving_cup_T_laptop"),
-                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(),
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    y=-0.25
+                ),
             )
         )
 
@@ -230,4 +256,26 @@ def build_transfer_scenario(
         sensitive_body=sensitive_body,
         balance_body=balance_body,
         tool_frame=tool_frame,
+    )
+
+
+def pouring_plane_stabilization(scenario: TransferScenario) -> AlignPlanes:
+    """The wrist stabilization the Tracy liquid-transfer demo runs throughout the motion.
+
+    Keeps the tool frame's z-axis along the world's x-axis, so the only rotational freedom left is
+    the tilt the pour needs. Without it the wrist is unconstrained about the pour axis and the
+    optimizer wanders it, which shows up as jitter.
+
+    This is a statement about the embodiment and the scene, not about any theory, so the caller
+    adds it to the chart the way it adds termination.
+
+    :param scenario: The scenario whose tool frame is stabilized.
+    :return: The always-active alignment task.
+    """
+    return AlignPlanes(
+        name="pouring_plane_stabilization",
+        root_link=scenario.world.root,
+        tip_link=scenario.tool_frame,
+        goal_normal=Vector3.X(reference_frame=scenario.world.root),
+        tip_normal=Vector3.Z(reference_frame=scenario.tool_frame),
     )

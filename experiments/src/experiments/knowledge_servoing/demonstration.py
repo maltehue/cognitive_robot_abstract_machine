@@ -64,7 +64,10 @@ from semantic_digital_twin.reasoning.substance_transfer.primitive_theory import 
 )
 
 from experiments.knowledge_servoing.constraint_factories import build_transfer_catalog
-from experiments.knowledge_servoing.scenario import TransferScenario
+from experiments.knowledge_servoing.scenario import (
+    TransferScenario,
+    pouring_plane_stabilization,
+)
 from experiments.knowledge_servoing.twist_bridge import TwistBridgeNode
 
 REQUESTED_FILL_LEVEL = 0.4
@@ -183,6 +186,7 @@ def build_transfer_demonstration(
         ],
         statechart,
     )
+    statechart.add_node(pouring_plane_stabilization(scenario))
     statechart.add_node(
         EndMotion.when_true(transfer_assembled.monitors["return_upright"])
     )

@@ -20,6 +20,7 @@ from experiments.knowledge_servoing.constraint_factories import (
 from experiments.knowledge_servoing.scenario import (
     TransferScenario,
     build_transfer_scenario,
+    pouring_plane_stabilization,
 )
 from experiments.theory_synthesis.generator import SpecificationGenerator
 from experiments.theory_synthesis.prompting import (
@@ -280,6 +281,7 @@ class SynthesisStudy:
             ],
             statechart,
         )
+        statechart.add_node(pouring_plane_stabilization(scenario))
         for declaration in synthesized.theory.required_constraints:
             if isinstance(declaration, ReturnUprightDeclaration):
                 statechart.add_node(
