@@ -17,6 +17,9 @@ from experiments.knowledge_servoing.constraint_factories import (
     DeclaredMotionAborted,
     build_transfer_catalog,
 )
+from experiments.knowledge_servoing.demonstration import (
+    pouring_controller_configuration,
+)
 from experiments.knowledge_servoing.scenario import (
     TransferScenario,
     build_transfer_scenario,
@@ -290,7 +293,10 @@ class SynthesisStudy:
                 break
 
         executor = Executor(
-            MotionStatechartContext(world=scenario.world),
+            MotionStatechartContext(
+                world=scenario.world,
+                qp_controller_config=pouring_controller_configuration(),
+            ),
             pacer=SimulationPacer(real_time_factor=1),
         )
         executor.compile(motion_statechart=statechart)

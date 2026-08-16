@@ -17,6 +17,7 @@ from experiments.knowledge_servoing.constraint_factories import build_transfer_c
 from experiments.knowledge_servoing.demonstration import (
     FILL_LEVEL_TOLERANCE,
     REQUESTED_FILL_LEVEL,
+    pouring_controller_configuration,
 )
 from experiments.knowledge_servoing.scenario import build_transfer_scenario
 from giskardpy.executor import Executor, SimulationPacer
@@ -87,7 +88,10 @@ def completed_compiled_run():
     statechart.add_node(EndMotion.when_true(assembled.monitors["return_upright"]))
 
     executor = Executor(
-        MotionStatechartContext(world=scenario.world),
+        MotionStatechartContext(
+            world=scenario.world,
+            qp_controller_config=pouring_controller_configuration(),
+        ),
         pacer=SimulationPacer(real_time_factor=1),
     )
     executor.compile(motion_statechart=statechart)
