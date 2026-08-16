@@ -97,6 +97,10 @@ class DecisionTranscript:
         if current_types == self._previous_types:
             return
         previous_types = self._previous_types or frozenset()
+        if not current_types and not previous_types:
+            # A theory that concludes nothing on its first inference has not turned anything over.
+            self._previous_types = current_types
+            return
         self.changes.append(
             DecisionChange(
                 control_cycle=control_cycle,
