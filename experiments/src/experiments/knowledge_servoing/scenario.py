@@ -122,14 +122,18 @@ def _move_gripper_to_carry_pose(world: World, tool_frame: Body) -> None:
 
 
 def _cup_body(name: str) -> Body:
-    """Builds a cup-sized box body.
+    """Builds a cup body with the Jeroen cup mesh, as in the Tracy liquid-transfer demo.
 
     :param name: Name of the body.
     :return: The body.
     """
+    mesh = Mesh(
+        origin=HomogeneousTransformationMatrix.from_xyz_rpy(),
+        filename=_JEROEN_CUP_MESH_PATH,
+        scale=Scale(1, 1, 1),
+    )
     return Body.from_shape_collection(
-        shape_collection=ShapeCollection([Box(scale=Scale(0.08, 0.08, 0.1))]),
-        name=PrefixedName(name),
+        shape_collection=ShapeCollection([mesh]), name=PrefixedName(name)
     )
 
 

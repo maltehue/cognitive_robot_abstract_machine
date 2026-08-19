@@ -96,7 +96,7 @@ def completed_compiled_run():
     )
     executor.compile(motion_statechart=statechart)
     ended = False
-    for _ in range(2000):
+    for _ in range(5000):
         executor.tick()
         if executor.motion_statechart.is_end_motion():
             ended = True

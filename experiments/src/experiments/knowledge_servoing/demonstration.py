@@ -157,7 +157,7 @@ class TransferDemonstration:
     Regime turnovers of the safety theory over the run.
     """
 
-    def run(self, maximum_control_cycles: int = 4000) -> None:
+    def run(self, maximum_control_cycles: int = 6000) -> None:
         """
         Ticks the controller to completion, transcribing both theories as it goes.
 

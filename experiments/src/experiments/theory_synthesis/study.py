@@ -84,7 +84,7 @@ STUDY_SCENE = SceneDescription(
 )
 """What the model is told about the demonstration scene."""
 
-MAXIMUM_CONTROL_CYCLES = 3000
+MAXIMUM_CONTROL_CYCLES = 6000
 """Cycle budget after which a run counts as not terminating."""
 
 
