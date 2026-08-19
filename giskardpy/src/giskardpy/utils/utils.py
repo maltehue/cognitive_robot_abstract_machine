@@ -1,6 +1,5 @@
 from __future__ import division
 
-import errno
 import inspect
 import logging
 import os
@@ -32,12 +31,15 @@ def get_all_classes_in_module(
 
 
 def create_path(path):
-    if not os.path.exists(os.path.dirname(path)):
-        try:
-            os.makedirs(os.path.dirname(path))
-        except OSError as exc:  # Guard against race condition
-            if exc.errno != errno.EEXIST:
-                raise
+    """
+    Creates the directory a file path points into, if any.
+
+    A bare file name has no directory part and needs nothing created; ``exist_ok``
+    guards against a concurrent creation of the same directory.
+    """
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
 
 
 def clear_cached_properties(instance: Any):
