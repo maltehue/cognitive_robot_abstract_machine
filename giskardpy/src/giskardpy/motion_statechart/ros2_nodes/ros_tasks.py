@@ -29,7 +29,6 @@ from semantic_digital_twin.world_description.world_entity import Body
 
 logger = logging.getLogger(__name__)
 
-
 Action = TypeVar("Action")
 ActionGoal = TypeVar("ActionGoal")
 ActionResult = TypeVar("ActionResult")
@@ -178,7 +177,7 @@ class NavigateActionServerTask(
         position_error = root_T_goal.to_position().euclidean_distance(
             root_T_current.to_position()
         )
-        rotation_error = root_T_goal.to_rotation_matrix().rotational_error(
+        rotation_error = root_T_goal.to_rotation_matrix().rotational_distance(
             root_T_current.to_rotation_matrix()
         )
 

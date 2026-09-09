@@ -89,6 +89,14 @@
 
 ## Type Hints
 - Classes and methods should always have accurate type hints (including `Any`) where applicable
+- When a family of classes each declares the type it handles, carry that type as a bound
+  generic parameter, not as a `ClassVar`: inherit `Generic[T]` plus
+  `krrood.patterns.subclass_safe_generic.SubClassSafeGeneric`, have each member bind it
+  (`class MemberOfFamily(Family[ConcreteType])`), and read it back through
+  `SubClassSafeGeneric`'s own helpers rather than re-deriving it. The binding is then part
+  of the type signature instead of a separate attribute that can disagree with it.
+  Note `SubClassSafeGeneric` is a non-frozen dataclass, so members cannot be
+  `@dataclass(frozen=True)`.
 
 ## Documentation
 - Classes and methods should always have meaningful, non-trivial documentation
