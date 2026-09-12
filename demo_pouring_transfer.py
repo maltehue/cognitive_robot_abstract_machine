@@ -297,6 +297,7 @@ else:
     )
     with world.modify_world():
         world.add_semantic_annotation(receiving_cup)
+    time.sleep(0.2)
     receiving_cup.initialize_fill_level(
         world=world, initial_fill=0.0, outflow_rate_constant=1.0
     )
@@ -310,7 +311,7 @@ else:
     else:
         receiving_cup.receive_outflow_from(source=source_cup, world=world)
 
-# time.sleep(0.2)
+time.sleep(0.2)
 
 assert source_cup.fill_level == START_FILL
 assert receiving_cup.fill_level == 0.0
@@ -318,7 +319,7 @@ assert receiving_cup.fill_level == 0.0
 # ----- Transfer -----
 goal_fill = GOAL_FILL_CONST
 tolerance = 0.05
-input("Press Enter to continue...")
+# input("Press Enter to continue...")
 transfer_task = FillByTransferTask(
     receiver=receiving_cup,
     goal_value=goal_fill,

@@ -7,7 +7,6 @@
 # ----------------------------------------------------------------------------------------------------------------------
 from __future__ import annotations
 
-import importlib.util
 import logging
 from pathlib import Path
 
@@ -18,14 +17,11 @@ import semantic_digital_twin.orm.model
 
 import semantic_digital_twin.adapters.procthor.procthor_resolver
 from krrood.adapters.json_serializer import SubclassJSONSerializer
+from krrood.entity_query_language.predicate import SymbolicCallable
 from krrood.ormatic.ormatic import ORMatic
-from semantic_digital_twin.physics.equations.learned_pouring_equations import (
-    HasLearnedHead,
-)
-from semantic_digital_twin.physics.equations.pouring_equations import (
-    RectangularContainerGeometry,
-)
-from semantic_digital_twin.reasoning.predicates import ContainsType
+from krrood.utils import recursive_subclasses
+import semantic_digital_twin.reasoning.predicates
+import semantic_digital_twin.reasoning.world_rdr.rules
 from semantic_digital_twin.semantic_annotations.position_descriptions import (
     SemanticDirection,
 )
@@ -49,24 +45,13 @@ ignore_classes = {
     ForwardKinematicsManager,
     MeshFileStorage,
     semantic_digital_twin.adapters.procthor.procthor_resolver.ProcthorResolver,
-    ContainsType,
     SemanticDirection,
     SubclassJSONSerializer,
-    # Behaviour mixins of the pouring equations: keeping them unmapped roots the equations'
-    # DAOs in the single PouringEquation hierarchy their fields are persisted in.
-    HasLearnedHead,
-    RectangularContainerGeometry,
+    # A symbolic operation is a step of a query, not something a world stores, so none of
+    # them is mapped. The modules defining them are imported above so that they are all
+    # declared by the time this is read.
+    *recursive_subclasses(SymbolicCallable),
 }
-
-# The trainer is a training procedure, not world state, and its module requires torch at import
-# time. Without torch the package scan skips the module on its own, so ORM regeneration must not
-# hard-import it — otherwise regeneration breaks on every torch-free install.
-if importlib.util.find_spec("torch") is not None:
-    import semantic_digital_twin.physics.equations.head_surrogate_training
-
-    ignore_classes.add(
-        semantic_digital_twin.physics.equations.head_surrogate_training.HeadSurrogateTrainer
-    )
 
 
 def generate_orm():

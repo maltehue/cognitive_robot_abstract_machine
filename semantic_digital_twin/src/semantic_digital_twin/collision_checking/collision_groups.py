@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from rustworkx import rustworkx
 from typing_extensions import TYPE_CHECKING
 
-from krrood.utils import clear_memoization_cache, memoize
 from semantic_digital_twin.collision_checking.collision_manager import (
     CollisionManager,
     CollisionConsumer,
@@ -41,6 +40,10 @@ class CollisionGroup:
     """
     All bodies belonging to the group.
 
+    Derived from the kinematic structure and therefore re-evaluated whenever the world
+    model changes. It is deliberately not part of the group's identity, so that a group
+    stays usable as a dict key across such a change.
+
     .. note: `root` is only in bodies, if it is itself a body.
     """
 
@@ -54,6 +57,8 @@ class CollisionGroup:
         return str(self.root.name)
 
     def __eq__(self, other) -> bool:
+        if not isinstance(other, CollisionGroup):
+            return NotImplemented
         return self.root == other.root
 
     def __contains__(self, item):
@@ -85,7 +90,7 @@ class CollisionGroup:
         return max(max_avoided_bodies, default=1)
 
 
-@dataclass(eq=False)
+@dataclass
 class CollisionGroupConsumer(CollisionConsumer, ABC):
     """
     A collision consumer that keeps track of collision groups instead of individual
@@ -111,11 +116,7 @@ class CollisionGroupConsumer(CollisionConsumer, ABC):
         """
         body_to_robot = world.robot_body_to_robot_mapping
 
-        root_group = CollisionGroup(world.root)
-        group_of_entity: dict[KinematicStructureEntity, CollisionGroup] = {
-            world.root: root_group
-        }
-        self.collision_groups = [root_group]
+        self.collision_groups = [CollisionGroup(world.root)]
         for parent, children in rustworkx.bfs_successors(
             world.kinematic_structure, world.root.index
         ):
@@ -124,27 +125,20 @@ class CollisionGroupConsumer(CollisionConsumer, ABC):
                 if parent_C_child.is_controlled or body_to_robot.get(
                     parent
                 ) != body_to_robot.get(child):
-                    child_group = CollisionGroup(child)
-                    self.collision_groups.append(child_group)
+                    self.collision_groups.append(CollisionGroup(child))
                 else:
-                    child_group = group_of_entity[parent]
-                    child_group.bodies.add(child)
-                group_of_entity[child] = child_group
+                    collision_group = self.get_collision_group(parent)
+                    collision_group.bodies.add(child)
 
+        # Inspecting a body's geometry is expensive, so ask the world once.
+        bodies_with_collision = set(world.bodies_with_collision)
         for group in self.collision_groups:
-            group.bodies = set(
-                body for body in group.bodies if body in world.bodies_with_collision
-            )
+            group.bodies = set(b for b in group.bodies if b in bodies_with_collision)
 
         self.collision_groups = [
             group for group in self.collision_groups if len(group.bodies) > 0
         ]
 
-        # The memoized body-to-group mapping refers to the groups of the previous model;
-        # without clearing it, lookups keep returning (and mutating) those dead groups.
-        clear_memoization_cache(self)
-
-    @memoize
     def get_collision_group(self, body: KinematicStructureEntity) -> CollisionGroup:
         """
         Ever body belongs to at most one collision group.

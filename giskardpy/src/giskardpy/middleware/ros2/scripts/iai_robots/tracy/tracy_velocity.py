@@ -11,8 +11,8 @@ from giskardpy.qp.qp_controller_config import QPControllerConfig
 
 def main():
     rospy.init_node("giskard")
-    rospy.node.declare_parameter("robot_description", "")
-    robot_description = rospy.node.get_parameter("robot_description").value
+    rospy.get_node().declare_parameter("robot_description", "")
+    robot_description = rospy.get_node().get_parameter("robot_description").value
     if not robot_description:
         robot_description = load_xacro(
             "package://iai_tracy_description/urdf/tracy.urdf.xacro"
