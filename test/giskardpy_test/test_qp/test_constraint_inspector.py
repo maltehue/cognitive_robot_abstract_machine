@@ -10,6 +10,8 @@ from giskardpy.qp.constraint_inspector import (  # noqa: E402
     ChartLabels,
     ChartPalette,
     ConstraintInspector,
+    MAXIMUM_VISIBLE_COST_DECADES,
+    VISIBLE_COST_DECADES,
 )
 
 OFFSCREEN_ARGUMENTS = ["test", "-platform", "offscreen"]
@@ -100,6 +102,81 @@ def test_redrawing_a_panel_does_not_add_another_color_scale(inspector):
     inspector.show_first_cycle()
 
     assert [len(panel.figure.axes) for panel in inspector.panels] == scales_per_panel
+
+
+# %% cost scale
+
+
+def test_the_visible_decades_control_starts_at_the_timelines_default(inspector):
+    assert inspector.decades_slider.value() == VISIBLE_COST_DECADES
+    assert inspector.timeline.visible_decades == VISIBLE_COST_DECADES
+
+
+def test_moving_the_visible_decades_slider_rescales_the_timeline(inspector):
+    peak_cost = inspector.timeline.image.norm.vmax
+
+    inspector.decades_slider.setValue(MAXIMUM_VISIBLE_COST_DECADES)
+
+    assert inspector.timeline.visible_decades == MAXIMUM_VISIBLE_COST_DECADES
+    assert inspector.timeline.image.norm.linthresh == pytest.approx(
+        peak_cost * 10.0**-MAXIMUM_VISIBLE_COST_DECADES
+    )
+    assert inspector.decades_value_label.text() == str(MAXIMUM_VISIBLE_COST_DECADES)
+
+
+def test_widening_the_visible_decades_brings_a_faint_cost_back_from_the_floor(
+    inspector,
+):
+    """
+    Reproduces the reported symptom: a cost many decades below the peak reads as exactly
+    the floor of the scale until enough decades are made visible to place it above the
+    linear threshold.
+    """
+    peak_cost = inspector.timeline.image.norm.vmax
+    faint_cost = peak_cost * 10.0 ** -(VISIBLE_COST_DECADES + 2)
+
+    inspector.decades_slider.setValue(VISIBLE_COST_DECADES)
+    at_default = float(inspector.timeline.image.norm(faint_cost))
+
+    inspector.decades_slider.setValue(VISIBLE_COST_DECADES + 4)
+    at_widened = float(inspector.timeline.image.norm(faint_cost))
+
+    assert (
+        at_default < 0.01
+    ), "a cost this far below the peak should read near the floor"
+    assert at_widened > at_default
+
+
+def test_the_maximum_cost_control_starts_uncapped_at_the_peak(inspector):
+    assert (
+        inspector.maximum_cost_slider.value() == inspector.maximum_cost_slider.maximum()
+    )
+    assert inspector.timeline.visible_maximum_cost == inspector.timeline.peak_cost
+
+
+def test_capping_the_maximum_cost_lowers_the_timelines_ceiling(inspector):
+    capped_decade = inspector.maximum_cost_slider.maximum() - 1
+
+    inspector.maximum_cost_slider.setValue(capped_decade)
+
+    assert inspector.timeline.visible_maximum_cost == pytest.approx(10.0**capped_decade)
+    assert inspector.timeline.image.norm.vmax == pytest.approx(10.0**capped_decade)
+    assert inspector.maximum_cost_value_label.text() == str(capped_decade)
+
+
+def test_capping_the_maximum_cost_spreads_out_the_cheaper_constraints(inspector):
+    """
+    Reproduces the reported symptom from the other direction: instead of widening how
+    far below the peak the scale still tells costs apart, lowering the ceiling gives the
+    cheaper constraints more of the scale directly.
+    """
+    moderate_cost = inspector.timeline.peak_cost * 10.0**-2
+    at_the_peak = float(inspector.timeline.image.norm(moderate_cost))
+
+    inspector.maximum_cost_slider.setValue(inspector.maximum_cost_slider.maximum() - 2)
+    at_the_cap = float(inspector.timeline.image.norm(moderate_cost))
+
+    assert at_the_cap > at_the_peak
 
 
 # %% reading the values

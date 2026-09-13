@@ -81,10 +81,21 @@ The untruncated names stay readable in the table of the inspected cycle.
 
 VISIBLE_COST_DECADES = 6
 """
-How many powers of ten below the largest cost the timeline still tells apart.
+How many powers of ten below the largest cost the timeline still tells apart, until the
+visible-decades control is moved.
 
 Constraint weights span orders of magnitude, so on a linear scale the most expensive
-constraint hides every other one.
+constraint hides every other one. A single peak can span so many more decades than the
+rest of the motion that even this default collapses everything else to the same near-
+zero color, which is what the control is for.
+"""
+
+MAXIMUM_VISIBLE_COST_DECADES = 15
+"""
+Upper bound offered by the visible-decades control.
+
+Double-precision floats carry about 15 significant decimal digits, so widening the scale
+any further stops distinguishing additional costs from zero.
 """
 
 ELLIPSIS = "…"
@@ -401,13 +412,31 @@ class ViolationTimelinePanel(InspectorPanel):
     def __init__(self, analysis: ControlCycleAnalysis, labels: ChartLabels) -> None:
         super().__init__(analysis, labels)
         self._create_axes_with_task_strip()
-        costs = self.analysis.slack_costs.T
-        image = self.axes.imshow(
-            costs,
+        self.costs = self.analysis.slack_costs.T
+        self.peak_cost = self._peak_cost(self.costs)
+        """
+        The largest cost anywhere in the recording; the scale's ceiling before it is
+        capped by :meth:`set_visible_maximum_cost`.
+        """
+        self.visible_decades = VISIBLE_COST_DECADES
+        """
+        How many powers of ten below the scale's current ceiling are kept
+        distinguishable; changed live by :meth:`set_visible_decades`.
+        """
+        self.visible_maximum_cost = self.peak_cost
+        """
+        The scale's current ceiling; changed live by :meth:`set_visible_maximum_cost`.
+
+        A cost above it reads the same as one exactly at it, which is how capping it
+        below :attr:`peak_cost` neutralizes one outlier instead of only widening how far
+        below it the scale still tells costs apart.
+        """
+        self.image = self.axes.imshow(
+            self.costs,
             aspect="auto",
             interpolation="nearest",
             cmap=self.palette.magnitude_color_map,
-            norm=self._cost_scale(costs),
+            norm=self._cost_scale(self.visible_decades, self.visible_maximum_cost),
             extent=(
                 0,
                 self.recording.number_of_cycles,
@@ -424,7 +453,7 @@ class ViolationTimelinePanel(InspectorPanel):
             "control cycle", fontsize=LABEL_FONT_SIZE, color=self.palette.muted_ink
         )
         self._style_axes()
-        self._add_scale(image, "cost (weight × violation²)")
+        self._add_scale(self.image, "cost (weight × violation²)")
         self.cursor = self.axes.axvline(
             0,
             color=self.palette.primary_ink,
@@ -432,6 +461,36 @@ class ViolationTimelinePanel(InspectorPanel):
             path_effects=[withStroke(linewidth=3, foreground=self.palette.surface)],
         )
         self._add_task_legend()
+
+    def set_visible_decades(self, decades: int) -> None:
+        """
+        Keep ``decades`` powers of ten below the scale's current ceiling
+        distinguishable, redrawing immediately.
+
+        A cost far enough above the rest of the motion otherwise pushes every cheaper
+        constraint into the same near-zero color; widening the scale brings them back.
+
+        :param decades: How many powers of ten below the ceiling stay distinguishable
+            from zero.
+        """
+        self.visible_decades = decades
+        self.image.set_norm(self._cost_scale(decades, self.visible_maximum_cost))
+        self.canvas.draw_idle()
+
+    def set_visible_maximum_cost(self, maximum_cost: float) -> None:
+        """
+        Cap the scale's ceiling at ``maximum_cost``, redrawing immediately.
+
+        A single outlier cost otherwise sets the ceiling for the whole motion, leaving
+        every cheaper constraint to share what little of the scale is left below it;
+        capping the ceiling gives them the whole scale back and lets the outlier itself
+        saturate instead.
+
+        :param maximum_cost: The new ceiling of the scale, at most :attr:`peak_cost`.
+        """
+        self.visible_maximum_cost = maximum_cost
+        self.image.set_norm(self._cost_scale(self.visible_decades, maximum_cost))
+        self.canvas.draw_idle()
 
     def _add_task_legend(self) -> None:
         """
@@ -455,18 +514,30 @@ class ViolationTimelinePanel(InspectorPanel):
             text.set_color(self.palette.secondary_ink)
 
     @staticmethod
-    def _cost_scale(costs: np.ndarray) -> SymLogNorm:
+    def _peak_cost(costs: np.ndarray) -> float:
+        """
+        The largest cost in the whole recording.
+
+        :return: That cost, or ``1.0`` if every cost is zero, absent, or the recording
+            is empty, so the scale still has a positive ceiling to cap.
+        """
+        largest_cost = float(np.nanmax(costs)) if costs.size else 0.0
+        return largest_cost if largest_cost > 0.0 else 1.0
+
+    @staticmethod
+    def _cost_scale(decades: int, vmax: float) -> SymLogNorm:
         """
         Build a scale that keeps the cheap constraints visible next to the expensive
         ones.
+
+        :param decades: How many powers of ten below ``vmax`` stay distinguishable from
+            zero.
+        :param vmax: The cost at which the scale saturates.
         """
-        largest_cost = float(np.nanmax(costs)) if costs.size else 0.0
-        if not largest_cost > 0.0:
-            largest_cost = 1.0
         return SymLogNorm(
-            linthresh=largest_cost * 10.0**-VISIBLE_COST_DECADES,
+            linthresh=vmax * 10.0**-decades,
             vmin=0.0,
-            vmax=largest_cost,
+            vmax=vmax,
         )
 
     def draw(self, cycle_index: int) -> None:
@@ -759,6 +830,58 @@ class ConstraintInspector(QWidget):
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.toggle_playback)
 
+        self.decades_label = QLabel("visible decades:")
+        self.decades_label.setStyleSheet(f"color: {self.palette_colors.secondary_ink};")
+        self.decades_slider = QSlider(Qt.Horizontal)
+        self.decades_slider.setMinimum(1)
+        self.decades_slider.setMaximum(MAXIMUM_VISIBLE_COST_DECADES)
+        self.decades_slider.setValue(self.timeline.visible_decades)
+        self.decades_slider.setMaximumWidth(150)
+        self.decades_slider.valueChanged.connect(self._set_visible_decades)
+        self.decades_value_label = QLabel(str(self.timeline.visible_decades))
+        self.decades_value_label.setStyleSheet(
+            f"color: {self.palette_colors.primary_ink};"
+        )
+
+        peak_cost_decade = self._cost_decade(self.timeline.peak_cost)
+        self.maximum_cost_label = QLabel("cap peak at 10^:")
+        self.maximum_cost_label.setStyleSheet(
+            f"color: {self.palette_colors.secondary_ink};"
+        )
+        self.maximum_cost_slider = QSlider(Qt.Horizontal)
+        self.maximum_cost_slider.setMinimum(
+            peak_cost_decade - MAXIMUM_VISIBLE_COST_DECADES
+        )
+        self.maximum_cost_slider.setMaximum(peak_cost_decade)
+        self.maximum_cost_slider.setValue(peak_cost_decade)
+        self.maximum_cost_slider.setMaximumWidth(150)
+        self.maximum_cost_slider.valueChanged.connect(self._set_maximum_cost_decade)
+        self.maximum_cost_value_label = QLabel(str(peak_cost_decade))
+        self.maximum_cost_value_label.setStyleSheet(
+            f"color: {self.palette_colors.primary_ink};"
+        )
+
+    @staticmethod
+    def _cost_decade(cost: float) -> int:
+        """
+        The smallest power-of-ten exponent at or above ``cost``.
+        """
+        return int(np.ceil(np.log10(cost)))
+
+    def _set_visible_decades(self, decades: int) -> None:
+        """
+        Rescale the cost timeline and report the new setting next to the slider.
+        """
+        self.timeline.set_visible_decades(decades)
+        self.decades_value_label.setText(str(decades))
+
+    def _set_maximum_cost_decade(self, decade: int) -> None:
+        """
+        Cap the cost timeline's ceiling and report the new setting next to the slider.
+        """
+        self.timeline.set_visible_maximum_cost(10.0**decade)
+        self.maximum_cost_value_label.setText(str(decade))
+
     def _setup_layout(self) -> None:
         """
         Put the whole motion on top, the inspected cycle below it, and the exact numbers
@@ -767,6 +890,15 @@ class ConstraintInspector(QWidget):
         cycle_charts = QHBoxLayout()
         for panel in self.panels[1:]:
             cycle_charts.addWidget(panel.canvas)
+
+        timeline_scale = QHBoxLayout()
+        timeline_scale.addWidget(self.decades_label)
+        timeline_scale.addWidget(self.decades_slider)
+        timeline_scale.addWidget(self.decades_value_label)
+        timeline_scale.addWidget(self.maximum_cost_label)
+        timeline_scale.addWidget(self.maximum_cost_slider)
+        timeline_scale.addWidget(self.maximum_cost_value_label)
+        timeline_scale.addStretch(1)
 
         navigation = QHBoxLayout()
         navigation.addWidget(self.first_button)
@@ -779,6 +911,7 @@ class ConstraintInspector(QWidget):
         layout = QVBoxLayout()
         layout.addWidget(self.header_label)
         layout.addWidget(self.timeline.canvas, stretch=3)
+        layout.addLayout(timeline_scale)
         layout.addWidget(self.slider)
         layout.addLayout(navigation)
         layout.addLayout(cycle_charts, stretch=4)
@@ -823,7 +956,7 @@ class ConstraintInspector(QWidget):
         if self.state_publisher is None:
             return
         self.state_publisher.publish(
-            self.recording.world_degree_of_freedom_ids,
+            self.recording.world_degree_of_freedom_names,
             self.recording.world_positions[cycle_index],
         )
 
@@ -878,10 +1011,17 @@ def _create_state_publisher() -> RecordedWorldStatePublisher:
     """
     Start a ros node that replays the recorded world state.
 
+    The node is spun on a thread of its own, because the publisher first asks the
+    running giskard for its world to learn which degree of freedom each recorded name
+    stands for, and that answer only arrives while the node is being spun.
+
     Imported here rather than at module level so the viewer opens a recording on a
     machine without ros installed.
     """
+    import threading
+
     import rclpy
+    from rclpy.executors import SingleThreadedExecutor
 
     from giskardpy.qp.recorded_state_publisher import (
         REPLAY_NODE_NAME,
@@ -889,7 +1029,11 @@ def _create_state_publisher() -> RecordedWorldStatePublisher:
     )
 
     rclpy.init()
-    return RecordedWorldStatePublisher.for_node(rclpy.create_node(REPLAY_NODE_NAME))
+    node = rclpy.create_node(REPLAY_NODE_NAME)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    threading.Thread(target=executor.spin, daemon=True, name="replay-spinner").start()
+    return RecordedWorldStatePublisher.for_node(node)
 
 
 def main() -> None:
@@ -902,7 +1046,9 @@ def main() -> None:
         "--replay-world-state",
         action="store_true",
         help="publish the world state of the inspected cycle, so a running standalone "
-        "giskard shows the robot where it was; never use this against a real robot",
+        "giskard shows the robot where it was; that giskard has to be up, as its "
+        "world says which degree of freedom each recorded name stands for; never use "
+        "this against a real robot",
     )
     arguments = parser.parse_args()
 

@@ -197,7 +197,7 @@ def test_the_pose_of_the_whole_world_is_recorded(recording):
     A replay puts the objects the robot works on back too, so the recording covers every
     degree of freedom of the world rather than only the ones the optimizer moves.
     """
-    number_of_world_degrees_of_freedom = len(recording.world_degree_of_freedom_ids)
+    number_of_world_degrees_of_freedom = len(recording.world_degree_of_freedom_names)
 
     assert recording.world_positions.shape == (
         recording.number_of_cycles,
@@ -237,7 +237,9 @@ def test_stored_recording_reads_back_unchanged(recording, tmp_path):
     np.testing.assert_allclose(loaded.row_slacks, recording.row_slacks, equal_nan=True)
     np.testing.assert_allclose(loaded.velocities, recording.velocities)
     np.testing.assert_allclose(loaded.world_positions, recording.world_positions)
-    assert loaded.world_degree_of_freedom_ids == recording.world_degree_of_freedom_ids
+    assert (
+        loaded.world_degree_of_freedom_names == recording.world_degree_of_freedom_names
+    )
 
 
 def test_recording_of_an_unknown_format_version_is_rejected(recording, tmp_path):

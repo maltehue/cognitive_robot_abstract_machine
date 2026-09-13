@@ -1892,6 +1892,57 @@ def test_apply_missed_messages_interleaved_model_and_state(rclpy_node):
     world_synchronizer_2.close()
 
 
+def test_connection_referencing_a_still_buffered_parent_body_resolves(rclpy_node):
+    """
+    A connection published right after the body it refers to, while the receiver is
+    paused and has not applied that body yet, must still resolve the reference against
+    the buffered message instead of raising WorldUpdateReferencesUnknownEntityError.
+
+    This is the shape of a client adding a body and then, in a separate
+    ``modify_world()`` block, attaching another body to it (as
+    ``HasFillLevel.initialize_fill_level`` does for its fill-level phantom body): two
+    messages travel separately, and the receiver may not have applied the first before
+    the second, referencing one of its bodies, is deserialized.
+    """
+    world_1 = World(name="buffered_ref_w1")
+    world_2 = World(name="buffered_ref_w2")
+
+    world_synchronizer_1 = WorldSynchronizer(node=rclpy_node, _world=world_1)
+    world_synchronizer_2 = WorldSynchronizer(node=rclpy_node, _world=world_2)
+
+    world_synchronizer_2.pause()
+
+    parent_body = Body(name=PrefixedName("buffered_ref_parent"))
+    with world_1.modify_world():
+        world_1.add_body(parent_body)
+
+    child_body = Body(name=PrefixedName("buffered_ref_child"))
+    with world_1.modify_world():
+        world_1.add_body(child_body)
+        connection = FixedConnection.create_with_dofs(
+            world=world_1,
+            parent=parent_body,
+            child=child_body,
+            name=PrefixedName("buffered_ref_connection"),
+        )
+        world_1.add_connection(connection)
+
+    time.sleep(0.3)
+
+    assert (
+        len(world_synchronizer_2.missed_messages) == 2
+    ), "both messages must have been deserialized and buffered, not just the first"
+
+    world_synchronizer_2.resume()
+    world_synchronizer_2.apply_missed_messages()
+
+    synced_connection = world_2.get_connection_by_name(connection.name)
+    assert synced_connection.parent.name == parent_body.name
+
+    world_synchronizer_1.close()
+    world_synchronizer_2.close()
+
+
 def test_apply_state_with_unknown_identifier_raises(rclpy_node):
     """
     _apply_state must raise StateUpdateContainsUnknownDegreesOfFreedomError when any DOF

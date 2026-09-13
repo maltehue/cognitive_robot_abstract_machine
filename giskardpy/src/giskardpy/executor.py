@@ -203,9 +203,13 @@ class Executor:
         self._compiled_world_state_data = self.context.world.state._data
         self._compile_qp_controller(self.context.qp_controller_config)
         if self.control_cycle_recorder is not None and self.qp_controller is not None:
+            world = self.context.world
             self.control_cycle_recorder.reset(
                 self.qp_controller.qp_data_factory.qp_data,
-                [str(dof_id) for dof_id in self.context.world.state],
+                [
+                    str(world.get_degree_of_freedom_by_id(dof_id).name)
+                    for dof_id in world.state
+                ],
             )
         if self.trajectory_plotter is not None:
             self.trajectory_plotter.reset(self.context.world.state, self.time)

@@ -156,7 +156,7 @@ def test_anchored_vector_tracks_moving_visualisation_frame(
 
     publisher = DebugExpressionPublisher(world=mini_world, node=rclpy_node)
     anchored = publisher._anchored_expression(tip_axis_in_world)
-    mini_world.set_positions_1DOF_connection({joint: 1.0})
+    mini_JointState.from_mapping({joint: 1.0}).apply_to(world)
 
     # The frame must actually have rotated: in the world the tip axis now points at the
     # rotated direction, so the constant anchored value below is not a silent no-op.

@@ -1035,7 +1035,7 @@ class World(HasSimulatorProperties):
             name must be unique within the current context.
         """
         self._raise_error_if_belongs_to_other_world(semantic_annotation)
-        if self.contains_semantic_annotation(semantic_annotation):
+        if self.get_semantic_annotation_equal_to(semantic_annotation) is not None:
             return
         self._add_semantic_annotation(semantic_annotation)
 
@@ -1052,7 +1052,7 @@ class World(HasSimulatorProperties):
             name must be unique within the current context.
         """
         self._raise_error_if_belongs_to_other_world(semantic_annotation)
-        if self.contains_semantic_annotation(semantic_annotation):
+        if self.get_semantic_annotation_equal_to(semantic_annotation) is not None:
             return
         introspector = DataclassOnlyIntrospector()
 
@@ -1727,8 +1727,8 @@ class World(HasSimulatorProperties):
         """
         :return: Whether this exact annotation instance is bound to this world.
 
-        Unlike :meth:`contains_semantic_annotation`, an equal but distinct instance does
-        not count; the given instance itself must be stored here.
+        Unlike :meth:`get_semantic_annotation_equal_to`, an equal but distinct instance
+        does not count; the given instance itself must be stored here.
         """
         return (
             semantic_annotation._world == self

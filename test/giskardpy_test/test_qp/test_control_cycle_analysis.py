@@ -41,10 +41,7 @@ def build_opposing_constraints_recording() -> ControlCycleRecording:
         velocities=np.array([[2.0, 3.0], [1.0, 1.0]]),
         velocity_lower_limits=np.full((2, 2), -4.0),
         velocity_upper_limits=np.full((2, 2), 4.0),
-        world_degree_of_freedom_ids=[
-            "6f1d0e6e-0000-4000-8000-000000000001",
-            "6f1d0e6e-0000-4000-8000-000000000002",
-        ],
+        world_degree_of_freedom_names=["first_joint", "second_joint"],
         world_positions=np.array([[0.25, 0.5], [0.75, 1.0]]),
     )
 

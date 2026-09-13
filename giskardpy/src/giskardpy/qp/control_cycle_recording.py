@@ -22,7 +22,7 @@ from giskardpy.qp.qp_data import QPDataExplicit
 from giskardpy.qp.qp_data_symbolic import QPDataSymbolic
 from giskardpy.utils.utils import create_path
 
-RECORDING_FORMAT_VERSION = 3
+RECORDING_FORMAT_VERSION = 4
 """
 Version of the stored recording layout, raised whenever stored fields change meaning.
 """
@@ -319,10 +319,14 @@ class ControlCycleRecording:
     Per-cycle upper velocity box limits, shaped like :attr:`velocities`.
     """
 
-    world_degree_of_freedom_ids: list[str]
+    world_degree_of_freedom_names: list[str]
     """
-    Identifier of every degree of freedom of the world, in the column order of
+    Name of every degree of freedom of the world, in the column order of
     :attr:`world_positions`.
+
+    Names rather than identifiers: a world hands out a fresh identifier to every degree
+    of freedom it builds, so only the name still means anything to a world that was
+    started since the recording was made.
     """
 
     world_positions: np.ndarray
@@ -335,7 +339,7 @@ class ControlCycleRecording:
     def from_cycles(
         cls,
         structure: ConstraintProblemStructure,
-        world_degree_of_freedom_ids: list[str],
+        world_degree_of_freedom_names: list[str],
         cycles: list[RecordedControlCycle],
     ) -> Self:
         """
@@ -361,7 +365,7 @@ class ControlCycleRecording:
             velocity_upper_limits=np.stack(
                 [cycle.velocity_upper_limits for cycle in cycles]
             ),
-            world_degree_of_freedom_ids=list(world_degree_of_freedom_ids),
+            world_degree_of_freedom_names=list(world_degree_of_freedom_names),
             world_positions=np.stack([cycle.world_positions for cycle in cycles]),
         )
 
@@ -381,7 +385,7 @@ class ControlCycleRecording:
             {
                 "format_version": RECORDING_FORMAT_VERSION,
                 "structure": self.structure.to_json(),
-                "world_degree_of_freedom_ids": self.world_degree_of_freedom_ids,
+                "world_degree_of_freedom_names": self.world_degree_of_freedom_names,
             }
         )
         np.savez_compressed(
@@ -429,8 +433,8 @@ class ControlCycleRecording:
                 velocities=archive["velocities"],
                 velocity_lower_limits=archive["velocity_lower_limits"],
                 velocity_upper_limits=archive["velocity_upper_limits"],
-                world_degree_of_freedom_ids=list(
-                    metadata["world_degree_of_freedom_ids"]
+                world_degree_of_freedom_names=list(
+                    metadata["world_degree_of_freedom_names"]
                 ),
                 world_positions=archive["world_positions"],
             )
@@ -465,23 +469,23 @@ class ControlCycleRecorder:
     Sums the velocity columns of every horizon block onto their degree of freedom.
     """
 
-    world_degree_of_freedom_ids: list[str] = field(init=False, default_factory=list)
+    world_degree_of_freedom_names: list[str] = field(init=False, default_factory=list)
     """
-    Identifier of every degree of freedom of the world, in world state column order.
+    Name of every degree of freedom of the world, in world state column order.
     """
 
     def reset(
-        self, qp_data: QPDataSymbolic, world_degree_of_freedom_ids: list[str]
+        self, qp_data: QPDataSymbolic, world_degree_of_freedom_names: list[str]
     ) -> None:
         """
         Prepares to record the given problem, discarding any previous cycles.
 
         :param qp_data: The compiled problem whose rows are recorded.
-        :param world_degree_of_freedom_ids: Identifier of every degree of freedom of the
+        :param world_degree_of_freedom_names: Name of every degree of freedom of the
             world, in the column order of the positions handed to :meth:`record`.
         """
         self.structure = ConstraintProblemStructure.from_symbolic_problem(qp_data)
-        self.world_degree_of_freedom_ids = list(world_degree_of_freedom_ids)
+        self.world_degree_of_freedom_names = list(world_degree_of_freedom_names)
         self._cycles = []
         self._degree_of_freedom_aggregator = self._create_aggregator()
 
@@ -580,7 +584,7 @@ class ControlCycleRecorder:
         if not self.has_recorded_cycles:
             raise EmptyControlCycleRecordingError()
         return ControlCycleRecording.from_cycles(
-            self.structure, self.world_degree_of_freedom_ids, self._cycles
+            self.structure, self.world_degree_of_freedom_names, self._cycles
         )
 
     def _number_of_non_slack_variables(self, qp_data: QPDataExplicit) -> int:

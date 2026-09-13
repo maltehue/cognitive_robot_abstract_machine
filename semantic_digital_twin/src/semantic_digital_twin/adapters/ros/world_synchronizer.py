@@ -52,6 +52,10 @@ from semantic_digital_twin.exceptions import (
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.world_entity import (
     WorldEntityWithClassBasedID,
+    WorldEntityWithID,
+)
+from semantic_digital_twin.world_description.world_modification import (
+    WorldModificationWithWorldEntityReference,
 )
 
 
@@ -213,6 +217,20 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
             process_id=os.getpid(),
         )
 
+    def _buffered_world_entities(self) -> Dict[UUID, WorldEntityWithID]:
+        """
+        World entities introduced by messages this synchronizer has received but not yet
+        applied.
+
+        A synchronizer that defers application (see ``defer_incoming_updates``) buffers
+        every incoming message instead of applying it right away, so a later message
+        that references an entity a still-buffered one introduced would otherwise fail
+        to resolve that reference against the not-yet-updated world. Overridden by
+        subclasses that buffer messages this way; the base synchronizer applies messages
+        immediately, so it never has anything buffered here.
+        """
+        return {}
+
     def subscription_callback(self, message: std_msgs.msg.String):
         """
         Wrap the origin subscription callback by self-skipping and disabling the next
@@ -225,6 +243,8 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
         content = json.loads(message.data)
         with self._world._world_lock:
             tracker = WorldEntityWithIDKwargsTracker.from_world(self._world)
+            for entity in self._buffered_world_entities().values():
+                tracker.add(entity.id, entity)
             try:
                 deserialized_message = from_json(content, **tracker.create_kwargs())
             except WorldEntityWithIDNotInKwargs as unknown_entity:
@@ -610,6 +630,24 @@ class WorldSynchronizer(Synchronizer, ModelChangeCallback, StateChangeCallback):
                 message.modification_block is not None
                 for message in self.missed_messages
             )
+
+    def _buffered_world_entities(self) -> Dict[UUID, WorldEntityWithID]:
+        """
+        World entities introduced by model modifications sitting in ``missed_messages``.
+
+        Buffered messages are guaranteed to be applied, in order, before any message
+        received after them, so an entity one of them introduces can already be resolved
+        by that guarantee even though it is not part of the world yet.
+        """
+        with self._missed_message_lock:
+            buffered_messages = list(self.missed_messages)
+        return {
+            modification.referenced_world_entity.id: modification.referenced_world_entity
+            for message in buffered_messages
+            if message.modification_block is not None
+            for modification in message.modification_block.modifications.modifications
+            if isinstance(modification, WorldModificationWithWorldEntityReference)
+        }
 
     def apply_message(self, message: WorldUpdate):
         """
