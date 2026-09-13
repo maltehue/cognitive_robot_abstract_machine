@@ -26,6 +26,11 @@ from giskardpy.qp.enforcement_strategy import (
     VelocityStrategy,
 )
 
+INEQUALITY_ENFORCEMENT_STRATEGY: type[EnforcementStrategy] = PredictedValueStrategy
+"""
+How an inequality constraint is spread over the prediction horizon.
+"""
+
 if TYPE_CHECKING:
     from giskardpy.motion_statechart.graph_node import MotionStatechartNode
 
@@ -239,7 +244,7 @@ class ConstraintCollection:
             lower_slack_limit=lower_slack_limit,
             upper_slack_limit=upper_slack_limit,
             linear_weight=linear_weight,
-            enforcement_strategy=PredictedValueStrategy,
+            enforcement_strategy=INEQUALITY_ENFORCEMENT_STRATEGY,
             lower_bound=lower_error,
             upper_bound=upper_error,
         )
