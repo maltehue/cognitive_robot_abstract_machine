@@ -259,8 +259,9 @@ disturbance speed itself does not matter (above), so the effect runs through the
 compensating joints: tight box limits shrink what the horizon can reach, and with it the
 room the optimizer has to park the correction. Tight limits do not remove the deferral —
 0.13 mm is still above the 0.1 mm tolerance and still grows with the horizon (0.29 mm at
-180) — but they explain why the standalone reproduction on `main` shows a much smaller
-excursion than the pouring branch.
+180). The standalone reproduction on branch `constraint-enforcement-deferral` therefore
+sets every Tracy joint to 1.0 rad/s itself and measures 5.2 mm at horizon 180, the same
+regime as this branch.
 
 **Conclusion:** holding a bound with an `IntegralStrategy` row cannot be made reliable by
 tuning. Every knob a caller has (`weight`, `reference_velocity`/`maximum_velocity`) is
