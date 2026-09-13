@@ -22,6 +22,7 @@ from giskardpy.qp.constraint import (
 from giskardpy.qp.enforcement_strategy import (
     EnforcementStrategy,
     IntegralStrategy,
+    PredictedValueStrategy,
     VelocityStrategy,
 )
 
@@ -204,13 +205,13 @@ class ConstraintCollection:
         upper_slack_limit: sm.ScalarData = LargeNumber,
     ) -> None:
         """
-        Add a task constraint to the motion problem.
+        Add a task constraint keeping an expression between two bounds.
 
-        This should be used for most constraints. It will not strictly stick to the
-        reference velocity, but requires only a single constraint in the final
-        optimization problem and is therefore faster.
-        :param reference_velocity: used by Giskard to limit the error and normalize the
-            weight, will not be strictly enforced.
+        The bounds hold for the expression's predicted value along the prediction
+        horizon (:class:`~giskardpy.qp.enforcement_strategy.PredictedValueStrategy`), so
+        the executed step cannot leave them and the plan brakes before them.
+        :param reference_velocity: caps how fast the expression is pulled back inside
+            its bounds and normalizes the weight
         :param lower_error: lower bound for the error of expression
         :param upper_error: upper bound for the error of expression
         :param quadratic_weight:
@@ -238,7 +239,7 @@ class ConstraintCollection:
             lower_slack_limit=lower_slack_limit,
             upper_slack_limit=upper_slack_limit,
             linear_weight=linear_weight,
-            enforcement_strategy=IntegralStrategy,
+            enforcement_strategy=PredictedValueStrategy,
             lower_bound=lower_error,
             upper_bound=upper_error,
         )

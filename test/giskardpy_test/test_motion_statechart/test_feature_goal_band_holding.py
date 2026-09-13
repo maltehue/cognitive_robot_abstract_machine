@@ -443,17 +443,11 @@ class TestFeatureGoalGuardsHeldCupWhileWristRotates:
     and keeps it there while a joint goal, started once the band is reached, rotates the
     wrist holding the cup, which on its own would push the quantity out of the band.
 
-    Only integral rows take part: the bounded quantity is guarded by the same constraint
-    form every threshold in the system uses.
+    Only the guard's inequality rows and the wrist goal's equality row take part, so the
+    bounded quantity is guarded by the same constraint form every threshold in the
+    system uses.
     """
 
-    _DEFERRAL_REASON = (
-        "The guard's row is an integral over the whole prediction horizon, so the "
-        "optimizer satisfies it with a plan that defers the correction past the step "
-        "it executes. The quantity leaves its band while the row reports no violation."
-    )
-
-    @pytest.mark.xfail(strict=True, reason=_DEFERRAL_REASON)
     def test_height_goal_keeps_the_rim_in_its_band(self, held_cup_scene) -> None:
         """
         The rim, once brought down from well above its band into it, never leaves the
@@ -523,7 +517,13 @@ class TestFeatureGoalGuardsHeldCupWhileWristRotates:
             f"{trace.worst_excursion_after_entry() * 1000:.2f} mm"
         )
 
-    @pytest.mark.xfail(strict=True, reason=_DEFERRAL_REASON)
+    @pytest.mark.xfail(
+        strict=True,
+        reason="The tilt still leaves its band by a few hundredths of a radian at this "
+        "wrist speed while holding it at a third of the speed, so the remaining "
+        "excursion is not the deferral the predicted-value rows removed but the "
+        "linearisation or the joint limits under a fast rotation.",
+    )
     def test_angle_goal_keeps_the_tilt_in_its_band(self, held_cup_scene) -> None:
         """
         The cup's tilt away from upright, once grown from below its band into it, never

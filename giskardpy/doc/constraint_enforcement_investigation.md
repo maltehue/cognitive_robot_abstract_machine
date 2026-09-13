@@ -1,12 +1,15 @@
 # Inequality constraints do not hold their bound during a motion
 
-Write-up of an investigation from 2026-09-13. Everything needed to understand the problem
-and to reproduce it is on this branch:
+Write-up of an investigation from 2026-09-13. Everything needed to understand the problem,
+to reproduce it and to see the fix is on this branch:
 
-- this document, and
+- this document,
 - `test/giskardpy_test/test_motion_statechart/test_feature_goal_band_holding.py`, three
-  tests that show the failure against `main` with nothing but a joint goal and a
-  feature goal.
+  tests that showed the failure against `main` with nothing but a joint goal and a
+  feature goal — two of them pass now, and
+- the fix, `PredictedValueStrategy` in `giskardpy/src/giskardpy/qp/enforcement_strategy.py`,
+  the default of `add_inequality_constraint` since section 8, with unit tests in
+  `test/giskardpy_test/test_qp/test_predicted_value_strategy.py`.
 
 The problem was first noticed as bumpy motion in a cup-to-cup pouring demo. It turned out
 to be general: **giskardpy's inequality constraints do not reliably keep a quantity
@@ -103,10 +106,11 @@ satisfies both goals every time.
 **Contract.** Deliberately the loose one: a motion may start outside the band and be
 brought in, but *once inside, the quantity must never leave again* (`BandTrace` in the
 test file: first sample inside the band, then no sample beyond the band ± 0.1 mm or
-0.1 mrad). Each test is `xfail(strict=True)`, so the markers flip to failures the moment
-the deferral stops.
+0.1 mrad). Before the fix every test was `xfail(strict=True)`; the height and distance
+tests pass now and the angle test stays a strict xfail for the residual described in
+section 8.
 
-**Result** (simulation, 80 Hz, prediction horizon 180):
+**Result before the fix** (simulation, 80 Hz, prediction horizon 180, integral row):
 
 | guard | band | rotation alone would move it to | excursion after entering the band |
 |---|---|---|---|
@@ -280,24 +284,25 @@ Two cheaper companions, matching existing practice:
   does. That aborts on violation instead of holding the margin, but it is one node and no
   tuning.
 
-The three tests on this branch are the acceptance test for any of these: they have no
-`enforcement_strategy` parameter to opt into, so a fix has to reach them through
-`add_inequality_constraint`'s default, and the strict markers flip the moment it does.
+The three tests on this branch were the acceptance test for any of these: they have no
+`enforcement_strategy` parameter to opt into, so a fix had to reach them through
+`add_inequality_constraint`'s default. Section 8 describes the one that did.
 
 ---
 
-## 8. Prototype of the fix: bounding the predicted value along the horizon
+## 8. The fix: bounding the predicted value along the horizon
 
-Tried on 2026-09-13 on this branch's test scene, as step 1 of the plan in section 7. The
-prototype lives in the working tree only; this section records it precisely enough to
-rebuild.
+Tried on 2026-09-13 on this branch's test scene as step 1 of the plan in section 7, then
+landed as `PredictedValueStrategy`, the default of `add_inequality_constraint`, on this
+branch and on the pouring branch.
 
 **The row.** Instead of one integral row per constraint, one row per chosen step `t` of
 the horizon, whose left-hand side is the *predicted value change* after step `t`: the
 expression jacobian times `dt`, summed over velocity blocks `0..t` (a lower-triangular
-Kronecker product instead of the repeated row). Each row has its own slack; the slack
-weight of the constraint is divided by the number of rows, the way the integral row
-divides it by the horizon.
+Kronecker product instead of the repeated row). Each row has its own slack. The
+constraint's slack weight is normalized over the horizon exactly like an integral row's
+and then shared across the rows, so a bound keeps its weight relative to the goals it
+competes with (see *weight scale* below).
 
 **The steps.** `0, 1, 3, 7, 15, 31, 63, 127` and the last block: dense near the executed
 block, sparse toward the end. Nine rows per constraint.
@@ -316,7 +321,8 @@ Outside, row `t` asks for the fraction `(t+1)/H` of the gap, so the approach rat
 gap divided by the horizon time — the barrier rule of section 7 with `α = 1 / (H·dt)`,
 and no tuning parameter — capped by what the reference velocity can reach.
 
-**Result** with this as the default of `add_inequality_constraint`, on the section-3 scene:
+**Result** with this as the default of `add_inequality_constraint`, on the section-3 scene
+(prototype weights, i.e. without the horizon normalization):
 
 | guard | integral (today) | scheduled, 9 rows |
 |---|---|---|
@@ -345,11 +351,33 @@ feature-monitor tests pass under the new default.
   rows fought the floor rows at equal weight and the floor lost: 7 mm on height, worse
   than the integral row. The proportional schedule above removes the fight.
 
-**Open after step 1.**
+**Weight scale.** The prototype skipped the horizon division in the slack weight and was
+therefore about `H` times stiffer than an integral row at the same nominal weight. That
+silently reordered bounds above equal-weight goals everywhere: the collision-avoidance
+buffer became effectively hard against a goal at the collision tier, and the two
+`test_collision_avoidance_tasks` tests that pin down the soft-buffer semantics failed.
+The landed strategy normalizes over the horizon like the integral row, which keeps every
+existing weight relationship, still removes the deferral (the guards hold regardless of
+the weight), and means a bound that is genuinely pushed by a heavier goal now needs a
+weight that says so — F3 in action. On the pouring branch the clearance task therefore
+moved to `WEIGHT_MAXIMUM`.
+
+**On the pouring transfer** (pouring branch, floor and aiming weight as in the demo): the
+strategy holds the clearance band exactly at floor 0.08 and halves the excursion at 0.07,
+at unchanged tick time and with peak joint acceleration up from 0.65 to 0.97. Below
+0.06 the fill row's gate gradient breaks the PIQP solve once the clearance rows push
+back — replaying the failing QP without the clearance rows still fails, without the fill
+row it solves in 23 iterations — so the demo's floor moved from 0.03 to 0.07, which F4's
+rule had asked for anyway, and the superseded front-loaded strategy and the gate-freezing
+flag were removed there.
+
+**Open.**
 
 - The angle guard's remaining 33 mrad vanishes at a slower wrist, so it is not
   deferral. Either the jacobian being held constant while the wrist turns 0.66 rad within
-  one horizon, or the compensating joints saturating. To be separated in step 2.
-- The distance guard is unchanged until its damping rows go (F8).
-- Regression run of the whole giskardpy suite and the pouring demo are still to do
-  (steps 3 and 4 of section 7).
+  one horizon, or the compensating joints saturating. Still a strict xfail.
+- The distance guard passes on the pouring branch's scene; on this branch's scene it
+  still times out through its damping rows (F8) — see the test's marker.
+- Hardware validation of the pouring demo at floor 0.07; the simulation understated
+  every effect in this investigation.
+- The fill row's gate gradient below floor 0.06, and the F3 weight story.
