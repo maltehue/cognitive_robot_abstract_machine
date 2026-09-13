@@ -283,3 +283,73 @@ Two cheaper companions, matching existing practice:
 The three tests on this branch are the acceptance test for any of these: they have no
 `enforcement_strategy` parameter to opt into, so a fix has to reach them through
 `add_inequality_constraint`'s default, and the strict markers flip the moment it does.
+
+---
+
+## 8. Prototype of the fix: bounding the predicted value along the horizon
+
+Tried on 2026-09-13 on this branch's test scene, as step 1 of the plan in section 7. The
+prototype lives in the working tree only; this section records it precisely enough to
+rebuild.
+
+**The row.** Instead of one integral row per constraint, one row per chosen step `t` of
+the horizon, whose left-hand side is the *predicted value change* after step `t`: the
+expression jacobian times `dt`, summed over velocity blocks `0..t` (a lower-triangular
+Kronecker product instead of the repeated row). Each row has its own slack; the slack
+weight of the constraint is divided by the number of rows, the way the integral row
+divides it by the horizon.
+
+**The steps.** `0, 1, 3, 7, 15, 31, 63, 127` and the last block: dense near the executed
+block, sparse toward the end. Nine rows per constraint.
+
+**The bounds.** With `e_low = lower_limit − value`, `e_up = upper_limit − value`,
+`cap_t = reference_velocity · dt · (t + 1)` and `H` the horizon:
+
+```
+lower_t = min(e_low, e_low · (t+1)/H,  cap_t)
+upper_t = max(e_up,  e_up  · (t+1)/H, −cap_t)
+```
+
+Inside the band (`e_low < 0 < e_up`) every row reduces to "stay inside": the executed
+step cannot leave the band, and the later rows make the plan brake before a bound.
+Outside, row `t` asks for the fraction `(t+1)/H` of the gap, so the approach rate is the
+gap divided by the horizon time — the barrier rule of section 7 with `α = 1 / (H·dt)`,
+and no tuning parameter — capped by what the reference velocity can reach.
+
+**Result** with this as the default of `add_inequality_constraint`, on the section-3 scene:
+
+| guard | integral (today) | scheduled, 9 rows |
+|---|---|---|
+| `HeightGoal` | 5.2 mm below the floor | **0.00 mm**, 0 of 389 ticks outside |
+| `AngleGoal`, wrist 0.3 rad/s | 136 mrad | 33 mrad |
+| `AngleGoal`, wrist 0.1 rad/s | 61 mrad | **0.0 mrad** |
+| `DistanceGoal` | wrist goal never converges | unchanged (F8 damping rows) |
+| median tick time | 9 ms | 11 ms |
+
+The height test's strict xfail flips, as intended. The 27 existing feature-function and
+feature-monitor tests pass under the new default.
+
+**Variants that failed, and why — do not retry these as they were:**
+
+- **First step only.** A velocity demand with no braking lookahead. On jerk-limited
+  dynamics the rim shot through the band, overshot 7 cm below, then swung 70 cm above in
+  a growing oscillation — a first-order barrier on a third-order system. The executed
+  step alone is not enough to bind; the later rows are what make the plan brake.
+- **Every step.** 26 vs 33 mrad on the angle — almost nothing gained over nine steps —
+  at 150–180 ms per tick instead of 11. The dense triangular matrix is not worth it.
+- **Unshared slack weights.** With the full per-row weight, PIQP hit its iteration
+  limit (status −1) on the very first tick with nine rows and mid-motion with two.
+  Sharing the weight across the rows fixed it.
+- **Approach at the reference velocity.** A first schedule demanded a full
+  `reference_velocity` approach at every step until inside. At the band edge those
+  rows fought the floor rows at equal weight and the floor lost: 7 mm on height, worse
+  than the integral row. The proportional schedule above removes the fight.
+
+**Open after step 1.**
+
+- The angle guard's remaining 33 mrad vanishes at a slower wrist, so it is not
+  deferral. Either the jacobian being held constant while the wrist turns 0.66 rad within
+  one horizon, or the compensating joints saturating. To be separated in step 2.
+- The distance guard is unchanged until its damping rows go (F8).
+- Regression run of the whole giskardpy suite and the pouring demo are still to do
+  (steps 3 and 4 of section 7).
