@@ -2825,6 +2825,14 @@ class World(HasSimulatorProperties):
             applied.
         """
         self.state._apply_control_commands(commands, dt, derivative)
+        self.step_physics(dt=dt)
+
+    def step_physics(self, dt: float) -> None:
+        """
+        Step every connection that integrates its own state forward by ``dt``.
+
+        :param dt: Time elapsed since the previous step, in seconds.
+        """
         for connection in self.connections:
             match connection:
                 case HasUpdateState():

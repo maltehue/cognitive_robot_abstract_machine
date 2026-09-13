@@ -22,6 +22,12 @@ from krrood.ormatic.ormatic import ORMatic
 from krrood.utils import recursive_subclasses
 import semantic_digital_twin.reasoning.predicates
 import semantic_digital_twin.reasoning.world_rdr.rules
+from semantic_digital_twin.physics.equations.learned_pouring_equations import (
+    HasLearnedHead,
+)
+from semantic_digital_twin.physics.equations.pouring_equations import (
+    RectangularContainerGeometry,
+)
 from semantic_digital_twin.semantic_annotations.position_descriptions import (
     SemanticDirection,
 )
@@ -47,6 +53,10 @@ ignore_classes = {
     semantic_digital_twin.adapters.procthor.procthor_resolver.ProcthorResolver,
     SemanticDirection,
     SubclassJSONSerializer,
+    # Mixins of the fill equations, not equations themselves: the equations inheriting
+    # them map their fields within their own single-rooted equation hierarchy.
+    HasLearnedHead,
+    RectangularContainerGeometry,
     # A symbolic operation is a step of a query, not something a world stores, so none of
     # them is mapped. The modules defining them are imported above so that they are all
     # declared by the time this is read.

@@ -95,6 +95,16 @@ class WorldModificationWithWorldEntityReference(WorldModification, ABC):
     cases may sometimes be treated differently (see World.__deepcopy__).
     """
 
+    @property
+    @abstractmethod
+    def referenced_world_entity(self) -> WorldEntityWithID:
+        """
+        The world entity this modification introduces.
+
+        A synchronizer that has received this modification but not yet applied it can
+        use this to resolve a later, still-unapplied message's reference to that entity.
+        """
+
     @abstractmethod
     def update_reference_for_world(self, world: World) -> Self:
         """
@@ -133,6 +143,10 @@ class AddKinematicStructureEntityModification(
 
     def __post_init__(self):
         self.original_kinematic_structure_entity_id = self.kinematic_structure_entity.id
+
+    @property
+    def referenced_world_entity(self) -> WorldEntityWithID:
+        return self.kinematic_structure_entity
 
     @classmethod
     def from_kwargs(cls, kwargs: Dict[str, Any]):
@@ -207,6 +221,10 @@ class AddConnectionModification(WorldModificationWithWorldEntityReference):
         self.original_child_id = self.connection.child.id
         self.original_parent_id = self.connection.parent.id
 
+    @property
+    def referenced_world_entity(self) -> WorldEntityWithID:
+        return self.connection
+
     @classmethod
     def from_kwargs(cls, kwargs: Dict[str, Any]):
         return cls(kwargs["connection"])
@@ -280,6 +298,10 @@ class AddDegreeOfFreedomModification(WorldModificationWithWorldEntityReference):
 
     def __post_init__(self):
         self.original_degree_of_freedom_id = self.degree_of_freedom.id
+
+    @property
+    def referenced_world_entity(self) -> WorldEntityWithID:
+        return self.degree_of_freedom
 
     @classmethod
     def from_kwargs(cls, kwargs: Dict[str, Any]):
@@ -434,6 +456,10 @@ class AddActuatorModification(WorldModificationWithWorldEntityReference):
     def __post_init__(self):
         self.original_actuator_id = self.actuator.id
 
+    @property
+    def referenced_world_entity(self) -> WorldEntityWithID:
+        return self.actuator
+
     @classmethod
     def from_kwargs(cls, kwargs: Dict[str, Any]):
         return cls(actuator=kwargs["actuator"])
@@ -572,10 +598,8 @@ class SetDofHasHardwareInterface(WorldModification):
     """
 
     def apply(self, world: World):
-        for dof_id in self.degree_of_freedom_ids:
-            world.get_degree_of_freedom_by_id(dof_id).has_hardware_interface = (
-                self.value
-            )
+        for degree_of_freedom_id in self.degree_of_freedom_ids:
+            self.assign_flag(world.get_degree_of_freedom_by_id(degree_of_freedom_id))
 
     def revert(self, world: World):
         dofs_by_previous_value: Dict[bool, List[DegreeOfFreedom]] = {}
@@ -689,17 +713,17 @@ class AttributeUpdateModification(WorldModification, SubclassJSONSerializer):
         diff: JSONAttributeDiff,
         **kwargs,
     ):
-        diff.apply_to_list(
-            current_value,
-            removed_items=[
-                self._resolve_item(world, from_json(raw_json, **kwargs))
-                for raw_json in diff.removed_values
-            ],
-            added_items=[
-                self._resolve_item(world, from_json(raw_json, **kwargs))
-                for raw_json in diff.added_values
-            ],
-        )
+        for raw_json in diff.removed_values:
+            raw = from_json(raw_json, **kwargs)
+            obj = self._resolve_item(world, raw)
+            if obj in current_value:
+                current_value.remove(obj)
+
+        for raw_json in diff.added_values:
+            raw = from_json(raw_json, **kwargs)
+            obj = self._resolve_item(world, raw)
+            if obj not in current_value:
+                current_value.append(obj)
 
     def _resolve_item(self, world: World, item: Any):
         if isinstance(item, UUID):
