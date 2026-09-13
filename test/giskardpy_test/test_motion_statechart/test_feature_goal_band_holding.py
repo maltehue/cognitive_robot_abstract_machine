@@ -36,7 +36,10 @@ from semantic_digital_twin.spatial_types import (
     Vector3,
 )
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.world_description.connections import (
+    ActiveConnection1DOF,
+    FixedConnection,
+)
 from semantic_digital_twin.world_description.geometry import Box, Scale
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
@@ -73,6 +76,15 @@ _PREDICTION_HORIZON = 180
 Number of velocity blocks in the controller's prediction horizon.
 """
 
+_JOINT_VELOCITY_LIMIT = 1.0
+"""
+Velocity limit, in radians per second, given to every joint of the robot.
+
+Tracy tightens its joints to 0.2 rad/s by default; the limit used here matches the URDF
+limits the pouring demo runs at, under which the deferred excursion is an order of
+magnitude larger.
+"""
+
 _BAND_TOLERANCE = 1e-4
 """
 How far outside a band a sample may lie before it counts as having left it, absorbing
@@ -86,7 +98,7 @@ _WRIST_ROTATION = 2.0
 Angle, in radians, the wrist rotates the held cup by while a feature goal guards it.
 """
 
-_WRIST_SPEED = 0.1
+_WRIST_SPEED = 0.3
 """
 Speed, in radians per second, of the wrist rotation.
 
@@ -233,11 +245,16 @@ def _controller_context(world: World) -> MotionStatechartContext:
 @pytest.fixture(scope="function")
 def held_cup_scene(tracy_world) -> HeldCupScene:
     """
-    Tracy with both arms parked, the left gripper moved to an upright pose above the
-    table and a cup fixed in it, slightly tilted by a wrist offset.
+    Tracy with every joint limited to :data:`_JOINT_VELOCITY_LIMIT`, both arms parked,
+    the left gripper moved to an upright pose above the table and a cup fixed in it,
+    slightly tilted by a wrist offset.
     """
     world = deepcopy(tracy_world)
     [tracy] = world.get_semantic_annotations_by_type(Tracy)
+    for connection in tracy.connections:
+        if isinstance(connection, ActiveConnection1DOF):
+            connection.raw_dof.limits.lower.velocity = -_JOINT_VELOCITY_LIMIT
+            connection.raw_dof.limits.upper.velocity = _JOINT_VELOCITY_LIMIT
     for arm in (tracy.left_arm, tracy.right_arm):
         park = arm.get_joint_state_by_type(StaticJointState.PARK)
         JointState.from_mapping(dict(park.items())).apply_to(world)

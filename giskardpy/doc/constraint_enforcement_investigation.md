@@ -28,7 +28,7 @@ before proposing anything. Four plausible fixes were tried and three of them mad
    with a reference cup on it. A feature goal first brings its quantity into a band from
    outside; **only once the goal observes the quantity inside the band** (a
    `start_condition`) does a `JointPositionList` rotate `left_wrist_3` by 2.0 rad at
-   0.1 rad/s, which alone would push the quantity out. The safety contract asserted is
+   0.3 rad/s, which alone would push the quantity out. The safety contract asserted is
    the loosened one: *once inside the band, never leave it again*
    (`BandTrace.worst_excursion_after_entry() == 0.0`). On the pouring branch the same
    contract applied to the pouring clearance gives an excursion of 6.4 mm.
@@ -36,9 +36,9 @@ before proposing anything. Four plausible fixes were tried and three of them mad
    The table below is from the pouring branch's version of the scenario (Jeroen cup mesh,
    horizon 120, wrist at 0.3 rad/s, joint velocity limits at 1.0 rad/s — see F7 for why
    that last one matters). The standalone test on `main` (box cup 0.15 m tall, horizon
-   180, wrist at 0.1 rad/s, Tracy's joint limits tightened to 0.2 rad/s) reproduces all
-   three: `HeightGoal` **0.57 mm** below its floor, `AngleGoal` **161 mrad** above its
-   ceiling, `DistanceGoal` wrist goal never converges.
+   180, wrist at 0.3 rad/s, every Tracy joint set to 1.0 rad/s) reproduces all three:
+   `HeightGoal` **5.2 mm** below its floor, `AngleGoal` **136 mrad** above its ceiling,
+   `DistanceGoal` wrist goal never converges.
 
    | guard | band | disturbance alone would move it to | excursion after entry | ticks outside |
    |---|---|---|---|---|
@@ -269,8 +269,8 @@ disturbance speed itself does not matter (above), so the effect runs through the
 compensating joints: tight box limits shrink what the horizon can reach, and with it the
 room the optimizer has to park the correction. Tight limits do not remove the deferral —
 0.13 mm is still above the 0.1 mm tolerance and still grows with the horizon (0.29 mm at
-180) — which is why the standalone test on `main` uses horizon 180 and a taller cup to
-keep a clear margin.
+180). The standalone test sets every Tracy joint to 1.0 rad/s itself, so it measures the
+same regime as the pouring demo: 5.2 mm at horizon 180.
 
 **Conclusion:** holding a bound with an `IntegralStrategy` row cannot be made reliable by
 tuning. Every knob a caller has (`weight`, `reference_velocity`/`maximum_velocity`) is
