@@ -102,6 +102,7 @@ from semantic_digital_twin.world_description.world_modification import (
     synchronized_attribute_modification,
 )
 from semantic_digital_twin.physics.equations.pouring_equations import (
+    TransferGate,
     ArticulatedPouringEquation,
     DEFAULT_DISCHARGE_COEFFICIENT,
     DEFAULT_GATE_SHARPNESS,
@@ -1497,16 +1498,24 @@ class HasFillLevel(HasRootBody, LiquidSource):
         """
         Add a fill equation to the semantic annotation.
 
+        Unlike :attr:`inflow_equation`, a :class:`PouringEquation` carries no live
+        symbolic state — :meth:`~PouringEquation.symbolic_velocity` builds its
+        expression from plain parameters on demand — so it is fully JSON-serializable
+        and can be recorded in the JSON-diffed modification history.
+
         :param fill_equation: The fill equation to add.
         """
         self.fill_equation = fill_equation
         if self.fill_connection is not None:
             self.fill_connection.outflow_equation = fill_equation
 
-    @synchronized_attribute_modification
     def add_inflow_equation(self, inflow_equation: Optional[InflowEquation]) -> None:
         """
         Add an inflow equation to the semantic annotation.
+
+        Unlike :meth:`set_inflow_coupling`, this is not synchronized: the equation is a
+        symbolic expression that cannot cross a process boundary, so it cannot be
+        recorded in the JSON-diffed modification history.
 
         :param inflow_equation: The inflow equation to add.
         """
@@ -1695,13 +1704,15 @@ class HasFillLevel(HasRootBody, LiquidSource):
             container_height=self.root.collision.height,
             container_width=self.root.collision.width,
             inflow=source_volume_rate,
-            gate=gate,
+            gate=gate.product,
+            height_gate=gate.height,
+            overlap_gate=gate.overlap,
             source_tilt_expression=source.pour_tilt_expression,
             exit_speed=exit_speed,
         )
         with world.modify_world(publish_changes=False):
             self.add_inflow_equation(inflow_equation)
-            source.couple_drain_to_gate(gate, world)
+            source.couple_drain_to_gate(gate.product, world)
         self._record_coupling_provenance(source)
 
     def _record_coupling_provenance(self, source: LiquidSource) -> None:
@@ -1935,7 +1946,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         landing_point: Point3,
         height_gate_sharpness: float,
         overlap_gate_sharpness: float,
-    ) -> sm.Scalar:
+    ) -> TransferGate:
         """
         Build the differentiable gate that is open only while the source pours into this container.
 
@@ -1954,7 +1965,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         :param landing_point: The projectile landing point on this container's opening plane.
         :param height_gate_sharpness: Logistic steepness of the vertical term.
         :param overlap_gate_sharpness: Logistic steepness of the landing-in-opening term.
-        :return: Symbolic gate factor in ``[0, 1]``.
+        :return: The gate's vertical and horizontal factors.
         """
         source_exit = source.liquid_exit_point(world)
         receiver_opening = self.opening_point(world)
@@ -1970,7 +1981,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
             (self.opening_radius - landing_distance) / self.opening_radius,
             overlap_gate_sharpness,
         )
-        return height_gate * overlap_gate
+        return TransferGate(height=height_gate, overlap=overlap_gate)
 
     @property
     def opening_radius(self) -> float:

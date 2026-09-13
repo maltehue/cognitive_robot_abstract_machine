@@ -23,14 +23,16 @@ def main():
         world_config=WorldWithTracyConfig(urdf=robot_description),
         robot_interface_config=TracyStandAloneRobotInterfaceConfig(),
         server_config=GiskardServerConfig(
-            execution_mode=ExecutionMode.STANDALONE, debug_mode=False
+            execution_mode=ExecutionMode.STANDALONE,
+            debug_mode=True,
+            record_control_cycles=True,
         ),
         qp_controller_config=QPControllerConfig(
             target_frequency=80,
             # Calibrated against the terminal-state prediction row's scaling convention
             # (mean-normalized lookahead weights, single time-step factor); see
             # TerminalStatePredictionStrategy.create_matrix.
-            prediction_horizon=120,
+            prediction_horizon=180,
         ),
     )
     giskard.live()

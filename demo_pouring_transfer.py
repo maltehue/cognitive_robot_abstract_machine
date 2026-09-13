@@ -260,7 +260,7 @@ else:
                 child=source_cup_body,
                 name=PrefixedName("l_gripper_T_source_cup"),
                 parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    roll=-math.pi / 2.0, y=-0.0
+                    roll=-math.pi / 2.0, y=-0.05
                 ),
             )
         )
@@ -341,9 +341,10 @@ no_spill = KeepProjectileInReceiver(
 keep_above = KeepSourceRimAboveReceiverRim(
     receiver=receiving_cup,
     source=source_cup,
-    minimum_clearance=0.08,
+    minimum_clearance=0.03,
     clearance_band=0.05,
     weight=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
+    demands_immediate_recovery=True,
 )
 keep_plane = AlignPlanes(
     root_link=world.root,

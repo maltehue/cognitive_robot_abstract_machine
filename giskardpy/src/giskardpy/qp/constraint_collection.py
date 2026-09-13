@@ -154,6 +154,7 @@ class ConstraintCollection:
         name: Optional[str] = None,
         lower_slack_limit: sm.ScalarData = -LargeNumber,
         upper_slack_limit: sm.ScalarData = LargeNumber,
+        enforcement_strategy: type[EnforcementStrategy] = IntegralStrategy,
     ) -> None:
         """
         Add a task constraint to the motion problem.
@@ -172,6 +173,7 @@ class ConstraintCollection:
             unless you know what you are doing
         :param upper_slack_limit: how much the upper error can be violated, don't use
             unless you know what you are doing
+        :param enforcement_strategy: how the row is spread over the prediction horizon
         """
         if task_expression.shape != (1, 1):
             raise InvalidConstraintExpressionShapeError(list(task_expression.shape))
@@ -206,6 +208,7 @@ class ConstraintCollection:
         linear_weight: sm.ScalarData = 0,
         lower_slack_limit: sm.ScalarData = -LargeNumber,
         upper_slack_limit: sm.ScalarData = LargeNumber,
+        enforcement_strategy: type[EnforcementStrategy] = IntegralStrategy,
     ) -> None:
         """
         Add a task constraint to the motion problem.
@@ -242,7 +245,7 @@ class ConstraintCollection:
             lower_slack_limit=lower_slack_limit,
             upper_slack_limit=upper_slack_limit,
             linear_weight=linear_weight,
-            enforcement_strategy=IntegralStrategy,
+            enforcement_strategy=enforcement_strategy,
             lower_bound=lower_error,
             upper_bound=upper_error,
         )

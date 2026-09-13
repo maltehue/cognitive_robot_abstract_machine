@@ -414,6 +414,34 @@ class InflowEquation(RectangularContainerGeometry, FillEquation):
 
 
 @dataclass
+class TransferGate:
+    """
+    The two independent factors of the geometric transfer gate.
+
+    Named separately because each is held by a different task: the vertical factor
+    measures the clearance :class:`KeepSourceRimAboveReceiverRim` defends, the
+    horizontal one the landing point :class:`KeepProjectileInReceiver` aims.
+    """
+
+    height: Scalar
+    """
+    Vertical factor, closing as the source lip sinks toward the receiver's opening.
+    """
+
+    overlap: Scalar
+    """
+    Horizontal factor, closing as the projectile lands further from the opening.
+    """
+
+    @property
+    def product(self) -> Scalar:
+        """
+        :return: The gate both factors together describe.
+        """
+        return self.height * self.overlap
+
+
+@dataclass
 class GatedInflowEquation(InflowEquation):
     """
     Inflow ODE whose volume rate is modulated by a differentiable geometric gate.
@@ -427,6 +455,22 @@ class GatedInflowEquation(InflowEquation):
     """
     Symbolic transfer gate in ``[0, 1]``; ``1`` when the pour's projectile lands in this
     receiver.
+    """
+
+    height_gate: Scalar = field(default_factory=lambda: sm.Scalar(1.0))
+    """
+    The vertical factor of :attr:`gate`, closing as the source lip sinks toward this
+    receiver's opening plane.
+
+    Kept apart from the horizontal factor because it measures the same clearance a
+    dedicated task holds, so a caller that wants the gate's value without its pull on
+    that clearance can hold this factor fixed.
+    """
+
+    overlap_gate: Scalar = field(default_factory=lambda: sm.Scalar(1.0))
+    """
+    The horizontal factor of :attr:`gate`, closing as the pour's projectile lands
+    further from this receiver's opening.
     """
 
     source_tilt_expression: Scalar = field(default_factory=lambda: sm.Scalar(0.0))
@@ -450,4 +494,11 @@ class GatedInflowEquation(InflowEquation):
         :param context: Kinematic context; forwarded to the base inflow conversion.
         :return: Gated normalised fill velocity; zero while the gate is closed.
         """
-        return self.gate * super().symbolic_velocity(context)
+        return self.gate * self.ungated_symbolic_velocity(context)
+
+    def ungated_symbolic_velocity(self, context: FillContext) -> Scalar:
+        """
+        :param context: Kinematic context; forwarded to the base inflow conversion.
+        :return: Normalised fill velocity before the transfer gate scales it.
+        """
+        return super().symbolic_velocity(context)

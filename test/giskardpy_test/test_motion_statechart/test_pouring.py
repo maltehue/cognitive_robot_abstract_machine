@@ -8,6 +8,9 @@ from copy import deepcopy
 from importlib.resources import files
 from pathlib import Path
 
+from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
+    VizMarkerPublisher,
+)
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.qp.qp_controller_config import QPControllerConfig
@@ -27,6 +30,13 @@ from giskardpy.motion_statechart.exceptions import (
 )
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
+from giskardpy.motion_statechart.tasks.feature_functions import (
+    AngleGoal,
+    DistanceGoal,
+    FeatureFunctionGoal,
+    HeightGoal,
+)
+from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList
 from giskardpy.motion_statechart.tasks.cartesian_tasks import (
     CartesianPose,
     CartesianPosition,
@@ -44,9 +54,10 @@ from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
     WorldEntityWithIDKwargsTracker,
 )
 from semantic_digital_twin.datastructures.definitions import StaticJointState
+from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.physics.equations.pouring_equations import InflowEquation
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.robots.tracy import Tracy
+from semantic_digital_twin.robots.tracy import Tracy, TracyJoint
 from semantic_digital_twin.spatial_types import (
     HomogeneousTransformationMatrix,
     Vector3,
@@ -66,7 +77,8 @@ from semantic_digital_twin.world_description.geometry import (
 )
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Callable
 
 _JEROEN_CUP_STL = str(
     Path(files("semantic_digital_twin")).parent.parent
@@ -79,6 +91,57 @@ _TABLE_SURFACE_Z = 0.9
 _POURING_TARGET_FREQUENCY = 80
 _POURING_PREDICTION_HORIZON = 120
 _DEFAULT_PERCEPTION_HZ: int = 10
+
+_CLEARANCE_TOLERANCE = 1e-4
+"""
+Tolerance, in metres, on the clearance floor, absorbing the integrator's own step.
+"""
+
+_WRIST_ROTATION = 2.5
+"""
+Angle, in radians, the wrist rotates the held cup by while a feature goal guards it.
+"""
+
+_WRIST_SPEED = 0.3
+"""
+Speed, in radians per second, of the wrist rotation.
+
+Slow enough that the rest of the arm can compensate for it within its joint velocity
+limits, so a guarded quantity leaving its band is the optimizer's choice rather than a
+saturation the guard could not have prevented.
+"""
+
+_MINIMUM_RIM_HEIGHT = 0.03
+"""
+Floor, in metres, on the held cup's rim height above the receiving cup's rim.
+"""
+
+_RIM_HEIGHT_BAND = 0.05
+"""
+Width, in metres, of the band above :data:`_MINIMUM_RIM_HEIGHT` the held cup's rim may
+settle within.
+"""
+
+_MINIMUM_RIM_DISTANCE = 0.15
+"""
+Floor, in metres, on the planar distance between the two cups' rim centres.
+"""
+
+_RIM_DISTANCE_BAND = 0.05
+"""
+Width, in metres, of the band above :data:`_MINIMUM_RIM_DISTANCE` the rims may settle
+within.
+"""
+
+_MINIMUM_TILT = 0.3
+"""
+Floor, in radians, on the held cup's tilt away from upright.
+"""
+
+_TILT_BAND = 0.2
+"""
+Width, in radians, of the band above :data:`_MINIMUM_TILT` the tilt may settle within.
+"""
 
 
 def _pouring_context(world: World) -> MotionStatechartContext:
@@ -137,8 +200,8 @@ def tracy_pouring_world(tracy_world):
 
     left_park = tracy.left_arm.get_joint_state_by_type(StaticJointState.PARK)
     right_park = tracy.right_arm.get_joint_state_by_type(StaticJointState.PARK)
-    world.set_positions_1DOF_connection(dict(left_park.items()))
-    world.set_positions_1DOF_connection(dict(right_park.items()))
+    JointState.from_mapping(dict(left_park.items())).apply_to(world)
+    JointState.from_mapping(dict(right_park.items())).apply_to(world)
 
     table_cup_body = _spawn_jeroen_cup_body("table_cup")
     with world.modify_world():
@@ -245,9 +308,9 @@ def tracy_transfer_world(tracy_pouring_world):
     receiving_cup.receive_outflow_from(source=source_cup, world=world)
 
     left_wrist_joint = world.get_connection_by_name("left_wrist_3_joint")
-    world.set_positions_1DOF_connection(
+    JointState.from_mapping(
         {left_wrist_joint: left_wrist_joint.position + 0.1}
-    )
+    ).apply_to(world)
 
     return world, source_cup, receiving_cup, left_tool_frame
 
@@ -280,6 +343,12 @@ class TransferMotion:
     transfer_task: PouringTask
     """
     The fill-driving task, whose tick hook the clearance recorder wraps.
+    """
+
+    clearance_task: KeepSourceRimAboveReceiverRim
+    """
+    The task holding the source lip above the receiver rim, so a test can assert against
+    the clearance it was configured with rather than a second copy of it.
     """
 
     motion_statechart: MotionStatechart
@@ -330,6 +399,7 @@ def _build_transfer_motion(
     no_spill_weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
     no_spill_reference_velocity: float = 0.2,
     fill_level_tolerance: float = 0.05,
+    height_gate_drives_control: bool = True,
 ) -> TransferMotion:
     """
     Build the cup-to-cup transfer motion the transfer tests share.
@@ -347,6 +417,8 @@ def _build_transfer_motion(
     :param no_spill_reference_velocity: Reference velocity of the competing pour-aiming
         task.
     :param fill_level_tolerance: Tolerance around the fill goal handed to the fill task.
+    :param height_gate_drives_control: Whether the transfer gate steers the fill task's
+        row.
     :return: The built motion.
     """
     world, source_cup, receiving_cup, left_tool_frame = tracy_transfer_world
@@ -356,6 +428,7 @@ def _build_transfer_motion(
         goal_value=0.7,
         fill_level_tolerance=fill_level_tolerance,
         reference_velocity=0.03,
+        height_gate_drives_control=height_gate_drives_control,
     )
     no_spill = KeepProjectileInReceiver(
         receiver=receiving_cup,
@@ -364,7 +437,9 @@ def _build_transfer_motion(
         reference_velocity=no_spill_reference_velocity,
     )
     keep_above = KeepSourceRimAboveReceiverRim(
-        receiver=receiving_cup, source=source_cup, minimum_clearance=minimum_clearance
+        receiver=receiving_cup,
+        source=source_cup,
+        minimum_clearance=minimum_clearance,
     )
     keep_plane = AlignPlanes(
         root_link=world.root,
@@ -382,6 +457,7 @@ def _build_transfer_motion(
         source_cup=source_cup,
         receiving_cup=receiving_cup,
         transfer_task=transfer_task,
+        clearance_task=keep_above,
         motion_statechart=transfer_statechart,
     )
 
@@ -427,7 +503,7 @@ def _tick_with_perception_correction(
                 noisy_fill = float(
                     np.clip(true_fill + rng.normal(0.0, sigma), 0.0, 1.0)
                 )
-                world.set_positions_1DOF_connection({fill_connection: noisy_fill})
+                JointState.from_mapping({fill_connection: noisy_fill}).apply_to(world)
             executor.pacer.sleep()
             if executor.motion_statechart.is_end_motion():
                 return
@@ -527,9 +603,9 @@ class TestPouringTask:
         pouring_task.build(context)
 
         flowing_tilt = 1.3
-        world.set_positions_1DOF_connection(
+        JointState.from_mapping(
             {cup.root.parent_connection: flowing_tilt, cup.fill_connection: goal_fill}
-        )
+        ).apply_to(world)
         fill_rate = cup.fill_equation.symbolic_velocity(cup.fill_connection).evaluate()[
             0
         ]
@@ -687,7 +763,7 @@ class TestTracyPouring:
         Add an angular offset to the current left_wrist_3_joint position.
         """
         joint = world.get_connection_by_name("left_wrist_3_joint")
-        world.set_positions_1DOF_connection({joint: joint.position + offset})
+        JointState.from_mapping({joint: joint.position + offset}).apply_to(world)
 
     def test_tracy_pouring(self, tracy_pouring_world) -> None:
         """
@@ -952,6 +1028,327 @@ class TestRimClearanceDuringTransfer:
         assert min(clearance_history) > 0.0, (
             "the pouring lip dropped to or below the receiver rim: "
             f"minimum clearance was {min(clearance_history):.3f} m"
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="The clearance row is an integral over the whole prediction horizon, so "
+        "the optimizer satisfies it with a plan that defers the recovery past the step "
+        "it executes. The row reports no violation while the lip sits below its floor, "
+        "so neither its weight nor a bound on its slack reaches the behaviour.",
+    )
+    def test_clearance_stays_within_the_configured_band(self, tracy_transfer_world):
+        """
+        Once the lip is inside the clearance band the task was configured with, it never
+        leaves it again, rather than merely staying above the receiver rim.
+        """
+        transfer = _build_transfer_motion(
+            tracy_transfer_world,
+            minimum_clearance=0.08,
+            no_spill_weight=DefaultWeights.WEIGHT_MAXIMUM,
+            no_spill_reference_velocity=0.1,
+        )
+        clearance_history = transfer.record_rim_clearance()
+
+        transfer.execute()
+
+        trace = BandTrace(
+            lower=transfer.clearance_task.minimum_clearance,
+            upper=transfer.clearance_task.maximum_clearance,
+            samples=clearance_history,
+        )
+        assert trace.entry_index() is not None, "the lip never reached its band"
+        assert trace.worst_excursion_after_entry() == 0.0, (
+            "the pouring lip left its clearance band after entering it, by "
+            f"{trace.worst_excursion_after_entry() * 1000:.2f} mm"
+        )
+
+
+# %% band traces
+
+
+@dataclass
+class BandTrace:
+    """
+    Samples of a bounded quantity over a motion, judged against the band the motion was
+    asked to keep it in.
+
+    A motion may start outside the band and be brought into it; the safety contract is
+    that once inside, the quantity never leaves again.
+    """
+
+    lower: float
+    """
+    Lower end of the band.
+    """
+
+    upper: float
+    """
+    Upper end of the band.
+    """
+
+    tolerance: float = _CLEARANCE_TOLERANCE
+    """
+    How far outside the band a sample may lie before it counts as having left it,
+    absorbing the integrator's own step.
+    """
+
+    samples: list[float] = field(default_factory=list)
+    """
+    The quantity, sampled once per control tick in execution order.
+    """
+
+    def entry_index(self) -> int | None:
+        """
+        Index of the first sample inside the band, or ``None`` if the band was never
+        reached.
+        """
+        for index, sample in enumerate(self.samples):
+            if self.lower <= sample <= self.upper:
+                return index
+        return None
+
+    def worst_excursion_after_entry(self) -> float:
+        """
+        The farthest, in the quantity's unit, any sample after the band was entered lies
+        outside the band beyond the tolerance, or ``0.0`` if none does.
+        """
+        entry = self.entry_index()
+        if entry is None:
+            return 0.0
+        excursions = (
+            max(
+                self.lower - self.tolerance - sample,
+                sample - self.upper - self.tolerance,
+            )
+            for sample in self.samples[entry:]
+        )
+        return max(0.0, *excursions)
+
+
+# %% feature goals guarding a held cup under a wrist rotation
+
+
+@dataclass
+class GuardedWristRotation:
+    """
+    A wrist rotation of a held cup run against one feature goal that bounds a quantity
+    the rotation disturbs.
+
+    The rotation is an equality goal on a single wrist joint; the guard is an inequality
+    goal whose band the quantity is first brought into. The rotation starts only once
+    the guard observes the quantity inside its band, so the disturbance acts entirely
+    while the guard is meant to hold, and the rest of the arm must compensate for it.
+    """
+
+    world: World
+    """
+    The world the motion runs in.
+    """
+
+    guard: FeatureFunctionGoal
+    """
+    The feature goal bounding the disturbed quantity.
+    """
+
+    wrist_goal: JointPositionList
+    """
+    The joint goal rotating the wrist that holds the cup.
+    """
+
+    sample_quantity: Callable[[], float]
+    """
+    Reads the guarded quantity off the world, in the unit the guard's limits use.
+    """
+
+    def execute(self, trace: BandTrace) -> None:
+        """
+        Run the rotation to completion in simulation, sampling the guarded quantity on
+        every tick of the guard.
+
+        :param trace: The trace the samples are appended to.
+        """
+        original_on_tick = self.guard.on_tick
+
+        def recording_on_tick(context):
+            trace.samples.append(self.sample_quantity())
+            return original_on_tick(context)
+
+        self.guard.on_tick = recording_on_tick
+
+        self.wrist_goal.start_condition = self.guard.observation_variable
+        motion = Parallel([self.wrist_goal, self.guard])
+        motion_statechart = MotionStatechart()
+        motion_statechart.add_node(motion)
+        motion_statechart.add_node(EndMotion.when_true(motion))
+        executor = Executor(
+            _pouring_context(self.world), pacer=SimulationPacer(real_time_factor=1)
+        )
+        executor.compile(motion_statechart=motion_statechart)
+        executor.tick_until_end(timeout=4000)
+
+
+def _wrist_rotation_goal(world: World) -> JointPositionList:
+    """
+    Joint goal rotating the left wrist that holds the source cup by
+    :data:`_WRIST_ROTATION` at :data:`_WRIST_SPEED`.
+    """
+    wrist = world.get_connection_by_name(TracyJoint.LEFT_WRIST_3)
+    return JointPositionList(
+        goal_state=JointState.from_mapping({wrist: wrist.position + _WRIST_ROTATION}),
+        max_velocity=_WRIST_SPEED,
+    )
+
+
+def _root_point(world: World, point: Point3) -> np.ndarray:
+    """
+    The point's coordinates in the world root frame.
+    """
+    return world.transform(target_frame=world.root, spatial_object=point).to_np()[:3]
+
+
+def _tilt_from_upright(world: World, cup_up: Vector3) -> float:
+    """
+    Angle, in radians, between the cup's up direction and the world's.
+    """
+    root_up = world.transform(target_frame=world.root, spatial_object=cup_up).to_np()[
+        :3
+    ]
+    return float(math.acos(np.clip(root_up[2] / np.linalg.norm(root_up), -1.0, 1.0)))
+
+
+class TestFeatureGoalGuardsHeldCupWhileWristRotates:
+    """
+    A feature goal bounding a quantity of a held cup brings that quantity into its band
+    and keeps it there while a joint goal, started once the band is reached, rotates the
+    wrist holding the cup, which on its own would push the quantity out of the band.
+
+    No fill task takes part, so only integral rows compete: the bounded quantity is
+    guarded by the same constraint form every threshold in the system uses.
+    """
+
+    _DEFERRAL_REASON = (
+        "The guard's row is an integral over the whole prediction horizon, so the "
+        "optimizer satisfies it with a plan that defers the correction past the step "
+        "it executes. The quantity leaves its band while the row reports no violation, "
+        "with no terminal-prediction row taking part."
+    )
+
+    @pytest.mark.xfail(strict=True, reason=_DEFERRAL_REASON)
+    def test_height_goal_keeps_the_rim_in_its_band(
+        self, tracy_transfer_world, rclpy_node
+    ) -> None:
+        """
+        The rim, once brought down from well above its band into it, never leaves the
+        band while the wrist rotates the cup.
+        """
+        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        VizMarkerPublisher(_world=world, node=rclpy_node)
+        receiver_rim = _root_point(world, receiving_cup.rim_point())
+        guard = HeightGoal(
+            root_link=world.root,
+            tip_link=source_cup.root,
+            tip_point=source_cup.rim_point(),
+            reference_point=Point3(*receiver_rim, reference_frame=world.root),
+            lower_limit=_MINIMUM_RIM_HEIGHT,
+            upper_limit=_MINIMUM_RIM_HEIGHT + _RIM_HEIGHT_BAND,
+            weight=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
+        )
+        rotation = GuardedWristRotation(
+            world=world,
+            guard=guard,
+            wrist_goal=_wrist_rotation_goal(world),
+            sample_quantity=lambda: float(
+                _root_point(world, source_cup.rim_point())[2] - receiver_rim[2]
+            ),
+        )
+        trace = BandTrace(lower=guard.lower_limit, upper=guard.upper_limit)
+
+        rotation.execute(trace)
+
+        assert rotation.wrist_goal.observation_state == ObservationStateValues.TRUE
+        assert trace.entry_index() is not None, "the rim never reached its band"
+        assert trace.worst_excursion_after_entry() == 0.0, (
+            "the rim left its height band after entering it, by "
+            f"{trace.worst_excursion_after_entry() * 1000:.2f} mm"
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TimeoutError,
+        reason="Besides its band row, the distance goal adds a zero-target row per axis "
+        "of the rim-to-rim vector, which resists any motion of the rim. The wrist goal "
+        "is outweighed by them and never reaches its target.",
+    )
+    def test_distance_goal_keeps_the_rims_apart(self, tracy_transfer_world) -> None:
+        """
+        The planar rim-to-rim distance, once grown from below its band into it, never
+        leaves the band while the wrist rotates the cup toward the receiver.
+        """
+        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        receiver_rim = _root_point(world, receiving_cup.rim_point())
+        guard = DistanceGoal(
+            root_link=world.root,
+            tip_link=source_cup.root,
+            tip_point=source_cup.rim_point(),
+            reference_point=Point3(*receiver_rim, reference_frame=world.root),
+            lower_limit=_MINIMUM_RIM_DISTANCE,
+            upper_limit=_MINIMUM_RIM_DISTANCE + _RIM_DISTANCE_BAND,
+            weight=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
+        )
+        rotation = GuardedWristRotation(
+            world=world,
+            guard=guard,
+            wrist_goal=_wrist_rotation_goal(world),
+            sample_quantity=lambda: float(
+                np.linalg.norm(
+                    (_root_point(world, source_cup.rim_point()) - receiver_rim)[:2]
+                )
+            ),
+        )
+        trace = BandTrace(lower=guard.lower_limit, upper=guard.upper_limit)
+
+        rotation.execute(trace)
+
+        assert rotation.wrist_goal.observation_state == ObservationStateValues.TRUE
+        assert trace.entry_index() is not None, "the rims never reached their band"
+        assert trace.worst_excursion_after_entry() == 0.0, (
+            "the rim distance left its band after entering it, by "
+            f"{trace.worst_excursion_after_entry() * 1000:.2f} mm"
+        )
+
+    @pytest.mark.xfail(strict=True, reason=_DEFERRAL_REASON)
+    def test_angle_goal_keeps_the_tilt_in_its_band(self, tracy_transfer_world) -> None:
+        """
+        The cup's tilt away from upright, once grown from below its band into it, never
+        leaves the band while the wrist rotates the cup further over.
+        """
+        world, source_cup, _receiving_cup, _left_tool_frame = tracy_transfer_world
+        cup_up = Vector3.Z(reference_frame=source_cup.root)
+        guard = AngleGoal(
+            root_link=world.root,
+            tip_link=source_cup.root,
+            tip_vector=cup_up,
+            reference_vector=Vector3.Z(reference_frame=world.root),
+            lower_angle=_MINIMUM_TILT,
+            upper_angle=_MINIMUM_TILT + _TILT_BAND,
+            weight=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
+        )
+        rotation = GuardedWristRotation(
+            world=world,
+            guard=guard,
+            wrist_goal=_wrist_rotation_goal(world),
+            sample_quantity=lambda: _tilt_from_upright(world, cup_up),
+        )
+        trace = BandTrace(lower=guard.lower_angle, upper=guard.upper_angle)
+
+        rotation.execute(trace)
+
+        assert rotation.wrist_goal.observation_state == ObservationStateValues.TRUE
+        assert trace.entry_index() is not None, "the tilt never reached its band"
+        assert trace.worst_excursion_after_entry() == 0.0, (
+            "the tilt left its band after entering it, by "
+            f"{trace.worst_excursion_after_entry():.4f} rad"
         )
 
 

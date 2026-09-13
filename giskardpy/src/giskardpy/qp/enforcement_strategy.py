@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 import numpy as np
 from typing_extensions import Callable
@@ -253,10 +253,9 @@ class IntegralStrategy(ExpressionEnforcementStrategy):
         """
         Creates one slack variable per constraint with normalized weights.
         """
-        number_of_slack_variables = len(self.constraints)
         return DirectLimits(
-            lower_bounds=Vector([-LargeNumber] * number_of_slack_variables),
-            upper_bounds=Vector([LargeNumber] * number_of_slack_variables),
+            lower_bounds=Vector([c.lower_slack_limit for c in self.constraints]),
+            upper_bounds=Vector([c.upper_slack_limit for c in self.constraints]),
             quadratic_weights=Vector(
                 [
                     normalize_slack_weight(
@@ -333,6 +332,65 @@ class IntegralStrategy(ExpressionEnforcementStrategy):
         Returns the constraint names, one row per constraint.
         """
         return [c.name for c in self.constraints]
+
+
+@dataclass
+class FrontLoadedIntegralStrategy(IntegralStrategy):
+    """
+    Integral strategy whose earliest velocity blocks carry most of the demanded change.
+
+    The flat integral spreads a constraint evenly over the horizon, so it is satisfied
+    by any plan that gets there eventually, including one that defers every correction
+    past the single block the controller executes.  A constraint enforced that way
+    reports no violation while the quantity it guards stands still.  Weighting the
+    blocks so an earlier velocity counts for more makes moving now the cheapest way to
+    satisfy the row.
+    """
+
+    def create_matrix(self) -> Matrix:
+        """
+        Builds the constraint matrix with the expression jacobian scaled per horizon
+        block by a decaying ramp, and the jerk columns padded with zeros.
+        """
+        if len(self.constraints) == 0:
+            return sm.Matrix()
+        jacobian = (
+            sm.Vector([c.expression for c in self.constraints]).jacobian(
+                variables=self.position_variables
+            )
+            * self.qp_controller_config.model_predictive_control_time_step
+        )
+        return sm.hstack(
+            [jacobian * weight for weight in self._block_weights()]
+            + [sm.Matrix.zeros(jacobian.shape[0], self.number_of_jerk_columns)]
+        )
+
+    early_block_emphasis: float = 4.0
+    """
+    How much more the first velocity block counts toward the row than the last.
+
+    Bounded rather than decaying to zero: weights that vanish at the end of the horizon
+    shorten it for this row alone, which leaves the solver reconciling rows that
+    disagree about how far ahead they look.
+    """
+
+    def _block_weights(self) -> List[float]:
+        """
+        Ramp weighting the horizon blocks, earliest first.
+
+        Normalized to unit average so the row keeps the scale of the flat integral it
+        replaces, leaving only the relative emphasis changed.
+        """
+        horizon = self.qp_controller_config.control_horizon
+        if horizon < 2:
+            return [1.0] * horizon
+        span = self.early_block_emphasis - 1.0
+        ramp = [
+            1.0 + span * (horizon - 1 - block) / (horizon - 1)
+            for block in range(horizon)
+        ]
+        total = sum(ramp)
+        return [weight * horizon / total for weight in ramp]
 
 
 @dataclass

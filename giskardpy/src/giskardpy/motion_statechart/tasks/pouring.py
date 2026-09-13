@@ -7,11 +7,16 @@ from typing import ClassVar, Optional
 import krrood.symbolic_math.symbolic_math as sm
 from krrood.symbolic_math.symbolic_math import (
     CompiledFunction,
+    FloatVariable,
     Scalar,
     VariableParameters,
 )
 
 from giskardpy.motion_statechart.context import MotionStatechartContext
+from giskardpy.qp.enforcement_strategy import (
+    FrontLoadedIntegralStrategy,
+    IntegralStrategy,
+)
 from giskardpy.motion_statechart.data_types import (
     DefaultWeights,
     ObservationStateValues,
@@ -27,6 +32,7 @@ from giskardpy.motion_statechart.graph_node import (
     NodeArtifacts,
     Task,
 )
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.physics.equations.pouring_equations import (
     GatedInflowEquation,
     PouringEquation,
@@ -122,6 +128,41 @@ class TerminalFillConstraintTask(Task, ABC):
         :param fill_level: The current normalized fill level.
         """
 
+    def _control_velocity(self, context: MotionStatechartContext) -> Scalar:
+        """
+        The fill-velocity expression whose gradient steers the robot.
+
+        The constraint row reads this expression twice: its value predicts the terminal
+        fill, and its jacobian picks the direction to move.  Both come from the modelled
+        rate unless a subclass separates them.
+
+        :param context: The build context.
+        :return: Symbolic normalized fill velocity for the control row.
+        """
+        return self.fill_velocity_expression
+
+    @staticmethod
+    def _compile_against_world(
+        expression: Scalar, context: MotionStatechartContext
+    ) -> CompiledFunction:
+        """
+        Compiles an expression so it reads the live world and float variable state.
+
+        :param expression: The expression to compile.
+        :param context: The build context supplying both state arrays.
+        :return: The compiled function, bound to those arrays.
+        """
+        compiled = expression.compile(
+            parameters=VariableParameters.from_lists(
+                context.world.state.position_float_variables,
+                context.float_variable_data.variables,
+            ),
+            sparse=False,
+        )
+        compiled.bind_args_to_memory_view(0, context.world.state.positions)
+        compiled.bind_args_to_memory_view(1, context.float_variable_data.data)
+        return compiled
+
     def build(self, context: MotionStatechartContext) -> NodeArtifacts:
         """
         Linearizes the fill ODE into a single terminal-state prediction row over the
@@ -139,22 +180,15 @@ class TerminalFillConstraintTask(Task, ABC):
         artifacts = NodeArtifacts()
         self.fill_connection = self._resolve_fill_connection(context)
         self.fill_velocity_expression = self._fill_velocity(context)
-        self._compiled_fill_velocity = self.fill_velocity_expression.compile(
-            parameters=VariableParameters.from_lists(
-                context.world.state.position_float_variables,
-                context.float_variable_data.variables,
-            ),
-            sparse=False,
-        )
-        self._compiled_fill_velocity.bind_args_to_memory_view(
-            0, context.world.state.positions
-        )
-        self._compiled_fill_velocity.bind_args_to_memory_view(
-            1, context.float_variable_data.data
+        # Built before anything binds a memory view: a subclass may register float
+        # variables here, which reallocates the array those views point at.
+        control_velocity = self._control_velocity(context)
+        self._compiled_fill_velocity = self._compile_against_world(
+            self.fill_velocity_expression, context
         )
         artifacts.constraints.add_terminal_state_prediction_constraint(
             name=f"{self.fill_connection.name}",
-            state_velocity=self.fill_velocity_expression,
+            state_velocity=control_velocity,
             state_variable=self.fill_connection.dof.variables.position,
             goal_value=self.goal_value,
             quadratic_weight=self.weight,
@@ -257,6 +291,81 @@ class FillByTransferTask(TerminalFillConstraintTask):
     """
     The container whose fill level is driven up to :attr:`goal_value`.
     """
+
+    height_gate_drives_control: bool = field(default=True, kw_only=True)
+    """
+    Whether the transfer gate's vertical factor contributes to the control row's
+    gradient.
+
+    That factor measures the same clearance :class:`KeepSourceRimAboveReceiverRim`
+    defends, so where its logistic is steep the fill row turns into a near-copy of the
+    clearance row and the two stop being separable.  Setting this false re-reads the
+    factor as a per-cycle constant: the row keeps the same value, so the terminal
+    prediction is unchanged, but stops steering the lip's height.  The horizontal factor
+    is always differentiated, since it is what aims the pour.
+    """
+
+    _height_gate_value: FloatVariable = field(init=False, repr=False)
+    """
+    The vertical gate factor's value this cycle, read by the control row while it is not
+    differentiated.
+    """
+
+    _compiled_height_gate: CompiledFunction = field(init=False, repr=False)
+    """
+    Compiled vertical gate factor, evaluated once per tick to refresh
+    :attr:`_height_gate_value`.
+    """
+
+    def _control_velocity(self, context: MotionStatechartContext) -> Scalar:
+        """
+        Freezes the gate's vertical factor into a per-cycle constant unless it may
+        steer.
+
+        :param context: The build context.
+        :return: Symbolic normalized fill velocity for the control row.
+        """
+        if self.height_gate_drives_control:
+            return super()._control_velocity(context)
+        inflow_equation = self.fill_connection.inflow_equation
+        self._height_gate_value = FloatVariable(
+            str(PrefixedName("height_gate", str(self.name)))
+        )
+        context.float_variable_data.register_expression(self._height_gate_value)
+        self._compiled_height_gate = self._compile_against_world(
+            inflow_equation.height_gate, context
+        )
+        self._refresh_height_gate(context)
+        return (
+            self._height_gate_value
+            * inflow_equation.overlap_gate
+            * inflow_equation.ungated_symbolic_velocity(self.fill_connection)
+        )
+
+    def _refresh_height_gate(self, context: MotionStatechartContext) -> None:
+        """
+        Reads the vertical gate factor at the current world state into its control-row
+        constant.
+
+        :param context: The runtime context.
+        """
+        context.float_variable_data.set_value(
+            self._height_gate_value,
+            float(self._compiled_height_gate.evaluate()[0]),
+        )
+
+    def on_tick(
+        self, context: MotionStatechartContext
+    ) -> Optional[ObservationStateValues]:
+        """
+        Refreshes the frozen vertical gate factor before reporting convergence.
+
+        :param context: The runtime context.
+        :return: The observation state.
+        """
+        if not self.height_gate_drives_control:
+            self._refresh_height_gate(context)
+        return super().on_tick(context)
 
     def _resolve_fill_connection(
         self, context: MotionStatechartContext
@@ -448,6 +557,16 @@ class KeepSourceRimAboveReceiverRim(Task):
     Maximum allowed vertical speed for the clearance motion, in metres per second.
     """
 
+    demands_immediate_recovery: bool = field(default=False, kw_only=True)
+    """
+    Whether the clearance row asks for its recovery from the velocities executed next
+    rather than anywhere in the prediction horizon.
+
+    Spread evenly, the row is satisfied by a plan that corrects the clearance in blocks
+    the controller never reaches, so it reports no violation while the lip stands still
+    below its floor.
+    """
+
     @property
     def maximum_clearance(self) -> float:
         """
@@ -480,6 +599,11 @@ class KeepSourceRimAboveReceiverRim(Task):
             quadratic_weight=self.weight,
             task_expression=clearance,
             name=f"{self.name}_clearance",
+            enforcement_strategy=(
+                FrontLoadedIntegralStrategy
+                if self.demands_immediate_recovery
+                else IntegralStrategy
+            ),
         )
         artifacts.observation = sm.logic_and(
             sm.if_less_eq(clearance, self.maximum_clearance, 1, 0),
