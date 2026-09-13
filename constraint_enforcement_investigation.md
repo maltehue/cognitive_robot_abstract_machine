@@ -243,6 +243,25 @@ angle excursion (half the 0.2 rad band) is far larger than the height one: the d
 correction is a fraction of the horizon's reachable change, and in angle units the
 horizon reaches much farther.
 
+**Joint velocity limits are the one lever that does move it — and it is not a task
+parameter.** This branch removed `Tracy._setup_velocity_limits`, which tightened every
+Tracy degree of freedom to 0.2 rad/s; here the joints run at their URDF limits
+(1.0 rad/s). Running the identical `HeightGoal` scenario (box cup, horizon 120) with both
+configurations:
+
+| joint velocity limits | excursion after entry |
+|---|---|
+| 1.0 rad/s (this branch) | 1.84 mm |
+| 0.2 rad/s (`main`, via `tighten_dof_velocity_limits_proportionally`) | 0.13 mm |
+
+Every number in this section and in section 1 was measured at 1.0 rad/s. The
+disturbance speed itself does not matter (above), so the effect runs through the
+compensating joints: tight box limits shrink what the horizon can reach, and with it the
+room the optimizer has to park the correction. Tight limits do not remove the deferral —
+0.13 mm is still above the 0.1 mm tolerance and still grows with the horizon (0.29 mm at
+180) — but they explain why the standalone reproduction on `main` shows a much smaller
+excursion than the pouring branch.
+
 **Conclusion:** holding a bound with an `IntegralStrategy` row cannot be made reliable by
 tuning. Every knob a caller has (`weight`, `reference_velocity`/`maximum_velocity`) is
 invisible to a row whose slack is zero, and the one knob that moves the excursion is the
