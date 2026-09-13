@@ -17,6 +17,7 @@ from giskardpy.qp.exceptions import (
     NoFactoryForQPDataTypeError,
 )
 from giskardpy.qp.constraint_collection import ConstraintCollection
+from giskardpy.qp.enforcement_strategy import PredictedValueStrategy
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.qp.qp_data import (
     QPData,
@@ -430,9 +431,15 @@ def test_qp_data_symbolic(prismatic_bot2):
     debugger = QuadraticProgramDebugger(
         qp_data_symbolic=qp_data_symbolic, current_solution=solution
     )
-    assert len(debugger.inequality_constraints) == 1
+    constrained_steps = PredictedValueStrategy(
+        degrees_of_freedom=prismatic_bot2.active_degrees_of_freedom,
+        constraints=[],
+        qp_controller_config=qp_data_symbolic.qp_controller_config,
+    ).constrained_steps()
+    assert list(debugger.inequality_constraints.index) == [
+        f"t{step:03}/ineq constraint" for step in constrained_steps
+    ]
     assert len(debugger.equality_constraints) == 22
-    assert "ineq constraint" in debugger.inequality_constraints.index
     assert "position_constraint" in debugger.equality_constraints.index
     assert "bounds" in debugger.equality_constraints.columns
 

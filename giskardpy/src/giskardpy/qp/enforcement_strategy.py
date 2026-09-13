@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 import numpy as np
 from typing_extensions import Callable
@@ -17,7 +17,6 @@ from giskardpy.qp.constraint import (
     GiskardConstraint,
     GiskardEqualityConstraint,
     GiskardInequalityConstraint,
-    LargeNumber,
 )
 from giskardpy.qp.dof_limits import DirectLimits
 from giskardpy.qp.exceptions import ConstraintTypeMismatchError
@@ -335,65 +334,6 @@ class IntegralStrategy(ExpressionEnforcementStrategy):
 
 
 @dataclass
-class FrontLoadedIntegralStrategy(IntegralStrategy):
-    """
-    Integral strategy whose earliest velocity blocks carry most of the demanded change.
-
-    The flat integral spreads a constraint evenly over the horizon, so it is satisfied
-    by any plan that gets there eventually, including one that defers every correction
-    past the single block the controller executes.  A constraint enforced that way
-    reports no violation while the quantity it guards stands still.  Weighting the
-    blocks so an earlier velocity counts for more makes moving now the cheapest way to
-    satisfy the row.
-    """
-
-    def create_matrix(self) -> Matrix:
-        """
-        Builds the constraint matrix with the expression jacobian scaled per horizon
-        block by a decaying ramp, and the jerk columns padded with zeros.
-        """
-        if len(self.constraints) == 0:
-            return sm.Matrix()
-        jacobian = (
-            sm.Vector([c.expression for c in self.constraints]).jacobian(
-                variables=self.position_variables
-            )
-            * self.qp_controller_config.model_predictive_control_time_step
-        )
-        return sm.hstack(
-            [jacobian * weight for weight in self._block_weights()]
-            + [sm.Matrix.zeros(jacobian.shape[0], self.number_of_jerk_columns)]
-        )
-
-    early_block_emphasis: float = 4.0
-    """
-    How much more the first velocity block counts toward the row than the last.
-
-    Bounded rather than decaying to zero: weights that vanish at the end of the horizon
-    shorten it for this row alone, which leaves the solver reconciling rows that
-    disagree about how far ahead they look.
-    """
-
-    def _block_weights(self) -> List[float]:
-        """
-        Ramp weighting the horizon blocks, earliest first.
-
-        Normalized to unit average so the row keeps the scale of the flat integral it
-        replaces, leaving only the relative emphasis changed.
-        """
-        horizon = self.qp_controller_config.control_horizon
-        if horizon < 2:
-            return [1.0] * horizon
-        span = self.early_block_emphasis - 1.0
-        ramp = [
-            1.0 + span * (horizon - 1 - block) / (horizon - 1)
-            for block in range(horizon)
-        ]
-        total = sum(ramp)
-        return [weight * horizon / total for weight in ramp]
-
-
-@dataclass
 class VelocityStrategy(ExpressionEnforcementStrategy):
     """
     The constraint will be applied to the derivative of the expression.
@@ -660,3 +600,183 @@ class SystemDynamicsStrategy(EnforcementStrategy):
             self.velocity_variables
         )
         return res
+
+
+# %% predicted-value rows
+
+
+@dataclass
+class PredictedValueStrategy(ExpressionEnforcementStrategy):
+    """
+    Bounds the expression's predicted value at chosen steps of the horizon, one row per
+    step.
+
+    Row ``t`` constrains the change accumulated over velocity blocks ``0..t``, so the
+    first row binds the block that is executed and the later rows make the plan brake
+    before a bound. Inside its bounds the expression may move freely but not leave.
+    Outside, row ``t`` asks for the fraction ``(t + 1) / horizon`` of the gap, capped by
+    what the reference velocity reaches by then, so the approach rate is the gap over
+    the horizon time and the approach never fights the braking rows at the bound.
+
+    The rows sit at steps ``0, 1, 3, 7, ...`` and the last block: dense where the plan
+    is executed, sparse where it is only predicted. The constraint's slack weight is
+    normalized over the horizon like an integral row's and shared across the rows, so a
+    bound keeps its weight relative to the goals it competes with.
+
+    ::
+
+        |   k0   |   k1   |   k2   |   k3   |  jerk  |  eps0  |  eps1  |  eps3  |
+        |--------+--------+--------+--------+--------+--------+--------+--------|
+        |  J*dt  |        |        |        |   0    |   dt   |        |        | t=0
+        |  J*dt  |  J*dt  |        |        |   0    |        |   dt   |        | t=1
+        |  J*dt  |  J*dt  |  J*dt  |  J*dt  |   0    |        |        |   dt   | t=3
+
+    Only inequality constraints are supported.
+    """
+
+    def constrained_steps(self) -> list[int]:
+        """
+        Zero-based velocity blocks after which the predicted value is bounded.
+        """
+        last = self.qp_controller_config.control_horizon - 1
+        steps = []
+        step = 0
+        while step < last:
+            steps.append(step)
+            step = 2 * step + 1
+        steps.append(last)
+        return steps
+
+    def _rows(self) -> list[tuple[int, GiskardConstraint]]:
+        """
+        The (step, constraint) pair behind every row, in row order.
+        """
+        return [(t, c) for t in self.constrained_steps() for c in self.constraints]
+
+    def create_matrix(self) -> Matrix:
+        """
+        Builds the constraint matrix: the row block of step ``t`` carries the expression
+        jacobian in every velocity block up to and including ``t``.
+        """
+        if len(self.constraints) == 0:
+            return sm.Matrix()
+        horizon = self.qp_controller_config.control_horizon
+        selector = np.tril(np.ones((horizon, horizon)))[self.constrained_steps(), :]
+        jacobian = (
+            sm.Vector([c.expression for c in self.constraints]).jacobian(
+                variables=self.position_variables
+            )
+            * self.qp_controller_config.model_predictive_control_time_step
+        )
+        value_block = sm.Matrix(selector).kron(jacobian)
+        return sm.hstack(
+            [
+                value_block,
+                sm.Matrix.zeros(value_block.shape[0], self.number_of_jerk_columns),
+            ]
+        )
+
+    def create_slack_matrix(self) -> Matrix:
+        """
+        Builds the diagonal slack matrix with one slack variable per row.
+        """
+        if len(self.constraints) == 0:
+            return sm.Matrix()
+        return (
+            sm.Matrix.eye(len(self._rows()))
+            * self.qp_controller_config.model_predictive_control_time_step
+        )
+
+    def create_slack_variables(self) -> DirectLimits:
+        """
+        Creates one slack variable per row, each carrying the constraint's slack limits
+        and its share of the constraint's horizon-normalized weight.
+        """
+        rows = self._rows()
+        share = len(self.constrained_steps())
+        return DirectLimits(
+            lower_bounds=Vector([c.lower_slack_limit for _, c in rows]),
+            upper_bounds=Vector([c.upper_slack_limit for _, c in rows]),
+            quadratic_weights=Vector(
+                [
+                    normalize_slack_weight(
+                        c.quadratic_weight,
+                        c.normalization_factor,
+                        self.qp_controller_config.control_horizon,
+                    )
+                    / share
+                    for _, c in rows
+                ]
+            ),
+            linear_weights=Vector([c.linear_weight for _, c in rows]),
+            names=self.create_names(),
+        )
+
+    def _reachable_change(self, constraint: GiskardConstraint, step: int) -> Scalar:
+        """
+        Largest change of the expression the reference velocity produces by ``step``.
+        """
+        return (
+            constraint.normalization_factor
+            * self.qp_controller_config.model_predictive_control_time_step
+            * (step + 1)
+        )
+
+    def _scheduled(self, gap: Scalar, step: int) -> Scalar:
+        """
+        The share of a gap to a bound that row ``step`` asks to be closed.
+        """
+        return gap * (step + 1) / self.qp_controller_config.control_horizon
+
+    def create_bounds(
+        self, bounds_getter: Callable[[GiskardConstraint], Scalar]
+    ) -> Vector:
+        """
+        Builds one bound per row, repeating each constraint's bound without a schedule.
+        """
+        return Vector([bounds_getter(c) for _, c in self._rows()])
+
+    def create_lower_bounds(self) -> Vector:
+        """
+        Lower bounds per row: the lower error while it permits, its scheduled and
+        reachable share while it demands a rise.
+        """
+        self._require_constraint_type(GiskardInequalityConstraint)
+        return Vector(
+            [
+                sm.min(
+                    sm.min(c.lower_bound, self._scheduled(c.lower_bound, t)),
+                    self._reachable_change(c, t),
+                )
+                for t, c in self._rows()
+            ]
+        )
+
+    def create_upper_bounds(self) -> Vector:
+        """
+        Upper bounds per row: the upper error while it permits, its scheduled and
+        reachable share while it demands a fall.
+        """
+        self._require_constraint_type(GiskardInequalityConstraint)
+        return Vector(
+            [
+                sm.max(
+                    sm.max(c.upper_bound, self._scheduled(c.upper_bound, t)),
+                    -self._reachable_change(c, t),
+                )
+                for t, c in self._rows()
+            ]
+        )
+
+    def create_equality_bounds(self) -> Vector:
+        """
+        Rejects equality constraints, which this strategy does not enforce.
+        """
+        self._require_constraint_type(GiskardInequalityConstraint)
+        return self.create_bounds(lambda c: c.lower_bound)
+
+    def create_names(self) -> list[str]:
+        """
+        One name per row, prefixed with its step.
+        """
+        return [f"t{t:03}/{c.name}" for t, c in self._rows()]

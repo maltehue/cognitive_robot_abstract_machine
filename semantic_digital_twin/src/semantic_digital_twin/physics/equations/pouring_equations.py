@@ -462,9 +462,9 @@ class GatedInflowEquation(InflowEquation):
     The vertical factor of :attr:`gate`, closing as the source lip sinks toward this
     receiver's opening plane.
 
-    Kept apart from the horizontal factor because it measures the same clearance a
-    dedicated task holds, so a caller that wants the gate's value without its pull on
-    that clearance can hold this factor fixed.
+    It measures the same clearance
+    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepSourceRimAboveReceiverRim`
+    holds.
     """
 
     overlap_gate: Scalar = field(default_factory=lambda: sm.Scalar(1.0))
@@ -494,11 +494,4 @@ class GatedInflowEquation(InflowEquation):
         :param context: Kinematic context; forwarded to the base inflow conversion.
         :return: Gated normalised fill velocity; zero while the gate is closed.
         """
-        return self.gate * self.ungated_symbolic_velocity(context)
-
-    def ungated_symbolic_velocity(self, context: FillContext) -> Scalar:
-        """
-        :param context: Kinematic context; forwarded to the base inflow conversion.
-        :return: Normalised fill velocity before the transfer gate scales it.
-        """
-        return super().symbolic_velocity(context)
+        return self.gate * super().symbolic_velocity(context)

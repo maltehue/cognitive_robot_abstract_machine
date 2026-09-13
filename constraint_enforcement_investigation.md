@@ -465,3 +465,101 @@ equation's cached symbolic expressions. One run is ~20–40 s.
 **The sim is not the robot.** It reproduces mechanisms (collinearity, gate slope, rim
 crossing) but understates severity, and it entirely missed the F5 failure. Validate
 anything load-bearing on hardware.
+
+---
+
+## 9. The predicted-value prototype on the pouring transfer (2026-09-13, not committed)
+
+The prototype from the standalone branch's section 8 (`GeometricScheduledStrategy`: nine
+predicted-value rows per constraint at steps 0, 1, 3, 7, 15, 31, 63, 127 and the last
+block, slack weight shared, gap closed proportionally over the horizon) was made the
+default of `add_inequality_constraint` here via a working-tree switch
+(`constraint_collection.INEQUALITY_ENFORCEMENT_STRATEGY`; the rim task's non-front-loaded
+path reads the same switch). Sim, `tracy_transfer_world`, horizon 120, 80 Hz.
+
+| floor / aim weight | integral: min clearance, excursion after entry | scheduled: min clearance, excursion after entry | fill reached |
+|---|---|---|---|
+| 0.08, `MAXIMUM` (the strict-xfail config) | 0.0735, 6.4 mm | **0.0800, 0.0 mm** (0 of 887 ticks outside) | both |
+| 0.07, `MAXIMUM` | 0.0650, 4.9 mm | 0.0675, 2.4 mm | both |
+| 0.06, `MAXIMUM` | 0.0560, 3.9 mm | 0.0593, **13.4 mm above the band** | both |
+| 0.05, default | 0.0443, 5.7 mm | 0.0440 — **QP fails at tick 177** | integral only |
+| 0.03, `MAXIMUM` (demo) | **−0.0301 (rims cross)**, 60 mm | 0.0267 — **QP fails at tick 315** | integral only |
+
+Tick time 13.0 vs 12.8 ms. Peak joint acceleration 0.97 vs 0.65 in every run that
+finished — the braking rows stop the lip harder at the band edge.
+
+Module run with the switch on: the three strict xfails flip to passing (clearance band at
+0.08, the height guard, and the distance guard, whose wrist goal converges here), and one
+real regression: `test_pouring_lip_stays_above_receiver_rim` (floor 0.05) dies with the
+QP failure below.
+
+**Why the QP fails below floor 0.06 — and it is not the new rows.** Offline replay of the
+failing problem (PIQP status −1, max iterations, unchanged at 5000): dropping all nine
+clearance rows and their slacks still fails; dropping *only the fill row* (the
+`TerminalStatePredictionStrategy` row, weight 23540) solves in 23 iterations. Per-tick
+logging shows the fill row's largest coefficient at 0.0125 for the entire integral run,
+but 0.16–0.38 in the scheduled run while the lip dips into the gate's knee (ticks
+110–140, clearance 0.044–0.05) and 0.59 at the failing tick, 47× normal. Mechanism: the
+much heavier fill row (F3) pushes the lip below the floor along the collinear direction
+(F4); the integral row lets it settle 5 mm under and the gate gradient stays small; the
+scheduled rows lift it back, the lip crosses the knee twice, the gate's logistic slope
+enters the fill row's gradient and the QP becomes unsolvable. Solver settings do not
+help (`max_iter` 2000/5000, `reg_lower_limit` 1e-8 → same; 1e-6 → primal infeasible;
+multistage KKT → fails at tick 11). Softening the rows (unit slack coefficient, i.e.
+6400× softer) "solves" it but the lip then leaves the band upward by 9 cm; five rows
+instead of nine finish but sink 14.5 mm under the floor.
+
+**Reading.** In the pouring transfer the prototype does what it did in the standalone
+scene — it stops the deferral — but it can only hold what the fill row lets it hold. The
+fill row outweighs it 3× (F3) and is collinear with it in the knee (F4), and once the
+clearance rows are stiff enough to push back, the fill row's gate gradient breaks the
+solver. So on this demo the prototype is only usable with the floor outside the knee
+(F4's rule, ≥ 0.06–0.07 m), which is also where it holds. Making floor 0.03 work needs the
+fill row fixed first: bound or normalise the gate gradient in the fill row, or lower the
+gate sharpness, or give the clearance rows priority over the fill row rather than a
+weight. The harder braking (peak acceleration +50%) is the other cost to look at before
+hardware.
+
+Probes: `test/giskardpy_test/test_motion_statechart/test_probe_transfer_strategies.py`
+(untracked) runs the table above; env vars `PROBE_STRATEGIES`, `PROBE_CONFIGS`,
+`PROBE_MAX_ITER`, `PROBE_REG`, `PROBE_KKT`, output `PROBE_OUT`.
+
+
+---
+
+## 10. What landed (2026-09-13)
+
+- `PredictedValueStrategy` in `giskardpy/qp/enforcement_strategy.py` is the default of
+  `add_inequality_constraint`: nine predicted-value rows per constraint at steps
+  0, 1, 3, 7, 15, 31, 63, 127 and the last block and the proportional approach schedule
+  of section 9. Unit tests in `test/giskardpy_test/test_qp/test_predicted_value_strategy.py`.
+  Equality constraints keep the integral row.
+- **Weight scale.** The rows' slack weight is normalized over the horizon exactly like an
+  integral row's and then shared across the rows, so a bound keeps today's weight
+  relative to the goals it competes with. The prototype of section 9 skipped the horizon
+  division and was therefore ~H× stiffer at equal nominal weight; that made the
+  collision-avoidance buffer effectively hard against an equal-weight goal and failed
+  the two `test_collision_avoidance_tasks` tests that pin down the soft-buffer semantics.
+  With the horizon-normalized weight those pass unchanged, the guards still hold (the
+  deferral fix does not depend on the weight), and the pouring clearance needs the
+  `WEIGHT_MAXIMUM` tier to hold its floor against the fill row — at
+  `ABOVE_COLLISION_AVOIDANCE` the fill row pushed the lip 17 mm out of the band and then
+  broke the solver even at floor 0.08. `KeepSourceRimAboveReceiverRim` therefore
+  defaults to `WEIGHT_MAXIMUM` and the demo sets it explicitly. This is F3 in action: the
+  clearance row is now genuinely pushed instead of deferred, so its weight matters.
+- Removed as superseded: `FrontLoadedIntegralStrategy` and
+  `KeepSourceRimAboveReceiverRim.demands_immediate_recovery` (W2),
+  `FillByTransferTask.height_gate_drives_control` with its `_control_velocity` seam and
+  `_compile_against_world` helper (the F5 experiment), the `enforcement_strategy`
+  parameters of the constraint builders, and `GatedInflowEquation.ungated_symbolic_velocity`.
+  The gate split into height and overlap factors stays.
+- The clearance floor is 0.07 m in the demo and as the task's default, following F4's
+  rule and section 9's measurements: 0.05 and 0.03 sit in the gate's knee, where the
+  fill row breaks the solver once the clearance rows push back. Making a lower floor work
+  needs the fill row's gate gradient bounded first.
+- Tests: the clearance band test (floor 0.08) and the height and distance guards are
+  ordinary tests now; the angle guard stays a strict xfail for the residual excursion
+  that is not deferral (section 8 of the standalone branch's write-up).
+- Still open: hardware validation of the demo at floor 0.07 (the simulation understated
+  every effect so far), the fill row's conditioning in the knee, the F3 weight story,
+  and `DistanceGoal`'s damping rows (F8).

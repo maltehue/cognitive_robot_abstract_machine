@@ -68,7 +68,6 @@ from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     FixedConnection,
     LiquidConnection,
-    RevoluteConnection,
 )
 from semantic_digital_twin.world_description.geometry import (
     Box,
@@ -395,11 +394,10 @@ class TransferMotion:
 
 def _build_transfer_motion(
     tracy_transfer_world,
-    minimum_clearance: float = 0.05,
+    minimum_clearance: float = 0.07,
     no_spill_weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
     no_spill_reference_velocity: float = 0.2,
     fill_level_tolerance: float = 0.05,
-    height_gate_drives_control: bool = True,
 ) -> TransferMotion:
     """
     Build the cup-to-cup transfer motion the transfer tests share.
@@ -417,8 +415,6 @@ def _build_transfer_motion(
     :param no_spill_reference_velocity: Reference velocity of the competing pour-aiming
         task.
     :param fill_level_tolerance: Tolerance around the fill goal handed to the fill task.
-    :param height_gate_drives_control: Whether the transfer gate steers the fill task's
-        row.
     :return: The built motion.
     """
     world, source_cup, receiving_cup, left_tool_frame = tracy_transfer_world
@@ -428,7 +424,6 @@ def _build_transfer_motion(
         goal_value=0.7,
         fill_level_tolerance=fill_level_tolerance,
         reference_velocity=0.03,
-        height_gate_drives_control=height_gate_drives_control,
     )
     no_spill = KeepProjectileInReceiver(
         receiver=receiving_cup,
@@ -1030,13 +1025,6 @@ class TestRimClearanceDuringTransfer:
             f"minimum clearance was {min(clearance_history):.3f} m"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="The clearance row is an integral over the whole prediction horizon, so "
-        "the optimizer satisfies it with a plan that defers the recovery past the step "
-        "it executes. The row reports no violation while the lip sits below its floor, "
-        "so neither its weight nor a bound on its slack reaches the behaviour.",
-    )
     def test_clearance_stays_within_the_configured_band(self, tracy_transfer_world):
         """
         Once the lip is inside the clearance band the task was configured with, it never
@@ -1227,14 +1215,6 @@ class TestFeatureGoalGuardsHeldCupWhileWristRotates:
     guarded by the same constraint form every threshold in the system uses.
     """
 
-    _DEFERRAL_REASON = (
-        "The guard's row is an integral over the whole prediction horizon, so the "
-        "optimizer satisfies it with a plan that defers the correction past the step "
-        "it executes. The quantity leaves its band while the row reports no violation, "
-        "with no terminal-prediction row taking part."
-    )
-
-    @pytest.mark.xfail(strict=True, reason=_DEFERRAL_REASON)
     def test_height_goal_keeps_the_rim_in_its_band(
         self, tracy_transfer_world, rclpy_node
     ) -> None:
@@ -1273,13 +1253,6 @@ class TestFeatureGoalGuardsHeldCupWhileWristRotates:
             f"{trace.worst_excursion_after_entry() * 1000:.2f} mm"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TimeoutError,
-        reason="Besides its band row, the distance goal adds a zero-target row per axis "
-        "of the rim-to-rim vector, which resists any motion of the rim. The wrist goal "
-        "is outweighed by them and never reaches its target.",
-    )
     def test_distance_goal_keeps_the_rims_apart(self, tracy_transfer_world) -> None:
         """
         The planar rim-to-rim distance, once grown from below its band into it, never
@@ -1317,7 +1290,13 @@ class TestFeatureGoalGuardsHeldCupWhileWristRotates:
             f"{trace.worst_excursion_after_entry() * 1000:.2f} mm"
         )
 
-    @pytest.mark.xfail(strict=True, reason=_DEFERRAL_REASON)
+    @pytest.mark.xfail(
+        strict=True,
+        reason="The tilt still leaves its band by a few hundredths of a radian at this "
+        "wrist speed while holding it at a third of the speed, so the remaining "
+        "excursion is not the deferral the predicted-value rows removed but the "
+        "linearisation or the joint limits under a fast rotation.",
+    )
     def test_angle_goal_keeps_the_tilt_in_its_band(self, tracy_transfer_world) -> None:
         """
         The cup's tilt away from upright, once grown from below its band into it, never
@@ -1468,7 +1447,6 @@ class TestClearanceBandStaysAboveTheRim:
         """
         transfer = _build_transfer_motion(
             tracy_transfer_world,
-            minimum_clearance=0.05,
             no_spill_weight=DefaultWeights.WEIGHT_MAXIMUM,
             no_spill_reference_velocity=0.1,
         )

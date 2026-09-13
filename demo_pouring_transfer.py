@@ -341,10 +341,9 @@ no_spill = KeepProjectileInReceiver(
 keep_above = KeepSourceRimAboveReceiverRim(
     receiver=receiving_cup,
     source=source_cup,
-    minimum_clearance=0.03,
+    minimum_clearance=0.07,
     clearance_band=0.05,
-    weight=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
-    demands_immediate_recovery=True,
+    weight=DefaultWeights.WEIGHT_MAXIMUM,
 )
 keep_plane = AlignPlanes(
     root_link=world.root,
