@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 import numpy as np
 from sqlalchemy import select
 
+from giskardpy.middleware.ros2 import rospy
 from krrood.ormatic.data_access_objects.helper import get_dao_class
+from semantic_digital_twin.adapters.ros.world_fetcher import fetch_world_from_service
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.orm.utils import semantic_digital_twin_sessionmaker
@@ -162,3 +164,26 @@ class WorldFromDatabaseConfig(WorldConfig):
             )
         )
         self.world = world_dao.from_dao()
+
+
+@dataclass
+class WorldFromFetchService(WorldConfig):
+    """
+    Loads the world another process serves over its fetch world service.
+
+    The world stays that process's own; this one only mirrors it, so that a giskard can
+    control a robot of a world it does not own.
+    """
+
+    fetch_timeout: float = 60.0
+    """
+    How many seconds to wait for the service and its answer.
+
+    A world of a few hundred bodies takes tens of seconds to serve, and the serving
+    process answers one fetch after the other.
+    """
+
+    def setup_world(self):
+        self.world = fetch_world_from_service(
+            rospy.get_node(), timeout_seconds=self.fetch_timeout
+        )

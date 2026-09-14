@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 
-from giskardpy.executor import NoPacing, Pacer, RealTimePacer
+from giskardpy.executor import NoPacing, Pacer, RealTimePacer, SimulationPacer
 from giskardpy.middleware.ros2.utils.utils import is_in_github_workflow
 
 
@@ -59,6 +59,25 @@ class GiskardServerConfig:
     Frequency in hertz at which Giskard waits for goals.
     """
 
+    real_time_factor: float | None = None
+    """
+    How much faster than real time a simulated motion runs, or ``None`` to let it run as
+    fast as the hardware allows.
+
+    Simulated servers that share a world race each other when none of them is paced: the
+    one with fewer joints finishes a cycle sooner, so its robot moves faster than the
+    others.
+    """
+
+    publishes_world: bool = True
+    """
+    Whether this server serves its world to other processes and draws it.
+
+    A server that fetched its world from another process must leave both to that
+    process: a late starter would otherwise fetch a copy instead of the original, and
+    every copy would draw the same markers again.
+    """
+
     def __post_init__(self):
         if is_in_github_workflow():
             self.debug_mode = False
@@ -85,6 +104,8 @@ class GiskardServerConfig:
         has to be commanded in real time, so a closed loop setup can never be sped up or
         slowed down.
         """
-        if self.is_standalone:
+        if not self.is_standalone:
+            return RealTimePacer()
+        if self.real_time_factor is None:
             return NoPacing()
-        return RealTimePacer()
+        return SimulationPacer(real_time_factor=self.real_time_factor)

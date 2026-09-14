@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Union
+from typing import TYPE_CHECKING, Dict, List, Type, Union
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -11,6 +11,7 @@ from std_msgs.msg import Float64MultiArray
 
 from giskardpy.data_types.exceptions import (
     JointRegistrationRequiresStandaloneModeError,
+    RobotNotInWorldError,
 )
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.command_publishing import (
@@ -357,3 +358,59 @@ class StandAloneRobotInterfaceConfig(RobotInterfaceConfig):
 
     def setup(self):
         self.register_controlled_joints(self.joint_names)
+
+
+# %% one robot of a world that holds several
+
+
+@dataclass
+class OneRobotOfManyInterface(RobotInterfaceConfig):
+    """
+    Controls one robot of a world that holds several, without talking to any hardware.
+
+    The robot is picked by its annotation type, which is what tells two robots of a
+    shared world apart; their bodies may carry the same prefix.
+    """
+
+    robot_type: Type[AbstractRobot]
+    """
+    The annotation type of the robot to control.
+    """
+
+    @property
+    def robot(self) -> AbstractRobot:
+        return self.find_robot(self.world)
+
+    def find_robot(self, world: World) -> AbstractRobot:
+        """
+        The robot of this interface's type.
+
+        :raises RobotNotInWorldError: If the world holds no robot of that type.
+        """
+        robots = world.get_semantic_annotations_by_type(self.robot_type)
+        if not robots:
+            raise RobotNotInWorldError(robot_type=self.robot_type)
+        return robots[0]
+
+    def connections_to_control(self, world: World) -> List[ActiveConnection]:
+        """
+        Every active connection that moves a part of this interface's robot.
+
+        The drive is one of them, although it carries the robot through the world rather
+        than connecting two of its bodies.
+        """
+        branch = set(
+            world.get_kinematic_structure_entities_of_branch(
+                self.find_robot(world).root
+            )
+        )
+        return [
+            connection
+            for connection in world.get_connections_by_type(ActiveConnection)
+            if connection.child in branch
+        ]
+
+    def setup(self):
+        self.register_controlled_joints(
+            [connection.name for connection in self.connections_to_control(self.world)]
+        )

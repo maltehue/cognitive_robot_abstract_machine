@@ -1,7 +1,11 @@
 from dataclasses import fields, is_dataclass
 
+import pytest
+
+from giskardpy.data_types.exceptions import RobotNotInWorldError
 from giskardpy.middleware.ros2.giskard import Giskard
 from giskardpy.middleware.ros2.robot_interface_config import (
+    OneRobotOfManyInterface,
     RobotInterfaceConfig,
     StandAloneRobotInterfaceConfig,
 )
@@ -23,6 +27,14 @@ from semantic_digital_twin.robots.daisy import DAiSyJoint
 from semantic_digital_twin.robots.stretch import StretchJoint
 from semantic_digital_twin.robots.tracy import TracyJoint
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from semantic_digital_twin.api import RobotSpecification, WorldSpecification
+from semantic_digital_twin.exceptions import ParsingError
+from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.robots.stretch import Stretch
+from semantic_digital_twin.robots.tiago import Tiago
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.connections import ActiveConnection
 
 # %% the interface hierarchy is built from dataclasses
 
@@ -146,3 +158,70 @@ def test_the_stretch_interface_controls_every_joint_except_the_drive():
         StretchJoint.HEAD_PAN,
         StretchJoint.HEAD_TILT,
     ]
+
+
+# %% one robot of a world that holds several
+
+
+@pytest.fixture()
+def world_with_two_robots() -> World:
+    """
+    A world holding a PR2 and a Stretch, each on a drive of its own.
+    """
+    try:
+        return WorldSpecification(
+            world_parser=None,
+            robots=[
+                RobotSpecification(
+                    semantic_annotation_type=PR2,
+                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=1.0),
+                ),
+                RobotSpecification(
+                    semantic_annotation_type=Stretch,
+                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=-1.0),
+                ),
+            ],
+        ).to_domain_object()
+    except ParsingError as error:
+        pytest.skip(f"Robot URDF not available: {error}")
+
+
+def test_the_interface_controls_its_robots_connections_and_its_drive(
+    world_with_two_robots: World,
+):
+    robot = world_with_two_robots.get_semantic_annotations_by_type(PR2)[0]
+
+    connections = OneRobotOfManyInterface(robot_type=PR2).connections_to_control(
+        world_with_two_robots
+    )
+
+    assert set(connections) == {
+        connection
+        for connection in robot.connections
+        if isinstance(connection, ActiveConnection)
+    } | {robot.root.parent_connection}
+
+
+def test_two_interfaces_of_one_world_control_different_connections(
+    world_with_two_robots: World,
+):
+    pr2_connections = OneRobotOfManyInterface(robot_type=PR2).connections_to_control(
+        world_with_two_robots
+    )
+    stretch_connections = OneRobotOfManyInterface(
+        robot_type=Stretch
+    ).connections_to_control(world_with_two_robots)
+
+    assert set(pr2_connections).isdisjoint(set(stretch_connections))
+    assert set(pr2_connections) | set(stretch_connections) == set(
+        world_with_two_robots.get_connections_by_type(ActiveConnection)
+    )
+
+
+def test_an_interface_for_a_robot_that_is_not_there_says_so(
+    world_with_two_robots: World,
+):
+    with pytest.raises(RobotNotInWorldError):
+        OneRobotOfManyInterface(robot_type=Tiago).connections_to_control(
+            world_with_two_robots
+        )

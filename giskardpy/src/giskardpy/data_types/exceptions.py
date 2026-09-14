@@ -149,6 +149,24 @@ class JointRegistrationRequiresStandaloneModeError(SetupException):
 
 
 @dataclass
+class RobotNotInWorldError(SetupException):
+    """
+    Raised when the world holds no robot of the type an interface controls.
+    """
+
+    robot_type: type
+    """
+    The annotation type that was looked for.
+    """
+
+    def error_message(self) -> str:
+        return f"The world holds no {self.robot_type.__name__}."
+
+    def suggest_correction(self) -> str:
+        return "Check the robot type of the interface config against the robots of the world."
+
+
+@dataclass
 class MaxTrajectoryLengthException(PlanningException):
     """
     Raised when a planned trajectory exceeds the maximum allowed length.

@@ -82,13 +82,15 @@ class Giskard:
     executor: Executor = field(init=False)
     motion_server: MotionServer = field(init=False)
     world_synchronizer: WorldSynchronizer = field(init=False)
-    tf_publisher: TFPublisher = field(init=False)
-    viz_marker_publisher: VizMarkerPublisher = field(init=False)
-    collision_marker_publisher: CollisionVisualizationMarkerPublisher = field(
-        init=False
+    tf_publisher: TFPublisher | None = field(init=False, default=None)
+    viz_marker_publisher: VizMarkerPublisher | None = field(init=False, default=None)
+    collision_marker_publisher: CollisionVisualizationMarkerPublisher | None = field(
+        init=False, default=None
     )
-    model_reload_synchronizer: ModelReloadSynchronizer = field(init=False)
-    world_fetcher: FetchWorldServer = field(init=False)
+    model_reload_synchronizer: ModelReloadSynchronizer | None = field(
+        init=False, default=None
+    )
+    world_fetcher: FetchWorldServer | None = field(init=False, default=None)
 
     def setup(self):
         """
@@ -170,6 +172,10 @@ class Giskard:
         return plotters
 
     def setup_world_model_ros_interface(self):
+        """
+        Attach the ros entities through which this world is kept in step with the other
+        processes, and, unless the server config forbids it, serve and draw it.
+        """
         try:
             semantic_digital_twin_database_uri = os.environ.get(
                 "SEMANTIC_DIGITAL_TWIN_DATABASE_URI"
@@ -201,6 +207,8 @@ class Giskard:
             node=rospy.get_node(),
             defer_incoming_updates=True,
         )
+        if not self.server_config.publishes_world:
+            return
         self.world_fetcher = FetchWorldServer(
             node=rospy.get_node(), world=self.world_config.world
         )
@@ -226,9 +234,12 @@ class Giskard:
         self.world_synchronizer.close()
         if self.model_reload_synchronizer is not None:
             self.model_reload_synchronizer.close()
-        self.world_fetcher.close()
-        self.tf_publisher.stop()
-        self.viz_marker_publisher.stop()
+        if self.world_fetcher is not None:
+            self.world_fetcher.close()
+        if self.tf_publisher is not None:
+            self.tf_publisher.stop()
+        if self.viz_marker_publisher is not None:
+            self.viz_marker_publisher.stop()
 
     def sanity_check(self):
         self._controlled_joints_sanity_check()
@@ -244,7 +255,11 @@ class Giskard:
     def _controlled_joints_sanity_check(self):
         world = self.world_config.world
         movable_joints = world.get_connections_by_type(ActiveConnection)
-        controlled_joints = self.robot.controlled_connections
+        controlled_joints = [
+            connection
+            for robot in self.robots
+            for connection in robot.controlled_connections
+        ]
         non_controlled_joints = set(movable_joints).difference(set(controlled_joints))
         if len(controlled_joints) == 0 and len(world.connections) > 0:
             raise NoControlledJointsError()
