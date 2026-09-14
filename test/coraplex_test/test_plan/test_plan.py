@@ -1,5 +1,7 @@
 import os
+import threading
 import time
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -22,7 +24,7 @@ from coraplex.plans.condition_nodes import ConditionNode
 from coraplex.plans.executables import GiskardExecutable
 from coraplex.plans.factories import code, sequential, parallel, execute_single
 from coraplex.plans.failures import EmptyUnderspecified
-from coraplex.plans.plan import Plan
+from coraplex.plans.plan import ConcurrentPlans, Plan
 from coraplex.plans.plan_node import PlanNode, ActionNode
 from coraplex.robot_plans.actions.core.navigation import NavigateAction
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
@@ -429,8 +431,8 @@ def _torso_position(world):
 
 def test_sequence_runs_all_motions(immutable_model_world):
     """
-    Every motion of a sequence is executed, so the torso ends at the target of the *last*
-    motion.
+    Every motion of a sequence is executed, so the torso ends at the target of the
+    *last* motion.
 
     The robot starts in the LOW configuration, so a final HIGH motion proves the second
     motion actually ran.
@@ -768,3 +770,71 @@ def test_a_plan_node_is_drawn_in_the_color_of_its_state():
     )
 
     assert visualizer.node_color(node.index) == LifeCycleValues.FAILED.color.to_hex()
+
+
+# %% performing several plans at once
+
+
+@dataclass
+class PlanRecordingItsThread(Plan):
+    """
+    A plan that notes which thread performed it.
+    """
+
+    performing_thread: threading.Thread = field(default=None, init=False)
+    """
+    The thread that performed this plan.
+    """
+
+    def perform(self) -> None:
+        self.performing_thread = threading.current_thread()
+
+
+@dataclass
+class PlanRaisingWhenPerformed(Plan):
+    """
+    A plan whose performance fails.
+    """
+
+    failure: Exception = field(default=None, kw_only=True)
+    """
+    What performing this plan raises.
+    """
+
+    def perform(self) -> None:
+        raise self.failure
+
+
+def test_concurrent_plans_are_performed_on_threads_of_their_own():
+    plans = [PlanRecordingItsThread() for _ in range(3)]
+
+    ConcurrentPlans(plans=plans).perform()
+
+    performing_threads = [plan.performing_thread for plan in plans]
+    assert None not in performing_threads
+    assert len(set(performing_threads)) == len(plans)
+    assert threading.current_thread() not in performing_threads
+
+
+def test_the_failure_of_the_first_failing_plan_is_reported():
+    first_failure = EmptyUnderspecified()
+    plans = [
+        PlanRecordingItsThread(),
+        PlanRaisingWhenPerformed(failure=first_failure),
+        PlanRaisingWhenPerformed(failure=EmptyUnderspecified()),
+    ]
+
+    with pytest.raises(EmptyUnderspecified) as reported:
+        ConcurrentPlans(plans=plans).perform()
+
+    assert reported.value is first_failure
+
+
+def test_every_plan_runs_even_when_one_of_them_fails():
+    succeeding = PlanRecordingItsThread()
+    plans = [PlanRaisingWhenPerformed(failure=EmptyUnderspecified()), succeeding]
+
+    with pytest.raises(EmptyUnderspecified):
+        ConcurrentPlans(plans=plans).perform()
+
+    assert succeeding.performing_thread is not None

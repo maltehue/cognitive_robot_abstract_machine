@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from coraplex.datastructures.enums import ExecutionType
 from coraplex.plans.executables import GiskardExecutable
+from coraplex.plans.motion_gate import MotionAndModelChangeGate
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,14 @@ class ExecutionEnvironment:
     motion state chart created within this environment.
     """
 
+    motion_gate: MotionAndModelChangeGate = field(
+        default_factory=MotionAndModelChangeGate
+    )
+    """
+    Keeps the model changes of the plans performed in this environment out of their
+    motions.
+    """
+
     previous_type: ExecutionType = field(init=False, default=None)
     """
     Type of the execution environment before setting it, used for nested environments.
@@ -44,27 +53,39 @@ class ExecutionEnvironment:
     environments.
     """
 
+    previous_motion_gate: MotionAndModelChangeGate | None = field(
+        init=False, default=None
+    )
+    """
+    Gate before entering this environment, used for nested environments.
+    """
+
     def __enter__(self):
         """
         Entering function for 'with' scope, saves the previously set
-        :py:attr:`~pycram.plans.executables.GiskardExecutable.execution_type` and
+        :py:attr:`~pycram.plans.executables.GiskardExecutable.execution_type`,
         :py:attr:`~pycram.plans.executables.GiskardExecutable.collision_avoidance` and
-        sets them to the values of this environment.
+        :py:attr:`~pycram.plans.executables.GiskardExecutable.motion_gate` and sets them
+        to the values of this environment.
         """
         self.previous_type = GiskardExecutable.execution_type
         self.previous_collision_avoidance = GiskardExecutable.collision_avoidance
+        self.previous_motion_gate = GiskardExecutable.motion_gate
         GiskardExecutable.execution_type = self.execution_type
         GiskardExecutable.collision_avoidance = self.collision_avoidance
+        GiskardExecutable.motion_gate = self.motion_gate
 
     def __exit__(self, _type, value, traceback):
         """
         Exit method for the 'with' scope, restores the
-        :py:attr:`~pycram.plans.executables.GiskardExecutable.execution_type` and
-        :py:attr:`~pycram.plans.executables.GiskardExecutable.collision_avoidance` to
-        the previously used values.
+        :py:attr:`~pycram.plans.executables.GiskardExecutable.execution_type`,
+        :py:attr:`~pycram.plans.executables.GiskardExecutable.collision_avoidance` and
+        :py:attr:`~pycram.plans.executables.GiskardExecutable.motion_gate` to the
+        previously used values.
         """
         GiskardExecutable.execution_type = self.previous_type
         GiskardExecutable.collision_avoidance = self.previous_collision_avoidance
+        GiskardExecutable.motion_gate = self.previous_motion_gate
 
     def __call__(self, collision_avoidance: bool = False):
         """

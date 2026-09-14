@@ -79,6 +79,14 @@ class Context(PlanEntity):
     A ROS node that should be used for communication in this plan.
     """
 
+    giskard_node_name: str = field(default="giskard")
+    """
+    Name of the giskard node that moves :attr:`robot`.
+
+    A process performing plans for several robots reaches each of them through a giskard
+    of its own.
+    """
+
     evaluate_conditions: bool = field(default=True)
     """
     Should pre -and postconditions of actions be evaluated in this plan.
@@ -161,7 +169,11 @@ class Context(PlanEntity):
         """
         from giskardpy.middleware.ros2.python_interface import GiskardWrapper
 
-        return GiskardWrapper(self.ros_node, world=self.world)
+        return GiskardWrapper(
+            self.ros_node,
+            giskard_node_name=self.giskard_node_name,
+            world=self.world,
+        )
 
     @classmethod
     def from_world(

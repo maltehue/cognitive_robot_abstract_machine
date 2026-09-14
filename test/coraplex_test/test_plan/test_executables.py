@@ -7,6 +7,7 @@ adds a goal per plan node and a task per motion, and ``prepare_for_execution`` a
 nodes that terminate the chart, which depend on the execution type.
 """
 
+import threading
 from copy import deepcopy
 
 import pytest
@@ -30,6 +31,7 @@ from giskardpy.motion_statechart.monitors.payload_monitors import (
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from semantic_digital_twin.datastructures.definitions import TorsoState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.robots.tiago import Tiago
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.spatial_types.spatial_types import Pose
@@ -47,7 +49,7 @@ from coraplex.execution_environment import (
     real_robot,
     simulated_robot,
 )
-from coraplex.plans.executables import GiskardExecutable
+from coraplex.plans.executables import GiskardExecutable, MoveBranchExecutable
 from coraplex.plans.factories import execute_single
 from coraplex.robot_plans.actions.core.pick_up import ReachAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
@@ -300,3 +302,77 @@ def test_the_tick_budget_is_not_class_state(reach_action_executable):
     """
     assert not hasattr(GiskardExecutable, "ticks_per_motion")
     assert reach_action_executable.context.ticks_per_motion
+
+
+# %% keeping model changes out of running motions
+
+GATE_TIMEOUT = 5.0
+"""
+How long a thread waits for another one to let go of the gate.
+"""
+
+SETTLE_TIME = 0.3
+"""
+How long to give a thread that should not get through the gate a chance to do so.
+"""
+
+
+def test_entering_an_environment_installs_its_gate():
+    environment = ExecutionEnvironment(ExecutionType.REAL)
+    previous_gate = GiskardExecutable.motion_gate
+
+    with environment:
+        assert GiskardExecutable.motion_gate is environment.motion_gate
+
+    assert GiskardExecutable.motion_gate is previous_gate
+
+
+@pytest.fixture
+def free_body_and_context(pr2_world_copy):
+    """
+    A body standing free in a world of its own, and the context that moves it.
+    """
+    robot = pr2_world_copy.get_semantic_annotations_by_type(PR2)[0]
+    with pr2_world_copy.modify_world():
+        body = Body(name=PrefixedName("carried"))
+        pr2_world_copy.add_connection(
+            FixedConnection(parent=pr2_world_copy.root, child=body)
+        )
+    return body, Context(pr2_world_copy, robot)
+
+
+def test_moving_a_branch_waits_for_a_running_motion(free_body_and_context):
+    """
+    Re-attaching a grasped object reaches every giskard, so it may not happen while a
+    robot of another plan is moving.
+    """
+    body, context = free_body_and_context
+    tool_frame = ViewManager.get_end_effector_view(Arms.RIGHT, context.robot).tool_frame
+    executable = MoveBranchExecutable(body=body, new_parent=tool_frame, context=context)
+    environment = ExecutionEnvironment(ExecutionType.REAL)
+    let_the_motion_go = threading.Event()
+    branch_moved = threading.Event()
+
+    def hold_a_motion() -> None:
+        with environment.motion_gate.motion():
+            let_the_motion_go.wait(timeout=GATE_TIMEOUT)
+
+    def move_the_branch() -> None:
+        executable.execute()
+        branch_moved.set()
+
+    with environment:
+        motion = threading.Thread(target=hold_a_motion, daemon=True)
+        motion.start()
+        mover = threading.Thread(target=move_the_branch, daemon=True)
+        mover.start()
+
+        assert not branch_moved.wait(timeout=SETTLE_TIME)
+
+        let_the_motion_go.set()
+
+        assert branch_moved.wait(timeout=GATE_TIMEOUT)
+        motion.join(timeout=GATE_TIMEOUT)
+        mover.join(timeout=GATE_TIMEOUT)
+
+    assert body.parent_connection.parent is tool_frame

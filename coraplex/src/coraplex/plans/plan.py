@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from copy import deepcopy
 from dataclasses import field, dataclass
 
@@ -398,3 +399,51 @@ class Plan:
         for node in self.nodes:
             if node.is_leaf:
                 node.perform()
+
+
+# %% performing several plans at once
+
+
+@dataclass
+class ConcurrentPlans:
+    """
+    Performs several plans at the same time, each on a thread of its own.
+
+    One robot per plan, all of them sharing the world of this process.
+    """
+
+    plans: List[Plan]
+    """
+    The plans to perform.
+    """
+
+    def perform(self) -> None:
+        """
+        Perform every plan and return once all of them are done.
+
+        :raises BaseException: What the earliest plan of :attr:`plans` that failed
+            raised. The other plans are performed to their own end regardless.
+        """
+        failures: dict[int, BaseException] = {}
+
+        def perform_plan(position: int, plan: Plan) -> None:
+            try:
+                plan.perform()
+            except BaseException as failure:
+                failures[position] = failure
+
+        threads = [
+            threading.Thread(
+                target=perform_plan,
+                args=(position, plan),
+                name=f"plan {position}",
+                daemon=True,
+            )
+            for position, plan in enumerate(self.plans)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        if failures:
+            raise failures[min(failures)]

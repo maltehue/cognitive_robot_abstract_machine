@@ -1,0 +1,133 @@
+"""
+A giskard that drives one robot of the world the demo serves.
+
+Run one of these per robot, next to ``demo.py``::
+
+    python robot.py --robot Stretch
+
+It fetches the demo's world instead of building one of its own, so that every process
+holds the same bodies, connections and degrees of freedom under the same identities, and
+it registers only the connections of its own robot, so the other robots stay where their
+processes put them. They are part of its world all the same, and are therefore seen and
+avoided rather than moved.
+"""
+
+from __future__ import annotations
+
+import argparse
+from enum import StrEnum
+from typing import Type
+
+from giskardpy.middleware.ros2 import rospy
+from giskardpy.middleware.ros2.giskard import Giskard
+from giskardpy.middleware.ros2.robot_interface_config import OneRobotOfManyInterface
+from giskardpy.middleware.ros2.server_config import ExecutionMode, GiskardServerConfig
+from giskardpy.model.world_config import WorldFromFetchService
+from giskardpy.qp.qp_controller_config import QPControllerConfig
+from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.robots.robot_parts import AbstractRobot
+from semantic_digital_twin.robots.stretch import Stretch
+from semantic_digital_twin.robots.tiago import Tiago
+
+# %% how the controller runs
+
+CONTROL_FREQUENCY = 20.0
+"""
+Frequency in hertz the controller solves at.
+"""
+
+REAL_TIME_FACTOR = 1.0
+"""
+How fast the simulation runs relative to the wall clock.
+
+Unpaced servers race each other: the robot with the fewest joints finishes its cycles
+soonest and would move faster than the others.
+"""
+
+# %% the robots of the demo
+
+
+class DemoRobot(StrEnum):
+    """
+    The robots of the demo, each driven by a process of its own.
+    """
+
+    PR2 = "PR2"
+    STRETCH = "Stretch"
+    TIAGO = "Tiago"
+
+    @property
+    def annotation_type(self) -> Type[AbstractRobot]:
+        """
+        The annotation that marks this robot in the shared world.
+        """
+        match self:
+            case DemoRobot.PR2:
+                return PR2
+            case DemoRobot.STRETCH:
+                return Stretch
+            case DemoRobot.TIAGO:
+                return Tiago
+
+    @property
+    def giskard_node_name(self) -> str:
+        """
+        Name of the giskard node that drives this robot.
+        """
+        return f"giskard_{self.lower()}"
+
+    @property
+    def command_action_name(self) -> str:
+        """
+        Name of the action this robot's giskard takes goals on.
+        """
+        return f"{self.giskard_node_name}/command"
+
+
+# %% the process
+
+
+def build_giskard(robot: DemoRobot) -> Giskard:
+    """
+    The giskard that drives the given robot of the fetched world.
+
+    It neither serves that world nor draws it: a process starting late would otherwise
+    fetch a copy of it rather than the original, and every copy would draw the same
+    markers again.
+
+    :param robot: The robot this process drives.
+    :return: The server, not yet set up.
+    """
+    return Giskard(
+        world_config=WorldFromFetchService(),
+        robot_interface_config=OneRobotOfManyInterface(
+            robot_type=robot.annotation_type
+        ),
+        server_config=GiskardServerConfig(
+            execution_mode=ExecutionMode.STANDALONE,
+            publishes_world=False,
+            real_time_factor=REAL_TIME_FACTOR,
+        ),
+        qp_controller_config=QPControllerConfig(target_frequency=CONTROL_FREQUENCY),
+    )
+
+
+def main() -> None:
+    """
+    Serve goals for the robot named on the command line until ROS shuts down.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--robot",
+        type=DemoRobot,
+        choices=list(DemoRobot),
+        required=True,
+        help="which robot of the demo's world this process drives",
+    )
+    robot = parser.parse_args().robot
+    rospy.init_node(robot.giskard_node_name)
+    build_giskard(robot).live()
+
+
+if __name__ == "__main__":
+    main()
