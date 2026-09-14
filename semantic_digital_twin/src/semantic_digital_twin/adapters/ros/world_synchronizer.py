@@ -134,6 +134,15 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
     The type of the message that is sent and received.
     """
 
+    queue_depth: int = field(default=10, kw_only=True)
+    """
+    How many messages the publisher and the subscriber keep before they drop the oldest.
+
+    A receiver applies a message while it holds its world, which a single model change
+    can occupy for a second, so a burst of updates has to wait in the queue. A dropped
+    update is never sent again.
+    """
+
     _published_sequence_number: int = field(default=0, init=False, repr=False)
     """
     Position of the message this synchronizer published last.
@@ -161,10 +170,10 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
             std_msgs.msg.String,
             topic=self.topic_name,
             callback=self.subscription_callback,
-            qos_profile=10,
+            qos_profile=self.queue_depth,
         )
         self.publisher = self.node.create_publisher(
-            std_msgs.msg.String, topic=self.topic_name, qos_profile=10
+            std_msgs.msg.String, topic=self.topic_name, qos_profile=self.queue_depth
         )
         self.wait_until_connected()
 

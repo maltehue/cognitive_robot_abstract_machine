@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import weakref
 from collections import defaultdict
 from dataclasses import InitVar, dataclass, field
@@ -257,6 +258,15 @@ class SymbolGraph(metaclass=SingletonMeta):
     List of packages to include in the symbol graph.
     """
 
+    _instance_graph_lock: ClassVar[threading.RLock] = threading.RLock()
+    """
+    Guards the instance graph and the indices into it against threads changing them at
+    the same time.
+
+    It belongs to the class rather than to the instance, so that it still protects the
+    graph while :meth:`clear` replaces the singleton holding it.
+    """
+
     def __post_init__(self):
         if self._class_diagram is None:
             self._class_diagram = self._build_class_diagram()
@@ -295,12 +305,13 @@ class SymbolGraph(metaclass=SingletonMeta):
 
         :param wrapped_instance: The instance to add.
         """
-        wrapped_instance.index = self._instance_graph.add_node(wrapped_instance)
-        wrapped_instance.symbol_graph = self
-        self._instance_index[id(wrapped_instance.instance)] = wrapped_instance
-        self._class_to_wrapped_instances[wrapped_instance.instance_type].append(
-            wrapped_instance
-        )
+        with self._instance_graph_lock:
+            wrapped_instance.index = self._instance_graph.add_node(wrapped_instance)
+            wrapped_instance.symbol_graph = self
+            self._instance_index[id(wrapped_instance.instance)] = wrapped_instance
+            self._class_to_wrapped_instances[wrapped_instance.instance_type].append(
+                wrapped_instance
+            )
 
     def remove_node(self, wrapped_instance: WrappedInstance):
         """
@@ -308,16 +319,21 @@ class SymbolGraph(metaclass=SingletonMeta):
 
         :param wrapped_instance: The instance to remove.
         """
-        self._instance_index.pop(id(wrapped_instance.instance), None)
-        self._class_to_wrapped_instances[wrapped_instance.instance_type].remove(
-            wrapped_instance
-        )
-        self._instance_graph.remove_node(wrapped_instance.index)
+        with self._instance_graph_lock:
+            self._instance_index.pop(id(wrapped_instance.instance), None)
+            self._class_to_wrapped_instances[wrapped_instance.instance_type].remove(
+                wrapped_instance
+            )
+            self._instance_graph.remove_node(wrapped_instance.index)
 
     def remove_dead_instances(self):
-        for node in self._instance_graph.nodes():
-            if node.instance is None:
-                self.remove_node(node)
+        """
+        Remove the wrapped instances whose symbol was garbage collected.
+        """
+        with self._instance_graph_lock:
+            for node in self._instance_graph.nodes():
+                if node.instance is None:
+                    self.remove_node(node)
 
     def get_instances_of_type(self, type_: Type) -> Iterable:
         """
@@ -346,11 +362,12 @@ class SymbolGraph(metaclass=SingletonMeta):
         :param instance: The object to be checked and wrapped if necessary.:
         :return: WrappedInstance: The wrapped object.
         """
-        wrapped_instance = self.get_wrapped_instance(instance)
-        if wrapped_instance is None:
-            wrapped_instance = WrappedInstance(instance)
-            self.add_node(wrapped_instance)
-        return wrapped_instance
+        with self._instance_graph_lock:
+            wrapped_instance = self.get_wrapped_instance(instance)
+            if wrapped_instance is None:
+                wrapped_instance = WrappedInstance(instance)
+                self.add_node(wrapped_instance)
+            return wrapped_instance
 
     @classmethod
     def clear(cls) -> None:
@@ -369,17 +386,18 @@ class SymbolGraph(metaclass=SingletonMeta):
 
     def add_relation(self, relation: PredicateClassRelation) -> bool:
         """Add a relation edge to the instance graph."""
-        if self.relation_exists(relation):
-            return False
-        self._instance_graph.add_edge(
-            relation.source.index, relation.target.index, relation
-        )
-        if relation.wrapped_field not in self._relation_index:
-            self._relation_index[relation.wrapped_field] = set()
-        self._relation_index[relation.wrapped_field].add(
-            (relation.source.index, relation.target.index)
-        )
-        return True
+        with self._instance_graph_lock:
+            if self.relation_exists(relation):
+                return False
+            self._instance_graph.add_edge(
+                relation.source.index, relation.target.index, relation
+            )
+            if relation.wrapped_field not in self._relation_index:
+                self._relation_index[relation.wrapped_field] = set()
+            self._relation_index[relation.wrapped_field].add(
+                (relation.source.index, relation.target.index)
+            )
+            return True
 
     def relation_exists(self, relation: PredicateClassRelation) -> bool:
         return (
