@@ -11,6 +11,7 @@ and the joint positions those processes produce arriving back here.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
@@ -50,21 +51,38 @@ ROBOT_LAUNCHER = (
 The robot process the demo starts one of per robot.
 """
 
+WORLD_OWNER = ROBOT_LAUNCHER.with_name("demo.py")
+"""
+The process that owns the world and starts the robot processes.
+"""
 
-def load_launcher_definitions() -> ModuleType:
+
+def load_script(path: Path) -> ModuleType:
     """
-    Read the launcher's own definitions, so that the robot names, the node names and the
-    action names are taken from the process under test rather than spelled again here.
+    Read a demo script's definitions, so that the robot names, the node names, the
+    action names and the commands are taken from the scripts under test rather than
+    spelled again here.
 
     The demos are scripts rather than an importable package, which is why this goes
     through the file rather than through an import.
+
+    :param path: The script to read.
     """
+    if str(path.parent) not in sys.path:
+        sys.path.insert(0, str(path.parent))
     specification = importlib.util.spec_from_file_location(
-        "shared_world_demo_robot", ROBOT_LAUNCHER
+        f"shared_world_demo_{path.stem}", path
     )
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
+
+
+def load_launcher_definitions() -> ModuleType:
+    """
+    The robot process's definitions.
+    """
+    return load_script(ROBOT_LAUNCHER)
 
 
 DemoRobot = load_launcher_definitions().DemoRobot
@@ -203,3 +221,21 @@ def test_two_robots_move_through_two_giskards(
 
     for robot in ROBOTS:
         assert controlled_positions(served_world, robot) != positions_before[robot]
+
+
+# %% one command for the whole demo
+
+
+def test_the_world_owner_starts_one_robot_process_per_robot():
+    """
+    The demo is started from ``demo.py`` alone: it starts the robot process of every
+    robot it places, in this interpreter, as ``robot.py`` would be started by hand.
+    """
+    world_owner = load_script(WORLD_OWNER)
+
+    assert world_owner.robot_process_command(DemoRobot.STRETCH) == [
+        sys.executable,
+        str(ROBOT_LAUNCHER),
+        "--robot",
+        str(DemoRobot.STRETCH),
+    ]

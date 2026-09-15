@@ -1,21 +1,23 @@
 """
 A PR2 and a Stretch share one apartment, each driven by a giskard process of its own.
 
-This process owns the world: it builds it, serves it, draws it, and performs a plan per
-robot on top of it. Start it first, then one ``robot.py`` per robot::
+This process owns the world: it builds it, serves it, draws it, starts one ``robot.py``
+per robot and performs a plan per robot on top of it::
 
     python demo.py
-    python robot.py --robot PR2
-    python robot.py --robot Stretch
 
 Every robot process fetches this world and controls its own robot in it, so the robots
-see each other while each of them is moved by a controller of its own. The plans are
-performed one after the other first and then all at once.
+see each other while each of them is moved by a controller of its own. Their output goes
+to a log file each, whose place is printed. The plans are performed one after the other
+first and then all at once, and the robot processes are stopped with this one.
 """
 
 from __future__ import annotations
 
 import signal
+import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -88,6 +90,72 @@ READY_POLL_INTERVAL = 1.0
 How often to look whether a robot process is accepting goals.
 """
 
+ROBOT_LAUNCHER = Path(__file__).with_name("robot.py")
+"""
+The script started once per robot.
+"""
+
+LOG_DIRECTORY = Path(tempfile.gettempdir()) / "coraplex_shared_world_demo"
+"""
+Where each robot process writes its output, one file per robot.
+"""
+
+SHUTDOWN_TIMEOUT = 10.0
+"""
+How long a robot process may take to end after it was interrupted, in seconds, before it
+is killed.
+"""
+
+# %% the robot processes
+
+
+def robot_process_command(robot: DemoRobot) -> List[str]:
+    """
+    The command that starts the process driving one robot, in this interpreter.
+
+    :param robot: The robot the process drives.
+    """
+    return [sys.executable, str(ROBOT_LAUNCHER), "--robot", str(robot)]
+
+
+def start_robot_process(robot: DemoRobot) -> subprocess.Popen:
+    """
+    Start the process driving one robot, in a session of its own so that it can be
+    stopped as a group, with its output in :data:`LOG_DIRECTORY`.
+
+    :param robot: The robot the process drives.
+    """
+    LOG_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIRECTORY / f"{robot}.log"
+    process = subprocess.Popen(
+        robot_process_command(robot),
+        stdout=log_path.open("w"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    print(f"started the {robot} process, logging to {log_path}", flush=True)
+    return process
+
+
+def stop_robot_processes(processes: List[subprocess.Popen]) -> None:
+    """
+    Interrupt every robot process and kill the ones that do not end in
+    :data:`SHUTDOWN_TIMEOUT`.
+
+    :param processes: The processes to stop.
+    """
+    for process in processes:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+    deadline = time.monotonic() + SHUTDOWN_TIMEOUT
+    for process in processes:
+        while process.poll() is None and time.monotonic() < deadline:
+            time.sleep(READY_POLL_INTERVAL)
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
 # %% building and serving the world
 
 
@@ -128,7 +196,10 @@ def wait_until_ready(robots: List[DemoRobot]) -> None:
                 for name, _ in get_action_names_and_types(rospy.get_node())
             ]
             if robot.command_action_name in action_names:
-                print(f"{robot} is ready after {time.monotonic() - started:.1f}s")
+                print(
+                    f"{robot} is ready after {time.monotonic() - started:.1f}s",
+                    flush=True,
+                )
                 break
             time.sleep(READY_POLL_INTERVAL)
         else:
@@ -178,7 +249,7 @@ def main() -> None:
     """
     rospy.init_node("shared_world")
     world = build_world()
-    print(f"built the apartment and its robots: {len(world.bodies)} bodies")
+    print(f"built the apartment and its robots: {len(world.bodies)} bodies", flush=True)
 
     WorldSynchronizer(
         _world=world, node=rospy.get_node(), queue_depth=WORLD_SYNC_QUEUE_DEPTH
@@ -186,9 +257,22 @@ def main() -> None:
     FetchWorldServer(node=rospy.get_node(), world=world)
     TFPublisher.create_with_ignore_existing_tf(node=rospy.get_node(), world=world)
     VizMarkerPublisher(node=rospy.get_node(), _world=world)
-    print("serving the world; start one robot.py per robot now")
-
     robots = [DemoRobot.PR2, DemoRobot.STRETCH]
+    processes = [start_robot_process(robot) for robot in robots]
+    try:
+        perform_the_plans(world, robots)
+    finally:
+        stop_robot_processes(processes)
+
+
+def perform_the_plans(world: World, robots: List[DemoRobot]) -> None:
+    """
+    Wait for the robot processes, perform a plan per robot, then keep serving the world
+    until interrupted.
+
+    :param world: The served world.
+    :param robots: The robots whose processes were started.
+    """
     wait_until_ready(robots)
 
     contexts = {
@@ -206,7 +290,10 @@ def main() -> None:
         started = time.monotonic()
         park_arms_and_drive(contexts[DemoRobot.PR2]).perform()
         park_arms(contexts[DemoRobot.STRETCH]).perform()
-        print(f"one robot after the other took {time.monotonic() - started:.1f}s")
+        print(
+            f"one robot after the other took {time.monotonic() - started:.1f}s",
+            flush=True,
+        )
 
         started = time.monotonic()
         ConcurrentPlans(
@@ -215,10 +302,11 @@ def main() -> None:
                 park_arms(contexts[DemoRobot.STRETCH]),
             ]
         ).perform()
-        print(f"both robots at once took {time.monotonic() - started:.1f}s")
+        print(f"both robots at once took {time.monotonic() - started:.1f}s", flush=True)
 
-    print("done; serving the world until interrupted")
+    print("done; serving the world until interrupted", flush=True)
     signal.pause()
 
 
-main()
+if __name__ == "__main__":
+    main()
