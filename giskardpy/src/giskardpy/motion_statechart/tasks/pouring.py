@@ -77,6 +77,15 @@ class TerminalFillConstraintTask(Task, ABC):
     QP constraint weight for the fill-driving gradient.
     """
 
+    prediction_duration: float = field(default=1.5, kw_only=True)
+    """
+    How far ahead the fill level is predicted, in seconds.
+
+    Long enough to cover the liquid that keeps flowing after the last commanded
+    velocity; it also sets how quickly the tilt reacts to a predicted miss and is
+    independent of the controller's prediction horizon.
+    """
+
     fill_connection: LiquidConnection = field(init=False)
     """
     World-resident fill connection resolved by :meth:`build`.
@@ -124,8 +133,8 @@ class TerminalFillConstraintTask(Task, ABC):
 
     def build(self, context: MotionStatechartContext) -> NodeArtifacts:
         """
-        Linearizes the fill ODE into a single terminal-state prediction row over the
-        horizon.
+        Linearizes the fill ODE into a single terminal-state prediction row over
+        :attr:`prediction_duration`.
 
         The fill ODE is linearized at the current operating point and its discrete-time
         recursion unrolled analytically, so the resulting QP row drives the MPC-
@@ -159,6 +168,7 @@ class TerminalFillConstraintTask(Task, ABC):
             goal_value=self.goal_value,
             quadratic_weight=self.weight,
             reference_velocity=self.reference_velocity,
+            prediction_duration=self.prediction_duration,
         )
         return artifacts
 

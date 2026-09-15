@@ -30,10 +30,9 @@ def main():
         ),
         qp_controller_config=QPControllerConfig(
             target_frequency=80,
-            # Calibrated against the terminal-state prediction row's scaling convention
-            # (mean-normalized lookahead weights, single time-step factor); see
-            # TerminalStatePredictionStrategy.create_matrix.
-            prediction_horizon=180,
+            # The fill tasks predict the pour over their own window, so the horizon only
+            # needs to smooth the joint motion; a short one keeps the other tasks quick.
+            prediction_horizon=20,
         ),
     )
     giskard.live()

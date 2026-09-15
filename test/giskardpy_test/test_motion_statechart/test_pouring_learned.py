@@ -36,6 +36,10 @@ from semantic_digital_twin.physics.equations.pouring_equations import (  # noqa:
 )
 from semantic_digital_twin.world import World  # noqa: E402
 
+from .test_pouring import (  # noqa: E402
+    _POURING_PREDICTION_HORIZON,
+    _POURING_TARGET_FREQUENCY,
+)
 from .single_cup_world import (  # noqa: E402
     PourableContainer,
     build_single_cup_world,
@@ -125,7 +129,8 @@ def _run_single_cup_pour(equation: PouringEquation) -> np.ndarray:
         MotionStatechartContext(
             world=world,
             qp_controller_config=QPControllerConfig(
-                target_frequency=80, prediction_horizon=120
+                target_frequency=_POURING_TARGET_FREQUENCY,
+                prediction_horizon=_POURING_PREDICTION_HORIZON,
             ),
         ),
         pacer=SimulationPacer(real_time_factor=1),

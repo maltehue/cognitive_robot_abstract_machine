@@ -11,6 +11,9 @@ from pathlib import Path
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from giskardpy.qp.terminal_state_prediction_strategy import (
+    TerminalStatePredictionConstraint,
+)
 from giskardpy.executor import Executor, SimulationPacer
 from giskardpy.ros_executor import Ros2Executor
 from giskardpy.motion_statechart.context import MotionStatechartContext
@@ -77,16 +80,17 @@ _JEROEN_CUP_STL = str(
 _JEROEN_CUP_SCALE = Scale(1, 1, 1)
 _TABLE_SURFACE_Z = 0.9
 _POURING_TARGET_FREQUENCY = 80
-_POURING_PREDICTION_HORIZON = 120
+_POURING_PREDICTION_HORIZON = 20
 _DEFAULT_PERCEPTION_HZ: int = 10
 
 
 def _pouring_context(world: World) -> MotionStatechartContext:
     """
-    Builds a context whose QP runs at a high frequency over a long prediction horizon.
+    Builds a context whose QP runs at a high frequency over a short prediction horizon.
 
-    The long horizon lets the linearized fill prediction span the pouring overshoot, so
-    the constraint converges without a reactive damping term.
+    The fill tasks predict the pour over their own window, so the controller's horizon
+    only has to be long enough for smooth joint motion; a short one keeps the other
+    tasks reacting quickly.
     """
     return MotionStatechartContext(
         world=world,
@@ -492,6 +496,30 @@ class TestPouringTask:
         assert cup.fill_equation.symbolic_velocity(cup.fill_connection).evaluate()[
             0
         ] == pytest.approx(0.0, abs=1e-2)
+
+    def test_build_hands_the_prediction_duration_to_the_constraint(
+        self, world_with_cup
+    ) -> None:
+        """
+        The fill task decides how far ahead its fill level is predicted; the QP row it
+        builds must carry that window rather than fall back to the control horizon.
+        """
+        world, cup = world_with_cup
+        pouring_task = PouringTask(
+            fill_equation=cup.fill_equation,
+            fill_connection=cup.fill_connection,
+            root_link=world.root,
+            tip_link=cup.root,
+            goal_value=0.6,
+            fill_level_tolerance=0.05,
+            prediction_duration=1.5,
+        )
+
+        artifacts = pouring_task.build(_pouring_context(world))
+
+        [constraint] = artifacts.constraints.equality_constraints
+        assert isinstance(constraint, TerminalStatePredictionConstraint)
+        assert constraint.prediction_duration == pouring_task.prediction_duration
 
     def test_build_rejects_non_world_root_link(self, world_with_cup) -> None:
         """

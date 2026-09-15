@@ -2,11 +2,16 @@
 Terminal-state prediction constraint and enforcement strategy for linearized MPC.
 
 The :class:`TerminalStatePredictionStrategy` builds a single equality constraint row that drives
-the MPC-predicted value of a scalar state at the end of the control horizon to a target value.
+the MPC-predicted value of a scalar state at the end of a prediction window to a target value.
 The prediction is obtained by linearizing the state's first-order ODE at the current operating
 point and unrolling the discrete-time recursion analytically, so the terminal state is a linear
 function of the joint velocity decision variables — compatible with the existing PIQP quadratic
 solver.
+
+The prediction window may be longer than the control horizon the velocities span: the joints
+are taken to rest after the last commanded block, which is what the controller's own dynamics
+assume, and the state keeps evolving until the window ends. The window is therefore a property
+of the constraint, while the control horizon stays a property of the controller.
 
 The mechanism is domain-agnostic: any scalar state governed by ``ẋ = f(x, q)`` whose terminal
 value should reach a goal (e.g. a container fill level driven by a tilt or a valve angle) can use
@@ -66,34 +71,35 @@ def _compute_power(base: Scalar, n: int) -> Scalar:
     return result
 
 
-def horizon_normalized_weights(
-    weights: list[Scalar], control_horizon: int
+def window_normalized_weights(
+    weights: list[Scalar], prediction_steps: int
 ) -> list[Scalar]:
     """
-    Rescales lookahead weights to unit average over the horizon for QP conditioning.
+    Rescales lookahead weights to sum to the number of predicted state steps.
 
     The raw terminal-state sensitivity carries an extra ``dt`` per block, making the matrix
     coefficients far smaller than the proven reactive integral and ill-conditioning the QP.
-    Rescaling so the weights sum to the control horizon preserves their relative lookahead
-    emphasis while keeping the row at the calibrated reactive scale.  This is a solver-conditioning
-    concern, not a property of the linearized dynamics, so it lives with the strategy rather than
-    the model.
+    Rescaling so the weights sum to the prediction steps preserves their relative lookahead
+    emphasis and asks a velocity held over the control horizon to close the terminal error at
+    the rate that would close it over the prediction window, so the row's gain follows the
+    window rather than the controller's horizon.  This is a solver-conditioning concern, not a
+    property of the linearized dynamics, so it lives with the strategy rather than the model.
 
     :param weights: Geometric lookahead weights from
         :meth:`LinearizedScalarStateModel.lookahead_weights`.
-    :param control_horizon: Number of velocity decision steps the weight sum is rescaled to.
-    :return: The rescaled weights, summing to ``control_horizon``.
+    :param prediction_steps: Number of predicted state steps the weight sum is rescaled to.
+    :return: The rescaled weights, summing to ``prediction_steps``.
     """
     total = sm.Scalar(0.0)
     for weight in weights:
         total = total + weight
-    horizon = sm.Scalar(float(control_horizon))
+    window = sm.Scalar(float(prediction_steps))
     return [
         sm.if_less(
             abs(total),
             sm.Scalar(WEIGHT_SUM_MAGNITUDE_EPSILON),
             weight,
-            weight * horizon / total,
+            weight * window / total,
         )
         for weight in weights
     ]
@@ -105,9 +111,10 @@ class LinearizedScalarStateModel:
     Discrete-time linearization of a first-order scalar ODE about the current operating point.
 
     Encodes the recursion ``x_{k+1} = λ·x_k + c + dt·a·δu_k`` with ``λ = 1 + dt·(∂f/∂x)`` and
-    ``c = dt·(f₀ − (∂f/∂x)·x₀)``.  Solving it over the control horizon splits the terminal state
-    into a control-independent free response and a control contribution whose per-step control
-    deviations are weighted by a geometric series.
+    ``c = dt·(f₀ − (∂f/∂x)·x₀)``.  Solving it over the predicted state steps splits the terminal
+    state into a control-independent free response and a control contribution whose per-step
+    control deviations are weighted by a geometric series. Control is commanded during the
+    control horizon only; the joints rest for the remaining predicted steps.
     """
 
     state_value: Scalar
@@ -125,6 +132,16 @@ class LinearizedScalarStateModel:
     control_horizon: int
     """Number of velocity decision steps M over which commands are applied."""
 
+    prediction_steps: int | None = None
+    """
+    Number of state steps N the terminal state is predicted over; defaults to the
+    control horizon when not given.
+    """
+
+    def __post_init__(self):
+        if self.prediction_steps is None:
+            self.prediction_steps = self.control_horizon
+
     @property
     def decay(self) -> Scalar:
         """Linearized state decay factor ``λ = 1 + dt·(∂f/∂x)``."""
@@ -137,22 +154,22 @@ class LinearizedScalarStateModel:
         This is the autonomous evolution of the linearized system, not a frozen-state assumption:
         the state keeps evolving at the held control.
         """
-        decay_to_horizon = _compute_power(self.decay, self.control_horizon)
-        series = _geometric_series(self.decay, self.control_horizon - 1)
+        decay_to_horizon = _compute_power(self.decay, self.prediction_steps)
+        series = _geometric_series(self.decay, self.prediction_steps - 1)
         return decay_to_horizon * self.state_value + series * sm.Scalar(
             self.time_step
         ) * (self.state_velocity - self.state_sensitivity * self.state_value)
 
     def lookahead_weights(self) -> list[Scalar]:
         """
-        Geometric lookahead weight ``G_{M-2-i}`` of each velocity block.
+        Geometric lookahead weight ``G_{N-2-i}`` of each velocity block.
 
-        Block ``i`` (earliest first) raises the control for the remaining ``M-1-i`` state steps,
-        so the terminal state is more sensitive to early decisions; the final block has weight
-        zero because no state step follows it.
+        Block ``i`` (earliest first) raises the control for the remaining ``N-1-i`` state steps,
+        so the terminal state is more sensitive to early decisions. A block no state step follows
+        has weight zero.
         """
         return [
-            _geometric_series(self.decay, self.control_horizon - 2 - block)
+            _geometric_series(self.decay, self.prediction_steps - 2 - block)
             for block in range(self.control_horizon)
         ]
 
@@ -174,7 +191,13 @@ class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
     """Symbolic current state x₀ (passive DOF position variable); the rate is differentiated w.r.t. it."""
 
     goal_value: float = field(kw_only=True)
-    """Target state value at the end of the horizon."""
+    """Target state value at the end of the prediction window."""
+
+    prediction_duration: float | None = field(default=None, kw_only=True)
+    """
+    Length of the prediction window in seconds; the state is predicted this far ahead.
+    ``None`` predicts to the end of the control horizon.
+    """
 
     bound: Scalar = field(default_factory=lambda: sm.Scalar(0.0), kw_only=True)
     """Unused inherited equality bound; the strategy computes the terminal bound ``goal − x_free`` instead."""
@@ -187,11 +210,10 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
 
     The constraint couples each velocity decision to the predicted terminal state with the
     relative emphasis derived from the linearized recursion: the state-rate jacobian
-    ``∂f/∂q·dt`` is scaled per horizon block by :func:`horizon_normalized_weights`, so an earlier
-    velocity — which keeps the control applied for more of the remaining horizon — affects the
-    terminal state more than a later one, and the final block has no effect.  The weights are
-    normalized to unit average so the row stays at the well-conditioned scale of the plain reactive
-    integral.
+    ``∂f/∂q·dt`` is scaled per horizon block by :func:`window_normalized_weights`, so an earlier
+    velocity — which keeps the control applied for more of the remaining window — affects the
+    terminal state more than a later one.  The weights are normalized to the prediction window so
+    the row stays at the well-conditioned scale of the plain reactive integral.
 
     The bound ``goal − x_free`` supplies the proactive terminal prediction error.  Where the
     control sensitivity ``∂f/∂q → 0`` the whole row vanishes, the QP regularizes velocities to
@@ -232,6 +254,23 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
             state_sensitivity=state_sensitivity,
             time_step=self.qp_controller_config.model_predictive_control_time_step,
             control_horizon=self.qp_controller_config.control_horizon,
+            prediction_steps=self._prediction_steps,
+        )
+
+    @cached_property
+    def _prediction_steps(self) -> int:
+        """
+        Number of state steps the constraint's prediction window spans, at least one;
+        the control horizon when the constraint names no window.
+        """
+        duration = self._constraint.prediction_duration
+        if duration is None:
+            return self.qp_controller_config.control_horizon
+        return max(
+            1,
+            round(
+                duration / self.qp_controller_config.model_predictive_control_time_step
+            ),
         )
 
     def create_matrix(self) -> Matrix:
@@ -240,10 +279,10 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
         geometric velocity weights, padding the jerk columns with zeros.
 
         Scaling contract: the jacobian carries a single ``time_step`` factor and the lookahead
-        weights are mean-normalized to unit average by :func:`horizon_normalized_weights`, so the
-        row lives at the same scale as the reactive :class:`~giskardpy.qp.enforcement_strategy.IntegralStrategy`
-        row.  The effective gain therefore depends on the prediction horizon and control frequency;
-        deployments are calibrated against this convention.
+        weights are normalized to the prediction window by :func:`window_normalized_weights`, so
+        the row lives at the same scale as the reactive
+        :class:`~giskardpy.qp.enforcement_strategy.IntegralStrategy` row and its effective gain
+        follows the constraint's prediction duration rather than the controller's horizon.
         """
         constraint = self._constraint
         time_step = self.qp_controller_config.model_predictive_control_time_step
@@ -251,9 +290,8 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
             sm.Vector([constraint.expression]).jacobian(self.position_variables)
             * time_step
         )
-        weights = horizon_normalized_weights(
-            self._state_model.lookahead_weights(),
-            self.qp_controller_config.control_horizon,
+        weights = window_normalized_weights(
+            self._state_model.lookahead_weights(), self._prediction_steps
         )
         blocks = [jacobian * weight for weight in weights]
         return sm.hstack(
@@ -265,11 +303,12 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
         Computes the capped equality bound ``goal − x_free``.
 
         ``x_free`` is the predicted terminal state under zero joint velocity, so the bound is the
-        terminal prediction error the QP drives to zero.
+        terminal prediction error the QP drives to zero. It is capped to the state change
+        reachable within the prediction window.
 
-        .. note:: This relies on a prediction horizon long enough for ``x_free`` to span the
-            terminal overshoot; at very short horizons the prediction is too myopic to ease off in
-            time and the state overshoots the goal.
+        .. note:: This relies on a prediction window long enough for ``x_free`` to span the
+            terminal overshoot; with a very short window the prediction is too myopic to ease off
+            in time and the state overshoots the goal.
         """
         constraint = self._constraint
         bound = sm.Scalar(constraint.goal_value) - self._state_model.free_response()
@@ -277,13 +316,14 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
             bound,
             self.qp_controller_config.model_predictive_control_time_step,
             constraint.normalization_factor,
-            self.qp_controller_config.control_horizon,
+            self._prediction_steps,
         )
         return sm.Vector([capped])
 
     def create_slack_variables(self) -> DirectLimits:
         """
-        Creates one normalized slack variable for the single terminal-state constraint.
+        Creates one slack variable for the single terminal-state constraint, normalized over
+        the prediction window like its bound.
         """
         constraint = self._constraint
         return DirectLimits(
@@ -294,7 +334,7 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
                     normalize_slack_weight(
                         constraint.quadratic_weight,
                         constraint.normalization_factor,
-                        self.qp_controller_config.control_horizon,
+                        self._prediction_steps,
                     )
                 ]
             ),

@@ -19,7 +19,7 @@ from giskardpy.qp.terminal_state_prediction_strategy import (
     LinearizedScalarStateModel,
     TerminalStatePredictionConstraint,
     TerminalStatePredictionStrategy,
-    horizon_normalized_weights,
+    window_normalized_weights,
 )
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
@@ -127,6 +127,7 @@ def _terminal_constraint(
     joint_degree_of_freedom: DegreeOfFreedom,
     state_degree_of_freedom: DegreeOfFreedom,
     goal_value: float = _GOAL_VALUE,
+    prediction_duration: float | None = None,
 ) -> TerminalStatePredictionConstraint:
     """
     Builds a terminal constraint over the linear state rate of the two DOFs.
@@ -142,6 +143,7 @@ def _terminal_constraint(
         enforcement_strategy=TerminalStatePredictionStrategy,
         state_variable=state_degree_of_freedom.variables.position,
         goal_value=goal_value,
+        prediction_duration=prediction_duration,
     )
 
 
@@ -218,7 +220,7 @@ class TestTerminalStatePredictionRow:
 
         expected_weights = [
             weight.evaluate()[0]
-            for weight in horizon_normalized_weights(
+            for weight in window_normalized_weights(
                 strategy._state_model.lookahead_weights(), config.control_horizon
             )
         ]
@@ -297,6 +299,151 @@ class TestTerminalStatePredictionRow:
         assert slack.linear_weights.evaluate()[0] == pytest.approx(0.0)
 
 
+# %% predicting beyond the control window
+
+_PREDICTION_DURATION = 0.75
+"""
+Prediction window of the far-looking constraint in seconds, longer than the control
+window of the simulation defaults.
+"""
+
+
+class TestPredictionWindow:
+    """
+    The row predicts the state over the constraint's prediction duration, not over the
+    control horizon the velocities span.
+    """
+
+    def test_prediction_steps_default_to_the_control_horizon(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        model = linear_state_rate_setup.strategy._state_model
+
+        assert model.prediction_steps == linear_state_rate_setup.config.control_horizon
+
+    def test_prediction_duration_is_converted_to_time_steps(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        config = linear_state_rate_setup.config
+        constraint = _terminal_constraint(
+            "far_looking",
+            linear_state_rate_setup.joint_degree_of_freedom,
+            linear_state_rate_setup.state_degree_of_freedom,
+            prediction_duration=_PREDICTION_DURATION,
+        )
+        strategy = _strategy(
+            [constraint], linear_state_rate_setup.joint_degree_of_freedom
+        )
+
+        model = strategy._state_model
+
+        assert model.prediction_steps == round(
+            _PREDICTION_DURATION / config.model_predictive_control_time_step
+        )
+        assert model.prediction_steps > config.control_horizon
+        assert model.control_horizon == config.control_horizon
+
+    def test_matrix_keeps_one_block_per_control_step(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        """
+        A longer prediction window adds no decision variables: the row still has one
+        velocity block per control step and the final block now carries weight, since
+        state steps follow it.
+        """
+        config = linear_state_rate_setup.config
+        constraint = _terminal_constraint(
+            "far_looking",
+            linear_state_rate_setup.joint_degree_of_freedom,
+            linear_state_rate_setup.state_degree_of_freedom,
+            prediction_duration=_PREDICTION_DURATION,
+        )
+        strategy = _strategy(
+            [constraint], linear_state_rate_setup.joint_degree_of_freedom
+        )
+
+        matrix = np.array(strategy.create_matrix().evaluate()).flatten()
+
+        assert matrix.shape == (config.control_horizon + config.prediction_horizon,)
+        assert matrix[config.control_horizon - 1] > 0.0
+
+    def test_velocity_blocks_sum_to_the_prediction_window(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        """
+        A velocity held over the control horizon is asked to close the terminal error at
+        the rate that closes it over the prediction window, so the row's gain follows
+        the window and not the controller's horizon.
+        """
+        config = linear_state_rate_setup.config
+        constraint = _terminal_constraint(
+            "far_looking",
+            linear_state_rate_setup.joint_degree_of_freedom,
+            linear_state_rate_setup.state_degree_of_freedom,
+            prediction_duration=_PREDICTION_DURATION,
+        )
+        strategy = _strategy(
+            [constraint], linear_state_rate_setup.joint_degree_of_freedom
+        )
+
+        matrix = np.array(strategy.create_matrix().evaluate()).flatten()
+
+        assert matrix[: config.control_horizon].sum() == pytest.approx(
+            config.model_predictive_control_time_step
+            * _JOINT_SENSITIVITY
+            * strategy._state_model.prediction_steps
+        )
+
+    def test_slack_weight_is_normalized_over_the_prediction_window(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        constraint = _terminal_constraint(
+            "far_looking",
+            linear_state_rate_setup.joint_degree_of_freedom,
+            linear_state_rate_setup.state_degree_of_freedom,
+            prediction_duration=_PREDICTION_DURATION,
+        )
+        strategy = _strategy(
+            [constraint], linear_state_rate_setup.joint_degree_of_freedom
+        )
+
+        slack = strategy.create_slack_variables()
+
+        expected_weight = normalize_slack_weight(
+            sm.Scalar(constraint.quadratic_weight),
+            constraint.normalization_factor,
+            strategy._state_model.prediction_steps,
+        ).evaluate()[0]
+        assert slack.quadratic_weights.evaluate()[0] == pytest.approx(expected_weight)
+
+    def test_equality_bound_is_capped_to_the_prediction_window(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        """
+        The bound is a state error over the prediction window, so its cap is what the
+        state can change within that window rather than within the control window.
+        """
+        config = linear_state_rate_setup.config
+        constraint = _terminal_constraint(
+            "far_goal",
+            linear_state_rate_setup.joint_degree_of_freedom,
+            linear_state_rate_setup.state_degree_of_freedom,
+            goal_value=5.0,
+            prediction_duration=_PREDICTION_DURATION,
+        )
+        strategy = _strategy(
+            [constraint], linear_state_rate_setup.joint_degree_of_freedom
+        )
+
+        bound = strategy.create_equality_bounds().evaluate()[0]
+
+        assert bound == pytest.approx(
+            constraint.normalization_factor
+            * config.model_predictive_control_time_step
+            * strategy._state_model.prediction_steps
+        )
+
+
 # %% validation
 
 
@@ -365,7 +512,7 @@ class TestHorizonNormalizedWeightGuard:
         dividing by zero.
         """
         weights = [sm.Scalar(1.0), sm.Scalar(-1.0)]
-        normalized = horizon_normalized_weights(weights, control_horizon=2)
+        normalized = window_normalized_weights(weights, prediction_steps=2)
         values = [weight.evaluate()[0] for weight in normalized]
         assert all(math.isfinite(value) for value in values)
         assert values == [1.0, -1.0]
@@ -375,7 +522,7 @@ class TestHorizonNormalizedWeightGuard:
         A sum below the magnitude epsilon must also fall back instead of exploding.
         """
         weights = [sm.Scalar(1.0), sm.Scalar(-1.0 + 1e-12)]
-        normalized = horizon_normalized_weights(weights, control_horizon=2)
+        normalized = window_normalized_weights(weights, prediction_steps=2)
         values = [weight.evaluate()[0] for weight in normalized]
         assert all(math.isfinite(value) for value in values)
         assert values == pytest.approx([1.0, -1.0 + 1e-12])
@@ -393,9 +540,10 @@ _CONTROL_HORIZON = 5
 Control horizon of the linearized model.
 """
 
-ModelFactory = Callable[[float], LinearizedScalarStateModel]
+ModelFactory = Callable[..., LinearizedScalarStateModel]
 """
-Builds a linearized model at the flowing operating point for a given state velocity.
+Builds a linearized model at the flowing operating point for a given state velocity and,
+optionally, a number of predicted state steps.
 """
 
 
@@ -438,32 +586,44 @@ def _ode_partials(
     return df_dtilt.evaluate()[0], df_dfill.evaluate()[0]
 
 
+_PREDICTION_STEPS = 12
+"""
+State steps of the far-looking linearized model, more than its control horizon.
+"""
+
+
 def _nonlinear_rollout(
     equation: ArticulatedPouringEquation,
     tilt_angle: float,
     fill_level: float,
     tilt_velocity: float,
+    steps: int = _CONTROL_HORIZON,
 ) -> float:
     """
     Brute-force forward-Euler rollout of the true nonlinear pouring ODE.
     """
     fill = fill_level
     tilt = tilt_angle
-    for _ in range(_CONTROL_HORIZON):
+    for _ in range(steps):
         fill += _TIME_STEP * _ode_value(equation, tilt, fill)
         tilt += tilt_velocity * _TIME_STEP
     return fill
 
 
-def _expected_lookahead_weights(decay: float, control_horizon: int) -> list[float]:
+def _expected_lookahead_weights(
+    decay: float, control_horizon: int, prediction_steps: int | None = None
+) -> list[float]:
     """
     Computes the geometric lookahead weight of every velocity block numerically.
 
-    Block ``i`` carries weight ``sum_{k=0}^{M-2-i} decay^k``; the final block has weight
-    zero because no state step follows it.
+    Block ``i`` carries weight ``sum_{k=0}^{N-2-i} decay^k`` over the ``N`` predicted
+    state steps; with ``N`` equal to the control horizon the final block has weight zero
+    because no state step follows it.
     """
+    if prediction_steps is None:
+        prediction_steps = control_horizon
     return [
-        sum(decay**power for power in range(control_horizon - 1 - block))
+        sum(decay**power for power in range(prediction_steps - 1 - block))
         for block in range(control_horizon)
     ]
 
@@ -479,13 +639,16 @@ def flowing_model_factory() -> ModelFactory:
     equation, tilt_angle, fill_level = _make_flowing_setup()
     _, fill_sensitivity = _ode_partials(equation, tilt_angle, fill_level)
 
-    def _build(state_velocity: float) -> LinearizedScalarStateModel:
+    def _build(
+        state_velocity: float, prediction_steps: int | None = None
+    ) -> LinearizedScalarStateModel:
         return LinearizedScalarStateModel(
             state_value=sm.Scalar(fill_level),
             state_velocity=sm.Scalar(state_velocity),
             state_sensitivity=sm.Scalar(fill_sensitivity),
             time_step=_TIME_STEP,
             control_horizon=_CONTROL_HORIZON,
+            prediction_steps=prediction_steps,
         )
 
     return _build
@@ -544,24 +707,25 @@ class TestLinearizedScalarStateModel:
         assert weights[-1] == pytest.approx(0.0)
         assert all(earlier > later for earlier, later in zip(weights, weights[1:]))
 
-    def test_normalized_weights_preserve_horizon_scale(
+    def test_normalized_weights_sum_to_the_prediction_window(
         self, flowing_model_factory: ModelFactory
     ) -> None:
         """
         Normalizing the lookahead weights must keep their decreasing shape while summing
-        to the control horizon, so the matrix stays at the calibrated reactive scale.
+        to the predicted state steps, so the matrix stays at the calibrated reactive
+        scale.
         """
-        model = flowing_model_factory(0.0)
+        model = flowing_model_factory(0.0, _PREDICTION_STEPS)
 
         weights = [
             weight.evaluate()[0]
-            for weight in horizon_normalized_weights(
-                model.lookahead_weights(), _CONTROL_HORIZON
+            for weight in window_normalized_weights(
+                model.lookahead_weights(), _PREDICTION_STEPS
             )
         ]
-        assert sum(weights) == pytest.approx(_CONTROL_HORIZON)
-        assert weights[-1] == pytest.approx(0.0)
-        assert weights[0] > weights[-2]
+        assert len(weights) == _CONTROL_HORIZON
+        assert sum(weights) == pytest.approx(_PREDICTION_STEPS)
+        assert weights[0] > weights[-1] > 0.0
 
     def test_single_step_horizon_predicts_one_euler_step(self) -> None:
         """
@@ -610,6 +774,79 @@ class TestLinearizedScalarStateModel:
                 outflow_rate + fill_sensitivity * (expected_fill - fill_level)
             )
         assert model.free_response().evaluate()[0] == pytest.approx(expected_fill)
+
+
+class TestPredictionBeyondTheControlWindow:
+    """
+    With more predicted state steps than control steps the model predicts the state
+    after the joints have come to rest, so the row sees what still flows after the last
+    command.
+    """
+
+    def test_free_response_matches_held_tilt_rollout_over_the_prediction_window(
+        self, flowing_model_factory: ModelFactory
+    ) -> None:
+        equation, tilt_angle, fill_level = _make_flowing_setup()
+        outflow_rate = _ode_value(equation, tilt_angle, fill_level)
+        model = flowing_model_factory(outflow_rate, _PREDICTION_STEPS)
+
+        predicted = model.free_response().evaluate()[0]
+
+        held_tilt = _nonlinear_rollout(
+            equation, tilt_angle, fill_level, 0.0, steps=_PREDICTION_STEPS
+        )
+        assert predicted == pytest.approx(held_tilt, abs=1e-2)
+        assert predicted != pytest.approx(
+            _nonlinear_rollout(equation, tilt_angle, fill_level, 0.0), abs=1e-3
+        )
+
+    def test_free_response_follows_the_linear_recursion_over_the_prediction_window(
+        self,
+    ) -> None:
+        fill_level = 0.8
+        outflow_rate = -0.2
+        fill_sensitivity = -2.0
+        model = LinearizedScalarStateModel(
+            state_value=sm.Scalar(fill_level),
+            state_velocity=sm.Scalar(outflow_rate),
+            state_sensitivity=sm.Scalar(fill_sensitivity),
+            time_step=_TIME_STEP,
+            control_horizon=_CONTROL_HORIZON,
+            prediction_steps=_PREDICTION_STEPS,
+        )
+
+        expected_fill = fill_level
+        for _ in range(_PREDICTION_STEPS):
+            expected_fill += _TIME_STEP * (
+                outflow_rate + fill_sensitivity * (expected_fill - fill_level)
+            )
+        assert model.free_response().evaluate()[0] == pytest.approx(expected_fill)
+
+    def test_lookahead_weights_count_the_state_steps_after_each_block(
+        self, flowing_model_factory: ModelFactory
+    ) -> None:
+        """
+        Every control block still gets one weight, and every weight now counts the
+        predicted state steps that follow the block, so the last block is no longer
+        weightless.
+        """
+        model = flowing_model_factory(0.0, _PREDICTION_STEPS)
+        decay = model.decay.evaluate()[0]
+
+        weights = [weight.evaluate()[0] for weight in model.lookahead_weights()]
+
+        assert len(weights) == _CONTROL_HORIZON
+        assert weights == pytest.approx(
+            _expected_lookahead_weights(decay, _CONTROL_HORIZON, _PREDICTION_STEPS)
+        )
+        assert weights[-1] > 0.0
+
+    def test_prediction_steps_default_to_the_control_horizon(
+        self, flowing_model_factory: ModelFactory
+    ) -> None:
+        model = flowing_model_factory(0.0)
+
+        assert model.prediction_steps == _CONTROL_HORIZON
 
 
 class TestIncreasingFillLinearization:
