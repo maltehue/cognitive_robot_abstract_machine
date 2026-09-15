@@ -1,43 +1,27 @@
 """
-A PR2, a Stretch and a Tiago share one apartment, each held by a giskard process of its
-own.
+A Stretch and a Tiago share one apartment, each held by a giskard process of its own and
+each moved from a window of its own.
 
-This process owns the world: it builds it, serves it, draws it, starts one ``robot.py``
-per robot and performs a plan per commanded robot on top of it::
+This process owns the world: it builds it, serves it, draws it and starts one
+``robot.py`` and one joint state publisher window per robot::
 
     python demo.py
 
 Every robot process fetches this world and holds its own robot in it, so the robots see
-each other while each of them is moved by a source of its own. Their output goes to a log
-file each, whose place is printed, and every started process is stopped with this one.
+each other while each of them is moved by a source of its own. Moving a slider in a
+robot's window publishes that robot's joint states; its giskard writes them into its
+copy of the world and announces them, and this process draws what happened. Their output
+goes to a log file each, whose place is printed, and every started process is stopped
+with this one.
 
-It shows the three ways a robot's state reaches this process:
+A robot's base stays where the world put it, because the window reports joint positions
+and no base pose.
 
-- the PR2 and the Stretch are commanded by the plans below, one after the other first
-  and then both at once,
-- either of them can be dragged about by the handles of its ``marker.py``,
-- the Tiago is moved by nobody here: a joint state publisher window opens for it, and
-  its giskard writes whatever that window reports into this world. Its base stays where
-  the world put it, because that window reports joint positions and no base pose.
+Watching it in RViz
+-------------------
 
-Watching and dragging it in RViz
---------------------------------
-
-Set the fixed frame to ``apartment/apartment_root`` and add
-
-- a ``MarkerArray`` display on ``/semworld/viz_marker`` for the world itself,
-- an ``InteractiveMarkers`` display per commanded robot, with update topic
-  ``/giskard_pr2/cartesian_goals/update`` and ``/giskard_stretch/cartesian_goals/update``.
-
-Dragging a handle and releasing it moves that robot through its own giskard, and this
-process draws what happened. The Stretch's base is a differential drive and cannot be
-dragged sideways: a lateral goal converges slowly or runs into the marker's timeout,
-which ends it cleanly.
-
-..note:: A marker goal reaches a robot's giskard directly and is therefore not
-    serialized against the plans this process performs. Dragging a robot while its own
-    plan runs leaves the two goals to giskard, and a model change during a marker motion
-    would abort that motion; the plans below change no model.
+Set the fixed frame to ``apartment/apartment_root`` and add a ``MarkerArray`` display on
+``/semworld/viz_marker``.
 """
 
 from __future__ import annotations
@@ -48,18 +32,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from rclpy.action import get_action_names_and_types
 from typing_extensions import List
 
-from coraplex.datastructures.dataclasses import Context
-from coraplex.datastructures.enums import Arms
-from coraplex.execution_environment import real_robot
-from coraplex.plans.factories import sequential
-from coraplex.plans.plan import ConcurrentPlans, Plan
-from coraplex.robot_plans.actions.core.navigation import NavigateAction
-from coraplex.robot_plans.actions.core.robot_body import ParkArmsAction
 from giskardpy.middleware.ros2 import rospy
 from robot import DemoRobot
 from semantic_digital_twin.adapters.package_resolver import CompositePathResolver
@@ -71,7 +48,6 @@ from semantic_digital_twin.adapters.ros.world_fetcher import FetchWorldServer
 from semantic_digital_twin.adapters.ros.world_synchronizer import WorldSynchronizer
 from semantic_digital_twin.api import RobotSpecification, WorldSpecification
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
-from semantic_digital_twin.spatial_types.spatial_types import Pose
 from semantic_digital_twin.world import World
 
 # %% where everything stands
@@ -83,33 +59,14 @@ APARTMENT_PATH = (
 The environment the robots share.
 """
 
-PR2_START = (1.5, 2.5)
-"""
-Where the PR2 stands, in the corridor in front of the kitchen counter.
-"""
-
 STRETCH_START = (1.5, 1.2)
 """
-Where the Stretch stands, a good arm's length away from the PR2.
+Where the Stretch stands, in the corridor in front of the kitchen counter.
 """
 
 TIAGO_START = (1.5, 3.8)
 """
-Where the Tiago stands, further up the corridor and clear of the PR2's drive.
-"""
-
-PR2_NAVIGATION_TARGET = (2.0, 2.5)
-"""
-Where the PR2 drives while the Stretch parks its arm.
-"""
-
-WORLD_SYNC_QUEUE_DEPTH = 1000
-"""
-How many updates the synchronizer of this world queues.
-
-Every robot process publishes on every control cycle, while a receiver applies one
-update at a time and holds its world for a model change; the default queue of ten would
-overflow and the lost update would never be sent again.
+Where the Tiago stands, further up the corridor.
 """
 
 READY_TIMEOUT = 600.0
@@ -122,17 +79,12 @@ fetch after the other.
 
 READY_POLL_INTERVAL = 1.0
 """
-How often to look whether a robot process is accepting goals.
+How often to look whether a robot process is up.
 """
 
 ROBOT_LAUNCHER = Path(__file__).with_name("robot.py")
 """
 The script started once per robot.
-"""
-
-MARKER_LAUNCHER = Path(__file__).with_name("marker.py")
-"""
-The interactive marker started once per commanded robot.
 """
 
 ROS_RUN_COMMAND = ["ros2", "run"]
@@ -142,7 +94,7 @@ The command that runs one executable of an installed ROS package.
 
 JOINT_STATE_PUBLISHER_PACKAGE = "joint_state_publisher_gui"
 """
-The package holding the window a mirrored robot is moved from.
+The package holding the window a robot is moved from.
 """
 
 JOINT_STATE_PUBLISHER_EXECUTABLE = "joint_state_publisher_gui"
@@ -184,21 +136,12 @@ def robot_process_command(robot: DemoRobot) -> List[str]:
     return [sys.executable, str(ROBOT_LAUNCHER), "--robot", str(robot)]
 
 
-def marker_process_command(robot: DemoRobot) -> List[str]:
-    """
-    The command that starts the interactive marker of one robot, in this interpreter.
-
-    :param robot: The robot the marker offers handles for.
-    """
-    return [sys.executable, str(MARKER_LAUNCHER), "--robot", str(robot)]
-
-
 def joint_state_publisher_command(robot: DemoRobot) -> List[str]:
     """
     The command that opens the window one robot's joint positions are reported from.
 
     The window reads the robot's own description file, so it offers a slider per movable
-    joint of it, and publishes under the namespace the robot's topic names.
+    joint of it, and publishes under the robot's namespace.
 
     :param robot: The robot whose joint states are reported.
     """
@@ -209,7 +152,7 @@ def joint_state_publisher_command(robot: DemoRobot) -> List[str]:
         str(CompositePathResolver().resolve(robot.annotation_type.get_ros_file_path())),
         ROS_ARGUMENTS_FLAG,
         REMAP_FLAG,
-        f"__ns:={PurePosixPath(robot.joint_states_topic).parent}",
+        f"__ns:={robot.namespace}",
         REMAP_FLAG,
         f"__node:={robot.joint_state_publisher_node_name}",
     ]
@@ -241,18 +184,6 @@ def start_robot_process(robot: DemoRobot) -> subprocess.Popen:
     log_path = LOG_DIRECTORY / f"{robot}.log"
     process = start_process(robot_process_command(robot), log_path)
     print(f"started the {robot} process, logging to {log_path}", flush=True)
-    return process
-
-
-def start_marker_process(robot: DemoRobot) -> subprocess.Popen:
-    """
-    Start the interactive marker of one robot.
-
-    :param robot: The robot the marker offers handles for.
-    """
-    log_path = LOG_DIRECTORY / f"{robot}_marker.log"
-    process = start_process(marker_process_command(robot), log_path)
-    print(f"started the {robot} marker, logging to {log_path}", flush=True)
     return process
 
 
@@ -312,10 +243,6 @@ def build_world() -> World:
         str(APARTMENT_PATH),
         robots=[
             RobotSpecification(
-                semantic_annotation_type=DemoRobot.PR2.annotation_type,
-                world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(*PR2_START),
-            ),
-            RobotSpecification(
                 semantic_annotation_type=DemoRobot.STRETCH.annotation_type,
                 world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(
                     *STRETCH_START
@@ -331,7 +258,7 @@ def build_world() -> World:
 
 def wait_until_ready(robots: List[DemoRobot]) -> None:
     """
-    Block until every robot's giskard takes goals.
+    Block until every robot's giskard is up, which it shows by taking goals.
 
     :param robots: The robots whose processes to wait for.
     :raises TimeoutError: If one of them does not come up in time.
@@ -355,115 +282,34 @@ def wait_until_ready(robots: List[DemoRobot]) -> None:
             raise TimeoutError(f"{robot} did not come up within {READY_TIMEOUT:.0f}s")
 
 
-# %% the plans
-
-
-def park_arms(context: Context) -> Plan:
-    """
-    A plan that brings both arms of the context's robot into their park pose.
-    """
-    return sequential([ParkArmsAction(Arms.BOTH)], context=context).plan
-
-
-def park_arms_and_drive(context: Context) -> Plan:
-    """
-    A plan that parks both arms of the context's robot and then drives it aside.
-
-    The target keeps the height the robot's root stands at, because a base goal of a
-    robot driven through giskard is a pose of that root rather than a point on the
-    floor.
-    """
-    root_height = context.robot.root.global_pose.to_position().to_np()[2]
-    return sequential(
-        [
-            ParkArmsAction(Arms.BOTH),
-            NavigateAction(
-                Pose.from_xyz_rpy(
-                    *PR2_NAVIGATION_TARGET,
-                    root_height,
-                    reference_frame=context.world.root,
-                )
-            ),
-        ],
-        context=context,
-    ).plan
-
-
 # %% the demo
 
 
 def main() -> None:
     """
-    Serve the world, wait for the robot processes, offer a handle per commanded robot,
-    open the window the mirrored one is moved from and perform a plan per commanded
-    robot.
+    Serve the world, wait for the robot processes, open a window per robot and keep
+    serving the world until interrupted.
 
-    The markers and the window are started once the robots hold the world, so that their
-    fetch does not queue behind the robots' own.
+    The windows are opened once the robots hold the world, so that their start does not
+    compete with the robots' fetches.
     """
     rospy.init_node("shared_world")
     world = build_world()
     print(f"built the apartment and its robots: {len(world.bodies)} bodies", flush=True)
 
-    WorldSynchronizer(
-        _world=world, node=rospy.get_node(), queue_depth=WORLD_SYNC_QUEUE_DEPTH
-    )
+    WorldSynchronizer(_world=world, node=rospy.get_node())
     FetchWorldServer(node=rospy.get_node(), world=world)
     TFPublisher.create_with_ignore_existing_tf(node=rospy.get_node(), world=world)
     VizMarkerPublisher(node=rospy.get_node(), _world=world)
-    robots = [DemoRobot.PR2, DemoRobot.STRETCH, DemoRobot.TIAGO]
-    commanded_robots = [robot for robot in robots if not robot.is_mirrored]
+    robots = list(DemoRobot)
     processes = [start_robot_process(robot) for robot in robots]
     try:
         wait_until_ready(robots)
-        for robot in commanded_robots:
-            processes.append(start_marker_process(robot))
-        for robot in robots:
-            if robot.is_mirrored:
-                processes.append(start_joint_state_publisher(robot))
-        perform_the_plans(world, commanded_robots)
+        processes.extend(start_joint_state_publisher(robot) for robot in robots)
+        print("serving the world until interrupted", flush=True)
+        signal.pause()
     finally:
         stop_processes(processes)
-
-
-def perform_the_plans(world: World, robots: List[DemoRobot]) -> None:
-    """
-    Perform a plan per robot, then keep serving the world until interrupted.
-
-    :param world: The served world.
-    :param robots: The robots the plans command.
-    """
-    contexts = {
-        robot: Context(
-            world=world,
-            robot=world.get_semantic_annotations_by_type(robot.annotation_type)[0],
-            ros_node=rospy.get_node(),
-            giskard_node_name=robot.giskard_node_name,
-            evaluate_conditions=False,
-        )
-        for robot in robots
-    }
-
-    with real_robot:
-        started = time.monotonic()
-        park_arms_and_drive(contexts[DemoRobot.PR2]).perform()
-        park_arms(contexts[DemoRobot.STRETCH]).perform()
-        print(
-            f"one robot after the other took {time.monotonic() - started:.1f}s",
-            flush=True,
-        )
-
-        started = time.monotonic()
-        ConcurrentPlans(
-            plans=[
-                park_arms_and_drive(contexts[DemoRobot.PR2]),
-                park_arms(contexts[DemoRobot.STRETCH]),
-            ]
-        ).perform()
-        print(f"both robots at once took {time.monotonic() - started:.1f}s", flush=True)
-
-    print("done; serving the world until interrupted", flush=True)
-    signal.pause()
 
 
 if __name__ == "__main__":
