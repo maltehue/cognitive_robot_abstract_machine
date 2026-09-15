@@ -100,20 +100,28 @@ class Giskard:
         with self.world_config.world.modify_world():
             self.world_config.setup_world()
             clear_memoization_cache(self.world_config.world)
-            self.executor = Ros2Executor(
-                ros_node=rospy.get_node(),
-                context=MotionStatechartContext(
-                    world=self.world_config.world,
-                    qp_controller_config=self.qp_controller_config,
-                ),
-                pacer=self.server_config.create_pacer(),
-            )
+            self.executor = self.create_executor()
 
         self.setup_world_model_ros_interface()
         self.motion_server = self.create_motion_server()
         self.robot_interface_config.attach(self)
         self.robot_interface_config.setup()
         self.sanity_check()
+
+    def create_executor(self) -> Ros2Executor:
+        """
+        Build the executor that runs the motion statecharts against the configured
+        world.
+        """
+        return Ros2Executor(
+            ros_node=rospy.get_node(),
+            context=MotionStatechartContext(
+                world=self.world_config.world,
+                qp_controller_config=self.qp_controller_config,
+            ),
+            pacer=self.server_config.create_pacer(),
+            publish_debug_expressions=self.server_config.publishes_debug_expressions,
+        )
 
     def create_motion_server(self) -> MotionServer:
         """

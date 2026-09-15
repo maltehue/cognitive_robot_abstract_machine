@@ -63,6 +63,12 @@ class GiskardServerConfig:
         :mod:`giskardpy.qp.constraint_inspector`.
     """
 
+    publish_debug_expressions: bool = False
+    """
+    Visualize the spatial debug expressions of the executed motion statechart nodes as
+    RViz markers, requires ``debug_mode``.
+    """
+
     idle_frequency: float = 20.0
     """
     Frequency in hertz at which Giskard waits for goals.
@@ -71,6 +77,13 @@ class GiskardServerConfig:
     def __post_init__(self):
         if is_in_github_workflow():
             self.debug_mode = False
+
+    @property
+    def publishes_debug_expressions(self) -> bool:
+        """
+        Whether the debug expressions of the executed nodes are visualized as markers.
+        """
+        return self.debug_mode and self.publish_debug_expressions
 
     @property
     def is_standalone(self) -> bool:

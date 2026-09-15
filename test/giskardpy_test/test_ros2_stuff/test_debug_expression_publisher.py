@@ -6,6 +6,12 @@ import sys
 import krrood.symbolic_math.symbolic_math as sm
 import numpy as np
 
+from giskardpy.middleware.ros2.giskard import Giskard
+from giskardpy.middleware.ros2.robot_interface_config import (
+    StandAloneRobotInterfaceConfig,
+)
+from giskardpy.middleware.ros2.server_config import GiskardServerConfig
+from giskardpy.model.world_config import EmptyWorld
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.debug_expression_publisher import (
     DebugExpressionPublisher,
@@ -13,6 +19,7 @@ from giskardpy.motion_statechart.debug_expression_publisher import (
 from giskardpy.motion_statechart.graph_node import DebugExpression
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
+from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.ros_executor import Ros2Executor
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.spatial_types import Point3, Vector3
@@ -279,3 +286,36 @@ def test_recompile_stops_previous_debug_expression_publisher(
     current_publisher = executor._debug_expression_publisher._publisher
     assert current_publisher is not previous_publisher
     assert any(callback is current_publisher for callback in callbacks)
+
+
+# %% the server config switches the publisher on
+
+
+def test_debug_expressions_are_not_published_without_debug_mode():
+    config = GiskardServerConfig(publish_debug_expressions=True)
+
+    assert config.publishes_debug_expressions is False
+
+
+def test_debug_expressions_are_published_in_debug_mode(monkeypatch):
+    monkeypatch.delenv("GITHUB_WORKFLOW", raising=False)
+    config = GiskardServerConfig(debug_mode=True, publish_debug_expressions=True)
+
+    assert config.publishes_debug_expressions is True
+
+
+def test_the_server_config_switch_reaches_the_executor(init_rospy, monkeypatch):
+    monkeypatch.delenv("GITHUB_WORKFLOW", raising=False)
+    server_config = GiskardServerConfig(debug_mode=True, publish_debug_expressions=True)
+    giskard = Giskard(
+        world_config=EmptyWorld(),
+        server_config=server_config,
+        robot_interface_config=StandAloneRobotInterfaceConfig([]),
+        qp_controller_config=QPControllerConfig(target_frequency=50),
+    )
+
+    executor = giskard.create_executor()
+
+    assert (
+        executor.publish_debug_expressions is server_config.publishes_debug_expressions
+    )

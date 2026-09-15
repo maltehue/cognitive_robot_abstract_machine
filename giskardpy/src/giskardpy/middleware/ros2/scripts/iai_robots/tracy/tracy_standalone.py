@@ -26,6 +26,7 @@ def main():
             execution_mode=ExecutionMode.STANDALONE,
             debug_mode=True,
             record_control_cycles=True,
+            publish_debug_expressions=True,
         ),
         qp_controller_config=QPControllerConfig(
             target_frequency=80,
