@@ -2,14 +2,33 @@
 A PR2 and a Stretch share one apartment, each driven by a giskard process of its own.
 
 This process owns the world: it builds it, serves it, draws it, starts one ``robot.py``
-per robot and performs a plan per robot on top of it::
+and one ``marker.py`` per robot and performs a plan per robot on top of it::
 
     python demo.py
 
 Every robot process fetches this world and controls its own robot in it, so the robots
 see each other while each of them is moved by a controller of its own. Their output goes
 to a log file each, whose place is printed. The plans are performed one after the other
-first and then all at once, and the robot processes are stopped with this one.
+first and then all at once, and every started process is stopped with this one.
+
+Watching and dragging it in RViz
+--------------------------------
+
+Set the fixed frame to ``apartment/apartment_root`` and add
+
+- a ``MarkerArray`` display on ``/semworld/viz_marker`` for the world itself,
+- an ``InteractiveMarkers`` display per robot, with update topic
+  ``/giskard_pr2/cartesian_goals/update`` and ``/giskard_stretch/cartesian_goals/update``.
+
+Dragging a handle and releasing it moves that robot through its own giskard, and this
+process draws what happened. The Stretch's base is a differential drive and cannot be
+dragged sideways: a lateral goal converges slowly or runs into the marker's timeout,
+which ends it cleanly.
+
+..note:: A marker goal reaches a robot's giskard directly and is therefore not
+    serialized against the plans this process performs. Dragging a robot while its own
+    plan runs leaves the two goals to giskard, and a model change during a marker motion
+    would abort that motion; the plans below change no model.
 """
 
 from __future__ import annotations
@@ -95,18 +114,23 @@ ROBOT_LAUNCHER = Path(__file__).with_name("robot.py")
 The script started once per robot.
 """
 
+MARKER_LAUNCHER = Path(__file__).with_name("marker.py")
+"""
+The interactive marker started once per robot.
+"""
+
 LOG_DIRECTORY = Path(tempfile.gettempdir()) / "coraplex_shared_world_demo"
 """
-Where each robot process writes its output, one file per robot.
+Where the started processes write their output, one file each.
 """
 
 SHUTDOWN_TIMEOUT = 10.0
 """
-How long a robot process may take to end after it was interrupted, in seconds, before it
-is killed.
+How long a started process may take to end after it was interrupted, in seconds, before
+it is killed.
 """
 
-# %% the robot processes
+# %% the processes started per robot
 
 
 def robot_process_command(robot: DemoRobot) -> List[str]:
@@ -118,28 +142,59 @@ def robot_process_command(robot: DemoRobot) -> List[str]:
     return [sys.executable, str(ROBOT_LAUNCHER), "--robot", str(robot)]
 
 
-def start_robot_process(robot: DemoRobot) -> subprocess.Popen:
+def marker_process_command(robot: DemoRobot) -> List[str]:
     """
-    Start the process driving one robot, in a session of its own so that it can be
-    stopped as a group, with its output in :data:`LOG_DIRECTORY`.
+    The command that starts the interactive marker of one robot, in this interpreter.
 
-    :param robot: The robot the process drives.
+    :param robot: The robot the marker offers handles for.
+    """
+    return [sys.executable, str(MARKER_LAUNCHER), "--robot", str(robot)]
+
+
+def start_process(command: List[str], log_path: Path) -> subprocess.Popen:
+    """
+    Start a child process in a session of its own so that it can be stopped as a group,
+    with its output in the given file.
+
+    :param command: The command to run.
+    :param log_path: The file its output goes to.
     """
     LOG_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIRECTORY / f"{robot}.log"
-    process = subprocess.Popen(
-        robot_process_command(robot),
+    return subprocess.Popen(
+        command,
         stdout=log_path.open("w"),
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+
+
+def start_robot_process(robot: DemoRobot) -> subprocess.Popen:
+    """
+    Start the process driving one robot.
+
+    :param robot: The robot the process drives.
+    """
+    log_path = LOG_DIRECTORY / f"{robot}.log"
+    process = start_process(robot_process_command(robot), log_path)
     print(f"started the {robot} process, logging to {log_path}", flush=True)
     return process
 
 
-def stop_robot_processes(processes: List[subprocess.Popen]) -> None:
+def start_marker_process(robot: DemoRobot) -> subprocess.Popen:
     """
-    Interrupt every robot process and kill the ones that do not end in
+    Start the interactive marker of one robot.
+
+    :param robot: The robot the marker offers handles for.
+    """
+    log_path = LOG_DIRECTORY / f"{robot}_marker.log"
+    process = start_process(marker_process_command(robot), log_path)
+    print(f"started the {robot} marker, logging to {log_path}", flush=True)
+    return process
+
+
+def stop_processes(processes: List[subprocess.Popen]) -> None:
+    """
+    Interrupt every started process and kill the ones that do not end in
     :data:`SHUTDOWN_TIMEOUT`.
 
     :param processes: The processes to stop.
@@ -245,7 +300,11 @@ def park_arms_and_drive(context: Context) -> Plan:
 
 def main() -> None:
     """
-    Serve the world, wait for the robot processes and perform a plan per robot.
+    Serve the world, wait for the robot processes, offer a handle per robot and perform
+    a plan per robot.
+
+    The markers are started once the robots take goals, so that their world fetch does
+    not queue behind the robots' own.
     """
     rospy.init_node("shared_world")
     world = build_world()
@@ -260,21 +319,21 @@ def main() -> None:
     robots = [DemoRobot.PR2, DemoRobot.STRETCH]
     processes = [start_robot_process(robot) for robot in robots]
     try:
+        wait_until_ready(robots)
+        for robot in robots:
+            processes.append(start_marker_process(robot))
         perform_the_plans(world, robots)
     finally:
-        stop_robot_processes(processes)
+        stop_processes(processes)
 
 
 def perform_the_plans(world: World, robots: List[DemoRobot]) -> None:
     """
-    Wait for the robot processes, perform a plan per robot, then keep serving the world
-    until interrupted.
+    Perform a plan per robot, then keep serving the world until interrupted.
 
     :param world: The served world.
     :param robots: The robots whose processes were started.
     """
-    wait_until_ready(robots)
-
     contexts = {
         robot: Context(
             world=world,

@@ -31,9 +31,13 @@ from coraplex.plans.plan import ConcurrentPlans
 from coraplex.robot_plans.actions.core.robot_body import ParkArmsAction
 from coraplex.testing import StandaloneProcess
 from giskardpy.middleware.ros2.robot_interface_config import OneRobotOfManyInterface
+from giskardpy.middleware.ros2.scripts.tools.interactive_marker import (
+    InteractiveMarkerSettings,
+)
 from semantic_digital_twin.adapters.ros.world_fetcher import FetchWorldServer
 from semantic_digital_twin.adapters.ros.world_synchronizer import WorldSynchronizer
 from semantic_digital_twin.api import RobotSpecification, WorldSpecification
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.exceptions import ParsingError
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
@@ -56,6 +60,11 @@ WORLD_OWNER = ROBOT_LAUNCHER.with_name("demo.py")
 The process that owns the world and starts the robot processes.
 """
 
+MARKER_LAUNCHER = ROBOT_LAUNCHER.with_name("marker.py")
+"""
+The interactive marker the demo starts one of per robot.
+"""
+
 
 def load_script(path: Path) -> ModuleType:
     """
@@ -70,10 +79,10 @@ def load_script(path: Path) -> ModuleType:
     """
     if str(path.parent) not in sys.path:
         sys.path.insert(0, str(path.parent))
-    specification = importlib.util.spec_from_file_location(
-        f"shared_world_demo_{path.stem}", path
-    )
+    name = f"shared_world_demo_{path.stem}"
+    specification = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module
     specification.loader.exec_module(module)
     return module
 
@@ -238,4 +247,60 @@ def test_the_world_owner_starts_one_robot_process_per_robot():
         str(ROBOT_LAUNCHER),
         "--robot",
         str(DemoRobot.STRETCH),
+    ]
+
+
+def test_the_world_owner_starts_one_marker_per_robot():
+    """
+    The demo also starts the interactive marker of every robot it places, so that a
+    robot can be dragged about while the plans run.
+    """
+    world_owner = load_script(WORLD_OWNER)
+
+    assert world_owner.marker_process_command(DemoRobot.STRETCH) == [
+        sys.executable,
+        str(MARKER_LAUNCHER),
+        "--robot",
+        str(DemoRobot.STRETCH),
+    ]
+
+
+# %% the handles the markers offer
+
+
+def test_every_marker_chain_names_one_body_of_the_world(world_with_both_robots: World):
+    """
+    Every chain a marker offers a handle for names exactly one body of the shared world,
+    where the plain link names of one robot are carried by the other as well.
+    """
+    world_root_name = str(world_with_both_robots.root.name)
+
+    for robot in ROBOTS:
+        for chain in robot.marker_chains(world_root_name):
+            for link in [chain.root, chain.tip]:
+                assert (
+                    InteractiveMarkerSettings.link_named(
+                        world_with_both_robots, link
+                    ).name.name
+                    == PrefixedName.from_string(link).name
+                )
+
+
+def test_a_markers_ros_arguments_name_its_chains_and_its_giskard():
+    """
+    The marker process hands its robot's chains, giskard and topic namespace to the
+    marker node as parameter overrides, which is what a launch file would otherwise do.
+    """
+    marker = load_script(MARKER_LAUNCHER)
+
+    assert marker.marker_ros_arguments(DemoRobot.STRETCH) == [
+        "--ros-args",
+        "-p",
+        "root_links:=[apartment_root,stretch_description/base_link]",
+        "-p",
+        "tip_links:=[stretch_description/base_link,link_grasp_center]",
+        "-p",
+        "giskard_node_name:=giskard_stretch",
+        "-p",
+        "marker_namespace:=giskard_stretch/cartesian_goals",
     ]

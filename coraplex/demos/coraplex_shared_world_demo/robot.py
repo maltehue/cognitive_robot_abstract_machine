@@ -15,19 +15,22 @@ avoided rather than moved.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Type
+from typing import List, Type
 
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.giskard import Giskard
 from giskardpy.middleware.ros2.robot_interface_config import OneRobotOfManyInterface
+from giskardpy.middleware.ros2.scripts.tools.interactive_marker import (
+    InteractiveMarkerSettings,
+)
 from giskardpy.middleware.ros2.server_config import ExecutionMode, GiskardServerConfig
 from giskardpy.model.world_config import WorldFromFetchService
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.robots.stretch import Stretch
-from semantic_digital_twin.robots.tiago import Tiago
 
 # %% how the controller runs
 
@@ -44,6 +47,36 @@ Unpaced servers race each other: the robot with the fewest joints finishes its c
 soonest and would move faster than the others.
 """
 
+# %% the handles a robot can be dragged by
+
+
+APARTMENT_ROOT_NAME = "apartment_root"
+"""
+Name of the body the apartment stands on, which the robots are driven relative to.
+"""
+
+
+@dataclass(frozen=True)
+class MarkerChain:
+    """
+    One kinematic chain an interactive marker offers a handle for.
+
+    Dragging the handle asks the robot's giskard to move :attr:`tip` relative to
+    :attr:`root`. Both are named the way the marker node resolves them, so a link
+    several robots carry has to bring its prefix.
+    """
+
+    root: str
+    """
+    The link the goal is expressed relative to.
+    """
+
+    tip: str
+    """
+    The link the handle is attached to and that the goal moves.
+    """
+
+
 # %% the robots of the demo
 
 
@@ -54,7 +87,6 @@ class DemoRobot(StrEnum):
 
     PR2 = "PR2"
     STRETCH = "Stretch"
-    TIAGO = "Tiago"
 
     @property
     def annotation_type(self) -> Type[AbstractRobot]:
@@ -66,8 +98,6 @@ class DemoRobot(StrEnum):
                 return PR2
             case DemoRobot.STRETCH:
                 return Stretch
-            case DemoRobot.TIAGO:
-                return Tiago
 
     @property
     def giskard_node_name(self) -> str:
@@ -82,6 +112,47 @@ class DemoRobot(StrEnum):
         Name of the action this robot's giskard takes goals on.
         """
         return f"{self.giskard_node_name}/command"
+
+    @property
+    def marker_node_name(self) -> str:
+        """
+        Name of the node offering this robot's handles.
+        """
+        return f"interactive_marker_{self.lower()}"
+
+    @property
+    def marker_namespace(self) -> str:
+        """
+        Topic namespace this robot's handles appear under.
+
+        Every robot keeps its own, because the markers of two robots would otherwise
+        share both their topics and their marker names.
+        """
+        return f"{self.giskard_node_name}/{InteractiveMarkerSettings.marker_namespace}"
+
+    def marker_chains(self, world_root_name: str) -> List[MarkerChain]:
+        """
+        The chains this robot offers a handle for: its base against the world it stands
+        in, and every hand against its base.
+
+        :param world_root_name: Name of the root of that world.
+        """
+        match self:
+            case DemoRobot.PR2:
+                return [
+                    MarkerChain(root=world_root_name, tip="base_footprint"),
+                    MarkerChain(root="base_footprint", tip="l_gripper_tool_frame"),
+                    MarkerChain(root="base_footprint", tip="r_gripper_tool_frame"),
+                ]
+            case DemoRobot.STRETCH:
+                return [
+                    MarkerChain(
+                        root=world_root_name, tip="stretch_description/base_link"
+                    ),
+                    MarkerChain(
+                        root="stretch_description/base_link", tip="link_grasp_center"
+                    ),
+                ]
 
 
 # %% the process
