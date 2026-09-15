@@ -26,6 +26,7 @@ from giskardpy.middleware.ros2.input_synchronization import (
     LatestJointStateSynchronizer,
     PendingJointStateSynchronizer,
     OdometrySynchronizer,
+    RobotJointStateSynchronizer,
     TfFrameSynchronizer,
 )
 from giskardpy.middleware.ros2.motion_server import MotionServer
@@ -413,4 +414,30 @@ class OneRobotOfManyInterface(RobotInterfaceConfig):
     def setup(self):
         self.register_controlled_joints(
             [connection.name for connection in self.connections_to_control(self.world)]
+        )
+
+
+@dataclass
+class MirroredRobotOfManyInterface(OneRobotOfManyInterface):
+    """
+    Follows one robot of a world that holds several, wherever whoever publishes its
+    joint states has moved it.
+
+    The positions read from that topic are written into the shared world on every idle
+    cycle, so a robot this Giskard is never asked to move still shows what it does.
+    """
+
+    joint_states_topic: str = field(kw_only=True)
+    """
+    Name of the topic this robot reports its joint positions on.
+    """
+
+    def setup(self):
+        super().setup()
+        self.motion_server.inputs.synchronizers.append(
+            RobotJointStateSynchronizer(
+                world=self.world,
+                topic_name=self.joint_states_topic,
+                robot=self.find_robot(self.world),
+            )
         )

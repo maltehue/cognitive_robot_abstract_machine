@@ -5,7 +5,7 @@ Tests for the synchronizers that write ROS topics and tf frames into the world s
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import pytest
 from geometry_msgs.msg import PoseStamped
@@ -22,13 +22,20 @@ from giskardpy.middleware.ros2.input_synchronization import (
     LatestJointStateSynchronizer,
     OdometrySynchronizer,
     PendingJointStateSynchronizer,
+    RobotJointStateSynchronizer,
     TfFrameSynchronizer,
     TopicInputSynchronizer,
 )
+from semantic_digital_twin.api import RobotSpecification, WorldSpecification
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.exceptions import ParsingError
+from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.robots.robot_parts import AbstractRobot
+from semantic_digital_twin.robots.tiago import Tiago
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
+    ActiveConnection1DOF,
     Connection6DoF,
     FixedConnection,
     OmniDrive,
@@ -81,6 +88,29 @@ def joint_state_message(joint_name: str, position: float) -> JointState:
     message.name = [joint_name]
     message.position = [position]
     return message
+
+
+def joint_state_message_of(positions: Dict[str, float]) -> JointState:
+    """
+    A joint state message that reports one position per joint name.
+    """
+    message = JointState()
+    message.name = list(positions)
+    message.position = list(positions.values())
+    return message
+
+
+def positions_of_one_degree_of_freedom_connections(
+    world: World, robot: AbstractRobot
+) -> Dict[PrefixedName, float]:
+    """
+    The position of every one degree of freedom connection of the given robot.
+    """
+    return {
+        connection.name: world.state[connection.raw_dof.id].position
+        for connection in robot.connections
+        if isinstance(connection, ActiveConnection1DOF)
+    }
 
 
 def odometry_message(pose: HomogeneousTransformationMatrix) -> Odometry:
@@ -214,6 +244,104 @@ def test_synchronizer_writes_nothing_without_a_message(init_rospy, mini_world: W
 
     assert synchronizer.apply() is False
     assert mini_world.state[connection.raw_dof.id].position == position_before_apply
+
+
+# %% writing the joint states of one robot of a world holding several
+
+LIFT_JOINT_NAME = "torso_lift_joint"
+"""
+The joint both robots of :func:`world_with_a_pr2_and_a_tiago` carry, under that plain
+name in their own description and under a prefix of their own in the world.
+"""
+
+TIAGO_LIFT_JOINT = PrefixedName(LIFT_JOINT_NAME, "tiago_dual")
+"""
+The connection the Tiago's lift joint is that world's.
+"""
+
+LIFT_POSITION = 0.25
+"""
+A height within the lift's limits, reported for it in a joint state message.
+"""
+
+
+@pytest.fixture()
+def world_with_a_pr2_and_a_tiago() -> World:
+    """
+    A world holding two robots whose descriptions share a joint name.
+    """
+    try:
+        return WorldSpecification(
+            world_parser=None,
+            robots=[
+                RobotSpecification(
+                    semantic_annotation_type=PR2,
+                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=1.0),
+                ),
+                RobotSpecification(
+                    semantic_annotation_type=Tiago,
+                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=-1.0),
+                ),
+            ],
+        ).to_domain_object()
+    except ParsingError as error:
+        pytest.skip(f"Robot URDF not available: {error}")
+
+
+def test_a_robots_joint_states_reach_that_robots_connections(
+    init_rospy, world_with_a_pr2_and_a_tiago: World
+):
+    """
+    A joint name a message reports is the name of the publishing robot's own joint, so
+    it has to reach that robot's connection rather than the one another robot of the
+    same world carries under the same name.
+    """
+    world = world_with_a_pr2_and_a_tiago
+    tiago = world.get_semantic_annotations_by_type(Tiago)[0]
+    pr2_positions_before = positions_of_one_degree_of_freedom_connections(
+        world, world.get_semantic_annotations_by_type(PR2)[0]
+    )
+    synchronizer = RobotJointStateSynchronizer(
+        world=world, topic_name="tiago/joint_states", robot=tiago
+    )
+    synchronizer.latest_message = joint_state_message_of(
+        {LIFT_JOINT_NAME: LIFT_POSITION}
+    )
+
+    assert synchronizer.apply() is True
+    assert (
+        world.state[world.get_connection_by_name(TIAGO_LIFT_JOINT).raw_dof.id].position
+        == LIFT_POSITION
+    )
+    assert (
+        positions_of_one_degree_of_freedom_connections(
+            world, world.get_semantic_annotations_by_type(PR2)[0]
+        )
+        == pr2_positions_before
+    )
+
+
+def test_a_joint_the_robot_does_not_have_is_passed_over(
+    init_rospy, world_with_a_pr2_and_a_tiago: World
+):
+    """
+    A robot publishes the joints of its own description, some of which the model of it
+    in the world may lack, and those leave the rest of the message unwritten.
+    """
+    world = world_with_a_pr2_and_a_tiago
+    tiago = world.get_semantic_annotations_by_type(Tiago)[0]
+    synchronizer = RobotJointStateSynchronizer(
+        world=world, topic_name="tiago/joint_states", robot=tiago
+    )
+    synchronizer.latest_message = joint_state_message_of(
+        {"no_such_joint": 1.0, LIFT_JOINT_NAME: LIFT_POSITION}
+    )
+
+    assert synchronizer.apply() is True
+    assert (
+        world.state[world.get_connection_by_name(TIAGO_LIFT_JOINT).raw_dof.id].position
+        == LIFT_POSITION
+    )
 
 
 # %% writing the base pose

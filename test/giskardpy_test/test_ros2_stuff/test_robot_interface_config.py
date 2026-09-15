@@ -5,6 +5,7 @@ import pytest
 from giskardpy.data_types.exceptions import RobotNotInWorldError
 from giskardpy.middleware.ros2.giskard import Giskard
 from giskardpy.middleware.ros2.robot_interface_config import (
+    MirroredRobotOfManyInterface,
     OneRobotOfManyInterface,
     RobotInterfaceConfig,
     StandAloneRobotInterfaceConfig,
@@ -225,3 +226,32 @@ def test_an_interface_for_a_robot_that_is_not_there_says_so(
         OneRobotOfManyInterface(robot_type=Tiago).connections_to_control(
             world_with_two_robots
         )
+
+
+# %% a robot of that world whose state comes from outside
+
+
+def test_the_mirroring_interface_controls_the_same_connections(
+    world_with_two_robots: World,
+):
+    """
+    The connections of a robot whose state is mirrored are registered like those of a
+    commanded one, so that a giskard holding nothing else has something to control.
+    """
+    interface = MirroredRobotOfManyInterface(
+        robot_type=Stretch, joint_states_topic="/stretch/joint_states"
+    )
+
+    assert interface.connections_to_control(world_with_two_robots) == (
+        OneRobotOfManyInterface(robot_type=Stretch).connections_to_control(
+            world_with_two_robots
+        )
+    )
+
+
+def test_the_mirroring_interface_names_the_topic_its_robot_publishes_on():
+    interface = MirroredRobotOfManyInterface(
+        robot_type=Stretch, joint_states_topic="/stretch/joint_states"
+    )
+
+    assert interface.joint_states_topic == "/stretch/joint_states"

@@ -17,6 +17,7 @@ from giskardpy.middleware.ros2.exceptions import (
 )
 from krrood.patterns.subclass_safe_generic import SubClassSafeGeneric
 from semantic_digital_twin.adapters.ros.tfwrapper import TFWrapper
+from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
@@ -233,6 +234,46 @@ class PendingJointStateSynchronizer(JointStateInputSynchronizer):
         message = self.latest_message
         self.latest_message = None
         return message
+
+
+@dataclass
+class RobotJointStateSynchronizer(PendingJointStateSynchronizer):
+    """
+    Writes the joint states one robot publishes into the connections of that robot.
+
+    A robot reports the joints of its own description under the names that description
+    gives them, without the prefix they carry in a world holding several robots, where
+    another robot may carry the same plain name. A name this robot has no connection for
+    is passed over, because a robot may publish joints its model here lacks.
+    """
+
+    robot: AbstractRobot = field(kw_only=True)
+    """
+    The robot whose joint states are written.
+    """
+
+    connections_by_joint_name: Dict[str, ActiveConnection1DOF] = field(
+        init=False, default_factory=dict
+    )
+    """
+    The robot's one degree of freedom connections, by the name their joint carries in
+    the robot's own description.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.connections_by_joint_name = {
+            connection.name.name: connection
+            for connection in self.robot.connections
+            if isinstance(connection, ActiveConnection1DOF)
+        }
+
+    def apply_message(self, message: JointState) -> None:
+        for joint_name, position in zip(message.name, message.position):
+            if joint_name not in self.connections_by_joint_name:
+                continue
+            connection = self.connections_by_joint_name[joint_name]
+            self.world.state[connection.raw_dof.id].position = position
 
 
 @dataclass
