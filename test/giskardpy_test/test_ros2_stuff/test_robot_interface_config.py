@@ -28,12 +28,9 @@ from semantic_digital_twin.robots.daisy import DAiSyJoint
 from semantic_digital_twin.robots.stretch import StretchJoint
 from semantic_digital_twin.robots.tracy import TracyJoint
 from giskardpy.qp.qp_controller_config import QPControllerConfig
-from semantic_digital_twin.api import RobotSpecification, WorldSpecification
-from semantic_digital_twin.exceptions import ParsingError
 from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.robots.stretch import Stretch
 from semantic_digital_twin.robots.tiago import Tiago
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import ActiveConnection
 
@@ -162,29 +159,6 @@ def test_the_stretch_interface_controls_every_joint_except_the_drive():
 
 
 # %% one robot of a world that holds several
-
-
-@pytest.fixture()
-def world_with_two_robots() -> World:
-    """
-    A world holding a PR2 and a Stretch, each on a drive of its own.
-    """
-    try:
-        return WorldSpecification(
-            world_parser=None,
-            robots=[
-                RobotSpecification(
-                    semantic_annotation_type=PR2,
-                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=1.0),
-                ),
-                RobotSpecification(
-                    semantic_annotation_type=Stretch,
-                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=-1.0),
-                ),
-            ],
-        ).to_domain_object()
-    except ParsingError as error:
-        pytest.skip(f"Robot URDF not available: {error}")
 
 
 def test_the_interface_controls_its_robots_connections_and_its_drive(

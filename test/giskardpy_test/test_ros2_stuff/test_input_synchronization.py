@@ -254,11 +254,6 @@ The joint both robots of :func:`world_with_a_pr2_and_a_tiago` carry, under that 
 name in their own description and under a prefix of their own in the world.
 """
 
-TIAGO_LIFT_JOINT = PrefixedName(LIFT_JOINT_NAME, "tiago_dual")
-"""
-The connection the Tiago's lift joint is that world's.
-"""
-
 LIFT_POSITION = 0.25
 """
 A height within the lift's limits, reported for it in a joint state message.
@@ -288,6 +283,16 @@ def world_with_a_pr2_and_a_tiago() -> World:
         pytest.skip(f"Robot URDF not available: {error}")
 
 
+def lift_position(world: World, robot: AbstractRobot) -> float:
+    """
+    The position the given robot's lift joint stands at in the given world.
+    """
+    connection = world.get_connection_by_name(
+        PrefixedName(LIFT_JOINT_NAME, robot.root.name.prefix)
+    )
+    return world.state[connection.raw_dof.id].position
+
+
 def test_a_robots_joint_states_reach_that_robots_connections(
     init_rospy, world_with_a_pr2_and_a_tiago: World
 ):
@@ -309,10 +314,7 @@ def test_a_robots_joint_states_reach_that_robots_connections(
     )
 
     assert synchronizer.apply() is True
-    assert (
-        world.state[world.get_connection_by_name(TIAGO_LIFT_JOINT).raw_dof.id].position
-        == LIFT_POSITION
-    )
+    assert lift_position(world, tiago) == LIFT_POSITION
     assert (
         positions_of_one_degree_of_freedom_connections(
             world, world.get_semantic_annotations_by_type(PR2)[0]
@@ -338,10 +340,7 @@ def test_a_joint_the_robot_does_not_have_is_passed_over(
     )
 
     assert synchronizer.apply() is True
-    assert (
-        world.state[world.get_connection_by_name(TIAGO_LIFT_JOINT).raw_dof.id].position
-        == LIFT_POSITION
-    )
+    assert lift_position(world, tiago) == LIFT_POSITION
 
 
 # %% writing the base pose
