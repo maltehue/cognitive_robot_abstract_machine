@@ -11,7 +11,6 @@ from coraplex.exceptions import (
     ConditionNotSatisfied,
     UnknownExecutionType,
 )
-from coraplex.plans.motion_gate import MotionAndModelChangeGate
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.data_types import LifeCycleValues
 from giskardpy.motion_statechart.goals.collision_avoidance import (
@@ -122,13 +121,6 @@ class GiskardExecutable(Executable):
     """
     The execution type used for all giskard executables, managed by
     :py:class:`pycram.motion_executor.ExecutionEnvironment`.
-    """
-
-    motion_gate: ClassVar[MotionAndModelChangeGate] = MotionAndModelChangeGate()
-    """
-    Keeps the model changes of every plan performed in this process out of the motions
-    of every other, managed by
-    :py:class:`~coraplex.execution_environment.ExecutionEnvironment`.
     """
 
     collision_avoidance: ClassVar[bool] = False
@@ -294,13 +286,8 @@ class GiskardExecutable(Executable):
         """
         Executes the motion state chart on the real robot via giskard while monitoring
         for interrupts.
-
-        The goal is held as a motion of :attr:`motion_gate`, so it runs next to the
-        goals of the other robots but never while the shared world model changes, which
-        giskard would answer by aborting it.
         """
-        with GiskardExecutable.motion_gate.motion():
-            self.context.giskard_wrapper.execute(self.motion_state_chart)
+        self.context.giskard_wrapper.execute(self.motion_state_chart)
 
 
 @dataclass
@@ -345,15 +332,7 @@ class MoveBranchExecutable(Executable):
     """
 
     def execute(self) -> None:
-        """
-        Move the branch, holding
-        :attr:`~coraplex.plans.executables.GiskardExecutable.motion_gate` alone.
-
-        The move reaches every giskard of this world, and a giskard executing a goal at
-        that moment aborts it, so no robot may be moving while this runs.
-        """
-        with GiskardExecutable.motion_gate.model_change():
-            self.context.world.move_branch(self.body, self.new_parent)
+        self.context.world.move_branch(self.body, self.new_parent)
 
 
 @dataclass

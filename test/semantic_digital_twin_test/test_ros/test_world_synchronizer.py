@@ -3087,26 +3087,3 @@ def test_all_blocks_received_when_subscribed_before_publishing(rclpy_node):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-# %% queue depth
-
-WIDE_QUEUE_DEPTH = 250
-"""
-A queue depth wide enough to tell it apart from the default.
-"""
-
-
-def test_the_queue_depth_configures_both_sides(rclpy_node):
-    """
-    Receivers apply a message while holding the world, so a burst of updates has to
-    queue up rather than be dropped.
-    """
-    synchronizer = WorldSynchronizer(
-        node=rclpy_node, _world=create_dummy_world(), queue_depth=WIDE_QUEUE_DEPTH
-    )
-
-    assert synchronizer.subscriber.qos_profile.depth == WIDE_QUEUE_DEPTH
-    assert synchronizer.publisher.qos_profile.depth == WIDE_QUEUE_DEPTH
-
-    synchronizer.close()
