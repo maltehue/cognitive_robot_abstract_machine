@@ -2,18 +2,14 @@ from __future__ import annotations
 
 from time import sleep
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Dict, List
 
 import rclpy
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 from rclpy import Parameter
-from rclpy.node import Node
-from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.world_entity import (
     KinematicStructureEntity,
 )
-from typing_extensions import Self
 from visualization_msgs.msg import InteractiveMarker, InteractiveMarkerControl, Marker
 from visualization_msgs.msg import InteractiveMarkerFeedback
 
@@ -23,118 +19,8 @@ from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from giskardpy.middleware.ros2.python_interface import GiskardWrapper
 from giskardpy.middleware.ros2 import rospy
-from semantic_digital_twin.datastructures.prefixed_name import (
-    NAME_SEPARATOR,
-    PrefixedName,
-)
+from semantic_digital_twin.exceptions import WorldEntityNotFoundError
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
-
-# %% what a marker node is told
-
-
-class MarkerParameter(StrEnum):
-    """
-    The node parameters an interactive marker reads itself from.
-    """
-
-    ROOT_LINKS = "root_links"
-    """
-    The links the goals are expressed relative to, one per chain.
-    """
-
-    TIP_LINKS = "tip_links"
-    """
-    The links the handles are attached to, one per chain.
-    """
-
-    GISKARD_NODE_NAME = "giskard_node_name"
-    """
-    The giskard the goals are sent to.
-    """
-
-    MARKER_NAMESPACE = "marker_namespace"
-    """
-    The topic namespace the handles appear under.
-    """
-
-
-@dataclass
-class InteractiveMarkerSettings:
-    """
-    Which chains an interactive marker offers handles for, and who answers them.
-
-    Naming the giskard and the namespace is what lets several markers serve one world:
-    each of them commands a robot of its own and keeps its handles on topics of its own.
-    """
-
-    root_links: List[str]
-    """
-    The links the goals are expressed relative to, one per chain.
-    """
-
-    tip_links: List[str]
-    """
-    The links the handles are attached to, one per chain.
-    """
-
-    giskard_node_name: str = "giskard"
-    """
-    Name of the giskard node the goals are sent to.
-    """
-
-    marker_namespace: str = "cartesian_goals"
-    """
-    Topic namespace the handles are published and their feedback is taken under.
-    """
-
-    @classmethod
-    def from_node(cls, node: Node) -> Self:
-        """
-        The settings the given node was launched with.
-
-        :param node: The node whose parameters to declare and read.
-        """
-        node.declare_parameters(
-            namespace="",
-            parameters=[
-                (MarkerParameter.ROOT_LINKS.value, Parameter.Type.STRING_ARRAY),
-                (MarkerParameter.TIP_LINKS.value, Parameter.Type.STRING_ARRAY),
-                (MarkerParameter.GISKARD_NODE_NAME.value, cls.giskard_node_name),
-                (MarkerParameter.MARKER_NAMESPACE.value, cls.marker_namespace),
-            ],
-        )
-        return cls(
-            root_links=node.get_parameter(MarkerParameter.ROOT_LINKS.value).value,
-            tip_links=node.get_parameter(MarkerParameter.TIP_LINKS.value).value,
-            giskard_node_name=node.get_parameter(
-                MarkerParameter.GISKARD_NODE_NAME.value
-            ).value,
-            marker_namespace=node.get_parameter(
-                MarkerParameter.MARKER_NAMESPACE.value
-            ).value,
-        )
-
-    @staticmethod
-    def link_named(world: World, name: str) -> KinematicStructureEntity:
-        """
-        The link of the given world a parameter names.
-
-        A name carrying a prefix picks the body of that prefix, which is the only way to
-        name a link of a world in which several robots bring the same link name.
-
-        :param world: The world to look the link up in.
-        :param name: The link name as it stands in the parameters.
-        :raises WorldEntityNotFoundError: If no link of that name exists.
-        :raises DuplicateWorldEntityError: If a plain name fits several links.
-        """
-        if NAME_SEPARATOR not in name:
-            return world.get_kinematic_structure_entity_by_name(name)
-        return world.get_kinematic_structure_entity_by_name(
-            PrefixedName.from_string(name)
-        )
-
-
-# %% the node
 
 
 @dataclass
@@ -145,6 +31,11 @@ class InteractiveMarkerNode:
     This node creates interactive markers for specified kinematic chains and allows
     users to manipulate them via RViz. When a marker is moved, it generates motion
     goals that are sent to Giskard for execution.
+
+    Node parameters for launching the node:
+
+    - root_links: List of root link names for kinematic chains
+    - tip_links: List of tip link names corresponding to root_links
 
     Example Node for .launch.py:
 
@@ -168,11 +59,6 @@ class InteractiveMarkerNode:
         ),
     """
 
-    settings: InteractiveMarkerSettings
-    """
-    The chains to offer handles for, the giskard to command and the namespace to serve
-    under.
-    """
     motion_timeout_seconds: float = 20
     """
     Timeout in seconds for motion execution.
@@ -189,37 +75,56 @@ class InteractiveMarkerNode:
     """
     Interactive marker server for RViz.
     """
+    root_links: List[str] = field(init=False)
+    """
+    List of root link names from parameters.
+    """
+    tip_links: List[str] = field(init=False)
+    """
+    List of tip link names from parameters.
+    """
 
     def __post_init__(self) -> None:
         """
-        Sets up the Giskard wrapper, creates kinematic chain markers and initializes the
-        interactive marker server.
+        Sets up the Giskard wrapper, reads parameters, creates kinematic chain markers,
+        and initializes the interactive marker server. Retries up to world_entity_retry_attempts
+        times if world entities are not found initially.
 
-        :raises WorldEntityNotFoundError: If kinematic structure entities cannot be
-            found.
+        :raises WorldEntityNotFoundError: If kinematic structure entities cannot be found
+            after all retry attempts.
         """
         self.giskard = GiskardWrapper(
-            node_handle=rospy.get_node(),
-            giskard_node_name=self.settings.giskard_node_name,
+            node_handle=rospy.get_node(), giskard_node_name="giskard"
         )
         self.markers = {}
         self.server = None
+
+        self.giskard.node_handle.declare_parameters(
+            namespace="",
+            parameters=[
+                ("root_links", Parameter.Type.STRING_ARRAY),
+                ("tip_links", Parameter.Type.STRING_ARRAY),
+            ],
+        )
+        self.root_links = self.giskard.node_handle.get_parameter("root_links").value
+        self.tip_links = self.giskard.node_handle.get_parameter("tip_links").value
 
         self._initialize_markers()
         self._setup_marker_server()
 
     def _initialize_markers(self) -> None:
         """
-        Find the kinematic structure entities of the settings' chains and create a
-        marker for each of them.
+        Attempts to find kinematic structure entities and create markers for them.
 
-        :raises WorldEntityNotFoundError: If entities cannot be found.
+        :raises WorldEntityNotFoundError: If entities cannot be found after all retries.
         """
-        for root, tip in zip(self.settings.root_links, self.settings.tip_links):
-            root_body = self.settings.link_named(self.giskard.world, root)
-            tip_body = self.settings.link_named(self.giskard.world, tip)
+        for root, tip in zip(self.root_links, self.tip_links):
+            root_body = self.giskard.world.get_kinematic_structure_entity_by_name(root)
+            tip_body = self.giskard.world.get_kinematic_structure_entity_by_name(tip)
             kinematic_chain = KinematicChainMarker(root, tip, root_body, tip_body)
             self.markers[kinematic_chain.name] = kinematic_chain
+
+        return
 
     def _setup_marker_server(self) -> None:
         """
@@ -228,9 +133,7 @@ class InteractiveMarkerNode:
         Creates the server, configures each marker with controls,
         and registers feedback callbacks.
         """
-        self.server = InteractiveMarkerServer(
-            rospy.get_node(), self.settings.marker_namespace
-        )
+        self.server = InteractiveMarkerServer(rospy.get_node(), "cartesian_goals")
 
         for marker in self.markers.values():
             marker.create_marker()
@@ -291,9 +194,6 @@ class InteractiveMarkerNode:
         # Update marker in server
         self.server.insert(kinematic_chain_marker.interactive_marker_message)
         self.server.applyChanges()
-
-
-# %% the handle of one chain
 
 
 @dataclass
@@ -482,9 +382,6 @@ class KinematicChainMarker:
         self.interactive_marker_message.pose.orientation.w = 1.0
 
 
-# %% running the node
-
-
 def main(args: None = None) -> None:
     """
     Main entry point for the interactive marker ROS 2 node.
@@ -495,7 +392,7 @@ def main(args: None = None) -> None:
     :param args: Optional command-line arguments (currently unused)
     """
     rospy.init_node("interactive_marker")
-    node = InteractiveMarkerNode(InteractiveMarkerSettings.from_node(rospy.get_node()))
+    node = InteractiveMarkerNode()
     node.giskard.node_handle.get_logger().info("interactive marker server running")
     rospy.spinner_thread.join()
     rclpy.shutdown()
