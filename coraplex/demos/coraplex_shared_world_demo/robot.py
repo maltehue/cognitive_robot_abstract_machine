@@ -1,5 +1,5 @@
 """
-A giskard that drives one robot of the world the demo serves.
+A giskard that holds one robot of the world the demo serves.
 
 Run one of these per robot, next to ``demo.py``::
 
@@ -10,6 +10,9 @@ holds the same bodies, connections and degrees of freedom under the same identit
 it registers only the connections of its own robot, so the other robots stay where their
 processes put them. They are part of its world all the same, and are therefore seen and
 avoided rather than moved.
+
+A robot that reports its joint states is followed rather than commanded: this process
+writes what it reports into the shared world and is sent no goals.
 """
 
 from __future__ import annotations
@@ -21,7 +24,11 @@ from typing import List, Type
 
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.giskard import Giskard
-from giskardpy.middleware.ros2.robot_interface_config import OneRobotOfManyInterface
+from giskardpy.middleware.ros2.robot_interface_config import (
+    MirroredRobotOfManyInterface,
+    OneRobotOfManyInterface,
+    RobotInterfaceConfig,
+)
 from giskardpy.middleware.ros2.scripts.tools.interactive_marker import (
     InteractiveMarkerSettings,
 )
@@ -31,6 +38,7 @@ from giskardpy.qp.qp_controller_config import QPControllerConfig
 from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.robots.stretch import Stretch
+from semantic_digital_twin.robots.tiago import Tiago
 
 # %% how the controller runs
 
@@ -87,6 +95,7 @@ class DemoRobot(StrEnum):
 
     PR2 = "PR2"
     STRETCH = "Stretch"
+    TIAGO = "Tiago"
 
     @property
     def annotation_type(self) -> Type[AbstractRobot]:
@@ -98,6 +107,34 @@ class DemoRobot(StrEnum):
                 return PR2
             case DemoRobot.STRETCH:
                 return Stretch
+            case DemoRobot.TIAGO:
+                return Tiago
+
+    @property
+    def joint_states_topic(self) -> str | None:
+        """
+        The topic this robot reports its joint positions on, or ``None`` where the
+        demo's plans move it instead.
+        """
+        match self:
+            case DemoRobot.TIAGO:
+                return f"/{self.lower()}/joint_states"
+            case _:
+                return None
+
+    @property
+    def is_mirrored(self) -> bool:
+        """
+        Whether this robot is followed on its joint state topic rather than commanded.
+        """
+        return self.joint_states_topic is not None
+
+    @property
+    def joint_state_publisher_node_name(self) -> str:
+        """
+        Name of the node reporting this robot's joint positions.
+        """
+        return f"joint_states_of_{self.lower()}"
 
     @property
     def giskard_node_name(self) -> str:
@@ -135,14 +172,19 @@ class DemoRobot(StrEnum):
         The chains this robot offers a handle for: its base against the world it stands
         in, and every hand against its base.
 
+        A mirrored robot offers none, because a goal sent by hand would fight whoever
+        publishes its joint states.
+
         :param world_root_name: Name of the root of that world.
         """
         match self:
+            case DemoRobot.TIAGO:
+                return []
             case DemoRobot.PR2:
                 return [
-                    MarkerChain(root=world_root_name, tip="base_footprint"),
-                    MarkerChain(root="base_footprint", tip="l_gripper_tool_frame"),
-                    MarkerChain(root="base_footprint", tip="r_gripper_tool_frame"),
+                    MarkerChain(root=world_root_name, tip="pr2/base_footprint"),
+                    MarkerChain(root="pr2/base_footprint", tip="l_gripper_tool_frame"),
+                    MarkerChain(root="pr2/base_footprint", tip="r_gripper_tool_frame"),
                 ]
             case DemoRobot.STRETCH:
                 return [
@@ -158,22 +200,34 @@ class DemoRobot(StrEnum):
 # %% the process
 
 
+def build_robot_interface(robot: DemoRobot) -> RobotInterfaceConfig:
+    """
+    How this process reaches the given robot: by following what it reports, where it
+    reports anything, and by moving it on a goal otherwise.
+
+    :param robot: The robot this process holds.
+    """
+    if not robot.is_mirrored:
+        return OneRobotOfManyInterface(robot_type=robot.annotation_type)
+    return MirroredRobotOfManyInterface(
+        robot_type=robot.annotation_type, joint_states_topic=robot.joint_states_topic
+    )
+
+
 def build_giskard(robot: DemoRobot) -> Giskard:
     """
-    The giskard that drives the given robot of the fetched world.
+    The giskard that holds the given robot of the fetched world.
 
     It neither serves that world nor draws it: a process starting late would otherwise
     fetch a copy of it rather than the original, and every copy would draw the same
     markers again.
 
-    :param robot: The robot this process drives.
+    :param robot: The robot this process holds.
     :return: The server, not yet set up.
     """
     return Giskard(
         world_config=WorldFromFetchService(),
-        robot_interface_config=OneRobotOfManyInterface(
-            robot_type=robot.annotation_type
-        ),
+        robot_interface_config=build_robot_interface(robot),
         server_config=GiskardServerConfig(
             execution_mode=ExecutionMode.STANDALONE,
             publishes_world=False,
@@ -193,7 +247,7 @@ def main() -> None:
         type=DemoRobot,
         choices=list(DemoRobot),
         required=True,
-        help="which robot of the demo's world this process drives",
+        help="which robot of the demo's world this process holds",
     )
     robot = parser.parse_args().robot
     rospy.init_node(robot.giskard_node_name)
