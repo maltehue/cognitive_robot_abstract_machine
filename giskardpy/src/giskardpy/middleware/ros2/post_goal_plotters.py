@@ -127,7 +127,7 @@ class GoalControlCycleRecorder(PostGoalPlotter):
             return
         file_name = self.create_file_name("control_cycles", goal_id, extension=".npz")
         self.control_cycle_recorder.build_recording().save(file_name)
-        rospy.node.get_logger().info(f"saved {file_name}")
+        rospy.get_node().get_logger().info(f"saved {file_name}")
 
 
 @dataclass

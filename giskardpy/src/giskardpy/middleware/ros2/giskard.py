@@ -275,7 +275,9 @@ class Giskard:
                 self.motion_server.live()
                 rospy.spinner_thread.join()
             except KeyboardInterrupt:
-                rospy.node.get_logger().info("Giskard was interrupted, shutting down.")
+                rospy.get_node().get_logger().info(
+                    "Giskard was interrupted, shutting down."
+                )
             except Exception:
                 traceback.print_exc()
             finally:
