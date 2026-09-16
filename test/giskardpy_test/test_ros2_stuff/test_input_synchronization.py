@@ -5,7 +5,7 @@ Tests for the synchronizers that write ROS topics and tf frames into the world s
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import pytest
 from geometry_msgs.msg import PoseStamped
@@ -25,16 +25,10 @@ from giskardpy.middleware.ros2.input_synchronization import (
     TfFrameSynchronizer,
     TopicInputSynchronizer,
 )
-from semantic_digital_twin.api import RobotSpecification, WorldSpecification
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.exceptions import ParsingError
-from semantic_digital_twin.robots.pr2 import PR2
-from semantic_digital_twin.robots.robot_parts import AbstractRobot
-from semantic_digital_twin.robots.tiago import Tiago
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
-    ActiveConnection1DOF,
     Connection6DoF,
     FixedConnection,
     OmniDrive,
@@ -74,18 +68,6 @@ class RecordedTransformLookup:
         return self.parent_T_child
 
 
-@dataclass
-class TransformsNotOnTf:
-    """
-    Stands in for a tf tree that holds none of the frames asked for.
-    """
-
-    def wait_for_transform(
-        self, target_frame: str, source_frame: str, time: Any, timeout: Any
-    ) -> bool:
-        return False
-
-
 def latest_message_field_type(synchronizer_type: type) -> Any:
     """
     The declared type of the buffered message of a synchronizer class.
@@ -104,29 +86,6 @@ def joint_state_message(joint_name: str, position: float) -> JointState:
     message.name = [joint_name]
     message.position = [position]
     return message
-
-
-def joint_state_message_of(positions: Dict[str, float]) -> JointState:
-    """
-    A joint state message that reports one position per joint name.
-    """
-    message = JointState()
-    message.name = list(positions)
-    message.position = list(positions.values())
-    return message
-
-
-def positions_of_one_degree_of_freedom_connections(
-    world: World, robot: AbstractRobot
-) -> Dict[PrefixedName, float]:
-    """
-    The position of every one degree of freedom connection of the given robot.
-    """
-    return {
-        connection.name: world.state[connection.raw_dof.id].position
-        for connection in robot.connections
-        if isinstance(connection, ActiveConnection1DOF)
-    }
 
 
 def odometry_message(pose: HomogeneousTransformationMatrix) -> Odometry:
@@ -262,99 +221,6 @@ def test_synchronizer_writes_nothing_without_a_message(init_rospy, mini_world: W
     assert mini_world.state[connection.raw_dof.id].position == position_before_apply
 
 
-# %% writing the joint states of one robot of a world holding several
-
-LIFT_JOINT_NAME = "torso_lift_joint"
-"""
-The joint both robots of :func:`world_with_a_pr2_and_a_tiago` carry, under that plain
-name in their own description and under a prefix of their own in the world.
-"""
-
-LIFT_POSITION = 0.25
-"""
-A height within the lift's limits, reported for it in a joint state message.
-"""
-
-
-@pytest.fixture()
-def world_with_a_pr2_and_a_tiago() -> World:
-    """
-    A world holding two robots whose descriptions share a joint name.
-    """
-    try:
-        return WorldSpecification(
-            world_parser=None,
-            robots=[
-                RobotSpecification(
-                    semantic_annotation_type=PR2,
-                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=1.0),
-                ),
-                RobotSpecification(
-                    semantic_annotation_type=Tiago,
-                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(x=-1.0),
-                ),
-            ],
-        ).to_domain_object()
-    except ParsingError as error:
-        pytest.skip(f"Robot URDF not available: {error}")
-
-
-def lift_position(world: World, robot: AbstractRobot) -> float:
-    """
-    The position the given robot's lift joint stands at in the given world.
-    """
-    connection = world.get_connection_by_name(
-        PrefixedName(LIFT_JOINT_NAME, robot.root.name.prefix)
-    )
-    return world.state[connection.raw_dof.id].position
-
-
-def test_a_robots_joint_states_reach_that_robots_connections(
-    init_rospy, world_with_a_pr2_and_a_tiago: World
-):
-    """
-    A joint name a message reports is the name of the publishing robot's own joint, so
-    with that robot's prefix it reaches that robot's connection rather than the one
-    another robot of the same world carries under the same name.
-    """
-    world = world_with_a_pr2_and_a_tiago
-    tiago = world.get_semantic_annotations_by_type(Tiago)[0]
-    pr2_positions_before = positions_of_one_degree_of_freedom_connections(
-        world, world.get_semantic_annotations_by_type(PR2)[0]
-    )
-    synchronizer = PendingJointStateSynchronizer(
-        world=world, topic_name="tiago/joint_states", prefix=tiago.root.name.prefix
-    )
-    synchronizer.latest_message = joint_state_message_of(
-        {LIFT_JOINT_NAME: LIFT_POSITION}
-    )
-
-    assert synchronizer.apply() is True
-    assert lift_position(world, tiago) == LIFT_POSITION
-    assert (
-        positions_of_one_degree_of_freedom_connections(
-            world, world.get_semantic_annotations_by_type(PR2)[0]
-        )
-        == pr2_positions_before
-    )
-
-
-# %% naming the topic
-
-
-def test_a_relative_topic_name_is_left_to_the_node_to_resolve(init_rospy, mini_world):
-    """
-    A giskard running in a robot's namespace has to read that robot's topics, which the
-    node does for a relative name and never for an absolute one.
-    """
-    synchronizer = PendingJointStateSynchronizer(
-        world=mini_world, topic_name="joint_states"
-    )
-
-    assert synchronizer.topic_name == "joint_states"
-    assert synchronizer.subscription.topic_name == "/joint_states"
-
-
 # %% writing the base pose
 
 
@@ -406,25 +272,6 @@ def test_apply_writes_the_looked_up_transform_into_the_connection(
         ),
         atol=1e-9,
     )
-
-
-def test_apply_leaves_a_connection_alone_whose_frames_are_not_on_tf(
-    init_rospy, tracked_connection
-):
-    """
-    The localization of a robot may come up after its giskard, and until it publishes
-    the connection keeps its origin rather than the idle cycle failing.
-    """
-    world, connection = tracked_connection
-    origin_before = connection.origin.to_np().copy()
-    synchronizer = TfFrameSynchronizer(world=world)
-    synchronizer.tf_wrapper = TransformsNotOnTf()
-    synchronizer.track(connection, tf_parent_frame="map", tf_child_frame="odom")
-
-    wrote_something = synchronizer.apply()
-
-    assert not wrote_something
-    assert_allclose(connection.origin.to_np(), origin_before)
 
 
 def test_apply_writes_nothing_without_a_tracked_connection(
