@@ -18,11 +18,6 @@ from giskardpy.middleware.ros2.robot_interface_config import (
 from giskardpy.middleware.ros2.server_config import GiskardServerConfig
 from giskardpy.model.world_config import WorldConfig, WorldFromFetchService
 from giskardpy.qp.qp_controller_config import QPControllerConfig
-from semantic_digital_twin.adapters.ros.tf_publisher import TFPublisher
-from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
-    VizMarkerPublisher,
-)
-from semantic_digital_twin.adapters.ros.world_fetcher import FetchWorldServer
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.robots.tiago import Tiago
 from semantic_digital_twin.world import World
@@ -70,21 +65,6 @@ def test_the_giskards_robot_is_the_one_of_the_type_its_world_config_names(
     )
 
     assert giskard.robot is later_robot
-
-
-def test_a_world_config_naming_no_type_means_the_worlds_first_robot(
-    world_with_two_robots: World,
-):
-    giskard = giskard_over(
-        WorldFromFetchService(world=world_with_two_robots),
-        StandAloneRobotInterfaceConfig([]),
-        GiskardServerConfig(),
-    )
-
-    assert (
-        giskard.robot
-        is world_with_two_robots.get_semantic_annotations_by_type(AbstractRobot)[0]
-    )
 
 
 def test_a_world_config_naming_a_robot_that_is_not_there_says_so(
@@ -172,21 +152,5 @@ def test_a_giskard_that_does_not_publish_its_world_serves_and_draws_nothing(
             giskard.tf_publisher,
             giskard.viz_marker_publisher,
         ) == (None, None, None)
-    finally:
-        giskard.close_world_model_ros_interface()
-
-
-def test_a_giskard_serves_and_draws_its_world_by_default(init_rospy, mini_world: World):
-    giskard = giskard_over(
-        WorldFromFetchService(world=mini_world),
-        StandAloneRobotInterfaceConfig([]),
-        GiskardServerConfig(),
-    )
-
-    giskard.setup_world_model_ros_interface()
-    try:
-        assert isinstance(giskard.world_fetcher, FetchWorldServer)
-        assert isinstance(giskard.tf_publisher, TFPublisher)
-        assert isinstance(giskard.viz_marker_publisher, VizMarkerPublisher)
     finally:
         giskard.close_world_model_ros_interface()

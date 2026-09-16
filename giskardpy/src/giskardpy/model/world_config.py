@@ -176,18 +176,13 @@ class WorldFromDatabaseConfig(WorldConfig):
 @dataclass
 class WorldFromFetchService(WorldConfig):
     """
-    Loads the world another process serves over its fetch world service.
-
-    The world stays that process's own; this one only mirrors it, so that a giskard can
-    control a robot of a world it does not own.
+    Loads the world another process serves over its fetch world service, so that a
+    giskard can control a robot of a world it does not own.
     """
 
     fetch_timeout: float = 60.0
     """
     How many seconds to wait for the service and its answer.
-
-    A world of a few hundred bodies takes tens of seconds to serve, and the serving
-    process answers one fetch after the other.
     """
 
     def setup_world(self):

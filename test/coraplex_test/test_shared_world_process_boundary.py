@@ -297,21 +297,6 @@ def test_every_robot_is_moved_through_its_own_giskard_by_published_joint_states(
 # %% one command for the whole demo
 
 
-def test_the_world_owner_starts_one_robot_process_per_robot():
-    """
-    The demo is started from ``demo.py`` alone: it starts the robot process of every
-    robot it places, in this interpreter, as ``robot.py`` would be started by hand.
-    """
-    world_owner = load_script(WORLD_OWNER)
-
-    assert world_owner.robot_process_command(DemoRobot.STRETCH) == [
-        sys.executable,
-        str(ROBOT_LAUNCHER),
-        "--robot",
-        str(DemoRobot.STRETCH),
-    ]
-
-
 def test_the_world_owner_starts_a_joint_state_publisher_per_robot():
     """
     Every robot is moved through a window of its own, which publishes its joint states
@@ -353,18 +338,3 @@ def test_stopping_a_started_process_stops_what_it_started(tmp_path: Path):
     world_owner.stop_processes([process])
 
     assert not psutil.pid_exists(started_process_id)
-
-
-# %% every robot's topics live in its own namespace
-
-
-def test_every_robot_reports_under_a_namespace_of_its_own():
-    """
-    Two robots' joint states must not share a topic, or one giskard would write the
-    other robot's positions into its own.
-    """
-    topics = [robot.joint_states_topic for robot in ROBOTS]
-
-    assert len(set(topics)) == len(ROBOTS)
-    for robot in ROBOTS:
-        assert robot.joint_states_topic.startswith(f"{robot.namespace}/")

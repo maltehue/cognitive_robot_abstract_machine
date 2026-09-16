@@ -63,9 +63,7 @@ class GiskardServerConfig:
     """
     Whether this server serves its world to other processes and draws it.
 
-    A server that fetched its world from another process must leave both to that
-    process: a late starter would otherwise fetch a copy instead of the original, and
-    every copy would draw the same markers again.
+    A server holding a world it fetched leaves both to the process that owns it.
     """
 
     def __post_init__(self):

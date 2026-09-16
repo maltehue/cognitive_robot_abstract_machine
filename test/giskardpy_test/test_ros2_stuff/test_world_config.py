@@ -28,7 +28,7 @@ def giskard_node() -> Iterator[Node]:
 # %% fetching the world of another process
 
 
-def test_the_fetched_world_holds_the_served_bodies(
+def test_the_fetched_world_holds_the_served_bodies_and_connections(
     giskard_node: Node, mini_world: World
 ):
     server = FetchWorldServer(node=giskard_node, world=mini_world)
@@ -40,17 +40,6 @@ def test_the_fetched_world_holds_the_served_bodies(
     assert {body.id for body in config.world.bodies} == {
         body.id for body in mini_world.bodies
     }
-
-
-def test_the_fetched_world_holds_the_served_connections(
-    giskard_node: Node, mini_world: World
-):
-    server = FetchWorldServer(node=giskard_node, world=mini_world)
-    config = WorldFromFetchService()
-
-    config.setup_world()
-    server.close()
-
     assert {connection.id for connection in config.world.connections} == {
         connection.id for connection in mini_world.connections
     }
