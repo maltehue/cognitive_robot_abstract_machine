@@ -352,6 +352,7 @@ class HasLearnedHead:
             container_width=self.container_width,
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
+            lip_offset=self.lip_offset,
             gate=gate,
             model_reference=self.model_reference,
         )
@@ -382,6 +383,7 @@ class GatedLearnedPouringEquation(HasLearnedHead, GatedArticulatedPouringEquatio
             container_width=self.container_width,
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
+            lip_offset=self.lip_offset,
             model_reference=self.model_reference,
         )
 
@@ -424,6 +426,7 @@ def couple_source_with_learned_head(
             container_width=drain.container_width,
             outflow_rate_constant=drain.outflow_rate_constant,
             discharge_coefficient=drain.discharge_coefficient,
+            lip_offset=drain.lip_offset,
             model_reference=model_reference,
         ),
     )

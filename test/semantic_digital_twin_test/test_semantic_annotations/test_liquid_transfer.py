@@ -6,6 +6,7 @@ import math
 from copy import deepcopy
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 import krrood.symbolic_math.symbolic_math as sm
@@ -34,7 +35,11 @@ from semantic_digital_twin.physics.equations.pouring_equations import (
     STANDARD_GRAVITY,
     SymbolicFillContext,
 )
-from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel, LiquidSource
+from semantic_digital_twin.semantic_annotations.mixins import (
+    HasFillLevel,
+    HasSpout,
+    LiquidSource,
+)
 from semantic_digital_twin.api import (
     PrismaticConnectionSpecification,
     RevoluteConnectionSpecification,
@@ -49,18 +54,30 @@ from semantic_digital_twin.spatial_types import (
 from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
+    FixedConnection,
     LiquidConnection,
 )
 from semantic_digital_twin.world_description.degree_of_freedom import (
     DegreeOfFreedomLimits,
 )
-from semantic_digital_twin.world_description.geometry import Scale
+from semantic_digital_twin.world_description.geometry import Cylinder, Scale
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 
 _INFLOW_CONTEXT = SymbolicFillContext(sm.Scalar(0.0), sm.Scalar(0.0))
 """
 Placeholder context for inflow equations, whose velocity does not depend on the context.
 """
+
+
+def _evaluated_xyz(spatial: Point3 | Vector3) -> np.ndarray:
+    """
+    The numeric ``x, y, z`` of a symbolic point or vector at the world's current state.
+    """
+    return np.array(
+        [spatial.x.evaluate()[0], spatial.y.evaluate()[0], spatial.z.evaluate()[0]]
+    )
+
 
 # %% test containers and sources
 
@@ -651,6 +668,24 @@ class TestProjectileLandingPoint:
     Validates the projectile model that locates where poured liquid lands.
     """
 
+    def test_rim_source_launches_horizontally(self):
+        """
+        Liquid spilling over a rim has no vertical launch: the exit velocity is the
+        horizontal part of the exit direction scaled by the exit speed.
+        """
+        world, source, _receiver = _build_world(
+            source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
+        )
+        _set_source_offset(world, source, 0.6)
+        exit_speed = 0.2
+
+        exit_velocity = _evaluated_xyz(source.liquid_exit_velocity(world, exit_speed))
+
+        exit_direction = _evaluated_xyz(source.liquid_exit_direction(world))
+        assert exit_velocity == pytest.approx(
+            [exit_speed * exit_direction[0], exit_speed * exit_direction[1], 0.0]
+        )
+
     def test_upright_source_lands_below_its_rim(self):
         """
         With no tilt the liquid has no horizontal velocity, so it lands directly below
@@ -1155,6 +1190,185 @@ class TestNonCupLiquidSource:
         assert inflow_equation is not None
         assert inflow_equation.gate.evaluate()[0] == pytest.approx(1.0, abs=1e-2)
         assert inflow_equation.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[0] > 0.0
+
+
+# %% spouted source
+
+_CAN_BODY_WIDTH = 0.12
+"""
+Width of the spouted container's body, in metres.
+"""
+
+_CAN_BODY_HEIGHT = 0.16
+"""
+Height of the spouted container's body, in metres.
+"""
+
+_SPOUT_OUTLET_HEIGHT = 0.14
+"""
+Height of the spout outlet above the container's base, in metres.
+"""
+
+_SPOUT_OUTLET_OFFSET = -0.15
+"""
+Horizontal offset of the spout outlet from the container's axis along ``x``, in metres.
+"""
+
+_SPOUT_PITCH = -math.pi / 4
+"""
+Pitch of the spout frame; its ``z`` axis, the outflow direction, points up and along
+negative ``x``.
+"""
+
+
+def _build_spouted_source_world() -> tuple[World, HasSpout, _TranslatingContainer]:
+    """
+    Builds a spouted container held above a receiver on the world root, tilted a little,
+    with the spout body attached at a known offset.
+    """
+    world = World()
+    with world.modify_world():
+        world.add_body(Body(name=PrefixedName("map")))
+    with world.modify_world():
+        receiver = _TranslatingContainer.create_with_new_body_in_world(
+            name="receiver",
+            world=world,
+            parent_connection_specification=_TranslatingContainer.parent_connection_specification(
+                axis=Vector3(1, 0, 0)
+            ),
+            scale=Scale(0.1, 0.1, 0.2),
+        )
+    can_body = Body.from_shape_collection(
+        shape_collection=ShapeCollection(
+            [
+                Cylinder(
+                    width=_CAN_BODY_WIDTH,
+                    height=_CAN_BODY_HEIGHT,
+                    origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        z=_CAN_BODY_HEIGHT / 2
+                    ),
+                )
+            ]
+        ),
+        name=PrefixedName("can"),
+    )
+    spout_body = Body(name=PrefixedName("spout"))
+    with world.modify_world():
+        world.add_body(can_body)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=world.root,
+                child=can_body,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=0.3, z=0.5, pitch=0.2
+                ),
+            )
+        )
+        world.add_body(spout_body)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=can_body,
+                child=spout_body,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=_SPOUT_OUTLET_OFFSET, z=_SPOUT_OUTLET_HEIGHT, pitch=_SPOUT_PITCH
+                ),
+            )
+        )
+    can = HasSpout(name=PrefixedName("watering_can"), root=can_body, spout=spout_body)
+    with world.modify_world():
+        world.add_semantic_annotation(can)
+    return world, can, receiver
+
+
+class TestSpoutedSource:
+    """
+    A container with a spout pours from the spout outlet, along the spout, and starts
+    pouring once the liquid reaches the outlet rather than the body's rim.
+    """
+
+    def test_liquid_exit_point_is_the_spout_outlet(self) -> None:
+        world, can, _receiver = _build_spouted_source_world()
+
+        exit_point = can.liquid_exit_point(world).to_np()[:3]
+
+        world_T_spout = world.compute_forward_kinematics_np(world.root, can.spout)
+        assert exit_point == pytest.approx(world_T_spout[:3, 3])
+
+    def test_liquid_exit_direction_is_the_spout_axis(self) -> None:
+        world, can, _receiver = _build_spouted_source_world()
+
+        exit_direction = can.liquid_exit_direction(world).to_np()[:3]
+
+        world_T_spout = world.compute_forward_kinematics_np(world.root, can.spout)
+        assert exit_direction == pytest.approx(world_T_spout[:3, 2])
+
+    def test_fill_equation_uses_the_outlet_height_and_the_body_width(self) -> None:
+        world, can, _receiver = _build_spouted_source_world()
+
+        can.initialize_fill_level(world=world, initial_fill=1.0)
+
+        assert can.fill_equation.container_height == pytest.approx(_SPOUT_OUTLET_HEIGHT)
+        assert can.fill_equation.container_width == pytest.approx(_CAN_BODY_WIDTH)
+
+    def test_fill_equation_lip_sits_at_the_outlet(self) -> None:
+        """
+        The head that drives the pour is measured against the spout outlet, which sits
+        farther from the tilt axis than the body wall.
+        """
+        world, can, _receiver = _build_spouted_source_world()
+
+        can.initialize_fill_level(world=world, initial_fill=1.0)
+
+        assert can.fill_equation.lip_offset == pytest.approx(abs(_SPOUT_OUTLET_OFFSET))
+
+    def test_liquid_exit_velocity_follows_the_spout(self) -> None:
+        """
+        A spout channels the whole stream along its axis, vertical component included.
+        """
+        world, can, _receiver = _build_spouted_source_world()
+        exit_speed = 0.5
+
+        exit_velocity = can.liquid_exit_velocity(world, exit_speed).to_np()[:3]
+
+        world_T_spout = world.compute_forward_kinematics_np(world.root, can.spout)
+        assert exit_velocity == pytest.approx(exit_speed * world_T_spout[:3, 2])
+
+    def test_landing_point_includes_the_upward_launch(self) -> None:
+        """
+        A stream launched upwards flies longer before it reaches the receiver's opening,
+        so it lands farther out than a horizontal launch would.
+        """
+        world, can, receiver = _build_spouted_source_world()
+        exit_speed = 0.5
+
+        landing = _evaluated_xyz(
+            receiver.projectile_landing_point(can, world, exit_speed)
+        )
+
+        outlet = _evaluated_xyz(can.liquid_exit_point(world))
+        velocity = _evaluated_xyz(can.liquid_exit_velocity(world, exit_speed))
+        drop = outlet[2] - _evaluated_xyz(receiver.opening_point(world))[2]
+        flight_time = (
+            velocity[2] + math.sqrt(velocity[2] ** 2 + 2 * STANDARD_GRAVITY * drop)
+        ) / STANDARD_GRAVITY
+        assert landing[:2] == pytest.approx(outlet[:2] + velocity[:2] * flight_time)
+        horizontal_flight_time = math.sqrt(2 * drop / STANDARD_GRAVITY)
+        assert flight_time > horizontal_flight_time
+
+    def test_spout_survives_a_json_round_trip(self) -> None:
+        """
+        The spout body must come back bound to the world's body, since the annotation
+        crosses to the process that controls the pour.
+        """
+        world, can, _receiver = _build_spouted_source_world()
+        tracker = WorldEntityWithIDKwargsTracker.from_world(world)
+
+        restored = HasSpout.from_json(can.to_json(), **tracker.create_kwargs())
+
+        assert restored.spout is can.spout
+        assert restored.root is can.root
 
 
 # %% fill-level integration limits

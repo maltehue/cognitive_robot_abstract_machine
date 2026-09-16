@@ -221,13 +221,16 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
     """
     Pouring ODE derived from the 2-D rectangular-cup model.
 
-    Computes the effective discharge gap from the actual cup dimensions (height ``A``,
-    half-width ``r``) and the current tilt angle::
+    Computes the effective discharge gap from the container height ``A``, the lip's
+    horizontal distance from the tilt axis ``r`` and the current tilt angle::
 
         L(h)    = √((A − h)² + r²)
         φ(h)    = atan2(A − h, r)
         d(α, h) = max(0, L(h) · sin(α − φ(h)))
         ḣ       = −k · d(α, h)
+
+    For a cup the lip is the rim corner at half the width; a spout puts it farther out,
+    so tilting lowers it faster and the pour gains head.
     """
 
     discharge_coefficient: float = field(
@@ -237,12 +240,24 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
     Dimensionless coefficient scaling the Torricelli exit speed to a realistic rim pour.
     """
 
+    lip_offset: float | None = field(default=None, kw_only=True)
+    """
+    Horizontal distance of the pouring lip from the tilt axis, in metres; half the
+    container width when not given.
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.lip_offset is None:
+            self.lip_offset = self.container_width / 2
+
     def to_json(self) -> Dict[str, Any]:
         result = super().to_json()
         result["container_height"] = self.container_height
         result["container_width"] = self.container_width
         result["outflow_rate_constant"] = self.outflow_rate_constant
         result["discharge_coefficient"] = self.discharge_coefficient
+        result["lip_offset"] = self.lip_offset
         return result
 
     @classmethod
@@ -266,6 +281,7 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
             "discharge_coefficient": data.get(
                 "discharge_coefficient", DEFAULT_DISCHARGE_COEFFICIENT
             ),
+            "lip_offset": data.get("lip_offset"),
         }
 
     @classmethod
@@ -287,6 +303,7 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
             container_width=self.container_width,
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
+            lip_offset=self.lip_offset,
             gate=gate,
         )
 
@@ -301,10 +318,9 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         :return: Symbolic head above the lip.
         """
         height = self.container_height
-        half_width = self.container_width / 2
         liquid_height = context.fill_position * height
-        lip_distance = sm.sqrt((height - liquid_height) ** 2 + half_width**2)
-        lip_angle = sm.atan2(height - liquid_height, half_width)
+        lip_distance = sm.sqrt((height - liquid_height) ** 2 + self.lip_offset**2)
+        lip_angle = sm.atan2(height - liquid_height, self.lip_offset)
         return sm.max(
             sm.Scalar(0.0),
             lip_distance * sm.sin(context.tilt_expression - lip_angle),
@@ -369,6 +385,7 @@ class GatedArticulatedPouringEquation(ArticulatedPouringEquation):
             container_width=self.container_width,
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
+            lip_offset=self.lip_offset,
         )
 
 

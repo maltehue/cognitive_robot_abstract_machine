@@ -1403,6 +1403,25 @@ class LiquidSource(ABC):
         :return: Symbolic exit direction in the world frame.
         """
 
+    def liquid_exit_velocity(self, world: World, exit_speed: sm.ScalarData) -> Vector3:
+        """
+        World-frame velocity the departing liquid initially travels with.
+
+        Liquid leaving over a rim slides off without a vertical launch, so by default the
+        speed acts along the horizontal part of the exit direction only.
+
+        :param world: The world providing the forward kinematics.
+        :param exit_speed: Speed of the liquid leaving the source, in m/s.
+        :return: Symbolic exit velocity in the world frame.
+        """
+        exit_direction = self.liquid_exit_direction(world)
+        return Vector3(
+            x=exit_speed * exit_direction.x,
+            y=exit_speed * exit_direction.y,
+            z=sm.Scalar(0.0),
+            reference_frame=world.root,
+        )
+
     @property
     @abstractmethod
     def pour_tilt_expression(self) -> sm.Scalar:
@@ -1541,11 +1560,8 @@ class HasFillLevel(HasRootBody, LiquidSource):
         """
         if self.fill_connection is not None:
             raise FillLevelAlreadyInitializedError(container=self)
-        fill_equation = ArticulatedPouringEquation(
-            container_width=self.root.collision.width,
-            container_height=self.root.collision.height,
-            outflow_rate_constant=outflow_rate_constant,
-            discharge_coefficient=discharge_coefficient,
+        fill_equation = self.create_pouring_equation(
+            world, outflow_rate_constant, discharge_coefficient
         )
         phantom = Body(name=PrefixedName(f"{self.root.name.name}_fill_level_phantom"))
         with world.modify_world():
@@ -1804,6 +1820,27 @@ class HasFillLevel(HasRootBody, LiquidSource):
         normalised_drain = self.fill_equation.symbolic_velocity(self.fill_connection)
         return -normalised_drain * self.fill_equation.half_cross_section_area
 
+    def create_pouring_equation(
+        self, world: World, outflow_rate_constant: float, discharge_coefficient: float
+    ) -> ArticulatedPouringEquation:
+        """
+        The pouring equation modelling this container's drain.
+
+        The liquid stands across the collision geometry's width and pours over its top
+        corner once it reaches the collision geometry's height.
+
+        :param world: The world the container lives in.
+        :param outflow_rate_constant: Outflow rate constant of the drain.
+        :param discharge_coefficient: Scales the Torricelli exit speed.
+        :return: The ungated drain of this container.
+        """
+        return ArticulatedPouringEquation(
+            container_width=self.root.collision.width,
+            container_height=self.root.collision.height,
+            outflow_rate_constant=outflow_rate_constant,
+            discharge_coefficient=discharge_coefficient,
+        )
+
     def current_outflow_velocity(self, world: World) -> Optional[sm.Scalar]:
         """
         Discharge-scaled Torricelli exit speed from the current pour, or ``None`` without a model.
@@ -1913,26 +1950,29 @@ class HasFillLevel(HasRootBody, LiquidSource):
         """
         Where liquid poured from the source lands on this container's opening plane.
 
-        The liquid leaves the source's exit point horizontally in the source's exit direction and
-        then follows projectile motion under gravity; the returned point is where that arc crosses
-        this container's opening plane.
+        The liquid leaves the source's exit point with the source's exit velocity and then
+        follows projectile motion under gravity; the returned point is where that arc crosses
+        this container's opening plane. A stream launched upwards therefore flies longer and
+        lands farther out than one released horizontally.
 
         :param source: The pouring liquid source.
         :param world: The world providing the forward kinematics.
-        :param exit_speed: Horizontal speed of the liquid leaving the source, in m/s.
+        :param exit_speed: Speed of the liquid leaving the source, in m/s.
         :param gravity: Gravitational acceleration in metres per second squared.
         :return: The symbolic landing point in the world frame, on this container's opening plane.
         """
         exit_point = source.liquid_exit_point(world)
-        exit_direction = source.liquid_exit_direction(world)
+        exit_velocity = source.liquid_exit_velocity(world, exit_speed)
         plane_height = self.opening_point(world).z
-        drop_height = exit_point.z - plane_height
-        flight_time = sm.sqrt(
-            2 * sm.max(sm.Scalar(MINIMUM_DROP_HEIGHT), drop_height) / gravity
+        drop_height = sm.max(
+            sm.Scalar(MINIMUM_DROP_HEIGHT), exit_point.z - plane_height
         )
+        flight_time = (
+            exit_velocity.z + sm.sqrt(exit_velocity.z**2 + 2 * gravity * drop_height)
+        ) / gravity
         return Point3(
-            x=exit_point.x + exit_speed * exit_direction.x * flight_time,
-            y=exit_point.y + exit_speed * exit_direction.y * flight_time,
+            x=exit_point.x + exit_velocity.x * flight_time,
+            y=exit_point.y + exit_velocity.y * flight_time,
             z=plane_height,
             reference_frame=world.root,
         )
@@ -2033,3 +2073,90 @@ class HasFillLevel(HasRootBody, LiquidSource):
     def fill_level(self) -> float:
         """Current fill level in ``[0, 1]``."""
         return float(self.fill_connection.position)
+
+
+# %% spouted container
+
+
+@dataclass(eq=False)
+class HasSpout(HasFillLevel):
+    """
+    Container that pours through a spout instead of over its rim.
+
+    The spout is a body of its own attached to the container: its origin is the outlet
+    the liquid leaves from and its ``z`` axis points along the outflow. The container
+    body keeps the fill geometry, and pouring starts once the liquid reaches the outlet
+    height rather than the body's rim.
+    """
+
+    spout: Body = field(kw_only=True)
+    """
+    Body whose origin is the spout outlet and whose ``z`` axis is the outflow direction.
+    """
+
+    def liquid_exit_point(self, world: World) -> Point3:
+        """
+        The spout outlet, in the world frame.
+
+        :param world: The world providing the forward kinematics.
+        :return: Symbolic outlet position in the world frame.
+        """
+        world_T_spout = world.compose_forward_kinematics_expression(
+            world.root, self.spout
+        )
+        world_P_outlet = world_T_spout.to_position()
+        world_P_outlet.reference_frame = world.root
+        return world_P_outlet
+
+    def liquid_exit_direction(self, world: World) -> Vector3:
+        """
+        The direction the spout points in, in the world frame.
+
+        :param world: The world providing the forward kinematics.
+        :return: Symbolic outflow direction in the world frame.
+        """
+        world_R_spout = world.compose_forward_kinematics_expression(
+            world.root, self.spout
+        ).to_rotation_matrix()
+        return world_R_spout @ Vector3.Z()
+
+    def liquid_exit_velocity(self, world: World, exit_speed: sm.ScalarData) -> Vector3:
+        """
+        The whole stream leaves along the spout, vertical component included.
+
+        :param world: The world providing the forward kinematics.
+        :param exit_speed: Speed of the liquid leaving the outlet, in m/s.
+        :return: Symbolic exit velocity in the world frame.
+        """
+        exit_direction = self.liquid_exit_direction(world)
+        return Vector3(
+            x=exit_speed * exit_direction.x,
+            y=exit_speed * exit_direction.y,
+            z=exit_speed * exit_direction.z,
+            reference_frame=world.root,
+        )
+
+    def create_pouring_equation(
+        self, world: World, outflow_rate_constant: float, discharge_coefficient: float
+    ) -> ArticulatedPouringEquation:
+        """
+        The drain of a spouted container: the liquid stands across the body and pours
+        once it reaches the outlet, whose horizontal distance from the body axis sets
+        the lip the head is measured against.
+
+        :param world: The world the container lives in.
+        :param outflow_rate_constant: Outflow rate constant of the drain.
+        :param discharge_coefficient: Scales the Torricelli exit speed.
+        :return: The ungated drain of this container.
+        """
+        root_P_outlet = world.compute_forward_kinematics_np(self.root, self.spout)[
+            :3, 3
+        ]
+        base_height = float(self.root.collision.min_point.to_np()[2])
+        return ArticulatedPouringEquation(
+            container_width=self.root.collision.width,
+            container_height=float(root_P_outlet[2]) - base_height,
+            outflow_rate_constant=outflow_rate_constant,
+            discharge_coefficient=discharge_coefficient,
+            lip_offset=float(np.hypot(root_P_outlet[0], root_P_outlet[1])),
+        )
