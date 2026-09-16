@@ -2,17 +2,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Type, Union
+from typing import TYPE_CHECKING, Dict, List, Union
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 
-from giskardpy.data_types.exceptions import (
-    JointRegistrationRequiresStandaloneModeError,
-    RobotNotInWorldError,
-)
+from giskardpy.data_types.exceptions import JointRegistrationRequiresStandaloneModeError
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.command_publishing import (
     DriveVelocityCommandPublisher,
@@ -26,7 +23,6 @@ from giskardpy.middleware.ros2.input_synchronization import (
     LatestJointStateSynchronizer,
     PendingJointStateSynchronizer,
     OdometrySynchronizer,
-    RobotJointStateSynchronizer,
     TfFrameSynchronizer,
 )
 from giskardpy.middleware.ros2.motion_server import MotionServer
@@ -98,6 +94,14 @@ class RobotInterfaceConfig(ABC):
         return self.giskard.robot
 
     @property
+    def robot_prefix(self) -> str | None:
+        """
+        The prefix the robot's bodies and connections carry in the world, under which
+        the plain joint names of its own description are found.
+        """
+        return self.robot.root.name.prefix
+
+    @property
     def server_config(self) -> GiskardServerConfig:
         return self.giskard.server_config
 
@@ -150,16 +154,23 @@ class RobotInterfaceConfig(ABC):
     def sync_joint_state_topic(self, topic_name: str, group_name: str | None = None):
         """
         Tell Giskard to sync the world state with a joint state topic.
+
+        The topic reports the robot's joints under the names of its own description, so
+        they are looked up under the robot's prefix.
         """
         if group_name is None:
             group_name = self.robot.name
         self.motion_server.inputs.synchronizers.append(
-            PendingJointStateSynchronizer(world=self.world, topic_name=topic_name)
+            PendingJointStateSynchronizer(
+                world=self.world, topic_name=topic_name, prefix=self.robot_prefix
+            )
         )
         if not self.server_config.is_closed_loop or group_name != self.robot.name:
             return
         self.control_loop.inputs.synchronizers.append(
-            LatestJointStateSynchronizer(world=self.world, topic_name=topic_name)
+            LatestJointStateSynchronizer(
+                world=self.world, topic_name=topic_name, prefix=self.robot_prefix
+            )
         )
 
     # %% commanding the robot
@@ -359,85 +370,3 @@ class StandAloneRobotInterfaceConfig(RobotInterfaceConfig):
 
     def setup(self):
         self.register_controlled_joints(self.joint_names)
-
-
-# %% one robot of a world that holds several
-
-
-@dataclass
-class OneRobotOfManyInterface(RobotInterfaceConfig):
-    """
-    Controls one robot of a world that holds several, without talking to any hardware.
-
-    The robot is picked by its annotation type, which is what tells two robots of a
-    shared world apart; their bodies may carry the same prefix.
-    """
-
-    robot_type: Type[AbstractRobot]
-    """
-    The annotation type of the robot to control.
-    """
-
-    @property
-    def robot(self) -> AbstractRobot:
-        return self.find_robot(self.world)
-
-    def find_robot(self, world: World) -> AbstractRobot:
-        """
-        The robot of this interface's type.
-
-        :raises RobotNotInWorldError: If the world holds no robot of that type.
-        """
-        robots = world.get_semantic_annotations_by_type(self.robot_type)
-        if not robots:
-            raise RobotNotInWorldError(robot_type=self.robot_type)
-        return robots[0]
-
-    def connections_to_control(self, world: World) -> List[ActiveConnection]:
-        """
-        Every active connection that moves a part of this interface's robot.
-
-        The drive is one of them, although it carries the robot through the world rather
-        than connecting two of its bodies.
-        """
-        branch = set(
-            world.get_kinematic_structure_entities_of_branch(
-                self.find_robot(world).root
-            )
-        )
-        return [
-            connection
-            for connection in world.get_connections_by_type(ActiveConnection)
-            if connection.child in branch
-        ]
-
-    def setup(self):
-        self.register_controlled_joints(
-            [connection.name for connection in self.connections_to_control(self.world)]
-        )
-
-
-@dataclass
-class MirroredRobotOfManyInterface(OneRobotOfManyInterface):
-    """
-    Follows one robot of a world that holds several, wherever whoever publishes its
-    joint states has moved it.
-
-    The positions read from that topic are written into the shared world on every idle
-    cycle, so a robot this Giskard is never asked to move still shows what it does.
-    """
-
-    joint_states_topic: str = field(kw_only=True)
-    """
-    Name of the topic this robot reports its joint positions on.
-    """
-
-    def setup(self):
-        super().setup()
-        self.motion_server.inputs.synchronizers.append(
-            RobotJointStateSynchronizer(
-                world=self.world,
-                topic_name=self.joint_states_topic,
-                robot=self.find_robot(self.world),
-            )
-        )

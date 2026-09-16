@@ -33,6 +33,13 @@ from semantic_digital_twin.world_description.world_entity import (
 class WorldConfig(ABC):
     world: World = field(default_factory=World)
 
+    robot_type: type[AbstractRobot] | None = field(default=None, kw_only=True)
+    """
+    The annotation type of the robot the giskard holding this config controls, which is
+    what tells the robots of a world holding several apart; ``None`` means the world's
+    first robot.
+    """
+
     @abc.abstractmethod
     def setup_world(self, *args, **kwargs):
         """

@@ -151,7 +151,7 @@ class JointRegistrationRequiresStandaloneModeError(SetupException):
 @dataclass
 class RobotNotInWorldError(SetupException):
     """
-    Raised when the world holds no robot of the type an interface controls.
+    Raised when the world holds no robot of the type a giskard is configured for.
     """
 
     robot_type: type
@@ -163,7 +163,9 @@ class RobotNotInWorldError(SetupException):
         return f"The world holds no {self.robot_type.__name__}."
 
     def suggest_correction(self) -> str:
-        return "Check the robot type of the interface config against the robots of the world."
+        return (
+            "Check the robot type of the world config against the robots of the world."
+        )
 
 
 @dataclass

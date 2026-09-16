@@ -10,7 +10,10 @@ import rclpy
 from json_msgs.action import JsonAction
 from sqlalchemy.orm import sessionmaker
 
-from giskardpy.data_types.exceptions import NoControlledJointsError
+from giskardpy.data_types.exceptions import (
+    NoControlledJointsError,
+    RobotNotInWorldError,
+)
 from giskardpy.executor import Executor
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.action_server import ActionServerHandler
@@ -246,7 +249,20 @@ class Giskard:
 
     @property
     def robot(self) -> AbstractRobot:
-        return self.robots[0]
+        """
+        The robot this giskard controls: the one of the type its world config names, or
+        the world's first robot where the config names none.
+
+        :raises RobotNotInWorldError: If the world holds no robot of the named type.
+        """
+        if self.world_config.robot_type is None:
+            return self.robots[0]
+        robots = self.world_config.world.get_semantic_annotations_by_type(
+            self.world_config.robot_type
+        )
+        if not robots:
+            raise RobotNotInWorldError(robot_type=self.world_config.robot_type)
+        return robots[0]
 
     @property
     def robots(self) -> List[AbstractRobot]:
@@ -255,11 +271,7 @@ class Giskard:
     def _controlled_joints_sanity_check(self):
         world = self.world_config.world
         movable_joints = world.get_connections_by_type(ActiveConnection)
-        controlled_joints = [
-            connection
-            for robot in self.robots
-            for connection in robot.controlled_connections
-        ]
+        controlled_joints = self.robot.controlled_connections
         non_controlled_joints = set(movable_joints).difference(set(controlled_joints))
         if len(controlled_joints) == 0 and len(world.connections) > 0:
             raise NoControlledJointsError()

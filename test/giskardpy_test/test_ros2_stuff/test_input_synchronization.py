@@ -22,7 +22,6 @@ from giskardpy.middleware.ros2.input_synchronization import (
     LatestJointStateSynchronizer,
     OdometrySynchronizer,
     PendingJointStateSynchronizer,
-    RobotJointStateSynchronizer,
     TfFrameSynchronizer,
     TopicInputSynchronizer,
 )
@@ -298,16 +297,16 @@ def test_a_robots_joint_states_reach_that_robots_connections(
 ):
     """
     A joint name a message reports is the name of the publishing robot's own joint, so
-    it has to reach that robot's connection rather than the one another robot of the
-    same world carries under the same name.
+    with that robot's prefix it reaches that robot's connection rather than the one
+    another robot of the same world carries under the same name.
     """
     world = world_with_a_pr2_and_a_tiago
     tiago = world.get_semantic_annotations_by_type(Tiago)[0]
     pr2_positions_before = positions_of_one_degree_of_freedom_connections(
         world, world.get_semantic_annotations_by_type(PR2)[0]
     )
-    synchronizer = RobotJointStateSynchronizer(
-        world=world, topic_name="tiago/joint_states", robot=tiago
+    synchronizer = PendingJointStateSynchronizer(
+        world=world, topic_name="tiago/joint_states", prefix=tiago.root.name.prefix
     )
     synchronizer.latest_message = joint_state_message_of(
         {LIFT_JOINT_NAME: LIFT_POSITION}
@@ -321,26 +320,6 @@ def test_a_robots_joint_states_reach_that_robots_connections(
         )
         == pr2_positions_before
     )
-
-
-def test_a_joint_the_robot_does_not_have_is_passed_over(
-    init_rospy, world_with_a_pr2_and_a_tiago: World
-):
-    """
-    A robot publishes the joints of its own description, some of which the model of it
-    in the world may lack, and those leave the rest of the message unwritten.
-    """
-    world = world_with_a_pr2_and_a_tiago
-    tiago = world.get_semantic_annotations_by_type(Tiago)[0]
-    synchronizer = RobotJointStateSynchronizer(
-        world=world, topic_name="tiago/joint_states", robot=tiago
-    )
-    synchronizer.latest_message = joint_state_message_of(
-        {"no_such_joint": 1.0, LIFT_JOINT_NAME: LIFT_POSITION}
-    )
-
-    assert synchronizer.apply() is True
-    assert lift_position(world, tiago) == LIFT_POSITION
 
 
 # %% writing the base pose

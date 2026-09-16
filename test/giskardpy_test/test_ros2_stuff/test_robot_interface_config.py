@@ -1,12 +1,7 @@
 from dataclasses import fields, is_dataclass
 
-import pytest
-
-from giskardpy.data_types.exceptions import RobotNotInWorldError
 from giskardpy.middleware.ros2.giskard import Giskard
 from giskardpy.middleware.ros2.robot_interface_config import (
-    MirroredRobotOfManyInterface,
-    OneRobotOfManyInterface,
     RobotInterfaceConfig,
     StandAloneRobotInterfaceConfig,
 )
@@ -28,11 +23,6 @@ from semantic_digital_twin.robots.daisy import DAiSyJoint
 from semantic_digital_twin.robots.stretch import StretchJoint
 from semantic_digital_twin.robots.tracy import TracyJoint
 from giskardpy.qp.qp_controller_config import QPControllerConfig
-from semantic_digital_twin.robots.pr2 import PR2
-from semantic_digital_twin.robots.stretch import Stretch
-from semantic_digital_twin.robots.tiago import Tiago
-from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import ActiveConnection
 
 # %% the interface hierarchy is built from dataclasses
 
@@ -156,76 +146,3 @@ def test_the_stretch_interface_controls_every_joint_except_the_drive():
         StretchJoint.HEAD_PAN,
         StretchJoint.HEAD_TILT,
     ]
-
-
-# %% one robot of a world that holds several
-
-
-def test_the_interface_controls_its_robots_connections_and_its_drive(
-    world_with_two_robots: World,
-):
-    robot = world_with_two_robots.get_semantic_annotations_by_type(PR2)[0]
-
-    connections = OneRobotOfManyInterface(robot_type=PR2).connections_to_control(
-        world_with_two_robots
-    )
-
-    assert set(connections) == {
-        connection
-        for connection in robot.connections
-        if isinstance(connection, ActiveConnection)
-    } | {robot.root.parent_connection}
-
-
-def test_two_interfaces_of_one_world_control_different_connections(
-    world_with_two_robots: World,
-):
-    pr2_connections = OneRobotOfManyInterface(robot_type=PR2).connections_to_control(
-        world_with_two_robots
-    )
-    stretch_connections = OneRobotOfManyInterface(
-        robot_type=Stretch
-    ).connections_to_control(world_with_two_robots)
-
-    assert set(pr2_connections).isdisjoint(set(stretch_connections))
-    assert set(pr2_connections) | set(stretch_connections) == set(
-        world_with_two_robots.get_connections_by_type(ActiveConnection)
-    )
-
-
-def test_an_interface_for_a_robot_that_is_not_there_says_so(
-    world_with_two_robots: World,
-):
-    with pytest.raises(RobotNotInWorldError):
-        OneRobotOfManyInterface(robot_type=Tiago).connections_to_control(
-            world_with_two_robots
-        )
-
-
-# %% a robot of that world whose state comes from outside
-
-
-def test_the_mirroring_interface_controls_the_same_connections(
-    world_with_two_robots: World,
-):
-    """
-    The connections of a robot whose state is mirrored are registered like those of a
-    commanded one, so that a giskard holding nothing else has something to control.
-    """
-    interface = MirroredRobotOfManyInterface(
-        robot_type=Stretch, joint_states_topic="/stretch/joint_states"
-    )
-
-    assert interface.connections_to_control(world_with_two_robots) == (
-        OneRobotOfManyInterface(robot_type=Stretch).connections_to_control(
-            world_with_two_robots
-        )
-    )
-
-
-def test_the_mirroring_interface_names_the_topic_its_robot_publishes_on():
-    interface = MirroredRobotOfManyInterface(
-        robot_type=Stretch, joint_states_topic="/stretch/joint_states"
-    )
-
-    assert interface.joint_states_topic == "/stretch/joint_states"

@@ -19,20 +19,20 @@ sent.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Type
 
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.giskard import Giskard
-from giskardpy.middleware.ros2.robot_interface_config import (
-    MirroredRobotOfManyInterface,
-)
+from giskardpy.middleware.ros2.robot_interface_config import RobotInterfaceConfig
 from giskardpy.middleware.ros2.server_config import ExecutionMode, GiskardServerConfig
 from giskardpy.model.world_config import WorldFromFetchService
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.robots.stretch import Stretch
 from semantic_digital_twin.robots.tiago import Tiago
+from semantic_digital_twin.world_description.connections import ActiveConnection
 
 # %% how the controller runs
 
@@ -45,6 +45,33 @@ JOINT_STATES_TOPIC_NAME = "joint_states"
 """
 Name of the topic a robot reports its joint positions on, within its own namespace.
 """
+
+# %% how a followed robot is reached
+
+
+@dataclass
+class FollowedRobotInterface(RobotInterfaceConfig):
+    """
+    Holds every joint of the robot without commanding any of them, and writes what the
+    robot reports on its joint state topic into the shared world.
+    """
+
+    joint_states_topic: str
+    """
+    The topic the robot reports its joint positions on.
+    """
+
+    def setup(self) -> None:
+        self.register_controlled_joints(
+            [
+                connection.name
+                for connection in self.robot.connections
+                if isinstance(connection, ActiveConnection)
+            ]
+            + [self.robot.root.parent_connection.name]
+        )
+        self.sync_joint_state_topic(self.joint_states_topic)
+
 
 # %% the robots of the demo
 
@@ -120,10 +147,9 @@ def build_giskard(robot: DemoRobot) -> Giskard:
     :return: The server, not yet set up.
     """
     return Giskard(
-        world_config=WorldFromFetchService(),
-        robot_interface_config=MirroredRobotOfManyInterface(
-            robot_type=robot.annotation_type,
-            joint_states_topic=robot.joint_states_topic,
+        world_config=WorldFromFetchService(robot_type=robot.annotation_type),
+        robot_interface_config=FollowedRobotInterface(
+            joint_states_topic=robot.joint_states_topic
         ),
         server_config=GiskardServerConfig(
             execution_mode=ExecutionMode.STANDALONE, publishes_world=False
