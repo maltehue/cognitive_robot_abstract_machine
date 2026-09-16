@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Generic, List, Tuple, Type, Union
 
 from nav_msgs.msg import Odometry
+from rclpy.duration import Duration
 from rclpy.subscription import Subscription
+from rclpy.time import Time
 from sensor_msgs.msg import JointState
 from typing_extensions import TypeVar
 
@@ -143,11 +145,12 @@ class TopicInputSynchronizer(
     subscription: Subscription = field(init=False)
     """
     The subscription feeding ``latest_message``.
+
+    A relative topic name is resolved by the node, so a giskard running in a robot's
+    namespace reads that robot's topics.
     """
 
     def __post_init__(self):
-        if not self.topic_name.startswith("/"):
-            self.topic_name = f"/{self.topic_name}"
         self.subscription = rospy.get_node().create_subscription(
             self.message_type(), self.topic_name, self.buffer_message, 1
         )
@@ -335,10 +338,21 @@ class TfFrameSynchronizer(InputSynchronizer):
         self.connection_to_frames[connection] = (tf_parent_frame, tf_child_frame)
 
     def apply(self) -> bool:
+        """
+        Write the transform of every tracked connection whose frames are on tf.
+
+        A connection whose frames are not there yet keeps its origin: whoever publishes
+        them may come up after this giskard.
+        """
+        wrote_something = False
         for connection, (
             tf_parent_frame,
             tf_child_frame,
         ) in self.connection_to_frames.items():
+            if not self.tf_wrapper.wait_for_transform(
+                tf_parent_frame, tf_child_frame, Time(), Duration()
+            ):
+                continue
             parent_T_child = self.tf_wrapper.lookup_pose(
                 tf_parent_frame, tf_child_frame
             ).pose
@@ -353,4 +367,5 @@ class TfFrameSynchronizer(InputSynchronizer):
                 reference_frame=connection.parent,
                 child_frame=connection.child,
             )
-        return bool(self.connection_to_frames)
+            wrote_something = True
+        return wrote_something

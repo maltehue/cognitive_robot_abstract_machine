@@ -582,6 +582,11 @@ def _tiago_world_setup():
     return world_with_urdf_factory(Tiago)
 
 
+@pytest.fixture(scope="function")
+def tiago_world_copy(_tiago_world_setup):
+    return deepcopy(_tiago_world_setup)
+
+
 @pytest.fixture(scope="session")
 def _apartment_world_setup():
     apartment_world = URDFParser.from_file(

@@ -7,15 +7,16 @@ This process owns the world: it builds it, serves it, draws it and starts one
 
     python demo.py
 
-Every robot process fetches this world and holds its own robot in it, so the robots see
-each other while each of them is moved by a source of its own. Moving a slider in a
-robot's window publishes that robot's joint states; its giskard writes them into its
-copy of the world and announces them, and this process draws what happened. Their output
-goes to a log file each, whose place is printed, and every started process is stopped
-with this one.
+Every robot process fetches this world and runs its robot's own velocity interface on
+it, in the robot's namespace, so the robots see each other while each of them is moved
+by a source of its own. The window stands in for the robot: moving a slider publishes
+that robot's joint states where its interface reads them; its giskard writes them into
+its copy of the world and announces them, and this process draws what happened. Their
+output goes to a log file each, whose place is printed, and every started process is
+stopped with this one.
 
 A robot's base stays where the world put it, because the window reports joint positions
-and no base pose.
+and no odometry.
 
 Watching it in RViz
 -------------------
@@ -38,7 +39,7 @@ from rclpy.action import get_action_names_and_types
 from typing_extensions import List
 
 from giskardpy.middleware.ros2 import rospy
-from robot import DemoRobot
+from robot import REMAP_FLAG, DemoRobot
 from semantic_digital_twin.adapters.package_resolver import CompositePathResolver
 from semantic_digital_twin.adapters.ros.tf_publisher import TFPublisher
 from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
@@ -103,16 +104,6 @@ The executable of that package, which takes the robot's description file and pub
 one slider per movable joint of it.
 """
 
-ROS_ARGUMENTS_FLAG = "--ros-args"
-"""
-The flag that opens the part of a command line ROS reads itself.
-"""
-
-REMAP_FLAG = "-r"
-"""
-The flag that renames one node or topic of a started node.
-"""
-
 LOG_DIRECTORY = Path(tempfile.gettempdir()) / "coraplex_shared_world_demo"
 """
 Where the started processes write their output, one file each.
@@ -141,7 +132,7 @@ def joint_state_publisher_command(robot: DemoRobot) -> List[str]:
     The command that opens the window one robot's joint positions are reported from.
 
     The window reads the robot's own description file, so it offers a slider per movable
-    joint of it, and publishes under the robot's namespace.
+    joint of it, and publishes in the robot's namespace, where its interface listens.
 
     :param robot: The robot whose joint states are reported.
     """
@@ -150,9 +141,7 @@ def joint_state_publisher_command(robot: DemoRobot) -> List[str]:
         JOINT_STATE_PUBLISHER_PACKAGE,
         JOINT_STATE_PUBLISHER_EXECUTABLE,
         str(CompositePathResolver().resolve(robot.annotation_type.get_ros_file_path())),
-        ROS_ARGUMENTS_FLAG,
-        REMAP_FLAG,
-        f"__ns:={robot.namespace}",
+        *robot.namespace_arguments(),
         REMAP_FLAG,
         f"__node:={robot.joint_state_publisher_node_name}",
     ]
@@ -268,8 +257,7 @@ def wait_until_ready(robots: List[DemoRobot]) -> None:
         deadline = started + READY_TIMEOUT
         while time.monotonic() < deadline:
             action_names = [
-                name.lstrip("/")
-                for name, _ in get_action_names_and_types(rospy.get_node())
+                name for name, _ in get_action_names_and_types(rospy.get_node())
             ]
             if robot.command_action_name in action_names:
                 print(

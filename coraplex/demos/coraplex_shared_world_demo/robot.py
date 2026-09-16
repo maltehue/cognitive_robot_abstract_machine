@@ -7,71 +7,62 @@ Run one of these per robot, next to ``demo.py``::
 
 It fetches the demo's world instead of building one of its own, so that every process
 holds the same bodies, connections and degrees of freedom under the same identities, and
-it registers only the connections of its own robot, so the other robots stay where their
-processes put them. They are part of its world all the same, and are therefore seen and
-avoided rather than moved.
+it runs the robot's own velocity interface in closed loop, in the robot's namespace. The
+other robots are part of its world all the same, and are therefore seen and avoided
+rather than moved.
 
-The robot is followed rather than commanded: whatever its joint state topic reports is
-written into the shared world and announced to every other process, and no goals are
-sent.
+Of everything that interface talks to, only the joint state topic is answered here: a
+window publishes on it, while odometry stays silent and velocity commands go nowhere.
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+import sys
 from enum import StrEnum
-from typing import Type
+from typing import List, Type
+
+import rclpy
 
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.giskard import Giskard
 from giskardpy.middleware.ros2.robot_interface_config import RobotInterfaceConfig
+from giskardpy.middleware.ros2.scripts.iai_robots.stretch.configs import (
+    StretchTopic,
+    StretchVelocityInterface,
+)
+from giskardpy.middleware.ros2.scripts.iai_robots.tiago.configs import (
+    TiagoTopic,
+    TiagoVelocityInterface,
+)
 from giskardpy.middleware.ros2.server_config import ExecutionMode, GiskardServerConfig
 from giskardpy.model.world_config import WorldFromFetchService
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.robots.stretch import Stretch
 from semantic_digital_twin.robots.tiago import Tiago
-from semantic_digital_twin.world_description.connections import ActiveConnection
 
 # %% how the controller runs
 
-CONTROL_FREQUENCY = 20.0
+CONTROL_FREQUENCY = 25.0
 """
 Frequency in hertz the controller solves at.
 """
 
-JOINT_STATES_TOPIC_NAME = "joint_states"
+PREDICTION_HORIZON = 30
 """
-Name of the topic a robot reports its joint positions on, within its own namespace.
+How many control cycles ahead the controller plans.
 """
 
-# %% how a followed robot is reached
+ROS_ARGUMENTS_FLAG = "--ros-args"
+"""
+The flag that opens the part of a command line ROS reads itself.
+"""
 
-
-@dataclass
-class FollowedRobotInterface(RobotInterfaceConfig):
-    """
-    Holds every joint of the robot without commanding any of them, and writes what the
-    robot reports on its joint state topic into the shared world.
-    """
-
-    joint_states_topic: str
-    """
-    The topic the robot reports its joint positions on.
-    """
-
-    def setup(self) -> None:
-        self.register_controlled_joints(
-            [
-                connection.name
-                for connection in self.robot.connections
-                if isinstance(connection, ActiveConnection)
-            ]
-            + [self.robot.root.parent_connection.name]
-        )
-        self.sync_joint_state_topic(self.joint_states_topic)
-
+REMAP_FLAG = "-r"
+"""
+The flag that renames one node or topic of a started node.
+"""
 
 # %% the robots of the demo
 
@@ -96,9 +87,32 @@ class DemoRobot(StrEnum):
                 return Tiago
 
     @property
+    def interface(self) -> RobotInterfaceConfig:
+        """
+        The interface config this robot runs on its hardware.
+        """
+        match self:
+            case DemoRobot.STRETCH:
+                return StretchVelocityInterface()
+            case DemoRobot.TIAGO:
+                return TiagoVelocityInterface()
+
+    @property
+    def joint_states_topic_name(self) -> str:
+        """
+        The topic this robot's interface reads its joint positions from, relative to the
+        robot's namespace.
+        """
+        match self:
+            case DemoRobot.STRETCH:
+                return StretchTopic.JOINT_STATES
+            case DemoRobot.TIAGO:
+                return TiagoTopic.JOINT_STATES
+
+    @property
     def namespace(self) -> str:
         """
-        The ROS namespace this robot's topics live under.
+        The ROS namespace this robot's nodes and topics live under.
         """
         return f"/{self.lower()}"
 
@@ -107,7 +121,7 @@ class DemoRobot(StrEnum):
         """
         The topic this robot reports its joint positions on.
         """
-        return f"{self.namespace}/{JOINT_STATES_TOPIC_NAME}"
+        return f"{self.namespace}/{self.joint_states_topic_name}"
 
     @property
     def joint_state_publisher_node_name(self) -> str:
@@ -129,7 +143,13 @@ class DemoRobot(StrEnum):
         Name of the action this robot's giskard takes goals on, which tells that it is
         up.
         """
-        return f"{self.giskard_node_name}/command"
+        return f"{self.namespace}/{self.giskard_node_name}/command"
+
+    def namespace_arguments(self) -> List[str]:
+        """
+        The ROS arguments that put a node into this robot's namespace.
+        """
+        return [ROS_ARGUMENTS_FLAG, REMAP_FLAG, f"__ns:={self.namespace}"]
 
 
 # %% the process
@@ -148,19 +168,19 @@ def build_giskard(robot: DemoRobot) -> Giskard:
     """
     return Giskard(
         world_config=WorldFromFetchService(robot_type=robot.annotation_type),
-        robot_interface_config=FollowedRobotInterface(
-            joint_states_topic=robot.joint_states_topic
-        ),
+        robot_interface_config=robot.interface,
         server_config=GiskardServerConfig(
-            execution_mode=ExecutionMode.STANDALONE, publishes_world=False
+            execution_mode=ExecutionMode.CLOSED_LOOP, publishes_world=False
         ),
-        qp_controller_config=QPControllerConfig(target_frequency=CONTROL_FREQUENCY),
+        qp_controller_config=QPControllerConfig(
+            target_frequency=CONTROL_FREQUENCY, prediction_horizon=PREDICTION_HORIZON
+        ),
     )
 
 
 def main() -> None:
     """
-    Follow the robot named on the command line until ROS shuts down.
+    Hold the robot named on the command line, in its namespace, until ROS shuts down.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -171,6 +191,7 @@ def main() -> None:
         help="which robot of the demo's world this process holds",
     )
     robot = parser.parse_args().robot
+    rclpy.init(args=[sys.argv[0], *robot.namespace_arguments()])
     rospy.init_node(robot.giskard_node_name)
     build_giskard(robot).live()
 

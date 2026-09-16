@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+
+from giskardpy.middleware.ros2.command_publishing import DriveVelocityCommandPublisher
 from giskardpy.middleware.ros2.giskard import Giskard
 from giskardpy.middleware.ros2.scripts.iai_robots.stretch.configs import (
     StretchStandaloneInterface,
@@ -6,8 +9,10 @@ from giskardpy.middleware.ros2.scripts.iai_robots.stretch.configs import (
 )
 from giskardpy.middleware.ros2.server_config import ExecutionMode, GiskardServerConfig
 from giskardpy.middleware.ros2.utils.utils import load_xacro
+from giskardpy.model.world_config import WorldConfig
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from semantic_digital_twin.robots.stretch import Stretch
+from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     ActiveConnection1DOF,
     DifferentialDrive,
@@ -81,3 +86,53 @@ def test_velocity_interface_sets_up_against_the_robot_description(init_rospy):
     assert world.get_connections_by_type(DifferentialDrive)
     for joint_name in StretchVelocityInterface().velocity_controlled_joint_names():
         assert world.get_connection_by_name(joint_name) is not None
+
+
+# %% the velocity interface in a world shared with another robot
+
+
+@dataclass
+class WorldBuiltElsewhere(WorldConfig):
+    """
+    Holds a world that was built before the giskard, and builds nothing itself.
+    """
+
+    def setup_world(self) -> None:
+        return
+
+
+def test_velocity_interface_wires_its_own_robot_of_a_shared_world(
+    init_rospy, world_with_two_robots: World
+):
+    """
+    In a world holding another robot too, the drive that is commanded and the
+    localization that follows tf are the Stretch's own, not the first ones of the world.
+    """
+    stretch = world_with_two_robots.get_semantic_annotations_by_type(Stretch)[0]
+    drive = stretch.root.parent_connection
+    localization = drive.parent.parent_connection
+    interface = StretchVelocityInterface()
+    giskard = Giskard(
+        world_config=WorldBuiltElsewhere(
+            world=world_with_two_robots, robot_type=Stretch
+        ),
+        robot_interface_config=interface,
+        server_config=GiskardServerConfig(execution_mode=ExecutionMode.CLOSED_LOOP),
+        qp_controller_config=QPControllerConfig(
+            target_frequency=25, prediction_horizon=30
+        ),
+    )
+
+    giskard.setup()
+    try:
+        drive_publisher = [
+            publisher
+            for publisher in giskard.motion_server.control_loop.command_publishers
+            if isinstance(publisher, DriveVelocityCommandPublisher)
+        ][0]
+        assert drive_publisher.connection is drive
+        assert interface.tf_frame_synchronizer.connection_to_frames == {
+            localization: (str(localization.parent.name), str(localization.child.name))
+        }
+    finally:
+        giskard.close_world_model_ros_interface()

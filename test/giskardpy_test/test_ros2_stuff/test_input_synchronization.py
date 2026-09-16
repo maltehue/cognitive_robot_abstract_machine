@@ -65,8 +65,25 @@ class RecordedTransformLookup:
     The transform handed back to the caller.
     """
 
+    def wait_for_transform(
+        self, target_frame: str, source_frame: str, time: Any, timeout: Any
+    ) -> bool:
+        return True
+
     def lookup_pose(self, target_frame: str, source_frame: str) -> PoseStamped:
         return self.parent_T_child
+
+
+@dataclass
+class TransformsNotOnTf:
+    """
+    Stands in for a tf tree that holds none of the frames asked for.
+    """
+
+    def wait_for_transform(
+        self, target_frame: str, source_frame: str, time: Any, timeout: Any
+    ) -> bool:
+        return False
 
 
 def latest_message_field_type(synchronizer_type: type) -> Any:
@@ -322,6 +339,22 @@ def test_a_robots_joint_states_reach_that_robots_connections(
     )
 
 
+# %% naming the topic
+
+
+def test_a_relative_topic_name_is_left_to_the_node_to_resolve(init_rospy, mini_world):
+    """
+    A giskard running in a robot's namespace has to read that robot's topics, which the
+    node does for a relative name and never for an absolute one.
+    """
+    synchronizer = PendingJointStateSynchronizer(
+        world=mini_world, topic_name="joint_states"
+    )
+
+    assert synchronizer.topic_name == "joint_states"
+    assert synchronizer.subscription.topic_name == "/joint_states"
+
+
 # %% writing the base pose
 
 
@@ -373,6 +406,25 @@ def test_apply_writes_the_looked_up_transform_into_the_connection(
         ),
         atol=1e-9,
     )
+
+
+def test_apply_leaves_a_connection_alone_whose_frames_are_not_on_tf(
+    init_rospy, tracked_connection
+):
+    """
+    The localization of a robot may come up after its giskard, and until it publishes
+    the connection keeps its origin rather than the idle cycle failing.
+    """
+    world, connection = tracked_connection
+    origin_before = connection.origin.to_np().copy()
+    synchronizer = TfFrameSynchronizer(world=world)
+    synchronizer.tf_wrapper = TransformsNotOnTf()
+    synchronizer.track(connection, tf_parent_frame="map", tf_child_frame="odom")
+
+    wrote_something = synchronizer.apply()
+
+    assert not wrote_something
+    assert_allclose(connection.origin.to_np(), origin_before)
 
 
 def test_apply_writes_nothing_without_a_tracked_connection(

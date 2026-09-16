@@ -28,6 +28,7 @@ from sensor_msgs.msg import JointState
 
 from coraplex.testing import StandaloneProcess
 from semantic_digital_twin.adapters.package_resolver import CompositePathResolver
+from semantic_digital_twin.adapters.ros.tf_publisher import TFPublisher
 from semantic_digital_twin.adapters.ros.world_fetcher import FetchWorldServer
 from semantic_digital_twin.adapters.ros.world_synchronizer import WorldSynchronizer
 from semantic_digital_twin.api import RobotSpecification, WorldSpecification
@@ -192,11 +193,16 @@ def world_with_every_robot() -> World:
 @pytest.fixture
 def served_world(world_with_every_robot: World, rclpy_node: Node) -> World:
     """
-    The world of this process, published and offered to whoever fetches it.
+    The world of this process, published, offered to whoever fetches it and put on tf,
+    where the robots' localizations look for their frames.
     """
     synchronizer = WorldSynchronizer(_world=world_with_every_robot, node=rclpy_node)
     fetch_server = FetchWorldServer(node=rclpy_node, world=world_with_every_robot)
+    tf_publisher = TFPublisher.create_with_ignore_existing_tf(
+        node=rclpy_node, world=world_with_every_robot
+    )
     yield world_with_every_robot
+    tf_publisher.stop()
     fetch_server.close()
     synchronizer.close()
 
@@ -206,7 +212,7 @@ def is_up(node: Node, robot: StrEnum) -> bool:
     Whether the giskard of the given robot is up, which it shows by taking goals.
     """
     return robot.command_action_name in [
-        name.lstrip("/") for name, _ in get_action_names_and_types(node)
+        name for name, _ in get_action_names_and_types(node)
     ]
 
 
