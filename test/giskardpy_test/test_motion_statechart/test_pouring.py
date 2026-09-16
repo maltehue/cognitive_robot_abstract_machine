@@ -57,13 +57,21 @@ from semantic_digital_twin.spatial_types import (
     Point3,
 )
 from semantic_digital_twin.world import World
+from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Faucet
+from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     FixedConnection,
     LiquidConnection,
+    RevoluteConnection,
+)
+from semantic_digital_twin.world_description.degree_of_freedom import (
+    DegreeOfFreedomLimits,
 )
 from semantic_digital_twin.world_description.geometry import (
     Box,
+    Cylinder,
     Mesh,
     Scale,
 )
@@ -1474,3 +1482,156 @@ class TestPerceptionCorrectedTransfer:
             f"receiver fill {receiving_cup.fill_level:.3f} outside goal band around {goal_fill} "
             f"(sigma={sigma}, perception_hz={perception_hz} Hz)"
         )
+
+
+# %% filling from a faucet
+
+_FAUCET_OUTLET_HEIGHT = 0.5
+"""
+Height of the faucet outlet above the world root, in metres.
+"""
+
+_FAUCET_VALVE_TRAVEL = math.pi / 2
+"""
+Valve position at which the faucet is fully open, in radians; shut at zero.
+"""
+
+_FAUCET_VOLUME_RATE = 0.002
+"""
+Volume rate of the fully open faucet, in cubic metres per second.
+"""
+
+_FAUCET_CAN_WIDTH = 0.12
+"""
+Width of the container standing under the faucet, in metres.
+"""
+
+_FAUCET_CAN_HEIGHT = 0.16
+"""
+Height of the container standing under the faucet, in metres.
+"""
+
+
+@pytest.fixture
+def world_with_faucet() -> tuple[World, Faucet, HasFillLevel]:
+    """
+    A faucet with a lever valve above an empty container standing on the world root.
+    """
+    world = World()
+    with world.modify_world():
+        world.add_body(Body(name=PrefixedName("map")))
+    can_body = Body.from_shape_collection(
+        shape_collection=ShapeCollection(
+            [
+                Cylinder(
+                    width=_FAUCET_CAN_WIDTH,
+                    height=_FAUCET_CAN_HEIGHT,
+                    origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        z=_FAUCET_CAN_HEIGHT / 2
+                    ),
+                )
+            ]
+        ),
+        name=PrefixedName("can"),
+    )
+    post = Body(name=PrefixedName("faucet_post"))
+    outlet = Body(name=PrefixedName("faucet_outlet"))
+    valve = Body(name=PrefixedName("faucet_valve"))
+    with world.modify_world():
+        world.add_body(can_body)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world, parent=world.root, child=can_body
+            )
+        )
+        world.add_body(post)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=world.root,
+                child=post,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=0.15, z=_FAUCET_OUTLET_HEIGHT
+                ),
+            )
+        )
+        world.add_body(outlet)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=post,
+                child=outlet,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=-0.15
+                ),
+            )
+        )
+        world.add_body(valve)
+        world.add_connection(
+            RevoluteConnection.create_with_dofs(
+                world=world,
+                parent=post,
+                child=valve,
+                axis=Vector3.Z(),
+                dof_limits=DegreeOfFreedomLimits(
+                    lower=DerivativeMap(position=0.0, velocity=-1.0),
+                    upper=DerivativeMap(position=_FAUCET_VALVE_TRAVEL, velocity=1.0),
+                ),
+            )
+        )
+    can = HasFillLevel(name=PrefixedName("can"), root=can_body)
+    faucet = Faucet(
+        name=PrefixedName("faucet"),
+        root=post,
+        outlet=outlet,
+        valve=valve,
+        maximum_volume_rate=_FAUCET_VOLUME_RATE,
+    )
+    with world.modify_world():
+        world.add_semantic_annotation(can)
+        world.add_semantic_annotation(faucet)
+    can.initialize_fill_level(world=world, initial_fill=0.0)
+    can.receive_outflow_from(source=faucet, world=world)
+    return world, faucet, can
+
+
+class TestFillingFromAFaucet:
+    """
+    The fill task drives whatever the receiver's inflow depends on; for a faucet that is
+    the valve, so the task opens it and shuts it again once the goal is reached.
+    """
+
+    def test_fill_task_turns_the_valve_to_fill_the_receiver(
+        self, world_with_faucet
+    ) -> None:
+        world, faucet, can = world_with_faucet
+        goal_fill = 0.8
+        tolerance = 0.05
+        fill_task = FillByTransferTask(
+            receiver=can,
+            goal_value=goal_fill,
+            fill_level_tolerance=tolerance,
+            reference_velocity=0.05,
+        )
+        statechart = MotionStatechart()
+        statechart.add_node(fill_task)
+        statechart.add_node(EndMotion.when_true(fill_task))
+        opening_history: list[float] = []
+        original_on_tick = fill_task.on_tick
+
+        def recording_on_tick(context):
+            opening_history.append(float(faucet.opening().evaluate()[0]))
+            return original_on_tick(context)
+
+        fill_task.on_tick = recording_on_tick
+        executor = Executor(
+            _pouring_context(world), pacer=SimulationPacer(real_time_factor=1)
+        )
+        executor.compile(motion_statechart=statechart)
+
+        executor.tick_until_end(timeout=4000)
+
+        assert fill_task.observation_state == ObservationStateValues.TRUE
+        assert can.fill_level == pytest.approx(goal_fill, abs=tolerance)
+        assert max(opening_history) > 0.2, "the valve was never opened"
+        assert opening_history[-1] < 0.05, "the valve was not shut again"

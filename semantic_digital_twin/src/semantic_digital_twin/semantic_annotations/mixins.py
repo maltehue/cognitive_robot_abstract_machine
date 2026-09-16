@@ -23,6 +23,7 @@ from krrood.adapters.json_serializer import to_json
 from krrood.class_diagrams.class_diagram import WrappedClass
 from krrood.entity_query_language.factories import variable_from, entity, variable, an
 from krrood.ormatic.utils import classproperty
+from krrood.patterns.field_metadata import JSONMetadata
 from krrood.patterns.subclass_safe_generic import SubClassSafeGeneric
 from krrood.utils import recursive_subclasses
 from probabilistic_model.distributions.gaussian import GaussianDistribution
@@ -1484,8 +1485,15 @@ class HasFillLevel(HasRootBody, LiquidSource):
     fill_equation: Optional[PouringEquation] = field(default=None)
     """Differential equation governing how this container drains when tilted."""
 
-    inflow_equation: Optional[InflowEquation] = field(default=None)
-    """Differential equation governing how this container fills from an external source."""
+    inflow_equation: Optional[InflowEquation] = field(
+        default=None, metadata=JSONMetadata(serialize=False).as_dict()
+    )
+    """
+    Differential equation governing how this container fills from an external source.
+
+    Bound to the world it was built in, so it never leaves the process; other worlds
+    rebuild it from :attr:`inflow_coupling`.
+    """
 
     inflow_coupling: Optional[LiquidTransferCoupling] = field(default=None)
     """Serializable description of the transfer coupling. Unlike :attr:`inflow_equation`, whose

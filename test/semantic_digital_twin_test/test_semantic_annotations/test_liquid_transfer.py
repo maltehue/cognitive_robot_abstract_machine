@@ -16,6 +16,7 @@ from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
     WorldEntityWithIDKwargsTracker,
 )
 from semantic_digital_twin.exceptions import (
+    FaucetValveWithoutPositionLimitsError,
     FillLevelAlreadyInitializedError,
     MissingFillEquationError,
     MissingFillLevelLimitsError,
@@ -40,6 +41,7 @@ from semantic_digital_twin.semantic_annotations.mixins import (
     HasSpout,
     LiquidSource,
 )
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Faucet
 from semantic_digital_twin.api import (
     PrismaticConnectionSpecification,
     RevoluteConnectionSpecification,
@@ -56,6 +58,7 @@ from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     FixedConnection,
     LiquidConnection,
+    RevoluteConnection,
 )
 from semantic_digital_twin.world_description.degree_of_freedom import (
     DegreeOfFreedomLimits,
@@ -1369,6 +1372,215 @@ class TestSpoutedSource:
 
         assert restored.spout is can.spout
         assert restored.root is can.root
+
+
+# %% faucet
+
+_OUTLET_HEIGHT = 0.5
+"""
+Height of the faucet outlet above the world root, in metres.
+"""
+
+_VALVE_TRAVEL = math.pi / 2
+"""
+Position of the valve at which the faucet is fully open, in radians; it is shut at zero.
+"""
+
+_FAUCET_VOLUME_RATE = 0.002
+"""
+Volume rate of the fully open faucet, in cubic metres per second.
+"""
+
+
+def _build_faucet_world(
+    valve_limits: DegreeOfFreedomLimits | None = None,
+) -> tuple[World, Faucet, _TranslatingContainer]:
+    """
+    Builds a faucet whose outlet hangs above a receiver at the origin, with a lever
+    valve on the faucet's post.
+
+    :param valve_limits: Limits of the valve joint; the shut-to-open travel by default.
+    """
+    if valve_limits is None:
+        valve_limits = DegreeOfFreedomLimits(
+            lower=DerivativeMap(position=0.0, velocity=-1.0),
+            upper=DerivativeMap(position=_VALVE_TRAVEL, velocity=1.0),
+        )
+    world = World()
+    with world.modify_world():
+        world.add_body(Body(name=PrefixedName("map")))
+    with world.modify_world():
+        receiver = _TranslatingContainer.create_with_new_body_in_world(
+            name="receiver",
+            world=world,
+            parent_connection_specification=_TranslatingContainer.parent_connection_specification(
+                axis=Vector3(1, 0, 0)
+            ),
+            scale=Scale(0.1, 0.1, 0.2),
+        )
+    post = Body(name=PrefixedName("faucet_post"))
+    outlet = Body(name=PrefixedName("faucet_outlet"))
+    valve = Body(name=PrefixedName("faucet_valve"))
+    with world.modify_world():
+        world.add_body(post)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=world.root,
+                child=post,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=0.15, z=_OUTLET_HEIGHT
+                ),
+            )
+        )
+        world.add_body(outlet)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=post,
+                child=outlet,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=-0.15
+                ),
+            )
+        )
+        world.add_body(valve)
+        world.add_connection(
+            RevoluteConnection.create_with_dofs(
+                world=world,
+                parent=post,
+                child=valve,
+                axis=Vector3.Z(),
+                dof_limits=valve_limits,
+            )
+        )
+    faucet = Faucet(
+        name=PrefixedName("faucet"),
+        root=post,
+        outlet=outlet,
+        valve=valve,
+        maximum_volume_rate=_FAUCET_VOLUME_RATE,
+    )
+    with world.modify_world():
+        world.add_semantic_annotation(faucet)
+    return world, faucet, receiver
+
+
+def _turn_valve(world: World, faucet: Faucet, position: float) -> None:
+    """
+    Sets the valve joint of the faucet.
+    """
+    JointState.from_mapping({faucet.valve_connection: position}).apply_to(world)
+
+
+class TestFaucet:
+    """
+    A faucet's flow follows its valve continuously and its water falls straight down
+    from the outlet.
+    """
+
+    def test_outflow_follows_the_valve(self) -> None:
+        world, faucet, _receiver = _build_faucet_world()
+        rate = faucet.outflow_volume_rate(world)
+
+        _turn_valve(world, faucet, 0.0)
+        assert rate.evaluate()[0] == pytest.approx(0.0)
+        _turn_valve(world, faucet, _VALVE_TRAVEL / 2)
+        assert rate.evaluate()[0] == pytest.approx(_FAUCET_VOLUME_RATE / 2)
+        _turn_valve(world, faucet, _VALVE_TRAVEL)
+        assert rate.evaluate()[0] == pytest.approx(_FAUCET_VOLUME_RATE)
+
+    def test_water_leaves_the_outlet_straight_down(self) -> None:
+        world, faucet, _receiver = _build_faucet_world()
+
+        exit_point = _evaluated_xyz(faucet.liquid_exit_point(world))
+        exit_velocity = _evaluated_xyz(faucet.liquid_exit_velocity(world, 0.5))
+
+        world_T_outlet = world.compute_forward_kinematics_np(world.root, faucet.outlet)
+        assert exit_point == pytest.approx(world_T_outlet[:3, 3])
+        assert exit_velocity == pytest.approx([0.0, 0.0, 0.0])
+
+    def test_receiver_fills_only_while_the_valve_is_open(self) -> None:
+        world, faucet, receiver = _build_faucet_world()
+        receiver.initialize_fill_level(world=world, initial_fill=0.0)
+        receiver.receive_outflow_from(source=faucet, world=world)
+        inflow_velocity = receiver.fill_connection.inflow_equation.symbolic_velocity(
+            _INFLOW_CONTEXT
+        )
+
+        _turn_valve(world, faucet, 0.0)
+        assert inflow_velocity.evaluate()[0] == pytest.approx(0.0)
+        _turn_valve(world, faucet, _VALVE_TRAVEL)
+        assert inflow_velocity.evaluate()[0] > 0.0
+
+    def test_valve_without_position_limits_is_rejected(self) -> None:
+        world, faucet, _receiver = _build_faucet_world(
+            valve_limits=DegreeOfFreedomLimits(
+                lower=DerivativeMap(velocity=-1.0), upper=DerivativeMap(velocity=1.0)
+            )
+        )
+
+        with pytest.raises(FaucetValveWithoutPositionLimitsError) as error_info:
+            faucet.opening()
+
+        assert error_info.value.faucet_name == faucet.name
+
+    def test_faucet_survives_a_json_round_trip(self) -> None:
+        world, faucet, _receiver = _build_faucet_world()
+        tracker = WorldEntityWithIDKwargsTracker.from_world(world)
+
+        restored = Faucet.from_json(faucet.to_json(), **tracker.create_kwargs())
+
+        assert restored.outlet is faucet.outlet
+        assert restored.valve is faucet.valve
+        assert restored.maximum_volume_rate == faucet.maximum_volume_rate
+
+
+# %% container that receives and pours
+
+
+class TestReceivingAndPouringContainer:
+    """
+    A container filled from one source can pour into another, so a synchronized change
+    to it must not stumble over the process-local inflow equation it carries.
+    """
+
+    def test_coupled_receiver_serializes_without_its_symbolic_inflow(self) -> None:
+        world, _source, receiver = _build_world()
+        assert receiver.fill_connection.inflow_equation is not None
+
+        payload = receiver.to_json()
+
+        assert "inflow_equation" not in payload
+        assert (
+            HasFillLevel.from_json(
+                payload,
+                **WorldEntityWithIDKwargsTracker.from_world(world).create_kwargs(),
+            ).inflow_coupling
+            == receiver.inflow_coupling
+        )
+
+    def test_receiver_can_pour_into_a_third_container(self) -> None:
+        world, faucet, can = _build_faucet_world()
+        can.initialize_fill_level(world=world, initial_fill=0.0)
+        can.receive_outflow_from(source=faucet, world=world)
+        with world.modify_world():
+            pot = _TranslatingContainer.create_with_new_body_in_world(
+                name="pot",
+                world=world,
+                world_root_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(x=1.0),
+                parent_connection_specification=_TranslatingContainer.parent_connection_specification(
+                    axis=Vector3(1, 0, 0)
+                ),
+                scale=Scale(0.2, 0.2, 0.15),
+            )
+        pot.initialize_fill_level(world=world, initial_fill=0.2)
+
+        pot.receive_outflow_from(source=can, world=world)
+
+        assert isinstance(can.fill_equation, GatedArticulatedPouringEquation)
+        assert pot.fill_connection.inflow_equation is not None
+        assert can.fill_connection.inflow_equation is not None
 
 
 # %% fill-level integration limits

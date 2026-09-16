@@ -15,6 +15,7 @@ from semantic_digital_twin.datastructures.alignment import AlignmentPair
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.datastructures.variables import SpatialVariables
 from semantic_digital_twin.exceptions import (
+    FaucetValveWithoutPositionLimitsError,
     InvalidPlaneDimensions,
     InvalidHingeActiveAxis,
     MissingSemanticAnnotationError,
@@ -25,6 +26,7 @@ from semantic_digital_twin.semantic_annotations.part_whole import (
     IsPartWholeRelationship,
 )
 from semantic_digital_twin.semantic_annotations.mixins import (
+    LiquidSource,
     HasSupportingSurface,
     HasRootRegion,
     HasDrawers,
@@ -47,6 +49,7 @@ from semantic_digital_twin.spatial_types import (
 )
 from semantic_digital_twin.spatial_types.spatial_types import Pose
 from semantic_digital_twin.world_description.connections import (
+    ActiveConnection1DOF,
     FixedConnection,
 )
 from semantic_digital_twin.world_description.degree_of_freedom import (
@@ -1838,3 +1841,107 @@ class CoffeeMachine(HasRootBody):
     """
 
     _synonyms = {"coffe"}
+
+
+# %% faucet
+
+
+@dataclass(eq=False)
+class Faucet(HasRootBody, LiquidSource):
+    """
+    A tap whose valve sets how much water leaves its outlet.
+
+    The water falls straight down from the outlet, and the flow follows the valve's
+    position continuously from shut at the lower position limit to
+    :attr:`maximum_volume_rate` at the upper one. The supply is the mains, so pouring
+    never empties the source.
+    """
+
+    outlet: Body = field(kw_only=True)
+    """
+    Body whose origin is where the water leaves the faucet.
+    """
+
+    valve: Body = field(kw_only=True)
+    """
+    The valve's lever; its parent connection is the revolute or prismatic joint whose
+    position sets the flow.
+    """
+
+    maximum_volume_rate: float = field(default=0.001, kw_only=True)
+    """
+    Volume rate leaving the outlet with the valve fully open, in cubic metres per
+    second.
+    """
+
+    @property
+    def valve_connection(self) -> ActiveConnection1DOF:
+        """
+        The joint whose position sets the flow.
+        """
+        return self.valve.get_first_parent_connection_of_type(ActiveConnection1DOF)
+
+    def opening(self) -> symbolic_math.Scalar:
+        """
+        Share of the valve's travel that is open, in ``[0, 1]``.
+
+        :raises FaucetValveWithoutPositionLimitsError: If the valve has no position
+            limits to measure the travel against.
+        """
+        limits = self.valve_connection.dof.limits
+        if limits.lower.position is None or limits.upper.position is None:
+            raise FaucetValveWithoutPositionLimitsError(faucet_name=self.name)
+        travel = (
+            self.valve_connection.dof.variables.position - limits.lower.position
+        ) / (limits.upper.position - limits.lower.position)
+        return symbolic_math.limit(travel, 0.0, 1.0)
+
+    def outflow_volume_rate(self, world: World) -> symbolic_math.Scalar:
+        """
+        The valve's share of the maximum flow.
+
+        :param world: The world providing the forward kinematics.
+        :return: Symbolic outflow volume rate, positive while the valve is open.
+        """
+        return self.maximum_volume_rate * self.opening()
+
+    def liquid_exit_point(self, world: World) -> Point3:
+        """
+        The outlet, in the world frame.
+
+        :param world: The world providing the forward kinematics.
+        :return: Symbolic outlet position in the world frame.
+        """
+        world_T_outlet = world.compose_forward_kinematics_expression(
+            world.root, self.outlet
+        )
+        world_P_outlet = world_T_outlet.to_position()
+        world_P_outlet.reference_frame = world.root
+        return world_P_outlet
+
+    def liquid_exit_direction(self, world: World) -> Vector3:
+        """
+        Straight down: the water falls from the outlet.
+
+        :param world: The world providing the forward kinematics.
+        :return: The downward direction in the world frame.
+        """
+        return Vector3(x=0.0, y=0.0, z=-1.0, reference_frame=world.root)
+
+    @property
+    def pour_tilt_expression(self) -> symbolic_math.Scalar:
+        """
+        A faucet does not tilt.
+        """
+        return symbolic_math.Scalar(0.0)
+
+    def couple_drain_to_gate(self, gate: symbolic_math.Scalar, world: World) -> None:
+        """
+        The mains supply is not drained by what leaves the outlet, so the gate changes
+        nothing on the faucet's side.
+        """
+
+    def validate_can_pour(self) -> None:
+        """
+        A faucet can always pour.
+        """

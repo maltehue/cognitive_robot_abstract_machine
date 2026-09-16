@@ -500,6 +500,25 @@ class InvalidConnectionLimits(UsageError):
 
 
 @dataclass
+class FaucetValveWithoutPositionLimitsError(UsageError):
+    """
+    Raised when a faucet's valve connection has no position limits, so the share of its
+    travel that is open cannot be told.
+    """
+
+    faucet_name: PrefixedName
+    """
+    The name of the faucet whose valve lacks position limits.
+    """
+
+    def error_message(self) -> str:
+        return f"The valve of {self.faucet_name} has no position limits, so its opening cannot be derived."
+
+    def suggest_correction(self) -> str:
+        return "Give the valve connection's degree of freedom lower and upper position limits."
+
+
+@dataclass
 class MissingFillLevelLimitsError(UsageError):
     """
     Raised when a liquid connection's fill degree of freedom has no position limits, so
