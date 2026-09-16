@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Generic, List, Tuple, Type, Union
 
 from nav_msgs.msg import Odometry
+from rclpy.duration import Duration
 from rclpy.subscription import Subscription
+from rclpy.time import Time
 from sensor_msgs.msg import JointState
 from typing_extensions import TypeVar
 
@@ -17,6 +19,7 @@ from giskardpy.middleware.ros2.exceptions import (
 )
 from krrood.patterns.subclass_safe_generic import SubClassSafeGeneric
 from semantic_digital_twin.adapters.ros.tfwrapper import TFWrapper
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
@@ -142,11 +145,12 @@ class TopicInputSynchronizer(
     subscription: Subscription = field(init=False)
     """
     The subscription feeding ``latest_message``.
+
+    A relative topic name is resolved by the node, so a giskard running in a robot's
+    namespace reads that robot's topics.
     """
 
     def __post_init__(self):
-        if not self.topic_name.startswith("/"):
-            self.topic_name = f"/{self.topic_name}"
         self.subscription = rospy.get_node().create_subscription(
             self.message_type(), self.topic_name, self.buffer_message, 1
         )
@@ -203,12 +207,28 @@ class JointStateInputSynchronizer(TopicInputSynchronizer[JointState], ABC):
     Writes the positions of a joint state message into the world state.
     """
 
+    prefix: str | None = field(default=None, kw_only=True)
+    """
+    The prefix the reporting robot's connections carry in the world, put in front of the
+    plain joint names its messages report; ``None`` looks the names up as they are.
+    """
+
     def apply_message(self, message: JointState) -> None:
         for joint_name, position in zip(message.name, message.position):
             connection: ActiveConnection1DOF = self.world.get_connection_by_name(
-                joint_name
+                self.connection_name(joint_name)
             )
             self.world.state[connection.raw_dof.id].position = position
+
+    def connection_name(self, joint_name: str) -> Union[str, PrefixedName]:
+        """
+        The name a reported joint carries in the world.
+
+        :param joint_name: The joint's name as the message reports it.
+        """
+        if self.prefix is None:
+            return joint_name
+        return PrefixedName(joint_name, self.prefix)
 
     @abstractmethod
     def take_message(self) -> JointState | None:
@@ -318,10 +338,21 @@ class TfFrameSynchronizer(InputSynchronizer):
         self.connection_to_frames[connection] = (tf_parent_frame, tf_child_frame)
 
     def apply(self) -> bool:
+        """
+        Write the transform of every tracked connection whose frames are on tf.
+
+        A connection whose frames are not there yet keeps its origin: whoever publishes
+        them may come up after this giskard.
+        """
+        wrote_something = False
         for connection, (
             tf_parent_frame,
             tf_child_frame,
         ) in self.connection_to_frames.items():
+            if not self.tf_wrapper.wait_for_transform(
+                tf_parent_frame, tf_child_frame, Time(), Duration()
+            ):
+                continue
             parent_T_child = self.tf_wrapper.lookup_pose(
                 tf_parent_frame, tf_child_frame
             ).pose
@@ -336,4 +367,5 @@ class TfFrameSynchronizer(InputSynchronizer):
                 reference_frame=connection.parent,
                 child_frame=connection.child,
             )
-        return bool(self.connection_to_frames)
+            wrote_something = True
+        return wrote_something

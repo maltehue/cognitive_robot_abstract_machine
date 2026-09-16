@@ -9,9 +9,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 
-from giskardpy.data_types.exceptions import (
-    JointRegistrationRequiresStandaloneModeError,
-)
+from giskardpy.data_types.exceptions import JointRegistrationRequiresStandaloneModeError
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.command_publishing import (
     DriveVelocityCommandPublisher,
@@ -96,6 +94,14 @@ class RobotInterfaceConfig(ABC):
         return self.giskard.robot
 
     @property
+    def robot_prefix(self) -> str | None:
+        """
+        The prefix the robot's bodies and connections carry in the world, under which
+        the plain joint names of its own description are found.
+        """
+        return self.robot.root.name.prefix
+
+    @property
     def server_config(self) -> GiskardServerConfig:
         return self.giskard.server_config
 
@@ -148,16 +154,23 @@ class RobotInterfaceConfig(ABC):
     def sync_joint_state_topic(self, topic_name: str, group_name: str | None = None):
         """
         Tell Giskard to sync the world state with a joint state topic.
+
+        The topic reports the robot's joints under the names of its own description, so
+        they are looked up under the robot's prefix.
         """
         if group_name is None:
             group_name = self.robot.name
         self.motion_server.inputs.synchronizers.append(
-            PendingJointStateSynchronizer(world=self.world, topic_name=topic_name)
+            PendingJointStateSynchronizer(
+                world=self.world, topic_name=topic_name, prefix=self.robot_prefix
+            )
         )
         if not self.server_config.is_closed_loop or group_name != self.robot.name:
             return
         self.control_loop.inputs.synchronizers.append(
-            LatestJointStateSynchronizer(world=self.world, topic_name=topic_name)
+            LatestJointStateSynchronizer(
+                world=self.world, topic_name=topic_name, prefix=self.robot_prefix
+            )
         )
 
     # %% commanding the robot
