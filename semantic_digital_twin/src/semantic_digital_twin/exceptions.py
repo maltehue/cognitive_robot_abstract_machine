@@ -2227,3 +2227,42 @@ class SimulationAlreadyRunningError(UsageError):
 
     def suggest_correction(self) -> str:
         return "Stop the simulation before starting it again."
+
+
+@dataclass
+class ParticlesDoNotFitError(UsageError):
+    """
+    Raised when a container is asked to hold more particles than its cavity seats.
+    """
+
+    cavity_volume: float
+    """
+    The volume of the cavity the particles were to be packed into, in cubic metres.
+    """
+
+    particle_radius: float
+    """
+    Radius of one particle, in metres.
+    """
+
+    requested: int
+    """
+    How many particles were asked for.
+    """
+
+    available: int
+    """
+    How many the cavity seats.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"A cavity of {self.cavity_volume:.2e} m^3 seats {self.available} particles "
+            f"of radius {self.particle_radius} m, but {self.requested} were asked for."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "ask for at most the number the cavity seats, or make the particles smaller "
+            "or the container larger."
+        )

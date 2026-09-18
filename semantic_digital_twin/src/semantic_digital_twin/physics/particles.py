@@ -1,0 +1,438 @@
+"""
+Containers that hold their contents as individual particles, for pouring experiments
+whose ground truth is where the grains actually land.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field, replace
+from datetime import timedelta
+
+import numpy
+
+from typing_extensions import ClassVar, List, Optional, Self
+
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.exceptions import ParticlesDoNotFitError
+from semantic_digital_twin.spatial_types.spatial_types import (
+    HomogeneousTransformationMatrix,
+    Point3,
+)
+from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.connections import Connection6DoF
+from semantic_digital_twin.world_description.contact import (
+    ContactFriction,
+    ContactParameters,
+    ContactStiffness,
+)
+from semantic_digital_twin.world_description.geometry import (
+    Box,
+    Color,
+    Cylinder,
+    Scale,
+    Sphere,
+)
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
+from semantic_digital_twin.world_description.world_entity import Body
+
+# %% the container
+
+
+@dataclass
+class HollowCylinder:
+    """
+    The geometry of an upright container whose contents cannot fall through it.
+
+    A container whose geometry is a mesh collides as that mesh's convex hull, so
+    anything poured into one comes to rest on top of it rather than inside. Built from
+    primitives, the cavity survives into the physics.
+
+    The container's origin sits at the bottom of its outside, so the cavity runs from
+    :attr:`base_thickness` up to :attr:`height`.
+    """
+
+    PARTICLE_SPACING: ClassVar[float] = 2.2
+    """
+    Distance between two neighbouring particle centres, in particle radii.
+
+    Larger than 2 so the packing starts with the particles clear of each other: a
+    packing that starts in contact resolves those contacts in its first steps, which
+    costs more than the gap it saves.
+    """
+
+    inner_radius: float
+    """
+    Radius of the cavity, in metres.
+    """
+
+    height: float
+    """
+    Height of the container from the bottom of its base to its rim, in metres.
+    """
+
+    wall_thickness: float = 0.004
+    """
+    Thickness of the side wall, in metres.
+    """
+
+    base_thickness: float = 0.004
+    """
+    Thickness of the floor the contents rest on, in metres.
+    """
+
+    wall_segments: int = 16
+    """
+    How many flat panels stand in for the round wall.
+
+    Each panel's inner face is tangent to the cavity, so the cavity is the circle the
+    panels enclose and every extra panel makes the wall rounder.
+    """
+
+    color: Color = field(default_factory=lambda: Color(0.7, 0.7, 0.75, 1.0))
+    """
+    Colour of the base and the wall panels.
+    """
+
+    @property
+    def cavity_volume(self) -> float:
+        """
+        :return: The volume the cavity encloses, in cubic metres.
+        """
+        return math.pi * self.inner_radius**2 * (self.height - self.base_thickness)
+
+    def shapes(self) -> ShapeCollection:
+        """
+        Build the base and the wall panels of this container.
+
+        :return: The shapes, in the container's own frame.
+        """
+        return ShapeCollection([self._base_shape()] + self._wall_shapes())
+
+    def _base_shape(self) -> Cylinder:
+        """
+        :return: The floor of the container, spanning the full outside radius.
+        """
+        return Cylinder(
+            origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                z=self.base_thickness / 2
+            ),
+            width=2 * (self.inner_radius + self.wall_thickness),
+            height=self.base_thickness,
+            color=self.color,
+        )
+
+    def _wall_shapes(self) -> List[Box]:
+        """
+        :return: The panels standing in for the round wall, each tangent to the cavity.
+        """
+        wall_height = self.height - self.base_thickness
+        panel_width = (
+            2
+            * (self.inner_radius + self.wall_thickness)
+            * math.tan(math.pi / self.wall_segments)
+        )
+        centre_radius = self.inner_radius + self.wall_thickness / 2
+        panels = []
+        for segment in range(self.wall_segments):
+            angle = 2 * math.pi * segment / self.wall_segments
+            panels.append(
+                Box(
+                    origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        x=centre_radius * math.cos(angle),
+                        y=centre_radius * math.sin(angle),
+                        z=self.base_thickness + wall_height / 2,
+                        yaw=angle,
+                    ),
+                    scale=Scale(self.wall_thickness, panel_width, wall_height),
+                    color=self.color,
+                )
+            )
+        return panels
+
+    def body(self, name: PrefixedName) -> Body:
+        """
+        Build the body of a container with this geometry, for a caller to connect into a
+        world however it stands there.
+
+        :param name: Name of the container's body.
+        :return: The container's body, not yet in any world.
+        """
+        return Body.from_shape_collection(name=name, shape_collection=self.shapes())
+
+    def fill_with_particles(
+        self,
+        container: Body,
+        world: World,
+        particle_radius: float,
+        count: int,
+    ) -> ParticleFill:
+        """
+        Pack a container this geometry describes with particles.
+
+        :param container: The body this geometry was built as.
+        :param world: The world the container lives in.
+        :param particle_radius: Radius of one particle, in metres.
+        :param count: How many particles to pack.
+        :return: The fill holding the spawned particles.
+        :raises ParticlesDoNotFitError: If the cavity holds fewer than ``count``.
+        """
+        return ParticleFill.spawn(
+            world=world,
+            container=container,
+            positions=self.particle_positions(particle_radius, count),
+            particle_radius=particle_radius,
+        )
+
+    def particle_capacity(
+        self, particle_radius: float, fill_fraction: float = 1.0
+    ) -> int:
+        """
+        How many particles stand in the cavity up to a share of its depth.
+
+        Lets a packing be given the same depth as the fill level it is compared against,
+        since a container pours once its contents reach its lip rather than once it
+        holds a given volume.
+
+        :param particle_radius: Radius of one particle, in metres.
+        :param fill_fraction: Share of the cavity's depth to pack, in ``[0, 1]``.
+        :return: The number of particles that fit below that depth.
+        """
+        spacing = self.PARTICLE_SPACING * particle_radius
+        seat_radius = self.inner_radius - particle_radius
+        surface = self.base_thickness + fill_fraction * (
+            self.height - self.base_thickness
+        )
+        count = 0
+        height = self.base_thickness + particle_radius
+        while height + particle_radius <= surface:
+            count += len(self._layer_positions(height, seat_radius, spacing))
+            height += spacing
+        return count
+
+    def particle_positions(self, particle_radius: float, count: int) -> List[Point3]:
+        """
+        Where ``count`` particles of this radius stand in the cavity, packed from the
+        floor up and clear of the walls and of each other.
+
+        :param particle_radius: Radius of one particle, in metres.
+        :param count: How many particles to place.
+        :return: The particles' positions in the container's own frame, lowest first.
+        :raises ParticlesDoNotFitError: If the cavity holds fewer than ``count``.
+        """
+        spacing = self.PARTICLE_SPACING * particle_radius
+        seat_radius = self.inner_radius - particle_radius
+        positions = []
+        height = self.base_thickness + particle_radius
+        while height + particle_radius <= self.height:
+            positions.extend(self._layer_positions(height, seat_radius, spacing))
+            if len(positions) >= count:
+                return positions[:count]
+            height += spacing
+        raise ParticlesDoNotFitError(
+            cavity_volume=self.cavity_volume,
+            particle_radius=particle_radius,
+            requested=count,
+            available=len(positions),
+        )
+
+    def _layer_positions(
+        self, height: float, seat_radius: float, spacing: float
+    ) -> List[Point3]:
+        """
+        One horizontal layer of the packing.
+
+        :param height: Height of the layer above the container's origin.
+        :param seat_radius: How far from the axis a particle's centre may stand.
+        :param spacing: Distance between two neighbouring particle centres.
+        :return: The positions in the layer, in the container's own frame.
+        """
+        positions = []
+        steps = int(seat_radius / spacing) if spacing > 0 else 0
+        for x_step in range(-steps, steps + 1):
+            for y_step in range(-steps, steps + 1):
+                x, y = x_step * spacing, y_step * spacing
+                if math.hypot(x, y) <= seat_radius:
+                    positions.append(Point3(x, y, height))
+        return positions
+
+
+# %% the contents
+
+
+@dataclass
+class ParticleFill:
+    """
+    A container's contents, modelled as individual spherical bodies.
+
+    Each particle is a free body of its own, so where the contents end up is whatever
+    the physics does with them rather than a number integrated from a pouring equation.
+    """
+
+    particles: List[Body]
+    """
+    The bodies standing for the contents, in the order they were packed.
+    """
+
+    particle_radius: float
+    """
+    Radius of one particle, in metres.
+    """
+
+    world: World
+    """
+    The world the particles live in.
+    """
+
+    @classmethod
+    def spawn(
+        cls,
+        world: World,
+        container: Body,
+        positions: List[Point3],
+        particle_radius: float,
+        color: Optional[Color] = None,
+        contact: Optional[ContactParameters] = None,
+    ) -> Self:
+        """
+        Add one free body per position to a world.
+
+        The positions are read in the container's frame but the particles hang from the
+        world's root, since a free body may only hang from the root.
+
+        :param world: The world to add the particles to.
+        :param container: The container whose frame the positions are given in.
+        :param positions: Where the particles start, in the container's frame.
+        :param particle_radius: Radius of one particle, in metres.
+        :param color: Colour of the particles. Defaults to a translucent blue.
+        :param contact: What the particles' surfaces do in a contact. Defaults to
+            :meth:`settling_contact`.
+        :return: The fill holding the spawned particles.
+        """
+        color = color if color is not None else Color(0.2, 0.45, 0.9, 1.0)
+        contact = contact if contact is not None else cls.settling_contact()
+        root_T_container = world.compute_forward_kinematics_np(world.root, container)
+        particles = []
+        with world.modify_world():
+            for index, position in enumerate(positions):
+                sphere = Sphere(radius=particle_radius, color=color)
+                sphere.add_simulator_property(replace(contact))
+                particle = Body.from_shape_collection(
+                    name=PrefixedName(f"{container.name.name}_particle_{index}"),
+                    shape_collection=ShapeCollection([sphere]),
+                )
+                root_position = root_T_container @ numpy.array(
+                    [
+                        float(position.x),
+                        float(position.y),
+                        float(position.z),
+                        1.0,
+                    ]
+                )
+                world.add_connection(
+                    Connection6DoF.create_with_dofs(
+                        world=world,
+                        parent=world.root,
+                        child=particle,
+                        parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                            x=float(root_position[0]),
+                            y=float(root_position[1]),
+                            z=float(root_position[2]),
+                            reference_frame=world.root,
+                        ),
+                    )
+                )
+                particles.append(particle)
+        return cls(particles=particles, particle_radius=particle_radius, world=world)
+
+    @staticmethod
+    def settling_contact() -> ContactParameters:
+        """
+        Contact parameters that let poured particles come to rest where they land.
+
+        At a physics engine's own damping a particle dropped a container's height into
+        another bounces straight back out of it, so these contacts are overdamped.
+
+        ..note:: :meth:`~...contact.ContactParameters.apply_to` passes a particle over,
+            since a particle's volume is below the threshold at which a shape counts as
+            collision geometry, so a fill declares these on its spheres itself.
+
+        :return: The parameters.
+        """
+        return ContactParameters(
+            friction=ContactFriction(sliding=0.6),
+            stiffness=ContactStiffness(
+                time_constant=timedelta(milliseconds=10), damping_ratio=3.0
+            ),
+        )
+
+    def count_inside(self, container: Body) -> int:
+        """
+        How many particles stand within a container's own extent.
+
+        Reads the world, so a simulation has to have written its state back for the
+        count to be the one the physics holds.
+
+        ..note:: A particle counts as inside when it is within the container's bounding
+            box, which also covers the volume the container's own walls occupy.
+
+        :param container: The container to count in.
+        :return: The number of particles inside it.
+        """
+        return sum(
+            1 for particle in self.particles if self._is_inside(container, particle)
+        )
+
+    def _is_inside(self, container: Body, particle: Body) -> bool:
+        """
+        :param container: The container to test against.
+        :param particle: The particle to test.
+        :return: Whether the particle's centre lies within the container's extent.
+        """
+        lower = container.collision.min_point.to_np()[:3]
+        upper = container.collision.max_point.to_np()[:3]
+        position = self.world.compute_forward_kinematics_np(container, particle)[:3, 3]
+        return bool(all(lower <= position) and all(position <= upper))
+
+    def filled_height_in(self, container: Body) -> float:
+        """
+        How far the particles standing in a container reach up it, as a share of its own
+        height.
+
+        Upright, this is the depth of the contents, which is what a fill level is. While
+        the container tilts the contents ride up its wall, so the same number says how
+        close they are to its rim and reaches ``1`` as it starts pouring.
+
+        :param container: The container to measure in.
+        :return: The height of the highest particle inside it over the container's
+            height, or ``0`` when none is inside.
+        """
+        lower = container.collision.min_point.to_np()[:3]
+        upper = container.collision.max_point.to_np()[:3]
+        heights = [
+            self.world.compute_forward_kinematics_np(container, particle)[2, 3]
+            for particle in self.particles
+            if self._is_inside(container, particle)
+        ]
+        if not heights:
+            return 0.0
+        return (max(heights) - lower[2]) / (upper[2] - lower[2])
+
+    def fraction_inside(self, container: Body) -> float:
+        """
+        The share of the contents standing in a container, for comparison against a fill
+        level.
+
+        :param container: The container to count in.
+        :return: The fraction in ``[0, 1]``, or ``0`` for a fill with no particles.
+        """
+        if not self.particles:
+            return 0.0
+        return self.count_inside(container) / len(self.particles)
+
+    @property
+    def volume(self) -> float:
+        """
+        :return: The volume of the particles themselves, in cubic metres.
+        """
+        return len(self.particles) * 4 / 3 * math.pi * self.particle_radius**3
