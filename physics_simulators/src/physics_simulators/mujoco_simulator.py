@@ -65,6 +65,38 @@ class MujocoEntity(StrEnum):
 
 
 @dataclass
+class NewEntity:
+    """
+    One entity to give a model, as :meth:`MujocoSimulator.add_entities` takes it.
+    """
+
+    name: str
+    """
+    Name of the new entity.
+    """
+
+    kind: MujocoEntity
+    """
+    What kind of entity it is.
+    """
+
+    properties: Dict[str, Any]
+    """
+    The properties to build it with, as MuJoCo's own spec names them.
+    """
+
+    parent_name: Optional[str] = None
+    """
+    Name of the body or frame it hangs from. ``None`` is the worldbody.
+    """
+
+    parent_kind: MujocoEntity = MujocoEntity.BODY
+    """
+    What kind of entity the parent is. Only a body or a frame can be one.
+    """
+
+
+@dataclass
 class MujocoRenderer(SimulatorRenderer):
     """
     MuJoCo Renderer class.
@@ -1735,46 +1767,104 @@ class MujocoSimulator(BaseSimulator):
         entity_type: str,
         entity_properties: Dict[str, Any],
         parent_name: Optional[str] = None,
-        parent_type: str = "body",
+        parent_type: str = MujocoEntity.BODY,
     ) -> SimulatorCallbackResult:
         """
         This method adds a new entity to the simulation.
 
         The entity can be a body, joint, geom, frame, or site.
+
+        ..note:: The model is compiled before this returns, so a body cannot be given a
+            joint before it has the geometry that gives it mass. Entities that are only
+            valid together go in one :meth:`add_entities` call.
+
         :param entity_name: The name of the new entity.
-        :param entity_type: The type of the new entity. Can be "body", "joint", "geom",
-            "actuator", "frame", or "site".
+        :param entity_type: The type of the new entity.
         :param entity_properties: A dictionary of properties for the new entity.
         :param parent_name: The name of the parent body or frame to attach the new
             entity to. If None, the worldbody is used.
-        :param parent_type: The type of the parent entity. Must be "body" for now.
+        :param parent_type: The type of the parent entity. Must be a body or a frame.
         :return: A SimulatorCallbackResult object indicating the result of the
             operation.
         """
-        if entity_type != MujocoEntity.ACTUATOR:
-            if parent_name is None:
-                parent_name = "world"
-                parent_type = MujocoEntity.BODY
-            if mujoco.mj_version() >= 330:
-                if parent_type == MujocoEntity.BODY:
-                    parent_spec = self._mj_spec.body(parent_name)
-                elif parent_type == MujocoEntity.FRAME:
-                    parent_spec = self._mj_spec.frame(parent_name)
-                else:
-                    return SimulatorCallbackResult(
-                        type=SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
-                        info=f"Parent type {parent_type} is not supported",
-                    )
+        return self.add_entities(
+            [
+                NewEntity(
+                    name=entity_name,
+                    kind=MujocoEntity(entity_type),
+                    properties=entity_properties,
+                    parent_name=parent_name,
+                    parent_kind=MujocoEntity(parent_type),
+                )
+            ]
+        )
+
+    @BaseSimulator.simulator_callback
+    def add_entities(self, entities: List[NewEntity]) -> SimulatorCallbackResult:
+        """
+        Add several entities to the simulation and compile the model once for all of
+        them.
+
+        One compile for the batch is what lets entities that are only valid together
+        arrive together -- a moving body has no mass until its geometry is there -- and
+        what keeps a viewer from reloading the scene once per entity.
+
+        Nothing is compiled until every entity has been built, so a batch that cannot be
+        built leaves the model as it was, and an empty batch compiles nothing at all: a
+        compile leaves every body's pose to be worked out again by the next step.
+
+        :param entities: The entities to add, in the order they are built.
+        :return: A SimulatorCallbackResult object indicating the result of the
+            operation.
+        """
+        if not entities:
+            return SimulatorCallbackResult(
+                type=SimulatorCallbackResult.ResultType.SUCCESS_WITHOUT_EXECUTION,
+                info="No entities to spawn",
+            )
+        built: Dict[str, Any] = {}
+        for entity in entities:
+            failure = self._build_entity(entity, built)
+            if failure is not None:
+                self._mj_spec = mujoco.MjSpec.from_string(self._mj_spec.to_xml())
+                return failure
+        if self.state == SimulatorState.RUNNING:
+            self.pause()
+            self._compile_and_reload()
+            self.unpause()
+        else:
+            self._compile_and_reload()
+        return SimulatorCallbackResult(
+            type=SimulatorCallbackResult.ResultType.SUCCESS_AFTER_EXECUTION_ON_MODEL,
+            info=f"Spawned {len(entities)} entities",
+        )
+
+    def _build_entity(
+        self, entity: NewEntity, built: Dict[str, Any]
+    ) -> Optional[SimulatorCallbackResult]:
+        """
+        Add one entity to the model's spec, without compiling it.
+
+        :param entity: The entity to build.
+        :param built: What the batch has built so far, by name, which this adds to. A
+            spec resolves a name only as of its last compile, so an entity standing on
+            one the same batch just built is found here rather than there.
+        :return: The failure to report, or ``None`` if it was built.
+        """
+        if entity.kind != MujocoEntity.ACTUATOR:
+            parent_name = "world" if entity.parent_name is None else entity.parent_name
+            parent_kind = (
+                MujocoEntity.BODY if entity.parent_name is None else entity.parent_kind
+            )
+            if parent_kind in (MujocoEntity.BODY, MujocoEntity.FRAME):
+                parent_spec = built.get(parent_name) or self._find_spec(
+                    parent_kind, parent_name
+                )
             else:
-                if parent_type == MujocoEntity.BODY:
-                    parent_spec = self._mj_spec.find_body(parent_name)
-                elif parent_type == MujocoEntity.FRAME:
-                    parent_spec = self._mj_spec.find_frame(parent_name)
-                else:
-                    return SimulatorCallbackResult(
-                        type=SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
-                        info=f"Parent type {parent_type} is not supported",
-                    )
+                return SimulatorCallbackResult(
+                    type=SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
+                    info=f"Parent type {parent_kind} is not supported",
+                )
             if parent_spec is None:
                 return SimulatorCallbackResult(
                     type=SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
@@ -1782,49 +1872,51 @@ class MujocoSimulator(BaseSimulator):
                 )
         else:
             parent_spec = self._mj_spec
-        if entity_type not in set(MujocoEntity):
+        if entity.kind not in set(MujocoEntity):
             return SimulatorCallbackResult(
                 type=SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
-                info=f"Entity type {entity_type} is not supported",
+                info=f"Entity type {entity.kind} is not supported",
             )
-        if mujoco.mj_version() >= 330:
-            entity_spec = self._mj_spec.__getattribute__(entity_type)(entity_name)
-        else:
-            entity_spec = self._mj_spec.__getattribute__(f"find_{entity_type}")(
-                entity_name
-            )
-        if entity_spec:
+        if entity.name in built or self._find_spec(entity.kind, entity.name):
             return SimulatorCallbackResult(
                 type=SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
-                info=f"{entity_type} {entity_name} already exists",
+                info=f"{entity.kind} {entity.name} already exists",
             )
         try:
-            entity = parent_spec.__getattribute__(f"add_{entity_type}")(
-                name=entity_name, **entity_properties
+            built[entity.name] = parent_spec.__getattribute__(f"add_{entity.kind}")(
+                name=entity.name, **entity.properties
             )
-        except Exception as e:
+        except Exception as error:
             return SimulatorCallbackResult(
                 type=SimulatorCallbackResult.ResultType.FAILURE_BEFORE_EXECUTION_ON_MODEL,
-                info=f"Failed to create {entity_type} {entity_name} with properties {entity_properties}: {e}",
+                info=(
+                    f"Failed to create {entity.kind} {entity.name} with properties "
+                    f"{entity.properties}: {error}"
+                ),
             )
+        return None
 
-        def do_spawn():
-            with self._model_lock:
-                self._mj_model, self._mj_data = self._mj_spec.recompile(
-                    self._mj_model, self._mj_data
-                )
-                if not self.headless:
-                    self._renderer._sim().load(self._mj_model, self._mj_data, "")
-                    if self.simulation_thread is None:
-                        mujoco.mj_step1(self._mj_model, self._mj_data)
+    def _find_spec(self, kind: MujocoEntity, name: str) -> Any:
+        """
+        Look an entity up in the model's spec by name.
 
-        if self.state == SimulatorState.RUNNING:
-            self.pause()
-            do_spawn()
-            self.unpause()
-        else:
-            do_spawn()
-        return SimulatorCallbackResult(
-            type=SimulatorCallbackResult.ResultType.SUCCESS_AFTER_EXECUTION_ON_MODEL,
-            info=f"Spawned {entity_type} {entity.name} under parent body {parent_name} with properties {entity_properties}",
-        )
+        :param kind: What kind of entity to look for.
+        :param name: Its name.
+        :return: The entity's spec, or ``None`` if the spec holds no such entity.
+        """
+        if mujoco.mj_version() >= 330:
+            return self._mj_spec.__getattribute__(kind)(name)
+        return self._mj_spec.__getattribute__(f"find_{kind}")(name)
+
+    def _compile_and_reload(self) -> None:
+        """
+        Compile the model's spec and hand the result to the renderer.
+        """
+        with self._model_lock:
+            self._mj_model, self._mj_data = self._mj_spec.recompile(
+                self._mj_model, self._mj_data
+            )
+            if not self.headless:
+                self._renderer._sim().load(self._mj_model, self._mj_data, "")
+                if self.simulation_thread is None:
+                    mujoco.mj_step1(self._mj_model, self._mj_data)

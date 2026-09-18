@@ -7,8 +7,10 @@ import pytest
 
 from physics_simulators.mujoco_simulator import (
     HeadlessGraphicsBackend,
+    MujocoEntity,
     MujocoEnvironmentVariable,
     MujocoSimulator,
+    NewEntity,
 )
 from physics_simulators.base_simulator import (
     SimulatorConstraints,
@@ -694,3 +696,145 @@ class TestOffscreenRenderingAvailability:
         monkeypatch.setenv(MujocoEnvironmentVariable.DISPLAY, ":1")
 
         assert MujocoSimulator.offscreen_rendering_available()
+
+
+# %% adding several entities at once
+
+
+class TestAddingSeveralEntities:
+    """
+    Adding many entities one at a time compiles the model once per entity, and a viewer
+    reloads the scene on each compile, so a scene given hundreds of bodies flickers its
+    way through hundreds of reloads.
+    """
+
+    @pytest.fixture
+    def simulator(self):
+        sim = MujocoSimulator(
+            _headless=True,
+            _step_size=1e-3,
+            file_path=os.path.join(resources_path, "floor.xml"),
+        )
+        yield sim
+        try:
+            sim.stop()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _free_sphere(name: str, height: float) -> list[NewEntity]:
+        """
+        The body, sphere and free joint one loose sphere is made of.
+        """
+        return [
+            NewEntity(
+                name=name,
+                kind=MujocoEntity.BODY,
+                properties={"pos": [0.0, 0.0, height]},
+            ),
+            NewEntity(
+                name=f"{name}_sphere",
+                kind=MujocoEntity.GEOM,
+                properties={
+                    "type": mujoco.mjtGeom.mjGEOM_SPHERE,
+                    "size": [0.01, 0.0, 0.0],
+                },
+                parent_name=name,
+            ),
+            NewEntity(
+                name=f"{name}_free",
+                kind=MujocoEntity.JOINT,
+                properties={"type": mujoco.mjtJoint.mjJNT_FREE},
+                parent_name=name,
+            ),
+        ]
+
+    def test_the_model_is_compiled_once_for_the_whole_batch(self, simulator):
+        """
+        One compile for the batch is what keeps a viewer from reloading the scene once
+        per entity.
+        """
+        simulator.start(simulate_in_thread=False, render_in_thread=False)
+        compiles = []
+        original_compile = simulator._compile_and_reload
+        simulator._compile_and_reload = lambda: (
+            compiles.append(None),
+            original_compile(),
+        )[1]
+
+        simulator.add_entities(
+            self._free_sphere("first", 1.0) + self._free_sphere("second", 1.5)
+        )
+
+        assert len(compiles) == 1
+
+    def test_every_entity_of_the_batch_reaches_the_model(self, simulator):
+        """
+        A batch is not a partial apply: everything in it is in the compiled model.
+        """
+        simulator.start(simulate_in_thread=False, render_in_thread=False)
+
+        simulator.add_entities(
+            self._free_sphere("first", 1.0) + self._free_sphere("second", 1.5)
+        )
+
+        body_names = simulator.get_all_body_names().result
+        assert {"first", "second"} <= set(body_names)
+        for name in ("first", "second"):
+            [joint] = simulator.get_body_joints(body_name=name).result
+            assert joint.type == mujoco.mjtJoint.mjJNT_FREE
+
+    def test_a_batch_may_build_a_body_before_it_has_any_geometry(self, simulator):
+        """
+        A moving body with no geometry has no mass and no model holding one compiles, so
+        a body and the joint that moves it can only be added together while the geometry
+        that gives it mass is still to come.
+        """
+        simulator.start(simulate_in_thread=False, render_in_thread=False)
+        body, sphere, free_joint = self._free_sphere("grain", 1.0)
+
+        simulator.add_entities([body, free_joint, sphere])
+
+        assert "grain" in simulator.get_all_body_names().result
+
+    def test_a_batch_that_cannot_be_built_leaves_the_model_alone(self, simulator):
+        """
+        A batch reports the entity it could not build rather than compiling half of it
+        into the model.
+        """
+        simulator.start(simulate_in_thread=False, render_in_thread=False)
+        bodies_before = set(simulator.get_all_body_names().result)
+
+        result = simulator.add_entities(
+            self._free_sphere("fine", 1.0)
+            + [
+                NewEntity(
+                    name="orphan",
+                    kind=MujocoEntity.GEOM,
+                    properties={"type": mujoco.mjtGeom.mjGEOM_SPHERE},
+                    parent_name="no_such_body",
+                )
+            ]
+        )
+
+        assert result.type in (
+            SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
+            SimulatorCallbackResult.ResultType.FAILURE_BEFORE_EXECUTION_ON_MODEL,
+        )
+        assert set(simulator.get_all_body_names().result) == bodies_before
+
+    def test_an_empty_batch_compiles_nothing(self, simulator):
+        """
+        A compile leaves every body's pose to be worked out again by the next step, so a
+        batch with nothing in it must not cost the caller its poses.
+        """
+        simulator.start(simulate_in_thread=False, render_in_thread=False)
+        simulator.add_entities(self._free_sphere("grain", 1.0))
+        simulator.step()
+        settled = simulator.get_body_position(body_name="grain").result.copy()
+
+        simulator.add_entities([])
+
+        assert list(simulator.get_body_position(body_name="grain").result) == list(
+            settled
+        )

@@ -27,7 +27,11 @@ from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
     Point3,
 )
-from physics_simulators.mujoco_simulator import MujocoEntity, MujocoSimulator
+from physics_simulators.mujoco_simulator import (
+    MujocoEntity,
+    MujocoSimulator,
+    NewEntity,
+)
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.contact import (
     ContactFriction,
@@ -332,44 +336,37 @@ class ParticleFill:
         color = color if color is not None else Color(0.2, 0.45, 0.9, 1.0)
         contact = contact if contact is not None else cls.settling_contact()
         names = []
+        new_entities = []
         for index, position in enumerate(positions):
             name = f"{container.name.name}_particle_{index}"
             pose = world_T_container @ numpy.array(
                 [float(position.x), float(position.y), float(position.z), 1.0]
             )
-            cls._add_particle(
-                simulator, name, pose[:3], particle_radius, color, contact
+            new_entities.extend(
+                cls._particle_entities(name, pose[:3], particle_radius, color, contact)
             )
             names.append(name)
+        simulator.add_entities(new_entities)
         return cls(simulator=simulator, names=names, particle_radius=particle_radius)
 
     @staticmethod
-    def _add_particle(
-        simulator: MujocoSimulator,
+    def _particle_entities(
         name: str,
         position: numpy.ndarray,
         particle_radius: float,
         color: Color,
         contact: ContactParameters,
-    ) -> None:
+    ) -> List[NewEntity]:
         """
-        Add one free sphere to a simulation.
+        The body, sphere and free joint one particle is made of.
 
-        The sphere is added before the free joint: a moving body with no geometry has no
-        mass, and the model is compiled between the two.
-
-        :param simulator: The simulation to add the particle to.
         :param name: Name of the particle's body.
         :param position: Where it starts, in the simulation's own frame.
         :param particle_radius: Radius of the particle, in metres.
         :param color: Colour of the particle.
         :param contact: What its surface does in a contact.
+        :return: The three entities, which only compile together.
         """
-        simulator.add_entity(
-            entity_name=name,
-            entity_type=MujocoEntity.BODY,
-            entity_properties={"pos": position.tolist()},
-        )
         geometry_properties = {
             "type": mujoco.mjtGeom.mjGEOM_SPHERE,
             "size": [particle_radius, 0.0, 0.0],
@@ -380,18 +377,25 @@ class ParticleFill:
             geometry_properties["solref"] = contact.stiffness.to_list()
         if contact.impedance is not None:
             geometry_properties["solimp"] = contact.impedance.to_list()
-        simulator.add_entity(
-            entity_name=f"{name}_sphere",
-            entity_type=MujocoEntity.GEOM,
-            entity_properties=geometry_properties,
-            parent_name=name,
-        )
-        simulator.add_entity(
-            entity_name=f"{name}_free",
-            entity_type=MujocoEntity.JOINT,
-            entity_properties={"type": mujoco.mjtJoint.mjJNT_FREE},
-            parent_name=name,
-        )
+        return [
+            NewEntity(
+                name=name,
+                kind=MujocoEntity.BODY,
+                properties={"pos": position.tolist()},
+            ),
+            NewEntity(
+                name=f"{name}_sphere",
+                kind=MujocoEntity.GEOM,
+                properties=geometry_properties,
+                parent_name=name,
+            ),
+            NewEntity(
+                name=f"{name}_free",
+                kind=MujocoEntity.JOINT,
+                properties={"type": mujoco.mjtJoint.mjJNT_FREE},
+                parent_name=name,
+            ),
+        ]
 
     @staticmethod
     def settling_contact() -> ContactParameters:
