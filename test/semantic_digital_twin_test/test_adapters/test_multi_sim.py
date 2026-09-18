@@ -1677,3 +1677,54 @@ def test_the_builder_leaves_a_containers_fill_level_out_of_the_physics(tmp_path)
     assert {joint.name for body in builder.spec.bodies for joint in body.joints} == {
         cup.root.parent_connection.name.name
     }
+
+
+# %% what the sync resolves once and what it must resolve again
+
+
+def test_a_body_added_to_a_running_simulation_has_its_pose_pulled_back(
+    falling_box_world,
+):
+    """
+    A body spawned after the simulation started falls in the physics like any other, so
+    the world has to follow it too, whatever the sync had resolved before it existed.
+    """
+    latecomer = Body(name=PrefixedName("latecomer"))
+    geometry = ShapeCollection(
+        [
+            Box(
+                origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    reference_frame=latecomer
+                ),
+                scale=Scale(0.1, 0.1, 0.1),
+            )
+        ],
+        reference_frame=latecomer,
+    )
+    latecomer.collision, latecomer.visual = geometry, geometry
+
+    multi_sim = MujocoSim(world=falling_box_world, headless=True)
+    multi_sim.start_stepped_simulation()
+    try:
+        multi_sim.step_simulation(timedelta(milliseconds=100))
+        with falling_box_world.modify_world():
+            falling_box_world.add_connection(
+                Connection6DoF.create_with_dofs(
+                    world=falling_box_world,
+                    parent=falling_box_world.root,
+                    child=latecomer,
+                    parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        x=0.5, z=2.0, reference_frame=falling_box_world.root
+                    ),
+                )
+            )
+        multi_sim.step_simulation(timedelta(milliseconds=300))
+        in_world = falling_box_world.compute_forward_kinematics_np(
+            falling_box_world.root, latecomer
+        )[:3, 3]
+        in_simulation = multi_sim.simulator.get_body_position("latecomer").result
+    finally:
+        stop_multisim_if_running(multi_sim)
+
+    assert list(in_world) == pytest.approx(list(in_simulation), abs=1e-6)
+    assert in_world[2] < 2.0

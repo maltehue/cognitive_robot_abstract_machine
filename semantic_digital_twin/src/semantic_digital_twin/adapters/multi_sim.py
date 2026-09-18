@@ -3143,6 +3143,21 @@ class MujocoSynchronizer(MultiSimSynchronizer):
 
     _last_sync_time: float = field(init=False, default=0.0, repr=False)
 
+    _resolved_connections: List[JointBackedConnection] = field(
+        init=False, default_factory=list, repr=False
+    )
+    """
+    The joint-backed connections as resolved against :attr:`_resolved_against`.
+    """
+
+    _resolved_against: Optional[mujoco.MjModel] = field(
+        init=False, default=None, repr=False
+    )
+    """
+    The compiled model :attr:`_resolved_connections` was resolved against; a recompile
+    replaces the model object, which is what makes the resolved set stale.
+    """
+
     def __post_init__(self):
         super().__post_init__()
         self.simulator.read_data_from_simulator = self._sim_to_world
@@ -3184,24 +3199,44 @@ class MujocoSynchronizer(MultiSimSynchronizer):
         quat_xyzw = Rotation.from_matrix(pose[:3, :3]).as_quat()
         return xyz, quat_xyzw
 
-    def _joint_backed_connections(self) -> Iterator[JointBackedConnection]:
+    def _joint_backed_connections(self) -> List[JointBackedConnection]:
         """
-        Yield every connection that a MuJoCo joint can be synced with, paired
-        with the qpos address of that joint.
+        Every connection that a MuJoCo joint can be synced with, paired with the qpos
+        address of that joint.
 
-        Fixed connections carry no DoFs, and a connection that does not resolve
-        to a joint is not in the compiled model, so neither has anything to
-        sync. Both sync directions walk the same set, so they share this.
+        Fixed connections carry no DoFs, and a connection that does not resolve to a
+        joint is not in the compiled model, so neither has anything to sync. Both sync
+        directions walk the same set, so they share this.
+
+        Resolved once per compiled model rather than once per step, since whatever
+        changes the set of joints recompiles the model, which is what the resolved set
+        is held against.
+
+        :return: The resolved connections.
         """
+        if self._resolved_against is self.simulator._mj_model:
+            return self._resolved_connections
+        resolved = []
         for connection in self._world.connections:
             if isinstance(connection, FixedConnection):
                 continue
             qpos_address = self._resolve_qpos_address(connection)
             if qpos_address is None:
                 continue
-            yield JointBackedConnection(
-                connection=connection, qpos_address=qpos_address
+            resolved.append(
+                JointBackedConnection(connection=connection, qpos_address=qpos_address)
             )
+        self._resolved_connections = resolved
+        self._resolved_against = self.simulator._mj_model
+        return resolved
+
+    def on_model_change(self, **kwargs):
+        """
+        Spawn what the world gained, and resolve the joints again: the set of joints to
+        sync is exactly what a model change can alter.
+        """
+        self._resolved_against = None
+        super().on_model_change(**kwargs)
 
     @staticmethod
     def _warn_unsupported_connection(direction: str, connection: Connection) -> None:
