@@ -4,6 +4,7 @@ import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, InitVar
 from enum import StrEnum
+from enum import StrEnum
 from threading import RLock
 from typing import Optional, List, Dict, Union, Any
 
@@ -40,14 +41,27 @@ class MujocoEnvironmentVariable(StrEnum):
 
     GRAPHICS_BACKEND = "MUJOCO_GL"
     """
-    Selects the backend MuJoCo renders with; a member of :class:`HeadlessGraphicsBackend`
-    selects a headless one.
+    Selects the backend MuJoCo renders with; a member of
+    :class:`HeadlessGraphicsBackend` selects a headless one.
     """
 
     DISPLAY = "DISPLAY"
     """
     Names the X display the windowed backend renders through.
     """
+
+
+class MujocoEntity(StrEnum):
+    """
+    The kinds of entity a MuJoCo model can be given.
+    """
+
+    BODY = "body"
+    JOINT = "joint"
+    GEOM = "geom"
+    ACTUATOR = "actuator"
+    FRAME = "frame"
+    SITE = "site"
 
 
 @dataclass
@@ -1737,14 +1751,14 @@ class MujocoSimulator(BaseSimulator):
         :return: A SimulatorCallbackResult object indicating the result of the
             operation.
         """
-        if entity_type != "actuator":
+        if entity_type != MujocoEntity.ACTUATOR:
             if parent_name is None:
                 parent_name = "world"
-                parent_type = "body"
+                parent_type = MujocoEntity.BODY
             if mujoco.mj_version() >= 330:
-                if parent_type == "body":
+                if parent_type == MujocoEntity.BODY:
                     parent_spec = self._mj_spec.body(parent_name)
-                elif parent_type == "frame":
+                elif parent_type == MujocoEntity.FRAME:
                     parent_spec = self._mj_spec.frame(parent_name)
                 else:
                     return SimulatorCallbackResult(
@@ -1752,9 +1766,9 @@ class MujocoSimulator(BaseSimulator):
                         info=f"Parent type {parent_type} is not supported",
                     )
             else:
-                if parent_type == "body":
+                if parent_type == MujocoEntity.BODY:
                     parent_spec = self._mj_spec.find_body(parent_name)
-                elif parent_type == "frame":
+                elif parent_type == MujocoEntity.FRAME:
                     parent_spec = self._mj_spec.find_frame(parent_name)
                 else:
                     return SimulatorCallbackResult(
@@ -1768,7 +1782,7 @@ class MujocoSimulator(BaseSimulator):
                 )
         else:
             parent_spec = self._mj_spec
-        if entity_type not in ["body", "joint", "geom", "actuator", "frame", "site"]:
+        if entity_type not in set(MujocoEntity):
             return SimulatorCallbackResult(
                 type=SimulatorCallbackResult.ResultType.FAILURE_WITHOUT_EXECUTION,
                 info=f"Entity type {entity_type} is not supported",

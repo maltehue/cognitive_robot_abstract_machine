@@ -202,19 +202,7 @@ def run(headless: bool) -> None:
     :param headless: Whether to run without the MuJoCo viewer.
     """
     world, source, receiver, tilt, pourable_source = build_world()
-    fill = SOURCE.fill_with_particles(
-        container=source,
-        world=world,
-        particle_radius=PARTICLE_RADIUS,
-        count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=INITIAL_FILL),
-    )
-    print(
-        f"{len(fill.particles)} particles of radius {PARTICLE_RADIUS} m "
-        f"({fill.volume * 1e6:.1f} ml) in a cavity of "
-        f"{SOURCE.cavity_volume * 1e6:.1f} ml"
-    )
-
-    ParticleFill.settling_contact().apply_to([source, receiver] + list(world.bodies))
+    ParticleFill.settling_contact().apply_to(world.bodies)
 
     simulation = MujocoSim(
         world=world,
@@ -224,6 +212,20 @@ def run(headless: bool) -> None:
     )
     simulation.start_stepped_simulation()
     try:
+        simulation.step_simulation(CONTROL_PERIOD)
+        fill = SOURCE.fill_with_particles(
+            container=source,
+            world=world,
+            simulator=simulation.simulator,
+            particle_radius=PARTICLE_RADIUS,
+            count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=INITIAL_FILL),
+        )
+        print(
+            f"{len(fill.names)} particles of radius {PARTICLE_RADIUS} m "
+            f"({fill.volume * 1e6:.1f} ml) in a cavity of "
+            f"{SOURCE.cavity_volume * 1e6:.1f} ml; the world carries "
+            f"{len(world.state)} degrees of freedom either way"
+        )
         simulation.step_simulation(SETTLE_TIME)
         settled_depth = fill.filled_height_in(source)
         JointState.from_mapping(
@@ -274,7 +276,7 @@ def _report(
         f"source: {in_source:3d} particles, reaching {fill.filled_height_in(source):4.2f} "
         f"vs {pourable_source.fill_level:4.2f} predicted  "
         f"receiver: {in_receiver:3d}  "
-        f"spilled: {len(fill.particles) - in_source - in_receiver:3d}"
+        f"spilled: {len(fill.names) - in_source - in_receiver:3d}"
     )
 
 

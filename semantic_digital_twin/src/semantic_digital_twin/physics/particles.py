@@ -1,6 +1,12 @@
 """
 Containers that hold their contents as individual particles, for pouring experiments
 whose ground truth is where the grains actually land.
+
+The contents live in the physics alone. A twin describes what a robot reasons about,
+which is that a container holds something and how much of it; where each grain of that
+something happens to be is not that. Keeping the particles out of the twin keeps its
+state from growing by a free body per grain, and keeps a simulation from converting a
+pose per grain into a world that nothing reads them from.
 """
 
 from __future__ import annotations
@@ -9,7 +15,9 @@ import math
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 
+import mujoco
 import numpy
+from scipy.spatial.transform import Rotation
 
 from typing_extensions import ClassVar, List, Optional, Self
 
@@ -19,8 +27,8 @@ from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
     Point3,
 )
+from physics_simulators.mujoco_simulator import MujocoEntity, MujocoSimulator
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import Connection6DoF
 from semantic_digital_twin.world_description.contact import (
     ContactFriction,
     ContactParameters,
@@ -164,22 +172,30 @@ class HollowCylinder:
         self,
         container: Body,
         world: World,
+        simulator: MujocoSimulator,
         particle_radius: float,
         count: int,
     ) -> ParticleFill:
         """
         Pack a container this geometry describes with particles.
 
+        The world is read to find where the container stands; the particles themselves
+        are added to the simulation and never to the world.
+
         :param container: The body this geometry was built as.
-        :param world: The world the container lives in.
+        :param world: The world the container stands in.
+        :param simulator: The simulation to add the particles to.
         :param particle_radius: Radius of one particle, in metres.
         :param count: How many particles to pack.
         :return: The fill holding the spawned particles.
         :raises ParticlesDoNotFitError: If the cavity holds fewer than ``count``.
         """
-        return ParticleFill.spawn(
-            world=world,
+        return ParticleFill.spawn_in(
+            simulator=simulator,
             container=container,
+            world_T_container=world.compute_forward_kinematics_np(
+                world.root, container
+            ),
             positions=self.particle_positions(particle_radius, count),
             particle_radius=particle_radius,
         )
@@ -263,15 +279,21 @@ class HollowCylinder:
 @dataclass
 class ParticleFill:
     """
-    A container's contents, modelled as individual spherical bodies.
+    A container's contents, as individual spheres in a simulation.
 
-    Each particle is a free body of its own, so where the contents end up is whatever
-    the physics does with them rather than a number integrated from a pouring equation.
+    Where the contents end up is whatever the physics does with them rather than a
+    number integrated from a pouring equation. They are bodies of the simulation only,
+    so every question about them is answered by reading it.
     """
 
-    particles: List[Body]
+    simulator: MujocoSimulator
     """
-    The bodies standing for the contents, in the order they were packed.
+    The simulation the particles live in.
+    """
+
+    names: List[str]
+    """
+    The particles' body names in that simulation, in the order they were packed.
     """
 
     particle_radius: float
@@ -279,71 +301,97 @@ class ParticleFill:
     Radius of one particle, in metres.
     """
 
-    world: World
-    """
-    The world the particles live in.
-    """
-
     @classmethod
-    def spawn(
+    def spawn_in(
         cls,
-        world: World,
+        simulator: MujocoSimulator,
         container: Body,
+        world_T_container: numpy.ndarray,
         positions: List[Point3],
         particle_radius: float,
         color: Optional[Color] = None,
         contact: Optional[ContactParameters] = None,
     ) -> Self:
         """
-        Add one free body per position to a world.
+        Add one free body per position to a simulation.
 
-        The positions are read in the container's frame but the particles hang from the
-        world's root, since a free body may only hang from the root.
+        The positions are read in the container's frame; a free body may only hang from
+        the top level, so each one is placed at the pose that frame gives it.
 
-        :param world: The world to add the particles to.
-        :param container: The container whose frame the positions are given in.
+        :param simulator: The simulation to add the particles to.
+        :param container: The container whose frame the positions are given in, whose
+            name the particles are named after.
+        :param world_T_container: Where that container stands, as a 4x4 pose.
         :param positions: Where the particles start, in the container's frame.
         :param particle_radius: Radius of one particle, in metres.
-        :param color: Colour of the particles. Defaults to a translucent blue.
+        :param color: Colour of the particles. Defaults to a blue.
         :param contact: What the particles' surfaces do in a contact. Defaults to
             :meth:`settling_contact`.
         :return: The fill holding the spawned particles.
         """
         color = color if color is not None else Color(0.2, 0.45, 0.9, 1.0)
         contact = contact if contact is not None else cls.settling_contact()
-        root_T_container = world.compute_forward_kinematics_np(world.root, container)
-        particles = []
-        with world.modify_world():
-            for index, position in enumerate(positions):
-                sphere = Sphere(radius=particle_radius, color=color)
-                sphere.add_simulator_property(replace(contact))
-                particle = Body.from_shape_collection(
-                    name=PrefixedName(f"{container.name.name}_particle_{index}"),
-                    shape_collection=ShapeCollection([sphere]),
-                )
-                root_position = root_T_container @ numpy.array(
-                    [
-                        float(position.x),
-                        float(position.y),
-                        float(position.z),
-                        1.0,
-                    ]
-                )
-                world.add_connection(
-                    Connection6DoF.create_with_dofs(
-                        world=world,
-                        parent=world.root,
-                        child=particle,
-                        parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                            x=float(root_position[0]),
-                            y=float(root_position[1]),
-                            z=float(root_position[2]),
-                            reference_frame=world.root,
-                        ),
-                    )
-                )
-                particles.append(particle)
-        return cls(particles=particles, particle_radius=particle_radius, world=world)
+        names = []
+        for index, position in enumerate(positions):
+            name = f"{container.name.name}_particle_{index}"
+            pose = world_T_container @ numpy.array(
+                [float(position.x), float(position.y), float(position.z), 1.0]
+            )
+            cls._add_particle(
+                simulator, name, pose[:3], particle_radius, color, contact
+            )
+            names.append(name)
+        return cls(simulator=simulator, names=names, particle_radius=particle_radius)
+
+    @staticmethod
+    def _add_particle(
+        simulator: MujocoSimulator,
+        name: str,
+        position: numpy.ndarray,
+        particle_radius: float,
+        color: Color,
+        contact: ContactParameters,
+    ) -> None:
+        """
+        Add one free sphere to a simulation.
+
+        The sphere is added before the free joint: a moving body with no geometry has no
+        mass, and the model is compiled between the two.
+
+        :param simulator: The simulation to add the particle to.
+        :param name: Name of the particle's body.
+        :param position: Where it starts, in the simulation's own frame.
+        :param particle_radius: Radius of the particle, in metres.
+        :param color: Colour of the particle.
+        :param contact: What its surface does in a contact.
+        """
+        simulator.add_entity(
+            entity_name=name,
+            entity_type=MujocoEntity.BODY,
+            entity_properties={"pos": position.tolist()},
+        )
+        geometry_properties = {
+            "type": mujoco.mjtGeom.mjGEOM_SPHERE,
+            "size": [particle_radius, 0.0, 0.0],
+            "rgba": color.to_rgba(),
+            "friction": contact.friction.to_list(),
+        }
+        if contact.stiffness is not None:
+            geometry_properties["solref"] = contact.stiffness.to_list()
+        if contact.impedance is not None:
+            geometry_properties["solimp"] = contact.impedance.to_list()
+        simulator.add_entity(
+            entity_name=f"{name}_sphere",
+            entity_type=MujocoEntity.GEOM,
+            entity_properties=geometry_properties,
+            parent_name=name,
+        )
+        simulator.add_entity(
+            entity_name=f"{name}_free",
+            entity_type=MujocoEntity.JOINT,
+            entity_properties={"type": mujoco.mjtJoint.mjJNT_FREE},
+            parent_name=name,
+        )
 
     @staticmethod
     def settling_contact() -> ContactParameters:
@@ -352,10 +400,6 @@ class ParticleFill:
 
         At a physics engine's own damping a particle dropped a container's height into
         another bounces straight back out of it, so these contacts are overdamped.
-
-        ..note:: :meth:`~...contact.ContactParameters.apply_to` passes a particle over,
-            since a particle's volume is below the threshold at which a shape counts as
-            collision geometry, so a fill declares these on its spheres itself.
 
         :return: The parameters.
         """
@@ -366,12 +410,37 @@ class ParticleFill:
             ),
         )
 
+    def positions_in(self, container: Body) -> numpy.ndarray:
+        """
+        Where the particles currently stand, in a container's own frame.
+
+        ..note:: A simulation computes a body's pose as it steps, so this reads zeros
+            until the first step has run.
+
+        :param container: The container whose frame the positions are given in.
+        :return: One row of x, y and z per particle, in the order they were packed.
+        """
+        name = container.name.name
+        world_P_container = numpy.asarray(
+            self.simulator.get_body_position(body_name=name).result, dtype=float
+        )
+        world_R_container = Rotation.from_quat(
+            numpy.asarray(
+                self.simulator.get_body_quaternion(body_name=name).result, dtype=float
+            ),
+            scalar_first=True,
+        ).as_matrix()
+        if not self.names:
+            return numpy.empty((0, 3))
+        world_P_particles = self.simulator.get_bodies_positions(
+            body_names=self.names
+        ).result
+        stacked = numpy.array([world_P_particles[name] for name in self.names])
+        return (stacked - world_P_container) @ world_R_container
+
     def count_inside(self, container: Body) -> int:
         """
         How many particles stand within a container's own extent.
-
-        Reads the world, so a simulation has to have written its state back for the
-        count to be the one the physics holds.
 
         ..note:: A particle counts as inside when it is within the container's bounding
             box, which also covers the volume the container's own walls occupy.
@@ -379,20 +448,19 @@ class ParticleFill:
         :param container: The container to count in.
         :return: The number of particles inside it.
         """
-        return sum(
-            1 for particle in self.particles if self._is_inside(container, particle)
-        )
+        return int(self._inside(container).sum())
 
-    def _is_inside(self, container: Body, particle: Body) -> bool:
+    def fraction_inside(self, container: Body) -> float:
         """
-        :param container: The container to test against.
-        :param particle: The particle to test.
-        :return: Whether the particle's centre lies within the container's extent.
+        The share of the contents standing in a container, for comparison against a fill
+        level.
+
+        :param container: The container to count in.
+        :return: The fraction in ``[0, 1]``, or ``0`` for a fill with no particles.
         """
-        lower = container.collision.min_point.to_np()[:3]
-        upper = container.collision.max_point.to_np()[:3]
-        position = self.world.compute_forward_kinematics_np(container, particle)[:3, 3]
-        return bool(all(lower <= position) and all(position <= upper))
+        if not self.names:
+            return 0.0
+        return self.count_inside(container) / len(self.names)
 
     def filled_height_in(self, container: Body) -> float:
         """
@@ -407,32 +475,30 @@ class ParticleFill:
         :return: The height of the highest particle inside it over the container's
             height, or ``0`` when none is inside.
         """
+        inside = self._inside(container)
+        if not inside.any():
+            return 0.0
         lower = container.collision.min_point.to_np()[:3]
         upper = container.collision.max_point.to_np()[:3]
-        heights = [
-            self.world.compute_forward_kinematics_np(container, particle)[2, 3]
-            for particle in self.particles
-            if self._is_inside(container, particle)
-        ]
-        if not heights:
-            return 0.0
-        return (max(heights) - lower[2]) / (upper[2] - lower[2])
+        highest = self.positions_in(container)[inside][:, 2].max()
+        return float((highest - lower[2]) / (upper[2] - lower[2]))
 
-    def fraction_inside(self, container: Body) -> float:
+    def _inside(self, container: Body) -> numpy.ndarray:
         """
-        The share of the contents standing in a container, for comparison against a fill
-        level.
-
-        :param container: The container to count in.
-        :return: The fraction in ``[0, 1]``, or ``0`` for a fill with no particles.
+        :param container: The container to test against.
+        :return: One boolean per particle: whether it stands within the container's
+            extent.
         """
-        if not self.particles:
-            return 0.0
-        return self.count_inside(container) / len(self.particles)
+        lower = container.collision.min_point.to_np()[:3]
+        upper = container.collision.max_point.to_np()[:3]
+        positions = self.positions_in(container)
+        if not len(positions):
+            return numpy.zeros(0, dtype=bool)
+        return numpy.all((positions >= lower) & (positions <= upper), axis=1)
 
     @property
     def volume(self) -> float:
         """
         :return: The volume of the particles themselves, in cubic metres.
         """
-        return len(self.particles) * 4 / 3 * math.pi * self.particle_radius**3
+        return len(self.names) * 4 / 3 * math.pi * self.particle_radius**3
