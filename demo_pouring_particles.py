@@ -17,6 +17,8 @@ import math
 from dataclasses import dataclass
 from datetime import timedelta
 
+import mujoco
+
 from semantic_digital_twin.adapters.multi_sim import MujocoSim
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.physics.particles import HollowCylinder, ParticleFill
@@ -52,15 +54,15 @@ that depth and the analytic fill level starts at the same number, so the two des
 the same cup.
 """
 
-SOURCE_STAND = HomogeneousTransformationMatrix.from_xyz_rpy(x=-0.02, z=0.2)
+SOURCE_STAND = (-0.02, 0.2)
 """
-Where the source cup hangs: beside the receiver and a cup's height above it, so its rim
-clears the receiver's once it tilts.
+Where the source cup hangs, as x and z in metres: beside the receiver and a cup's height
+above it, so its rim clears the receiver's once it tilts.
 """
 
-RECEIVER_STAND = HomogeneousTransformationMatrix.from_xyz_rpy(x=0.06)
+RECEIVER_STAND = 0.06
 """
-Where the receiving cup stands on the ground.
+Where the receiving cup stands on the ground, as x in metres.
 """
 
 TILT_RATE = 0.4
@@ -91,6 +93,21 @@ How much simulated time passes between two tilt commands.
 OUTFLOW_RATE_CONSTANT = 1.0
 """
 Outflow rate constant of the analytic drain the pour is compared against.
+"""
+
+STEP_SIZE = 2e-3
+"""
+Physics step, in seconds.
+"""
+
+INTEGRATOR = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+"""
+Integrator the physics runs with.
+
+The simulator's own default is Runge-Kutta, which evaluates the dynamics four times a
+step. A pour is decided by the contact solver rather than by the smooth dynamics between
+contacts, so the extra evaluations cost this scene about six times its speed and change
+neither where the grains go nor how many arrive.
 """
 
 
@@ -137,7 +154,9 @@ def build_world() -> tuple[World, Body, Body, RevoluteConnection, PourableContai
             FixedConnection(
                 parent=world.root,
                 child=receiver,
-                parent_T_connection_expression=RECEIVER_STAND,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=RECEIVER_STAND, reference_frame=world.root
+                ),
             )
         )
 
@@ -154,7 +173,9 @@ def build_world() -> tuple[World, Body, Body, RevoluteConnection, PourableContai
                 lower=DerivativeMap(position=0.0, velocity=-2.0),
                 upper=DerivativeMap(position=math.pi, velocity=2.0),
             ),
-            parent_T_connection_expression=SOURCE_STAND,
+            parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                x=SOURCE_STAND[0], z=SOURCE_STAND[1], reference_frame=world.root
+            ),
         )
         world.add_connection(tilt)
 
@@ -195,7 +216,12 @@ def run(headless: bool) -> None:
 
     ParticleFill.settling_contact().apply_to([source, receiver] + list(world.bodies))
 
-    simulation = MujocoSim(world=world, headless=headless)
+    simulation = MujocoSim(
+        world=world,
+        headless=headless,
+        step_size=STEP_SIZE,
+        integrator=INTEGRATOR,
+    )
     simulation.start_stepped_simulation()
     try:
         simulation.step_simulation(SETTLE_TIME)
