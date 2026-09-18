@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 from datetime import timedelta
 import threading
@@ -14,10 +15,12 @@ from trimesh.visual.material import SimpleMaterial
 
 from semantic_digital_twin.adapters.mesh import STLParser
 from semantic_digital_twin.adapters.urdf import URDFParser
+from semantic_digital_twin.api import RevoluteConnectionSpecification
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.exceptions import ParsingError, SimulationNotStartedError
 from semantic_digital_twin.robots.hsrb import HSRB
 from semantic_digital_twin.robots.tracy import Tracy
+from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
     Vector3,
@@ -534,9 +537,11 @@ def test_builder_writes_a_geoms_contact_bitmasks(tmp_path):
         root = Body(name=PrefixedName("root"))
         world.add_body(root)
         box_shape = Box(scale=Scale(1, 1, 1))
-        box_shape.add_simulator_property(MujocoGeom(
-            contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
-        ))
+        box_shape.add_simulator_property(
+            MujocoGeom(
+                contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
+            )
+        )
         link = Body(
             name=PrefixedName("link"),
             visual=ShapeCollection([box_shape]),
@@ -599,9 +604,11 @@ def test_builder_keeps_a_visual_only_geom_contactless_despite_its_bitmasks(tmp_p
         root = Body(name=PrefixedName("root"))
         world.add_body(root)
         box_shape = Box(scale=Scale(1, 1, 1))
-        box_shape.add_simulator_property(MujocoGeom(
-            contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
-        ))
+        box_shape.add_simulator_property(
+            MujocoGeom(
+                contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
+            )
+        )
         link = Body(name=PrefixedName("link"), visual=ShapeCollection([box_shape]))
         world.add_kinematic_structure_entity(link)
         world.add_connection(FixedConnection(parent=root, child=link))
@@ -1619,3 +1626,54 @@ def test_a_stepped_simulation_advances_exactly_the_requested_time(falling_box_wo
 
     fallen = 0.5 * 9.81 * duration.total_seconds() ** 2
     assert height == pytest.approx(1.0 - fallen, abs=0.01)
+
+
+# %% the virtual fill-level degree of freedom
+
+
+@dataclass(eq=False)
+class TiltingContainer(HasFillLevel):
+    """
+    A container that pours by tilting about the single degree of freedom it hangs from.
+    """
+
+    @classmethod
+    def parent_connection_specification(cls) -> RevoluteConnectionSpecification:
+        """
+        Build the tilt connection the container hangs from.
+
+        :return: The connection specification.
+        """
+        return RevoluteConnectionSpecification(
+            axis=Vector3(0, 1, 0),
+            dof_limits=DegreeOfFreedomLimits(
+                lower=DerivativeMap(position=0.0, velocity=-2.0),
+                upper=DerivativeMap(position=math.pi / 2, velocity=2.0),
+            ),
+        )
+
+
+def test_the_builder_leaves_a_containers_fill_level_out_of_the_physics(tmp_path):
+    """
+    How full a container is stands in the world as a virtual prismatic connection, not
+    as a joint the physics may move, so the built model carries the world's own joints
+    and none for the fill level.
+    """
+    world = World()
+    with world.modify_world():
+        world.add_body(Body(name=PrefixedName("map")))
+    with world.modify_world():
+        cup = TiltingContainer.create_with_new_body_in_world(
+            name="cup",
+            world=world,
+            parent_connection_specification=TiltingContainer.parent_connection_specification(),
+            scale=Scale(0.1, 0.1, 0.2),
+        )
+    cup.initialize_fill_level(world=world, initial_fill=1.0, outflow_rate_constant=1.0)
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    assert {joint.name for body in builder.spec.bodies for joint in body.joints} == {
+        cup.root.parent_connection.name.name
+    }

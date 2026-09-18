@@ -64,6 +64,7 @@ from semantic_digital_twin.world_description.connections import (
     ActiveConnection1DOF,
     FixedConnection,
     Connection6DoF,
+    LiquidConnection,
     OmniDrive,
     DifferentialDrive,
 )
@@ -1667,11 +1668,13 @@ class MultiSimBuilder(ABC):
         FixedConnection,
         OmniDrive,
         DifferentialDrive,
+        LiquidConnection,
     )
     """
     A list of connection types to ignore when building connections in the simulator.
     FixedConnection is ignored because in MuJoCo, all bodies that are not connected by a joint are implicitly fixed to the parent body.
     OmniDrive and DifferentialDrive are ignored because in MuJoCo, those are controlled by the degree of freedom of the freejoints.
+    LiquidConnection is ignored because its position is how full a container is, integrated from the pouring equations rather than moved by the physics.
     """
 
     def build_world(self, world: World, file_path: str):
