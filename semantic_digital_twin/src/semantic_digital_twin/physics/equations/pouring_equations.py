@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Protocol
+from typing import Any, Dict, Optional, Protocol
 
 import krrood.symbolic_math.symbolic_math as sm
 from krrood.adapters.json_serializer import SubclassJSONSerializer
+from krrood.patterns.field_metadata import JSONMetadata
 from krrood.symbolic_math.symbolic_math import FloatVariable, Scalar
 from typing_extensions import Self, Tuple
 
@@ -177,6 +178,24 @@ class PouringEquation(SubclassJSONSerializer, FillEquation):
     Proportionality constant scaling the discharge gap to the normalized drain rate.
     """
 
+    outflow_scale: Optional[Scalar] = field(
+        default=None,
+        kw_only=True,
+        metadata=JSONMetadata(serialize=False).as_dict(),
+    )
+    """
+    A further factor on the drain, or ``None`` to drain at :attr:`outflow_rate_constant`
+    alone.
+
+    Where the constant is what the model was calibrated to, this is what something
+    outside the model may correct it by while a controller runs: given a free variable,
+    the compiled expressions read its current value every cycle, so a drain can be
+    scaled to the outflow that is actually observed.
+
+    Symbols do not cross a process boundary, so this is never serialized and a copy of
+    the equation elsewhere drains at its constant.
+    """
+
     def ungated(self) -> PouringEquation:
         """
         The serializable, gate-free counterpart of this equation.
@@ -304,6 +323,7 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
             lip_offset=self.lip_offset,
+            outflow_scale=self.outflow_scale,
             gate=gate,
         )
 
@@ -345,11 +365,14 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         :param context: Kinematic context providing the tilt and fill symbols.
         :return: Symbolic d(fill_normalized)/dt as a CasADi expression.
         """
-        return (
+        drain = (
             -self.outflow_rate_constant
             * self.head_above_lip(context)
             / self.container_height
         )
+        if self.outflow_scale is None:
+            return drain
+        return drain * self.outflow_scale
 
 
 @dataclass
@@ -378,7 +401,9 @@ class GatedArticulatedPouringEquation(ArticulatedPouringEquation):
 
     def ungated(self) -> ArticulatedPouringEquation:
         """
-        :return: The analytic drain with this equation's parameters, without the symbolic gate.
+        :return: The analytic drain with this equation's parameters, without the
+            symbolic gate and without any scale a controller was correcting it by, so
+            what it answers is the model as it was calibrated.
         """
         return ArticulatedPouringEquation(
             container_height=self.container_height,

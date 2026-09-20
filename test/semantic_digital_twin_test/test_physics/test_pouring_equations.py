@@ -9,6 +9,7 @@ import pytest
 from krrood.adapters.json_serializer import from_json, to_json
 
 from semantic_digital_twin.exceptions import NonPositiveContainerGeometryError
+from krrood.symbolic_math.symbolic_math import FloatVariable
 from semantic_digital_twin.physics.equations.pouring_equations import (
     ArticulatedPouringEquation,
     InflowEquation,
@@ -131,3 +132,85 @@ class TestPouringLipOffset:
         gated = equation.with_gate(sm.Scalar(1.0))
         assert gated.lip_offset == _SPOUT_LIP_OFFSET
         assert gated.ungated().lip_offset == _SPOUT_LIP_OFFSET
+
+
+# %% a drain a controller can correct while it runs
+
+
+class TestDrainScale:
+    """
+    A drain carries an optional factor beside its constant, so something watching the
+    pour can correct what the model predicts without the equation being rebuilt.
+    """
+
+    @staticmethod
+    def _equation(**kwargs) -> ArticulatedPouringEquation:
+        return ArticulatedPouringEquation(
+            container_height=0.1,
+            container_width=0.08,
+            outflow_rate_constant=1.0,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _context() -> SymbolicFillContext:
+        return SymbolicFillContext(sm.Scalar(1.2), sm.Scalar(0.8))
+
+    def test_a_drain_without_a_scale_is_the_calibrated_one(self):
+        uncorrected = self._equation().symbolic_velocity(self._context()).evaluate()
+
+        scaled = (
+            self._equation(outflow_scale=sm.Scalar(1.0))
+            .symbolic_velocity(self._context())
+            .evaluate()
+        )
+
+        assert scaled == pytest.approx(uncorrected)
+
+    def test_a_scaled_drain_pours_in_proportion_to_its_scale(self):
+        scale = 0.25
+        uncorrected = self._equation().symbolic_velocity(self._context()).evaluate()
+
+        scaled = (
+            self._equation(outflow_scale=sm.Scalar(scale))
+            .symbolic_velocity(self._context())
+            .evaluate()
+        )
+
+        assert scaled == pytest.approx(scale * uncorrected)
+
+    def test_a_free_variable_scale_stays_free_in_the_drain(self):
+        """
+        The scale is only correctable while a controller runs if the compiled drain
+        still reads it, rather than having folded its value in.
+        """
+        correction = FloatVariable("drain_scale")
+
+        velocity = self._equation(outflow_scale=correction).symbolic_velocity(
+            self._context()
+        )
+
+        assert correction in velocity.free_variables()
+
+    def test_a_gated_drain_keeps_the_scale_it_was_given(self):
+        """
+        Coupling a source to a receiver rebuilds its drain as a gated one, which must
+        not drop a correction the controller is holding.
+        """
+        correction = FloatVariable("drain_scale")
+
+        gated = self._equation(outflow_scale=correction).with_gate(sm.Scalar(1.0))
+
+        assert gated.outflow_scale is correction
+
+    def test_the_calibrated_model_is_what_survives_a_round_trip(self):
+        """
+        A symbol cannot cross a process boundary, so what is written out is the model as
+        it was calibrated rather than the correction of the moment.
+        """
+        correction = FloatVariable("drain_scale")
+
+        restored = from_json(to_json(self._equation(outflow_scale=correction)))
+
+        assert restored.outflow_scale is None
+        assert restored.outflow_rate_constant == 1.0
