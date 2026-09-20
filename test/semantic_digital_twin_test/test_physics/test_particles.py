@@ -5,6 +5,7 @@ Tests for containers that hold their contents as individual particles.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import timedelta
 
 import mujoco
@@ -16,10 +17,15 @@ from ...pytest_environment import runs_in_continuous_integration
 from semantic_digital_twin.adapters.multi_sim import MujocoSim
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.exceptions import ParticlesDoNotFitError
-from semantic_digital_twin.physics.particles import HollowCylinder, ParticleFill
+from semantic_digital_twin.physics.particles import (
+    HollowCylinder,
+    MeasuredFillLevel,
+    ParticleFill,
+)
 from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
 )
+from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     FixedConnection,
@@ -33,6 +39,14 @@ from semantic_digital_twin.world_description.geometry import Box, Scale
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.spatial_types.spatial_types import Vector3
 from semantic_digital_twin.world_description.world_entity import Body
+
+
+@dataclass(eq=False)
+class PourableContainer(HasFillLevel):
+    """
+    A container carrying the fill level a controller reasons about.
+    """
+
 
 CUP = HollowCylinder(inner_radius=0.035, height=0.1)
 PARTICLE_RADIUS = 0.005
@@ -470,3 +484,97 @@ def _hang_container_on_a_tilt_in(world: World) -> tuple[Body, RevoluteConnection
         )
         world.add_connection(tilt)
     return container, tilt
+
+
+# %% reporting how full a container is
+
+
+@pytestmark_physics
+def test_a_measurement_reports_how_far_the_contents_reach(cup_in_a_simulation):
+    """
+    What a perception pipeline would report about a container is what stands in it, not
+    what an equation integrated into it.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+    )
+    simulation.step_simulation(SETTLE)
+
+    measurement = MeasuredFillLevel(
+        contents=fill,
+        container=container,
+        connection=annotation.fill_connection,
+        world=world,
+    )
+
+    assert measurement.measure() == pytest.approx(fill.filled_height_in(container))
+
+
+@pytestmark_physics
+def test_a_report_replaces_the_level_the_controller_holds(cup_in_a_simulation):
+    """
+    A report has to land where the tasks read the fill level from, or the controller
+    keeps reasoning about the level it integrated for itself.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.9)
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+    )
+    simulation.step_simulation(SETTLE)
+    measurement = MeasuredFillLevel(
+        contents=fill,
+        container=container,
+        connection=annotation.fill_connection,
+        world=world,
+    )
+
+    reported = measurement.report()
+
+    assert annotation.fill_level == pytest.approx(reported)
+    assert annotation.fill_level == pytest.approx(measurement.measure())
+
+
+@pytestmark_physics
+def test_an_empty_container_is_reported_as_empty(cup_in_a_simulation):
+    """
+    A container nothing has reached yet reads as empty, however full the controller
+    believed it was.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.7)
+    fill = ParticleFill.spawn_in(
+        simulator=simulation.simulator,
+        container=container,
+        world_T_container=world.compute_forward_kinematics_np(world.root, container),
+        positions=[],
+        particle_radius=PARTICLE_RADIUS,
+    )
+    measurement = MeasuredFillLevel(
+        contents=fill,
+        container=container,
+        connection=annotation.fill_connection,
+        world=world,
+    )
+
+    assert measurement.report() == 0.0
+    assert annotation.fill_level == pytest.approx(0.0)

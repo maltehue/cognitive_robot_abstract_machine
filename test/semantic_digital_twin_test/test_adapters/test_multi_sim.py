@@ -1728,3 +1728,33 @@ def test_a_body_added_to_a_running_simulation_has_its_pose_pulled_back(
 
     assert list(in_world) == pytest.approx(list(in_simulation), abs=1e-6)
     assert in_world[2] < 2.0
+
+
+def test_a_fill_level_given_to_a_running_simulation_adds_no_joint(tmp_path):
+    """
+    A container filled while the simulation runs must not be turned away: its fill level
+    reaches the world through the same model change as any other connection, and the
+    simulation has nothing to do with it.
+    """
+    world = World()
+    with world.modify_world():
+        world.add_body(Body(name=PrefixedName("map")))
+    with world.modify_world():
+        cup = TiltingContainer.create_with_new_body_in_world(
+            name="cup",
+            world=world,
+            parent_connection_specification=TiltingContainer.parent_connection_specification(),
+            scale=Scale(0.1, 0.1, 0.2),
+        )
+    multi_sim = MujocoSim(world=world, headless=True)
+    multi_sim.start_stepped_simulation()
+    try:
+        joints_before = set(multi_sim.simulator.get_all_joint_names().result)
+
+        cup.initialize_fill_level(
+            world=world, initial_fill=1.0, outflow_rate_constant=1.0
+        )
+
+        assert set(multi_sim.simulator.get_all_joint_names().result) == joints_before
+    finally:
+        stop_multisim_if_running(multi_sim)

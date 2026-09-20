@@ -2722,6 +2722,18 @@ class FixedConnectionSpawner(ConnectionSpawner, ABC):
 
 
 @dataclass
+class LiquidConnectionSpawner(ConnectionSpawner, ABC):
+    """
+    A spawner to spawn a LiquidConnection object in the simulator.
+    """
+
+    entity_type: ClassVar[Type[Connection]] = LiquidConnection
+    """
+    The type of the entity to spawn.
+    """
+
+
+@dataclass
 class Connection1DOFSpawner(ConnectionSpawner, ABC):
     """
     A spawner to spawn an ActiveConnection1DOF object in the simulator.
@@ -2911,6 +2923,20 @@ class MujocoConnectionSpawner(MujocoEntitySpawner, ConnectionSpawner):
 class MujocoFixedConnectionSpawner(MujocoEntitySpawner, FixedConnectionSpawner):
     """
     This spawner does nothing. FixedConnections are implicitly created in Mujoco.
+    """
+
+    def _spawn_connection(
+        self, simulator: MujocoSimulator, connection: Connection
+    ) -> bool:
+        return True
+
+
+@dataclass
+class MujocoLiquidConnectionSpawner(MujocoEntitySpawner, LiquidConnectionSpawner):
+    """
+    This spawner does nothing. How full a container is has no joint in the physics: its
+    position is integrated from the pouring equations, as
+    :attr:`MultiSimBuilder._ignore_connection_types` leaves it out of the built model.
     """
 
     def _spawn_connection(

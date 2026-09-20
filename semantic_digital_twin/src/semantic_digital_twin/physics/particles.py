@@ -21,6 +21,7 @@ from scipy.spatial.transform import Rotation
 
 from typing_extensions import ClassVar, List, Optional, Self
 
+from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.exceptions import ParticlesDoNotFitError
 from semantic_digital_twin.spatial_types.spatial_types import (
@@ -424,6 +425,8 @@ class ParticleFill:
         :param container: The container whose frame the positions are given in.
         :return: One row of x, y and z per particle, in the order they were packed.
         """
+        if not self.names:
+            return numpy.empty((0, 3))
         name = container.name.name
         world_P_container = numpy.asarray(
             self.simulator.get_body_position(body_name=name).result, dtype=float
@@ -434,8 +437,6 @@ class ParticleFill:
             ),
             scalar_first=True,
         ).as_matrix()
-        if not self.names:
-            return numpy.empty((0, 3))
         world_P_particles = self.simulator.get_bodies_positions(
             body_names=self.names
         ).result
@@ -506,3 +507,58 @@ class ParticleFill:
         :return: The volume of the particles themselves, in cubic metres.
         """
         return len(self.names) * 4 / 3 * math.pi * self.particle_radius**3
+
+
+# %% reporting how full a container is
+
+
+@dataclass
+class MeasuredFillLevel:
+    """
+    How full a container is, read off the contents standing in it and written into the
+    world, as a perception pipeline reporting on it would.
+
+    A fill level in the world is otherwise integrated from a pouring equation, so a
+    controller reading it reasons about the pour its own model predicts. Reported from
+    the contents instead, the controller reasons about the pour that happened: it keeps
+    pouring while nothing has arrived, and stops when something has.
+    """
+
+    contents: ParticleFill
+    """
+    The particles the report is read off.
+    """
+
+    container: Body
+    """
+    The container being reported on.
+    """
+
+    connection: LiquidConnection
+    """
+    The container's fill level, which a report replaces.
+    """
+
+    world: World
+    """
+    The world holding that fill level.
+    """
+
+    def measure(self) -> float:
+        """
+        How full the container currently is.
+
+        :return: The share of the container's height its contents reach, in ``[0, 1]``.
+        """
+        return self.contents.filled_height_in(self.container)
+
+    def report(self) -> float:
+        """
+        Measure the container and write the measurement into the world, so whatever
+        reads its fill level next reads this rather than what was integrated.
+
+        :return: What was reported.
+        """
+        measured = self.measure()
+        JointState.from_mapping({self.connection: measured}).apply_to(self.world)
+        return measured

@@ -44,7 +44,11 @@ from semantic_digital_twin.api import RobotSpecification
 from semantic_digital_twin.datastructures.definitions import StaticJointState
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.physics.particles import HollowCylinder, ParticleFill
+from semantic_digital_twin.physics.particles import (
+    HollowCylinder,
+    MeasuredFillLevel,
+    ParticleFill,
+)
 from semantic_digital_twin.robots.tracy import Tracy
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.spatial_types.spatial_types import (
@@ -162,6 +166,15 @@ How many control cycles the motion is given before the run gives up.
 SETTLE_TIME = timedelta(milliseconds=500)
 """
 How long the contents settle in the cup before the pour starts.
+"""
+
+PERCEPTION_FREQUENCY = 10
+"""
+How often the receiver's fill level is measured from its contents and reported into the
+controller's model, in hertz.
+
+Without it the controller reasons about the pour its own drain model predicts. With it
+the level it steers by is the one the grains actually produced.
 """
 
 REPORT_EVERY = 200
@@ -407,13 +420,24 @@ def run(headless: bool) -> None:
             f"starts from"
         )
 
+        perception = MeasuredFillLevel(
+            contents=fill,
+            container=scene.receiver.root,
+            connection=scene.receiver.fill_connection,
+            world=scene.world,
+        )
         tilt = pour_start_tilt(scene.source)
         print(f"carrying the cup pre-tilted to {tilt:.3f} rad, where its drain starts")
         _run_motion(
             build_carry_motion(scene, tilt=tilt), scene, simulation, "pre-tilt", fill
         )
         _run_motion(
-            build_transfer_motion(scene), scene, simulation, "transfer", fill=fill
+            build_transfer_motion(scene),
+            scene,
+            simulation,
+            "transfer",
+            fill=fill,
+            perception=perception,
         )
         _summarize(scene, fill)
     finally:
@@ -426,6 +450,7 @@ def _run_motion(
     simulation: MujocoSim,
     name: str,
     fill: Optional[ParticleFill] = None,
+    perception: Optional[MeasuredFillLevel] = None,
 ) -> None:
     """
     Tick one motion to its end in lockstep with the physics.
@@ -435,6 +460,8 @@ def _run_motion(
     :param simulation: The simulation the controller runs in lockstep with.
     :param name: What to call the motion in the report.
     :param fill: The contents to report on, if there are any yet.
+    :param perception: What reports the receiver's fill level into the controller's
+        model, if the run closes that loop.
     """
     executor = Executor(
         context=MotionStatechartContext(
@@ -448,7 +475,7 @@ def _run_motion(
     )
     executor.compile(motion_statechart=statechart)
     if fill is not None:
-        executor.tick = _reporting_tick(executor, scene, fill)
+        executor.tick = _reporting_tick(executor, scene, fill, perception)
     try:
         executor.tick_until_end(timeout=TICK_LIMIT)
         print(
@@ -460,22 +487,34 @@ def _run_motion(
 
 
 def _reporting_tick(
-    executor: Executor, scene: TransferScene, fill: ParticleFill
+    executor: Executor,
+    scene: TransferScene,
+    fill: ParticleFill,
+    perception: Optional[MeasuredFillLevel],
 ) -> Callable[[], None]:
     """
-    Wrap an executor's tick so the pour is reported as the motion runs.
+    Wrap an executor's tick so the receiver is measured and the pour reported as the
+    motion runs.
 
-    :param executor: The executor whose ticks are reported on.
+    :param executor: The executor whose ticks are wrapped.
     :param scene: The scene the motion runs in.
     :param fill: The contents being poured.
+    :param perception: What reports the receiver's fill level, if the run closes that
+        loop.
     :return: The wrapped tick.
     """
     tick = executor.tick
+    cycles_between_measurements = max(
+        1, round(CONTROL_FREQUENCY / PERCEPTION_FREQUENCY)
+    )
 
     def tick_and_report() -> None:
         tick()
-        if int(executor.control_cycles) % REPORT_EVERY == 0:
-            _report(int(executor.control_cycles), scene, fill)
+        cycle = int(executor.control_cycles)
+        if perception is not None and cycle % cycles_between_measurements == 0:
+            perception.report()
+        if cycle % REPORT_EVERY == 0:
+            _report(cycle, scene, fill)
 
     return tick_and_report
 
