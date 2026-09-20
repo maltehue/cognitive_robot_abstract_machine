@@ -20,6 +20,7 @@ from semantic_digital_twin.exceptions import ParticlesDoNotFitError
 from semantic_digital_twin.physics.particles import (
     HollowCylinder,
     MeasuredFillLevel,
+    MeasuredInflowRate,
     ParticleFill,
 )
 from semantic_digital_twin.spatial_types.spatial_types import (
@@ -445,17 +446,27 @@ def test_the_contents_stay_in_an_upright_container_and_pour_out_of_a_tilted_one(
     assert held_upside_down == 0
 
 
-def _stand_container_in(world: World) -> Body:
+def _stand_container_in(world: World, name: str = "cup", offset: float = 0.0) -> Body:
     """
     Add a container standing on a world's root.
 
     :param world: The world to add the container to.
+    :param name: Name of the container's body.
+    :param offset: How far along x it stands from the root.
     :return: The container's body.
     """
-    container = CUP.body(PrefixedName("cup"))
+    container = CUP.body(PrefixedName(name))
     with world.modify_world():
         world.add_kinematic_structure_entity(container)
-        world.add_connection(FixedConnection(parent=world.root, child=container))
+        world.add_connection(
+            FixedConnection(
+                parent=world.root,
+                child=container,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=offset, reference_frame=world.root
+                ),
+            )
+        )
     return container
 
 
@@ -581,3 +592,83 @@ def test_an_empty_container_is_reported_as_empty(cup_in_a_simulation):
 
     assert measurement.report() == 0.0
     assert annotation.fill_level == pytest.approx(0.0)
+
+
+# %% how fast the contents are arriving
+
+
+@pytestmark_physics
+def test_nothing_arriving_is_reported_as_no_inflow(cup_in_a_simulation):
+    """
+    A container nothing is reaching reports no inflow, however fast a drain model
+    believes its source is pouring.
+    """
+    world, container, simulation = cup_in_a_simulation
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=8,
+    )
+    elsewhere = _stand_container_in(world, name="elsewhere", offset=1.0)
+    simulation.step_simulation(SETTLE)
+    rate = MeasuredInflowRate(contents=fill, container=elsewhere)
+    rate.observe(at=0.0)
+
+    assert rate.observe(at=1.0) == 0.0
+
+
+@pytestmark_physics
+def test_the_inflow_is_the_share_that_arrived_over_the_time_it_took(
+    cup_in_a_simulation,
+):
+    """
+    The rate a controller would compare its drain model against is how much of the
+    contents arrived, over how long it took them.
+    """
+    world, container, simulation = cup_in_a_simulation
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=8,
+    )
+    catcher = _stand_container_in(world, name="catcher", offset=1.0)
+    simulation.step_simulation(SETTLE)
+    rate = MeasuredInflowRate(contents=fill, container=catcher)
+    rate.observe(at=0.0)
+
+    caught = fill.names[:2]
+    for name in caught:
+        simulation.simulator.set_body_position(
+            body_name=name, position=numpy.array([1.0, 0.0, 0.02])
+        )
+    simulation.step_simulation(SETTLE)
+
+    observed = rate.observe(at=0.5)
+
+    assert fill.count_inside(catcher) == len(caught)
+    assert observed == pytest.approx(len(caught) / len(fill.names) / 0.5)
+
+
+@pytestmark_physics
+def test_an_observation_at_no_elapsed_time_reports_no_inflow(cup_in_a_simulation):
+    """
+    Two observations of the same instant say nothing about a rate, and must not divide
+    by the time between them.
+    """
+    world, container, simulation = cup_in_a_simulation
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=4,
+    )
+    simulation.step_simulation(SETTLE)
+    rate = MeasuredInflowRate(contents=fill, container=container)
+    rate.observe(at=1.0)
+
+    assert rate.observe(at=1.0) == 0.0

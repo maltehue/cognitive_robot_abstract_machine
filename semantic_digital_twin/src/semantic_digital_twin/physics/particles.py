@@ -568,3 +568,54 @@ class MeasuredFillLevel:
         measured = self.measure()
         JointState.from_mapping({self.connection: measured}).apply_to(self.world)
         return measured
+
+
+# %% how fast the contents are arriving
+
+
+@dataclass
+class MeasuredInflowRate:
+    """
+    How fast a container's contents are arriving, measured from them.
+
+    A drain model says how fast a tilted container pours; this says how fast anything
+    actually reaches the container it was poured into. The two disagreeing is what a
+    controller would have to act on, since correcting only the level it steers by leaves
+    it predicting the same arrival from the same tilt.
+    """
+
+    contents: ParticleFill
+    """
+    The particles the rate is read off.
+    """
+
+    container: Body
+    """
+    The container they are arriving in.
+    """
+
+    _share: Optional[float] = field(init=False, default=None, repr=False)
+    """
+    The share of the contents that stood in the container at :attr:`_observed_at`.
+    """
+
+    _observed_at: Optional[float] = field(init=False, default=None, repr=False)
+    """
+    When that share was observed, in seconds.
+    """
+
+    def observe(self, at: float) -> float:
+        """
+        Measure how fast the contents have been arriving since the last observation.
+
+        The first observation has nothing to compare against and reports no inflow.
+
+        :param at: The time of this observation, in seconds.
+        :return: The share of the contents arriving per second.
+        """
+        share = self.contents.fraction_inside(self.container)
+        previous_share, previous_time = self._share, self._observed_at
+        self._share, self._observed_at = share, at
+        if previous_time is None or at <= previous_time:
+            return 0.0
+        return (share - previous_share) / (at - previous_time)

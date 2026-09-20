@@ -47,6 +47,7 @@ from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.physics.particles import (
     HollowCylinder,
     MeasuredFillLevel,
+    MeasuredInflowRate,
     ParticleFill,
 )
 from semantic_digital_twin.robots.tracy import Tracy
@@ -434,6 +435,7 @@ def run(headless: bool) -> None:
             f"{scene.receiver.fill_level:.2f}"
         )
 
+        arriving = MeasuredInflowRate(contents=fill, container=scene.receiver.root)
         tilt = pour_start_tilt(scene.source, fill)
         print(f"carrying the cup pre-tilted to {tilt:.3f} rad, where its drain starts")
         _run_motion(
@@ -446,6 +448,7 @@ def run(headless: bool) -> None:
             "transfer",
             fill=fill,
             perception=perception,
+            arriving=arriving,
         )
         _summarize(scene, fill)
     finally:
@@ -459,6 +462,7 @@ def _run_motion(
     name: str,
     fill: Optional[ParticleFill] = None,
     perception: Optional[List[MeasuredFillLevel]] = None,
+    arriving: Optional[MeasuredInflowRate] = None,
 ) -> None:
     """
     Tick one motion to its end in lockstep with the physics.
@@ -470,6 +474,8 @@ def _run_motion(
     :param fill: The contents to report on, if there are any yet.
     :param perception: What reports the containers' fill levels into the controller's
         model, if the run closes that loop.
+    :param arriving: What measures how fast the contents reach the receiver, if the run
+        watches that.
     """
     executor = Executor(
         context=MotionStatechartContext(
@@ -483,7 +489,7 @@ def _run_motion(
     )
     executor.compile(motion_statechart=statechart)
     if fill is not None:
-        executor.tick = _reporting_tick(executor, scene, fill, perception)
+        executor.tick = _reporting_tick(executor, scene, fill, perception, arriving)
     try:
         executor.tick_until_end(timeout=TICK_LIMIT)
         print(
@@ -499,6 +505,7 @@ def _reporting_tick(
     scene: TransferScene,
     fill: ParticleFill,
     perception: Optional[List[MeasuredFillLevel]],
+    arriving: Optional[MeasuredInflowRate],
 ) -> Callable[[], None]:
     """
     Wrap an executor's tick so the receiver is measured and the pour reported as the
@@ -509,6 +516,7 @@ def _reporting_tick(
     :param fill: The contents being poured.
     :param perception: What reports the containers' fill levels, if the run closes
         that loop.
+    :param arriving: What measures how fast the contents reach the receiver.
     :return: The wrapped tick.
     """
     tick = executor.tick
@@ -516,14 +524,19 @@ def _reporting_tick(
         1, round(CONTROL_FREQUENCY / PERCEPTION_FREQUENCY)
     )
 
+    measured_rate = [0.0]
+
     def tick_and_report() -> None:
         tick()
         cycle = int(executor.control_cycles)
-        if perception is not None and cycle % cycles_between_measurements == 0:
-            for measurement in perception:
-                measurement.report()
+        if cycle % cycles_between_measurements == 0:
+            if perception is not None:
+                for measurement in perception:
+                    measurement.report()
+            if arriving is not None:
+                measured_rate[0] = arriving.observe(at=cycle / CONTROL_FREQUENCY)
         if cycle % REPORT_EVERY == 0:
-            _report(cycle, scene, fill)
+            _report(cycle, scene, fill, measured_rate[0])
 
     return tick_and_report
 
@@ -539,13 +552,16 @@ def _nudge_wrist(scene: TransferScene) -> None:
     JointState.from_mapping({wrist: wrist.position + WRIST_NUDGE}).apply_to(scene.world)
 
 
-def _report(tick: int, scene: TransferScene, fill: ParticleFill) -> None:
+def _report(
+    tick: int, scene: TransferScene, fill: ParticleFill, measured_rate: float = 0.0
+) -> None:
     """
-    Print one line comparing the commanded fill levels against the particles.
+    Print one line comparing the commanded fill levels and inflow against the particles.
 
     :param tick: Which control cycle this is.
     :param scene: The scene being reported on.
     :param fill: The contents being poured.
+    :param measured_rate: How fast the contents were last seen reaching the receiver.
     """
     in_source = fill.count_inside(scene.source.root)
     in_receiver = fill.count_inside(scene.receiver.root)
@@ -555,8 +571,23 @@ def _report(tick: int, scene: TransferScene, fill: ParticleFill) -> None:
         f"source: {in_source:3d} particles vs {scene.source.fill_level:4.2f} level  "
         f"receiver: {in_receiver:3d} particles vs "
         f"{scene.receiver.fill_level:4.2f} level (goal {GOAL_FILL})  "
-        f"spilled: {len(fill.names) - in_source - in_receiver:3d}"
+        f"spilled: {len(fill.names) - in_source - in_receiver:3d}  "
+        f"inflow {measured_rate:+5.2f} measured vs "
+        f"{_predicted_inflow(scene):+5.2f} predicted /s"
     )
+
+
+def _predicted_inflow(scene: TransferScene) -> float:
+    """
+    How fast the drain model believes the receiver is filling.
+
+    :param scene: The scene holding the coupling.
+    :return: The predicted share of the receiver's cavity per second.
+    """
+    inflow = scene.receiver.fill_connection.inflow_equation
+    if inflow is None:
+        return 0.0
+    return float(inflow.symbolic_velocity(scene.receiver.fill_connection).evaluate()[0])
 
 
 def _summarize(scene: TransferScene, fill: ParticleFill) -> None:
