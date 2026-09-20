@@ -21,7 +21,7 @@ import math
 from dataclasses import dataclass
 from datetime import timedelta
 
-from typing_extensions import Callable, Optional
+from typing_extensions import Callable, List, Optional
 
 import mujoco
 
@@ -170,11 +170,11 @@ How long the contents settle in the cup before the pour starts.
 
 PERCEPTION_FREQUENCY = 10
 """
-How often the receiver's fill level is measured from its contents and reported into the
+How often the cups' fill levels are measured from their contents and reported into the
 controller's model, in hertz.
 
 Without it the controller reasons about the pour its own drain model predicts. With it
-the level it steers by is the one the grains actually produced.
+the levels it steers by are the ones the grains actually produced, on both cups.
 """
 
 REPORT_EVERY = 200
@@ -329,16 +329,22 @@ def build_carry_motion(scene: TransferScene, tilt: float = 0.0) -> MotionStatech
     return statechart
 
 
-def pour_start_tilt(source: PourableContainer) -> float:
+def pour_start_tilt(source: PourableContainer, contents: ParticleFill) -> float:
     """
-    The tilt at which the source's contents reach its lip at its current fill, plus a
-    margin, so the drain has flow and gradient from the start.
+    The tilt at which the source's contents reach its lip, plus a margin, so the drain
+    has flow and gradient from the start.
+
+    Read off how far the contents reach up the cup rather than off its fill level: the
+    level the controller steers by counts what is in the cup, while the lip is a
+    question about how deep it stands.
 
     :param source: The cup about to pour.
+    :param contents: The contents standing in it.
     :return: The tilt, in radians.
     """
     equation = source.fill_equation.ungated()
-    dry_height = equation.container_height * (1.0 - source.fill_level)
+    depth = contents.filled_height_in(source.root)
+    dry_height = equation.container_height * (1.0 - depth)
     return math.atan2(dry_height, equation.lip_offset) + POUR_START_TILT_MARGIN
 
 
@@ -409,24 +415,26 @@ def run(headless: bool) -> None:
             count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=INITIAL_FILL),
         )
         simulation.step_simulation(SETTLE_TIME)
-        settled = fill.filled_height_in(scene.source.root)
-        JointState.from_mapping({scene.source.fill_connection: settled}).apply_to(
-            scene.world
-        )
+        perception = [
+            MeasuredFillLevel(
+                contents=fill,
+                container=container.root,
+                connection=container.fill_connection,
+                world=scene.world,
+            )
+            for container in (scene.source, scene.receiver)
+        ]
+        for measurement in perception:
+            measurement.report()
         print(
-            f"{len(fill.names)} particles in the source cup, "
-            f"{fill.count_inside(scene.source.root)} of them still in it after "
-            f"settling to a depth of {settled:.2f}, which the pouring equation "
-            f"starts from"
+            f"{len(fill.names)} particles, "
+            f"{fill.count_inside(scene.source.root)} of them in the source cup after "
+            f"settling; both levels start from what is measured, source "
+            f"{scene.source.fill_level:.2f} and receiver "
+            f"{scene.receiver.fill_level:.2f}"
         )
 
-        perception = MeasuredFillLevel(
-            contents=fill,
-            container=scene.receiver.root,
-            connection=scene.receiver.fill_connection,
-            world=scene.world,
-        )
-        tilt = pour_start_tilt(scene.source)
+        tilt = pour_start_tilt(scene.source, fill)
         print(f"carrying the cup pre-tilted to {tilt:.3f} rad, where its drain starts")
         _run_motion(
             build_carry_motion(scene, tilt=tilt), scene, simulation, "pre-tilt", fill
@@ -450,7 +458,7 @@ def _run_motion(
     simulation: MujocoSim,
     name: str,
     fill: Optional[ParticleFill] = None,
-    perception: Optional[MeasuredFillLevel] = None,
+    perception: Optional[List[MeasuredFillLevel]] = None,
 ) -> None:
     """
     Tick one motion to its end in lockstep with the physics.
@@ -460,7 +468,7 @@ def _run_motion(
     :param simulation: The simulation the controller runs in lockstep with.
     :param name: What to call the motion in the report.
     :param fill: The contents to report on, if there are any yet.
-    :param perception: What reports the receiver's fill level into the controller's
+    :param perception: What reports the containers' fill levels into the controller's
         model, if the run closes that loop.
     """
     executor = Executor(
@@ -490,7 +498,7 @@ def _reporting_tick(
     executor: Executor,
     scene: TransferScene,
     fill: ParticleFill,
-    perception: Optional[MeasuredFillLevel],
+    perception: Optional[List[MeasuredFillLevel]],
 ) -> Callable[[], None]:
     """
     Wrap an executor's tick so the receiver is measured and the pour reported as the
@@ -499,8 +507,8 @@ def _reporting_tick(
     :param executor: The executor whose ticks are wrapped.
     :param scene: The scene the motion runs in.
     :param fill: The contents being poured.
-    :param perception: What reports the receiver's fill level, if the run closes that
-        loop.
+    :param perception: What reports the containers' fill levels, if the run closes
+        that loop.
     :return: The wrapped tick.
     """
     tick = executor.tick
@@ -512,7 +520,8 @@ def _reporting_tick(
         tick()
         cycle = int(executor.control_cycles)
         if perception is not None and cycle % cycles_between_measurements == 0:
-            perception.report()
+            for measurement in perception:
+                measurement.report()
         if cycle % REPORT_EVERY == 0:
             _report(cycle, scene, fill)
 
@@ -542,6 +551,7 @@ def _report(tick: int, scene: TransferScene, fill: ParticleFill) -> None:
     in_receiver = fill.count_inside(scene.receiver.root)
     print(
         f"cycle {tick:5d}  tilt {math.degrees(_cup_tilt(scene)):5.1f} deg  "
+        f"depth {fill.filled_height_in(scene.source.root):4.2f}  "
         f"source: {in_source:3d} particles vs {scene.source.fill_level:4.2f} level  "
         f"receiver: {in_receiver:3d} particles vs "
         f"{scene.receiver.fill_level:4.2f} level (goal {GOAL_FILL})  "
@@ -559,8 +569,8 @@ def _summarize(scene: TransferScene, fill: ParticleFill) -> None:
     in_source = fill.count_inside(scene.source.root)
     in_receiver = fill.count_inside(scene.receiver.root)
     print(
-        f"the controller emptied its source to {scene.source.fill_level:.2f} and "
-        f"filled its receiver to {scene.receiver.fill_level:.2f}, tilting the cup to "
+        f"the controller left its source at {scene.source.fill_level:.2f} and its "
+        f"receiver at {scene.receiver.fill_level:.2f}, tilting the cup to "
         f"{math.degrees(_cup_tilt(scene)):.0f} degrees; of {len(fill.names)} grains, "
         f"{in_source} never left the source, {in_receiver} reached the receiver and "
         f"{len(fill.names) - in_source - in_receiver} went elsewhere"

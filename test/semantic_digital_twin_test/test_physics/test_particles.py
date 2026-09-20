@@ -490,7 +490,9 @@ def _hang_container_on_a_tilt_in(world: World) -> tuple[Body, RevoluteConnection
 
 
 @pytestmark_physics
-def test_a_measurement_reports_how_far_the_contents_reach(cup_in_a_simulation):
+def test_a_measurement_reports_the_share_of_the_contents_standing_in_the_container(
+    cup_in_a_simulation,
+):
     """
     What a perception pipeline would report about a container is what stands in it, not
     what an equation integrated into it.
@@ -516,7 +518,8 @@ def test_a_measurement_reports_how_far_the_contents_reach(cup_in_a_simulation):
         world=world,
     )
 
-    assert measurement.measure() == pytest.approx(fill.filled_height_in(container))
+    assert measurement.measure() == pytest.approx(fill.fraction_inside(container))
+    assert measurement.measure() == pytest.approx(1.0)
 
 
 @pytestmark_physics

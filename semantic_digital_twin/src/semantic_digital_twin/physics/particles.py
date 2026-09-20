@@ -522,6 +522,12 @@ class MeasuredFillLevel:
     controller reading it reasons about the pour its own model predicts. Reported from
     the contents instead, the controller reasons about the pour that happened: it keeps
     pouring while nothing has arrived, and stops when something has.
+
+    The level is the share of the contents standing in the container, so the source and
+    the receiver are measured on one scale and what has left one but not reached the
+    other is visible as the difference. It is a share of the contents rather than of the
+    container's own capacity, which are the same thing only for the container the
+    contents started full of.
     """
 
     contents: ParticleFill
@@ -548,9 +554,9 @@ class MeasuredFillLevel:
         """
         How full the container currently is.
 
-        :return: The share of the container's height its contents reach, in ``[0, 1]``.
+        :return: The share of the contents standing in it, in ``[0, 1]``.
         """
-        return self.contents.filled_height_in(self.container)
+        return self.contents.fraction_inside(self.container)
 
     def report(self) -> float:
         """
