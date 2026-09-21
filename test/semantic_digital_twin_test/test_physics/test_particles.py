@@ -55,11 +55,32 @@ class PourableContainer(HasFillLevel):
 
 
 CUP = HollowCylinder(inner_radius=0.035, height=0.1)
+SMALL_CUP = HollowCylinder(inner_radius=0.025, height=0.05)
+"""
+A cavity small enough that settling a full one is quick, and still several particles
+across, which a packing needs to settle the way a bulk does.
+"""
+
 PARTICLE_RADIUS = 0.005
 SETTLE = timedelta(milliseconds=10)
 """
 How long a test steps the physics before reading the contents back: a body has no pose
 until the simulation has stepped once.
+"""
+
+SETTLING_TIME = timedelta(seconds=3)
+"""
+How long a test steps the physics to let a packing collapse into the contents it
+becomes, measured as the point the filled height stops falling.
+"""
+
+SEATED_CONTENTS = 40
+"""
+A count the packing places well inside the cavity.
+
+A packing that fills a cavity stands taller than it, since it holds the particles clear
+of each other; a test that reads the contents back before they have fallen and settled
+needs one that does not.
 """
 
 GRAVITY = 9.81
@@ -191,32 +212,46 @@ def test_asking_for_more_particles_than_the_cavity_seats_is_refused():
 # %% packing to a depth
 
 
-def test_a_cavity_packed_to_a_share_of_its_depth_stops_below_that_depth():
+def test_a_cavity_holds_the_share_of_its_volume_it_is_packed_to():
     """
-    A packing meant to stand as deep as a fill level has to end where that level does,
-    or the two describe different cups.
+    A count meant to stand as deep as a fill level has to take up that share of the
+    cavity once it settles, or the two describe different cups.
     """
     fill_fraction = 0.5
-    surface = CUP.base_thickness + fill_fraction * (CUP.height - CUP.base_thickness)
     capacity = CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=fill_fraction)
 
-    packed = CUP.particle_positions(PARTICLE_RADIUS, count=capacity)
-    one_layer_more = CUP.particle_positions(PARTICLE_RADIUS, count=capacity + 1)
+    settled = capacity * ParticleFill.loose_bulk_volume_per_particle(PARTICLE_RADIUS)
 
-    assert max(float(position.z) for position in packed) <= surface - PARTICLE_RADIUS
-    assert float(one_layer_more[-1].z) > surface - PARTICLE_RADIUS
+    assert settled == pytest.approx(
+        fill_fraction * CUP.cavity_volume,
+        abs=ParticleFill.loose_bulk_volume_per_particle(PARTICLE_RADIUS),
+    )
 
 
-def test_a_full_cavity_seats_every_particle_the_packing_places():
+def test_a_packing_stands_taller_than_the_cavity_it_settles_into():
     """
-    The capacity of the whole cavity is what packing it to the rim places, so the two
-    ways of asking how much a container holds agree.
+    The packing keeps the particles clear of each other, so it is looser than what they
+    settle into and a full cavity has to be released from above its own rim.
+    """
+    capacity = CUP.particle_capacity(PARTICLE_RADIUS)
+
+    packed = CUP.particle_positions(PARTICLE_RADIUS, count=capacity)
+
+    assert len(packed) == capacity
+    assert max(float(position.z) for position in packed) > CUP.height
+
+
+def test_a_cavity_refuses_more_than_it_holds_once_the_contents_settle():
+    """
+    The cavity's own volume is the limit, rather than how many seats the packing has:
+    a packing can always be built taller, and what cannot be done is fit the settled
+    contents in.
     """
     capacity = CUP.particle_capacity(PARTICLE_RADIUS)
 
     assert len(CUP.particle_positions(PARTICLE_RADIUS, count=capacity)) == capacity
     with pytest.raises(ParticlesDoNotFitError):
-        CUP.particle_positions(PARTICLE_RADIUS, count=capacity + 1)
+        CUP.particle_positions(PARTICLE_RADIUS, count=capacity * 2)
 
 
 # %% the contents in the physics
@@ -346,15 +381,15 @@ def test_a_particle_moved_out_of_a_container_stops_counting_towards_it(
 
 
 @pytestmark_physics
-def test_the_filled_height_is_where_the_highest_particle_stands(cup_in_a_simulation):
+def test_the_filled_height_is_the_surface_of_the_contents(cup_in_a_simulation):
     """
-    The number a fill level is compared against is read off the contents themselves.
+    The number a fill level is compared against is where the contents end, which is a
+    radius above the highest particle's centre rather than at it.
     """
     world, container, simulation = cup_in_a_simulation
-    count = CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5)
     highest_packed = max(
         float(position.z)
-        for position in CUP.particle_positions(PARTICLE_RADIUS, count=count)
+        for position in CUP.particle_positions(PARTICLE_RADIUS, count=SEATED_CONTENTS)
     )
 
     fill = CUP.fill_with_particles(
@@ -362,14 +397,44 @@ def test_the_filled_height_is_where_the_highest_particle_stands(cup_in_a_simulat
         world=world,
         simulator=simulation.simulator,
         particle_radius=PARTICLE_RADIUS,
-        count=count,
+        count=SEATED_CONTENTS,
     )
     simulation.step_simulation(SETTLE)
 
     fallen = 0.5 * GRAVITY * SETTLE.total_seconds() ** 2
     assert fill.filled_height_in(container) == pytest.approx(
-        highest_packed / CUP.height, abs=fallen / CUP.height
+        (highest_packed + PARTICLE_RADIUS) / CUP.height, abs=fallen / CUP.height
     )
+
+
+@pytestmark_physics
+def test_a_cavity_filled_to_capacity_settles_full(world_with_ground):
+    """
+    What a container is asked to hold is what stands in it once the contents settle.
+
+    The packing is looser than the settled contents, so the count that fills a cavity
+    cannot be read off the packing's own seats; asking for a full cavity and getting a
+    half-full one is what this pins down.
+    """
+    container = _stand_container_in(world_with_ground, geometry=SMALL_CUP)
+    simulation = MujocoSim(world=world_with_ground, headless=True)
+    simulation.start_stepped_simulation()
+    try:
+        simulation.step_simulation(SETTLE)
+        fill = SMALL_CUP.fill_with_particles(
+            container=container,
+            world=world_with_ground,
+            simulator=simulation.simulator,
+            particle_radius=PARTICLE_RADIUS,
+            count=SMALL_CUP.particle_capacity(PARTICLE_RADIUS),
+        )
+
+        simulation.step_simulation(SETTLING_TIME)
+
+        assert fill.filled_height_in(container) == pytest.approx(1.0, abs=0.15)
+    finally:
+        if simulation.is_running():
+            simulation.stop_simulation()
 
 
 @pytestmark_physics
@@ -451,16 +516,22 @@ def test_the_contents_stay_in_an_upright_container_and_pour_out_of_a_tilted_one(
     assert held_upside_down == 0
 
 
-def _stand_container_in(world: World, name: str = "cup", offset: float = 0.0) -> Body:
+def _stand_container_in(
+    world: World,
+    name: str = "cup",
+    offset: float = 0.0,
+    geometry: HollowCylinder = CUP,
+) -> Body:
     """
     Add a container standing on a world's root.
 
     :param world: The world to add the container to.
     :param name: Name of the container's body.
     :param offset: How far along x it stands from the root.
+    :param geometry: The shape of the container to stand there.
     :return: The container's body.
     """
-    container = CUP.body(PrefixedName(name))
+    container = geometry.body(PrefixedName(name))
     with world.modify_world():
         world.add_kinematic_structure_entity(container)
         world.add_connection(
@@ -524,7 +595,7 @@ def test_a_measurement_reports_the_share_of_the_capacity_the_contents_take_up(
         world=world,
         simulator=simulation.simulator,
         particle_radius=PARTICLE_RADIUS,
-        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+        count=SEATED_CONTENTS,
     )
     simulation.step_simulation(SETTLE)
 
@@ -558,7 +629,7 @@ def test_a_report_replaces_the_level_the_controller_holds(cup_in_a_simulation):
         world=world,
         simulator=simulation.simulator,
         particle_radius=PARTICLE_RADIUS,
-        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+        count=SEATED_CONTENTS,
     )
     simulation.step_simulation(SETTLE)
     measurement = MeasuredFillLevel(
@@ -726,7 +797,7 @@ def test_a_bigger_container_holding_the_same_contents_reads_emptier(
         world=world,
         simulator=simulation.simulator,
         particle_radius=PARTICLE_RADIUS,
-        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+        count=SEATED_CONTENTS,
     )
     simulation.step_simulation(SETTLE)
 
@@ -760,7 +831,7 @@ def test_contents_filling_their_container_read_full_and_no_more(cup_in_a_simulat
         world=world,
         simulator=simulation.simulator,
         particle_radius=PARTICLE_RADIUS,
-        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+        count=SEATED_CONTENTS,
     )
     simulation.step_simulation(SETTLE)
     fill.bulk_volume_per_particle = CUP.cavity_volume / fill.count_inside(container)
@@ -796,7 +867,7 @@ def test_calibrating_in_a_container_makes_its_measurement_match_how_far_they_rea
         world=world,
         simulator=simulation.simulator,
         particle_radius=PARTICLE_RADIUS,
-        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+        count=SEATED_CONTENTS,
     )
     simulation.step_simulation(SETTLE)
     fill.bulk_volume_per_particle = fill.bulk_volume_per_particle_in(
@@ -879,7 +950,7 @@ def test_contents_still_in_the_source_are_not_counted_as_on_their_way(
         world=world,
         simulator=simulation.simulator,
         particle_radius=PARTICLE_RADIUS,
-        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+        count=SEATED_CONTENTS,
     )
     simulation.step_simulation(SETTLE)
     world_T_container = world.compute_forward_kinematics_np(world.root, container)

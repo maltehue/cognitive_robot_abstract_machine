@@ -212,53 +212,61 @@ class HollowCylinder:
         self, particle_radius: float, fill_fraction: float = 1.0
     ) -> int:
         """
-        How many particles stand in the cavity up to a share of its depth.
+        How many particles settle to a share of the cavity's depth.
 
-        Lets a packing be given the same depth as the fill level it is compared against,
-        since a container pours once its contents reach its lip rather than once it
-        holds a given volume.
+        Counted by the volume the particles take up rather than by the seats the
+        packing has for them: the packing holds them clear of each other and so stands
+        looser than what they settle into, and its seats deliver about half the depth
+        they are asked for.
 
         :param particle_radius: Radius of one particle, in metres.
-        :param fill_fraction: Share of the cavity's depth to pack, in ``[0, 1]``.
-        :return: The number of particles that fit below that depth.
+        :param fill_fraction: Share of the cavity to fill, in ``[0, 1]``.
+        :return: The number of particles that settle to that share.
         """
-        spacing = self.PARTICLE_SPACING * particle_radius
-        seat_radius = self.inner_radius - particle_radius
-        surface = self.base_thickness + fill_fraction * (
-            self.height - self.base_thickness
+        return int(
+            fill_fraction
+            * self.cavity_volume
+            / ParticleFill.loose_bulk_volume_per_particle(particle_radius)
         )
-        count = 0
-        height = self.base_thickness + particle_radius
-        while height + particle_radius <= surface:
-            count += len(self._layer_positions(height, seat_radius, spacing))
-            height += spacing
-        return count
 
     def particle_positions(self, particle_radius: float, count: int) -> List[Point3]:
         """
-        Where ``count`` particles of this radius stand in the cavity, packed from the
-        floor up and clear of the walls and of each other.
+        Where ``count`` particles of this radius are released, packed from the floor up
+        and clear of the walls and of each other.
+
+        The packing stands looser than what the particles settle into, so filling the
+        cavity needs a column taller than it: the layers carry on above the rim, and the
+        surplus drops in as the ones below it compact.
 
         :param particle_radius: Radius of one particle, in metres.
         :param count: How many particles to place.
         :return: The particles' positions in the container's own frame, lowest first.
-        :raises ParticlesDoNotFitError: If the cavity holds fewer than ``count``.
+        :raises ParticlesDoNotFitError: If the cavity holds fewer than ``count`` once
+            they have settled.
         """
+        available = self.particle_capacity(particle_radius)
+        if count > available:
+            raise ParticlesDoNotFitError(
+                cavity_volume=self.cavity_volume,
+                particle_radius=particle_radius,
+                requested=count,
+                available=available,
+            )
         spacing = self.PARTICLE_SPACING * particle_radius
         seat_radius = self.inner_radius - particle_radius
-        positions = []
         height = self.base_thickness + particle_radius
-        while height + particle_radius <= self.height:
+        if count and not self._layer_positions(height, seat_radius, spacing):
+            raise ParticlesDoNotFitError(
+                cavity_volume=self.cavity_volume,
+                particle_radius=particle_radius,
+                requested=count,
+                available=0,
+            )
+        positions = []
+        while len(positions) < count:
             positions.extend(self._layer_positions(height, seat_radius, spacing))
-            if len(positions) >= count:
-                return positions[:count]
             height += spacing
-        raise ParticlesDoNotFitError(
-            cavity_volume=self.cavity_volume,
-            particle_radius=particle_radius,
-            requested=count,
-            available=len(positions),
-        )
+        return positions[:count]
 
     def _layer_positions(
         self, height: float, seat_radius: float, spacing: float
@@ -327,8 +335,8 @@ class ParticleFill:
 
     def __post_init__(self) -> None:
         if self.bulk_volume_per_particle is None:
-            self.bulk_volume_per_particle = (
-                self.particle_volume / self.LOOSE_PACKING_FRACTION
+            self.bulk_volume_per_particle = self.loose_bulk_volume_per_particle(
+                self.particle_radius
             )
 
     @property
@@ -337,6 +345,20 @@ class ParticleFill:
         :return: The volume of one particle itself, in cubic metres.
         """
         return 4 / 3 * math.pi * self.particle_radius**3
+
+    @classmethod
+    def loose_bulk_volume_per_particle(cls, particle_radius: float) -> float:
+        """
+        The volume one particle of a radius takes up once poured, voids included,
+        assuming it packs as loosely as equal spheres do.
+
+        How many particles a container holds and how full a count of them makes it are
+        the same conversion read in either direction, so both are read here.
+
+        :param particle_radius: Radius of one particle, in metres.
+        :return: The volume, in cubic metres.
+        """
+        return 4 / 3 * math.pi * particle_radius**3 / cls.LOOSE_PACKING_FRACTION
 
     def bulk_volume_in(self, container: Body) -> float:
         """
@@ -529,16 +551,19 @@ class ParticleFill:
 
     def filled_height_in(self, container: Body) -> float:
         """
-        How far the particles standing in a container reach up it, as a share of its own
+        How far the contents standing in a container reach up it, as a share of its own
         height.
 
         Upright, this is the depth of the contents, which is what a fill level is. While
         the container tilts the contents ride up its wall, so the same number says how
         close they are to its rim and reaches ``1`` as it starts pouring.
 
+        Measured to the top of the contents, a radius above the highest particle's
+        centre, so that a container packed to its rim reads as full.
+
         :param container: The container to measure in.
-        :return: The height of the highest particle inside it over the container's
-            height, or ``0`` when none is inside.
+        :return: The height the contents reach over the container's height, or ``0``
+            when none is inside.
         """
         inside = self._inside(container)
         if not inside.any():
@@ -546,7 +571,8 @@ class ParticleFill:
         lower = container.collision.min_point.to_np()[:3]
         upper = container.collision.max_point.to_np()[:3]
         highest = self.positions_in(container)[inside][:, 2].max()
-        return float((highest - lower[2]) / (upper[2] - lower[2]))
+        surface = highest + self.particle_radius
+        return float((surface - lower[2]) / (upper[2] - lower[2]))
 
     def heights(self) -> numpy.ndarray:
         """
