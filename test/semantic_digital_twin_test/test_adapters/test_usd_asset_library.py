@@ -1,15 +1,20 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pytest
 from PIL import Image
 
-from semantic_digital_twin.adapters.usd.asset_library import USDAssetLibrary
+from semantic_digital_twin.adapters.usd.asset_library import (
+    USDAssetLibrary,
+    VertexSharing,
+)
 from semantic_digital_twin.adapters.usd.scene_parser import USDSceneParser
 from semantic_digital_twin.adapters.usd.stage_parser import Usd, UsdGeom, UsdShade
 
 from .usd_stages import (
     PXR_AVAILABLE,
+    build_scene_stage_with_a_triangle_soup,
     build_scene_stage_with_textured_objects,
 )
 
@@ -241,3 +246,115 @@ def test_the_library_parses_into_the_scene_the_stage_described(tmp_path):
     from_library = USDSceneParser.from_file(str(world_layer), prefix="scene").parse()
 
     assert placed_bodies(from_library) == placed_bodies(from_source)
+
+
+# %% sharing the vertices loose triangles do not
+
+
+@dataclass
+class SplitSoup:
+    """
+    The triangle-soup fixture and the library it was split into.
+
+    Both stages are held, because a prim of a stage nothing refers to any more stops
+    answering the moment that stage is collected.
+    """
+
+    source: Usd.Stage
+    library: Usd.Stage
+
+    @property
+    def original(self) -> UsdGeom.Mesh:
+        return UsdGeom.Mesh(mesh_under(self.source, "wall_a"))
+
+    @property
+    def written(self) -> UsdGeom.Mesh:
+        return UsdGeom.Mesh(mesh_under(self.library, "wall_a"))
+
+
+def soup_library(tmp_path, **arguments) -> SplitSoup:
+    source = build_scene_stage_with_a_triangle_soup()
+    world_layer = USDAssetLibrary(stage=source, **arguments).write(tmp_path / "library")
+    return SplitSoup(source=source, library=Usd.Stage.Open(str(world_layer)))
+
+
+def corner_values(mesh, values, interpolation):
+    """
+    Spread a mesh's attribute values out to one per face corner, whichever way they were
+    stored, so two meshes storing the same thing differently compare equal.
+    """
+    values = np.asarray(values)
+    if interpolation == UsdGeom.Tokens.uniform:
+        return np.repeat(values, np.array(mesh.GetFaceVertexCountsAttr().Get()), axis=0)
+    if interpolation == UsdGeom.Tokens.faceVarying:
+        return values
+    return values[np.array(mesh.GetFaceVertexIndicesAttr().Get())]
+
+
+def corner_points(mesh):
+    points = np.array(mesh.GetPointsAttr().Get())
+    return points[np.array(mesh.GetFaceVertexIndicesAttr().Get())]
+
+
+def test_vertices_are_kept_as_authored_by_default(tmp_path):
+    split = soup_library(tmp_path)
+
+    assert len(split.written.GetPointsAttr().Get()) == len(
+        split.original.GetPointsAttr().Get()
+    )
+
+
+def test_sharing_vertices_keeps_one_point_per_position(tmp_path):
+    split = soup_library(tmp_path, vertex_sharing=VertexSharing.BY_POSITION)
+
+    assert len(split.original.GetPointsAttr().Get()) == 6
+    assert len(split.written.GetPointsAttr().Get()) == 4
+
+
+def test_sharing_vertices_keeps_the_surface_it_was_given(tmp_path):
+    split = soup_library(tmp_path, vertex_sharing=VertexSharing.BY_POSITION)
+
+    np.testing.assert_array_equal(
+        corner_points(split.written), corner_points(split.original)
+    )
+
+
+def test_sharing_vertices_keeps_a_texture_coordinate_per_corner(tmp_path):
+    split = soup_library(tmp_path, vertex_sharing=VertexSharing.BY_POSITION)
+    written, original = split.written, split.original
+
+    written_st = UsdGeom.PrimvarsAPI(written).GetPrimvar("st")
+    original_st = UsdGeom.PrimvarsAPI(original).GetPrimvar("st")
+
+    assert written_st.GetInterpolation() == UsdGeom.Tokens.faceVarying
+    np.testing.assert_array_equal(
+        corner_values(written, written_st.Get(), written_st.GetInterpolation()),
+        corner_values(original, original_st.Get(), original_st.GetInterpolation()),
+    )
+
+
+def test_sharing_vertices_keeps_a_flat_normal_once_per_face(tmp_path):
+    # A scan gives every corner of a face the same normal, so one per face says it.
+    split = soup_library(tmp_path, vertex_sharing=VertexSharing.BY_POSITION)
+    written, original = split.written, split.original
+
+    assert written.GetNormalsInterpolation() == UsdGeom.Tokens.uniform
+    assert len(written.GetNormalsAttr().Get()) == 2
+    np.testing.assert_array_equal(
+        corner_values(
+            written, written.GetNormalsAttr().Get(), written.GetNormalsInterpolation()
+        ),
+        corner_values(
+            original,
+            original.GetNormalsAttr().Get(),
+            original.GetNormalsInterpolation(),
+        ),
+    )
+
+
+def test_sharing_vertices_stops_a_renderer_subdividing_the_result(tmp_path):
+    # A scan is a polygon mesh, and USD's unauthored default is catmullClark - harmless
+    # while no face shares an edge, a smoothed building once they do.
+    split = soup_library(tmp_path, vertex_sharing=VertexSharing.BY_POSITION)
+
+    assert split.written.GetSubdivisionSchemeAttr().Get() == UsdGeom.Tokens.none

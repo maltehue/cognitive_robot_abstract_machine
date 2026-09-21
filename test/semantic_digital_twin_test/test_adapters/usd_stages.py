@@ -554,3 +554,67 @@ def build_scene_stage_with_a_guide_prim() -> Usd.Stage:
     proxy.CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
 
     return stage
+
+
+def build_scene_stage_with_a_triangle_soup() -> Usd.Stage:
+    """
+    A minimal in-memory stage whose object is exported as loose triangles.
+
+    Two triangles meet along an edge, but every corner carries its own point, its own
+    texture coordinate and the flat normal of the face it belongs to - the shape a
+    photogrammetry export takes, where nothing is shared between faces.
+
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, "/scene").GetPrim())
+
+    mesh = UsdGeom.Mesh.Define(stage, "/scene/Wall/wall_a/mesh")
+    mesh.CreatePointsAttr(
+        [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 0, 0), (1, 1, 0), (0, 1, 0)]
+    )
+    mesh.CreateFaceVertexCountsAttr([3, 3])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3, 4, 5])
+    mesh.CreateNormalsAttr(
+        [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, -1), (0, 0, -1), (0, 0, -1)]
+    )
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+
+    st = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
+        "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex
+    )
+    st.Set([(0, 0), (1, 0), (1, 1), (0.1, 0.1), (0.9, 0.9), (0.1, 0.9)])
+
+    return stage
+
+
+def build_stage_with_face_varying_texture_coordinates(
+    texture_file_path: str,
+) -> Usd.Stage:
+    """
+    A minimal in-memory stage whose mesh textures each face corner separately.
+
+    Two triangles share the vertices along the edge they meet at, but texture them
+    differently there, so the ``st`` primvar holds one coordinate per face corner
+    rather than one per point - what a mesh looks like once loose triangles have been
+    given one vertex per position.
+
+    :param texture_file_path: Path to the texture image the material's
+        ``UsdUVTexture`` node reads.
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    mesh = UsdGeom.Mesh.Define(stage, "/object/mesh")
+    mesh.CreatePointsAttr([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
+    mesh.CreateFaceVertexCountsAttr([3, 3])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 0, 2, 3])
+
+    st = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
+        "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying
+    )
+    st.Set([(0, 0), (1, 0), (1, 1), (0.25, 0.25), (0.5, 0.5), (0.75, 0.75)])
+
+    _bind_textured_material(stage, "/object", texture_file_path)
+
+    return stage

@@ -47,6 +47,7 @@ from .usd_stages import (
     build_stage_with_primitive_shapes,
     build_stage_with_scaled_mesh,
     build_stage_with_a_double_sided_mesh,
+    build_stage_with_face_varying_texture_coordinates,
     build_stage_with_textured_mesh,
     build_usdz_package_with_a_textured_mesh,
 )
@@ -413,7 +414,8 @@ def test_uv_coordinates_reads_the_per_point_st_primvar(texture_file):
 
     uv = UsdMeshShapeBuilder._uv_coordinates(mesh_prim)
 
-    np.testing.assert_array_equal(uv, [[0, 0], [1, 0], [1, 1], [0, 1]])
+    assert not uv.are_per_corner
+    np.testing.assert_array_equal(uv.values, [[0, 0], [1, 0], [1, 1], [0, 1]])
 
 
 def test_uv_coordinates_is_none_without_an_st_primvar(texture_file):
@@ -591,3 +593,31 @@ def test_create_mesh_shape_leaves_a_texture_within_the_maximum_alone(tmp_path):
     ).build()
 
     assert shape.unscaled_mesh.visual.material.baseColorTexture.size == (8, 8)
+
+
+# %% texture coordinates held per face corner
+
+
+def test_a_mesh_texturing_each_corner_separately_keeps_its_texture(texture_file):
+    # Giving loose triangles one vertex per position moves the texture coordinates
+    # onto the face corners, which is where a scan's differ.
+    world = parse(build_stage_with_face_varying_texture_coordinates(texture_file))
+
+    [shape] = world.root.visual.shapes
+
+    assert shape.is_textured
+
+
+def test_a_mesh_texturing_each_corner_separately_keeps_every_coordinate(texture_file):
+    stage = build_stage_with_face_varying_texture_coordinates(texture_file)
+    authored = np.array(
+        UsdGeom.PrimvarsAPI(stage.GetPrimAtPath("/object/mesh")).GetPrimvar("st").Get()
+    )
+
+    world = parse(stage)
+
+    [shape] = world.root.visual.shapes
+    np.testing.assert_allclose(
+        np.unique(np.round(shape.mesh.visual.uv, 6), axis=0),
+        np.unique(np.round(authored, 6), axis=0),
+    )

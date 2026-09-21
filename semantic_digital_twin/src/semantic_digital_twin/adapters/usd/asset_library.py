@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
-from typing_extensions import Dict, Optional, Self
+import numpy as np
+from numpy.typing import NDArray
+from typing_extensions import Dict, Optional, Self, Tuple
 
 from semantic_digital_twin.adapters.usd.exceptions import (
     PrimDefinedOutsideRootLayerError,
@@ -57,6 +60,28 @@ TEXTURE_FILE_INPUT = "file"
 """
 The input of a texture shader naming the image it reads.
 """
+
+
+class VertexSharing(StrEnum):
+    """
+    Whether the faces of a written mesh share the vertices they meet at.
+    """
+
+    AS_AUTHORED = "as_authored"
+    """
+    Every face keeps the vertices it was written with, so a mesh exported as loose
+    triangles stays loose triangles.
+    """
+
+    BY_POSITION = "by_position"
+    """
+    Faces meeting at a position share one vertex there, and whatever differs between
+    them is written per face corner, or once per face where a face agrees with itself.
+
+    A scanned surface arrives as loose triangles, storing a position, a normal and a
+    texture coordinate once for every triangle touching it, and sharing costs it
+    nothing: the surface, its shading and its texturing all come back unchanged.
+    """
 
 
 @dataclass(frozen=True)
@@ -114,6 +139,119 @@ class AssetFiles:
         return self.directory / TEXTURES_DIRECTORY
 
 
+# %% sharing the vertices a mesh's faces meet at
+
+CORNER_INTERPOLATIONS = (UsdGeom.Tokens.vertex, UsdGeom.Tokens.varying)
+"""
+The interpolations holding one value per point, and so the ones sharing points changes.
+"""
+
+
+def _unique_rows(rows: NDArray) -> Tuple[NDArray, NDArray]:
+    """
+    :param rows: The rows to deduplicate.
+    :return: The distinct rows, and for each original row the index of its distinct one.
+    """
+    rows = np.ascontiguousarray(rows)
+    as_records = rows.view([("", rows.dtype)] * rows.shape[1])
+    distinct, inverse = np.unique(as_records, return_inverse=True)
+    return distinct.view(rows.dtype).reshape(-1, rows.shape[1]), inverse.ravel()
+
+
+def _face_of_corner(counts: NDArray) -> NDArray:
+    """
+    :param counts: How many corners each face has.
+    :return: For each corner, the index of the first corner of the face it belongs to.
+    """
+    first_corners = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    return np.repeat(first_corners, counts)
+
+
+def _values_per_corner(
+    values: NDArray, interpolation: str, corner_indices: NDArray, counts: NDArray
+) -> Optional[NDArray]:
+    """
+    :param values: The values as authored.
+    :param interpolation: The interpolation they were authored with.
+    :param corner_indices: The point each face corner uses.
+    :param counts: How many corners each face has.
+    :return: One value per face corner, or ``None`` if sharing points cannot change
+        how the values are held.
+    """
+    if interpolation in CORNER_INTERPOLATIONS:
+        return values[corner_indices]
+    if interpolation == UsdGeom.Tokens.uniform:
+        return np.repeat(values, counts, axis=0)
+    if interpolation == UsdGeom.Tokens.faceVarying:
+        return values
+    return None
+
+
+def _tightest_holding(per_corner: NDArray, counts: NDArray) -> Tuple[str, NDArray]:
+    """
+    :param per_corner: One value per face corner.
+    :param counts: How many corners each face has.
+    :return: The fewest values saying the same thing, and the interpolation holding
+        them - one per face where a face agrees with itself, one per corner otherwise.
+    """
+    first_corners = _face_of_corner(counts)
+    if np.array_equal(per_corner, per_corner[first_corners]):
+        return UsdGeom.Tokens.uniform, per_corner[np.unique(first_corners)]
+    return UsdGeom.Tokens.faceVarying, per_corner
+
+
+def _share_mesh_vertices(mesh: UsdGeom.Mesh) -> None:
+    """
+    Give a mesh one vertex per position, holding whatever differed between the faces
+    meeting there on the faces instead.
+
+    The surface, its shading and its texturing are unchanged - only how few values it
+    takes to say them. The subdivision scheme is pinned to ``none`` as well, because
+    USD's unauthored default smooths a mesh whose faces share edges, which loose
+    triangles never did.
+
+    :param mesh: The mesh to rewrite in place.
+    """
+    points = np.asarray(mesh.GetPointsAttr().Get())
+    corner_indices = np.asarray(mesh.GetFaceVertexIndicesAttr().Get())
+    counts = np.asarray(mesh.GetFaceVertexCountsAttr().Get())
+    shared_points, point_of_corner = _unique_rows(points)
+    if len(shared_points) == len(points):
+        return
+
+    for primvar in UsdGeom.PrimvarsAPI(mesh).GetPrimvars():
+        per_corner = _values_per_corner(
+            np.asarray(primvar.ComputeFlattened()),
+            primvar.GetInterpolation(),
+            corner_indices,
+            counts,
+        )
+        if per_corner is None:
+            continue
+        interpolation, values = _tightest_holding(per_corner, counts)
+        primvar.BlockIndices()
+        primvar.SetInterpolation(interpolation)
+        primvar.Set(values)
+
+    normals = mesh.GetNormalsAttr().Get()
+    if normals is not None:
+        per_corner = _values_per_corner(
+            np.asarray(normals),
+            mesh.GetNormalsInterpolation(),
+            corner_indices,
+            counts,
+        )
+        interpolation, values = _tightest_holding(per_corner, counts)
+        mesh.SetNormalsInterpolation(interpolation)
+        mesh.GetNormalsAttr().Set(values)
+
+    mesh.GetPointsAttr().Set(shared_points)
+    mesh.GetFaceVertexIndicesAttr().Set(
+        point_of_corner[corner_indices].astype(np.int32)
+    )
+    mesh.GetSubdivisionSchemeAttr().Set(UsdGeom.Tokens.none)
+
+
 # %% asset library
 
 
@@ -142,6 +280,11 @@ class USDAssetLibrary:
     """
     Longest side a written texture may have, in pixels, or ``None`` to copy every
     texture at the size it was authored.
+    """
+
+    vertex_sharing: VertexSharing = VertexSharing.AS_AUTHORED
+    """
+    Whether the faces of a written mesh share the vertices they meet at.
     """
 
     # %% construction
@@ -238,6 +381,8 @@ class USDAssetLibrary:
                 self._path_in_asset(object_prim, child, files.name),
             )
         self._retarget_relationships(layer, object_prim, files.name)
+        if self.vertex_sharing is VertexSharing.BY_POSITION:
+            self._share_vertices(layer)
         self._author_collision_proxy(layer, object_prim, files.name)
         layer.Save()
 
@@ -367,6 +512,21 @@ class USDAssetLibrary:
             ]
 
         layer.Traverse(asset_root, retarget)
+
+    # %% sharing vertices
+
+    @staticmethod
+    def _share_vertices(layer: Sdf.Layer) -> None:
+        """
+        Give every mesh in a layer one vertex per position, moving whatever differed
+        between the faces meeting there onto the faces themselves.
+
+        :param layer: The written geometry layer to rewrite the meshes of.
+        """
+        stage = Usd.Stage.Open(layer)
+        for prim in stage.TraverseAll():
+            if prim.IsA(UsdGeom.Mesh):
+                _share_mesh_vertices(UsdGeom.Mesh(prim))
 
     # %% collision
 

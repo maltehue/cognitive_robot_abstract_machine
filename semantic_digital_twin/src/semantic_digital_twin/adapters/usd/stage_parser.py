@@ -390,6 +390,31 @@ class UsdCylinderShapeBuilder(UsdShapeBuilder):
         )
 
 
+@dataclass(frozen=True)
+class UvCoordinates:
+    """
+    The texture coordinates a mesh's ``st`` primvar holds, and what they are held per.
+    """
+
+    values: NDArray[np.float64]
+    """
+    The coordinates as authored.
+    """
+
+    interpolation: str
+    """
+    The USD interpolation naming what each coordinate belongs to.
+    """
+
+    @property
+    def are_per_corner(self) -> bool:
+        """
+        Whether a coordinate belongs to a face corner rather than to a point, which is
+        the case once faces sharing a point texture it differently.
+        """
+        return self.interpolation == UsdGeom.Tokens.faceVarying
+
+
 @dataclass
 class UsdMeshShapeBuilder(UsdShapeBuilder):
     """
@@ -412,32 +437,35 @@ class UsdMeshShapeBuilder(UsdShapeBuilder):
         mesh_geometry = UsdGeom.Mesh(self.prim)
         local_vertices = np.array(mesh_geometry.GetPointsAttr().Get())
         vertices = self._transform_points(local_vertices, mesh_to_link)
-        faces = self._triangulate(
+        corner_points = np.asarray(mesh_geometry.GetFaceVertexIndicesAttr().Get())
+        corner_faces = self._triangulate(
             mesh_geometry.GetFaceVertexCountsAttr().Get(),
-            mesh_geometry.GetFaceVertexIndicesAttr().Get(),
+            np.arange(len(corner_points)),
         )
-        if mesh_geometry.GetDoubleSidedAttr().Get():
-            faces = self._both_windings(faces)
-        trimesh_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+        faces = corner_points[corner_faces]
 
         texture_file_path = self._diffuse_texture_path(self.prim)
-        uv_per_point = self._uv_coordinates(self.prim)
-        if texture_file_path is None or uv_per_point is None:
-            return Mesh.from_trimesh(
-                mesh=trimesh_mesh,
-                origin=HomogeneousTransformationMatrix(),
-                file_type=MeshFileType.GLB,
-            )
+        uv = self._uv_coordinates(self.prim)
+        if texture_file_path is None or uv is None:
+            return self._build(mesh_geometry, vertices, faces)
+
+        uv_per_vertex = uv.values
+        if uv.are_per_corner:
+            # A vertex buffer carries one coordinate per vertex, so a point textured
+            # differently by each face meeting it has to be split again here - which
+            # is what its own file held before those faces came to share it.
+            vertices = vertices[faces.reshape(-1)]
+            uv_per_vertex = uv.values[corner_faces.reshape(-1)]
+            faces = np.arange(len(vertices), dtype=np.int64).reshape(-1, 3)
 
         texture_file_path = downscaled_texture_path(
             texture_file_path, self.maximum_texture_size
         )
-
-        # The st primvar is per point, so it indexes the vertices as they already are;
-        # handing the uv to Mesh.from_trimesh instead would have it split every vertex
+        trimesh_mesh = self._trimesh(mesh_geometry, vertices, faces)
+        # Handing the uv to Mesh.from_trimesh instead would have it split every vertex
         # per face corner again, which for a surface holding both windings duplicates
         # the whole mesh.
-        trimesh_mesh.visual = trimesh.visual.TextureVisuals(uv=uv_per_point)
+        trimesh_mesh.visual = trimesh.visual.TextureVisuals(uv=uv_per_vertex)
         if self.shading is Shading.LIT:
             return Mesh.from_trimesh(
                 mesh=trimesh_mesh,
@@ -457,6 +485,41 @@ class UsdMeshShapeBuilder(UsdShapeBuilder):
         )
         return Mesh.from_trimesh(
             mesh=trimesh_mesh,
+            origin=HomogeneousTransformationMatrix(),
+            file_type=MeshFileType.GLB,
+        )
+
+    def _trimesh(
+        self,
+        mesh_geometry: UsdGeom.Mesh,
+        vertices: NDArray[np.float64],
+        faces: NDArray[np.int64],
+    ) -> trimesh.Trimesh:
+        """
+        :param mesh_geometry: The USD mesh being built, read for its sidedness.
+        :param vertices: The surface's vertices, in the link's frame.
+        :param faces: The surface's triangles.
+        :return: The trimesh holding that surface, shown from both sides if the USD
+            mesh is authored ``doubleSided``.
+        """
+        if mesh_geometry.GetDoubleSidedAttr().Get():
+            faces = self._both_windings(faces)
+        return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+    def _build(
+        self,
+        mesh_geometry: UsdGeom.Mesh,
+        vertices: NDArray[np.float64],
+        faces: NDArray[np.int64],
+    ) -> Mesh:
+        """
+        :param mesh_geometry: The USD mesh being built.
+        :param vertices: The surface's vertices, in the link's frame.
+        :param faces: The surface's triangles.
+        :return: The untextured Mesh shape that surface becomes.
+        """
+        return Mesh.from_trimesh(
+            mesh=self._trimesh(mesh_geometry, vertices, faces),
             origin=HomogeneousTransformationMatrix(),
             file_type=MeshFileType.GLB,
         )
@@ -523,27 +586,31 @@ class UsdMeshShapeBuilder(UsdShapeBuilder):
         return readable_texture_path(asset_path.resolvedPath)
 
     @staticmethod
-    def _uv_coordinates(mesh_prim: Usd.Prim) -> Optional[NDArray[np.float64]]:
+    def _uv_coordinates(mesh_prim: Usd.Prim) -> Optional[UvCoordinates]:
         """
-        Reads a mesh prim's per-point UV coordinates from its ``st`` primvar.
+        Reads a mesh prim's UV coordinates from its ``st`` primvar.
 
         :param mesh_prim: The mesh prim to look up.
-        :return: An ``(n_points, 2)`` array of UV coordinates, or ``None`` if the prim
-            has no ``st`` primvar, or its interpolation is not per-point
-            (``vertex``/``varying``).
+        :return: The coordinates and what they are held per, or ``None`` if the prim
+            has no ``st`` primvar, or holds one coordinate for the whole surface or
+            for a whole face rather than one per point or per face corner.
         """
         primvar = UsdGeom.PrimvarsAPI(mesh_prim).GetPrimvar("st")
         if not primvar.IsDefined():
             return None
-        if primvar.GetInterpolation() not in (
+        interpolation = primvar.GetInterpolation()
+        if interpolation not in (
             UsdGeom.Tokens.vertex,
             UsdGeom.Tokens.varying,
+            UsdGeom.Tokens.faceVarying,
         ):
             return None
-        values = primvar.Get()
+        values = primvar.ComputeFlattened()
         if not values:
             return None
-        return np.array(values, dtype=np.float64)
+        return UvCoordinates(
+            values=np.array(values, dtype=np.float64), interpolation=interpolation
+        )
 
     @staticmethod
     def _triangulate(
