@@ -49,6 +49,7 @@ from krrood.symbolic_math.symbolic_math import FloatVariable
 from semantic_digital_twin.physics.drain_calibration import CalibratedDrainScale
 from semantic_digital_twin.physics.particles import (
     HollowCylinder,
+    MeasuredCommittedFillLevel,
     MeasuredFillLevel,
     MeasuredInflowRate,
     ParticleFill,
@@ -88,12 +89,16 @@ A loose packing settles to about half the depth it was packed to, so a cup packe
 rim holds its contents at about half its height once they have come to rest.
 """
 
-GOAL_FILL = 0.3
+GOAL_FILL = 0.06
 """
 The receiver's fill level the motion is commanded to reach.
+
+A fill level is a share of the container's own capacity, and this receiver holds about
+four and a half times what the source does, so everything the source can pour reaches
+only about ``0.13`` of it. The goal is set below that with room to stop in.
 """
 
-FILL_TOLERANCE = 0.05
+FILL_TOLERANCE = 0.01
 """
 How close to :data:`GOAL_FILL` counts as reached.
 """
@@ -367,6 +372,21 @@ def build_carry_motion(scene: TransferScene, tilt: float = 0.0) -> MotionStatech
     return statechart
 
 
+def _opening_height(world: World, container: PourableContainer) -> float:
+    """
+    How high a container's opening stands in the world, in metres.
+
+    Its origin sits at the base of its collision geometry, so the opening is one
+    container height above it.
+
+    :param world: The world the container stands in.
+    :param container: The container.
+    :return: The height, in metres.
+    """
+    base = world.compute_forward_kinematics_np(world.root, container.root)[2, 3]
+    return float(base) + container.root.collision.height
+
+
 def pour_start_tilt(source: PourableContainer, contents: ParticleFill) -> float:
     """
     The tilt at which the source's contents reach its lip, plus a margin, so the drain
@@ -374,7 +394,9 @@ def pour_start_tilt(source: PourableContainer, contents: ParticleFill) -> float:
 
     Read off how far the contents reach up the cup rather than off its fill level: the
     level the controller steers by counts what is in the cup, while the lip is a
-    question about how deep it stands.
+    question about how deep it stands. Contents that stand in a heap reach the lip only
+    once the surface has steepened past the angle they hold, so that angle is part of
+    the tilt the pour has to start from.
 
     :param source: The cup about to pour.
     :param contents: The contents standing in it.
@@ -382,8 +404,8 @@ def pour_start_tilt(source: PourableContainer, contents: ParticleFill) -> float:
     """
     equation = source.fill_equation.ungated()
     depth = contents.filled_height_in(source.root)
-    dry_height = equation.container_height * (1.0 - depth)
-    return math.atan2(dry_height, equation.lip_offset) + POUR_START_TILT_MARGIN
+    onset = equation.onset_tilt(depth).evaluate()[0]
+    return float(onset) + POUR_START_TILT_MARGIN
 
 
 def build_transfer_motion(scene: TransferScene) -> MotionStatechart:
@@ -453,14 +475,26 @@ def run(headless: bool) -> None:
             count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=INITIAL_FILL),
         )
         simulation.step_simulation(SETTLE_TIME)
+        fill.bulk_volume_per_particle = fill.bulk_volume_per_particle_in(
+            scene.source.root, scene.source.capacity
+        )
         perception = [
             MeasuredFillLevel(
                 contents=fill,
-                container=container.root,
-                connection=container.fill_connection,
+                container=scene.source.root,
+                capacity=scene.source.capacity,
+                connection=scene.source.fill_connection,
                 world=scene.world,
-            )
-            for container in (scene.source, scene.receiver)
+            ),
+            MeasuredCommittedFillLevel(
+                contents=fill,
+                container=scene.receiver.root,
+                capacity=scene.receiver.capacity,
+                connection=scene.receiver.fill_connection,
+                world=scene.world,
+                source=scene.source.root,
+                opening_height=_opening_height(scene.world, scene.receiver),
+            ),
         ]
         for measurement in perception:
             measurement.report()
@@ -472,7 +506,7 @@ def run(headless: bool) -> None:
             f"{scene.receiver.fill_level:.2f}"
         )
 
-        arriving = MeasuredInflowRate(contents=fill, container=scene.receiver.root)
+        arriving = MeasuredInflowRate(level=perception[1])
         tilt = pour_start_tilt(scene.source, fill)
         print(f"carrying the cup pre-tilted to {tilt:.3f} rad, where its drain starts")
         _run_motion(
