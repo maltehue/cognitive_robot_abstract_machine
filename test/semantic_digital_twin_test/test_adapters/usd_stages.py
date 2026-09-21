@@ -534,3 +534,23 @@ def build_scene_stage_with_textured_objects(texture_file_path: str) -> Usd.Stage
     _bind_textured_material(stage, "/scene/Floor/floor_a", texture_file_path)
 
     return stage
+
+
+def build_scene_stage_with_a_guide_prim() -> Usd.Stage:
+    """
+    A minimal in-memory stage whose object holds a guide beside its mesh.
+
+    A guide is geometry a renderer draws nothing for, which is the shape a collision
+    proxy authored beside the surface it stands for takes.
+
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, "/scene").GetPrim())
+
+    _define_placed_instance(stage, "/scene/Wall/wall_a", (1, 0, 0))
+    proxy = UsdGeom.Cube.Define(stage, "/scene/Wall/wall_a/collision")
+    proxy.CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
+
+    return stage

@@ -29,6 +29,7 @@ from .usd_stages import (
     build_jointless_stage_with_a_default_prim,
     build_jointless_stage_with_multiple_top_level_prims,
     build_jointless_stage_with_unsupported_geometry,
+    build_scene_stage_with_a_guide_prim,
     build_scene_stage_with_a_scaled_group,
     build_scene_stage_with_grouped_instances,
     build_scene_stage_with_nested_objects,
@@ -344,3 +345,12 @@ def test_a_parsed_scene_can_be_enclosed_in_boxes():
     [collision] = body_named(world, "wall_a").collision.shapes
     assert isinstance(collision, Box)
     np.testing.assert_allclose(collision.scale.to_np(), high - low, atol=1e-6)
+
+
+def test_parse_leaves_a_guide_out_of_what_an_object_looks_like():
+    # A guide is geometry a renderer draws nothing for, so a collision proxy authored
+    # beside a surface is not part of what that object looks like.
+    world = parse(build_scene_stage_with_a_guide_prim())
+
+    [shape] = body_named(world, "wall_a").visual.shapes
+    assert isinstance(shape, Mesh)

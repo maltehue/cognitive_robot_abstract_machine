@@ -776,12 +776,19 @@ class USDStageParser(WorldModelParser, ABC):
         way an unrecognised joint type does, rather than silently vanishing from the
         built world.
 
+        A prim marked as a guide is skipped too: a guide is what a renderer draws
+        nothing for, which is the shape a collision proxy authored beside the surface
+        it stands for takes.
+
         :param prim: The prim to create a shape for.
         :param link_to_world: The enclosing link's local-to-world transform.
         :return: The created shape, or ``None`` if ``prim`` is not shape geometry.
         :raises UnsupportedUsdGeometryTypeError: If ``prim`` is a renderable geometric
             primitive of a type this parser does not build a Shape for.
         """
+        if UsdGeom.Imageable(prim).ComputePurpose() == UsdGeom.Tokens.guide:
+            return None
+
         type_name = prim.GetTypeName()
         try:
             geom_type = UsdGeomPrimType(type_name)

@@ -41,9 +41,10 @@ Where an asset's own copies of the images its materials read are kept, relative 
 asset's directory.
 """
 
-LIBRARY_ROOT = "/Root"
+UNNAMED_LIBRARY_ROOT = "Root"
 """
-The path of the world layer's default prim, which every placement sits beneath.
+What the world layer's default prim is called when the stage being split named no
+default prim of its own for it to be called after.
 """
 
 TEXTURE_SHADER_ID = "UsdUVTexture"
@@ -172,13 +173,14 @@ class USDAssetLibrary:
         world = Usd.Stage.Open(world_layer)
         UsdGeom.SetStageUpAxis(world, UsdGeom.GetStageUpAxis(self.stage))
         UsdGeom.SetStageMetersPerUnit(world, UsdGeom.GetStageMetersPerUnit(self.stage))
-        world.SetDefaultPrim(UsdGeom.Xform.Define(world, LIBRARY_ROOT).GetPrim())
+        root_path = Sdf.Path(f"/{self._root_name()}")
+        world.SetDefaultPrim(UsdGeom.Xform.Define(world, root_path).GetPrim())
 
         names: Dict[str, int] = {}
         for object_prim in geometry_owning_prims(self.stage):
             self._require_root_layer_definition(object_prim)
             files = self._write_asset(object_prim, directory, names)
-            self._place(world, object_prim, files)
+            self._place(world, root_path, object_prim, files)
 
         world_layer.Save()
         return directory / WORLD_LAYER_NAME
@@ -398,8 +400,23 @@ class USDAssetLibrary:
 
     # %% placement
 
+    def _root_name(self) -> str:
+        """
+        :return: What the world layer's default prim is called, which is what the
+            stage called its own so that the library stands in for it unchanged.
+        """
+        default_prim = self.stage.GetDefaultPrim()
+        if not default_prim:
+            return UNNAMED_LIBRARY_ROOT
+        return default_prim.GetName()
+
     @staticmethod
-    def _place(world: Usd.Stage, object_prim: Usd.Prim, files: AssetFiles) -> None:
+    def _place(
+        world: Usd.Stage,
+        root_path: Sdf.Path,
+        object_prim: Usd.Prim,
+        files: AssetFiles,
+    ) -> None:
         """
         Reference an asset into the world layer, where the prim it was written from
         stood.
@@ -409,15 +426,16 @@ class USDAssetLibrary:
         scopes that only say what a thing is.
 
         :param world: The world stage to place the asset in.
+        :param root_path: The path every placement sits beneath.
         :param object_prim: The prim the asset was written from.
         :param files: The files the asset was written as.
         """
         category = object_prim.GetParent().GetName()
-        parent_path = f"{LIBRARY_ROOT}/{category}" if category else LIBRARY_ROOT
+        parent_path = root_path.AppendChild(category) if category else root_path
         if category:
             UsdGeom.Scope.Define(world, parent_path)
 
-        placement = UsdGeom.Xform.Define(world, f"{parent_path}/{files.name}")
+        placement = UsdGeom.Xform.Define(world, parent_path.AppendChild(files.name))
         placement.GetPrim().GetReferences().AddReference(
             f"./{ASSETS_DIRECTORY}/{files.name}/{files.interface.name}"
         )

@@ -87,6 +87,14 @@ def test_an_asset_keeps_its_geometry_and_its_material_in_separate_layers(tmp_pat
     ]
 
 
+def test_the_library_keeps_the_name_the_stage_gave_its_root(tmp_path):
+    # The library stands in for the stage it was written from, so anything addressing
+    # the scene by the name of its root goes on working.
+    source, _, library = written_library(tmp_path)
+
+    assert library.GetDefaultPrim().GetName() == source.GetDefaultPrim().GetName()
+
+
 def test_the_world_layer_carries_no_geometry_of_its_own(tmp_path):
     # The point of the split: the file a person edits stays small enough to read.
     _, world_layer, _ = written_library(tmp_path)
