@@ -23,7 +23,10 @@ from typing_extensions import ClassVar, List, Optional, Self
 
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.exceptions import ParticlesDoNotFitError
+from semantic_digital_twin.exceptions import (
+    EmptyContainerCalibrationError,
+    ParticlesDoNotFitError,
+)
 from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
     Point3,
@@ -306,6 +309,63 @@ class ParticleFill:
     Radius of one particle, in metres.
     """
 
+    bulk_volume_per_particle: Optional[float] = None
+    """
+    Volume one particle takes up once poured, voids included, in cubic metres.
+
+    What makes a count of particles comparable with a fill level: a container is as full
+    as the volume standing in it, and particles standing in a heap occupy more than they
+    are made of. Measurable by pouring a known count into a container of known capacity,
+    which is what :meth:`bulk_volume_per_particle_in` reads. Defaults to the particle
+    loosely packed.
+    """
+
+    LOOSE_PACKING_FRACTION: ClassVar[float] = 0.6
+    """
+    Share of a poured volume that equal spheres themselves occupy, packed loosely.
+    """
+
+    def __post_init__(self) -> None:
+        if self.bulk_volume_per_particle is None:
+            self.bulk_volume_per_particle = (
+                self.particle_volume / self.LOOSE_PACKING_FRACTION
+            )
+
+    @property
+    def particle_volume(self) -> float:
+        """
+        :return: The volume of one particle itself, in cubic metres.
+        """
+        return 4 / 3 * math.pi * self.particle_radius**3
+
+    def bulk_volume_in(self, container: Body) -> float:
+        """
+        The volume the particles standing in a container take up, voids included.
+
+        :param container: The container to measure in.
+        :return: The volume, in cubic metres.
+        """
+        return self.count_inside(container) * self.bulk_volume_per_particle
+
+    def bulk_volume_per_particle_in(self, container: Body, capacity: float) -> float:
+        """
+        The volume one particle takes up, read off the contents standing in a container
+        whose capacity is known.
+
+        Measures the packing in place rather than assuming it: the contents reach a
+        share of the container's height, and that share of its capacity is what the
+        particles in it occupy.
+
+        :param container: The container the contents stand in.
+        :param capacity: That container's capacity, in cubic metres.
+        :return: The volume one particle takes up, in cubic metres.
+        :raises EmptyContainerCalibrationError: If nothing stands in the container.
+        """
+        inside = self.count_inside(container)
+        if inside == 0:
+            raise EmptyContainerCalibrationError(container=container)
+        return self.filled_height_in(container) * capacity / inside
+
     @classmethod
     def spawn_in(
         cls,
@@ -488,6 +548,29 @@ class ParticleFill:
         highest = self.positions_in(container)[inside][:, 2].max()
         return float((highest - lower[2]) / (upper[2] - lower[2]))
 
+    def heights(self) -> numpy.ndarray:
+        """
+        How high each particle stands, in the world frame.
+
+        ..note:: A simulation computes a body's pose as it steps, so this reads zeros
+            until the first step has run.
+
+        :return: One height in metres per particle, in the order they were packed.
+        """
+        if not self.names:
+            return numpy.empty(0)
+        positions = self.simulator.get_bodies_positions(body_names=self.names).result
+        return numpy.array([positions[name][2] for name in self.names])
+
+    def count_above(self, height: float) -> int:
+        """
+        How many particles stand above a height in the world.
+
+        :param height: The height to count above, in metres.
+        :return: The number of particles above it.
+        """
+        return int((self.heights() > height).sum())
+
     def _inside(self, container: Body) -> numpy.ndarray:
         """
         :param container: The container to test against.
@@ -506,7 +589,7 @@ class ParticleFill:
         """
         :return: The volume of the particles themselves, in cubic metres.
         """
-        return len(self.names) * 4 / 3 * math.pi * self.particle_radius**3
+        return len(self.names) * self.particle_volume
 
 
 # %% reporting how full a container is
@@ -523,11 +606,10 @@ class MeasuredFillLevel:
     the contents instead, the controller reasons about the pour that happened: it keeps
     pouring while nothing has arrived, and stops when something has.
 
-    The level is the share of the contents standing in the container, so the source and
-    the receiver are measured on one scale and what has left one but not reached the
-    other is visible as the difference. It is a share of the contents rather than of the
-    container's own capacity, which are the same thing only for the container the
-    contents started full of.
+    The level is the share of the container's own capacity that the contents standing in
+    it take up, which is what a fill level means and what a scale or a depth sensor
+    would report of a real container. Counting particles is how this simulation sees
+    them, so the count is converted through the volume one of them occupies.
     """
 
     contents: ParticleFill
@@ -538,6 +620,11 @@ class MeasuredFillLevel:
     container: Body
     """
     The container being reported on.
+    """
+
+    capacity: float
+    """
+    That container's capacity, in cubic metres.
     """
 
     connection: LiquidConnection
@@ -554,9 +641,9 @@ class MeasuredFillLevel:
         """
         How full the container currently is.
 
-        :return: The share of the contents standing in it, in ``[0, 1]``.
+        :return: The share of its capacity the contents in it take up, in ``[0, 1]``.
         """
-        return self.contents.fraction_inside(self.container)
+        return min(1.0, self.contents.bulk_volume_in(self.container) / self.capacity)
 
     def report(self) -> float:
         """
@@ -576,46 +663,99 @@ class MeasuredFillLevel:
 @dataclass
 class MeasuredInflowRate:
     """
-    How fast a container's contents are arriving, measured from them.
+    How fast a container is filling, measured from its contents.
 
-    A drain model says how fast a tilted container pours; this says how fast anything
-    actually reaches the container it was poured into. The two disagreeing is what a
+    A drain model says how fast a tilted container pours; this says how fast the
+    container it pours into is actually filling. The two disagreeing is what a
     controller would have to act on, since correcting only the level it steers by leaves
     it predicting the same arrival from the same tilt.
+
+    It differentiates the same measurement the controller reads rather than counting for
+    itself, so the rate is in the units of the fill level it belongs to and the two
+    cannot come to mean different things.
     """
 
-    contents: ParticleFill
+    level: MeasuredFillLevel
     """
-    The particles the rate is read off.
-    """
-
-    container: Body
-    """
-    The container they are arriving in.
+    The fill level whose change this reports.
     """
 
-    _share: Optional[float] = field(init=False, default=None, repr=False)
+    _level: Optional[float] = field(init=False, default=None, repr=False)
     """
-    The share of the contents that stood in the container at :attr:`_observed_at`.
+    The level measured at :attr:`_observed_at`.
     """
 
     _observed_at: Optional[float] = field(init=False, default=None, repr=False)
     """
-    When that share was observed, in seconds.
+    When that level was observed, in seconds.
     """
 
     def observe(self, at: float) -> float:
         """
-        Measure how fast the contents have been arriving since the last observation.
+        Measure how fast the container has been filling since the last observation.
 
         The first observation has nothing to compare against and reports no inflow.
 
         :param at: The time of this observation, in seconds.
-        :return: The share of the contents arriving per second.
+        :return: The change in fill level per second.
         """
-        share = self.contents.fraction_inside(self.container)
-        previous_share, previous_time = self._share, self._observed_at
-        self._share, self._observed_at = share, at
+        level = self.level.measure()
+        previous_level, previous_time = self._level, self._observed_at
+        self._level, self._observed_at = level, at
         if previous_time is None or at <= previous_time:
             return 0.0
-        return (share - previous_share) / (at - previous_time)
+        return (level - previous_level) / (at - previous_time)
+
+
+@dataclass
+class MeasuredCommittedFillLevel(MeasuredFillLevel):
+    """
+    How full a container will be once the contents already falling towards it have
+    landed, rather than how full it is at this instant.
+
+    Pouring cannot be taken back: contents that have left the source will arrive
+    whatever the controller does next, so a level counting only what has landed lags by
+    everything still in the air and is steered past before it reads the goal. Counting
+    what is on its way as well is what a perception pipeline watching the stream would
+    report.
+
+    Contents count as on their way when they stand above the container's opening and
+    have left the source. What has already landed elsewhere lies below that opening and
+    is not counted, so a spill is not mistaken for an arrival.
+
+    ..note:: This reads the source as standing above the container it pours into, which
+        is what pouring into it requires.
+    """
+
+    source: Body
+    """
+    The container the contents are being poured from.
+    """
+
+    opening_height: float
+    """
+    How high this container's opening stands in the world, in metres.
+    """
+
+    def count_on_the_way(self) -> int:
+        """
+        :return: How many particles have left the source and not yet landed.
+        """
+        return max(
+            0,
+            self.contents.count_above(self.opening_height)
+            - self.contents.count_inside(self.source),
+        )
+
+    def measure(self) -> float:
+        """
+        How full the container is committed to becoming.
+
+        :return: The share of its capacity the contents in it and on their way to it
+            take up, in ``[0, 1]``.
+        """
+        arriving = self.count_on_the_way() * self.contents.bulk_volume_per_particle
+        return min(
+            1.0,
+            (self.contents.bulk_volume_in(self.container) + arriving) / self.capacity,
+        )

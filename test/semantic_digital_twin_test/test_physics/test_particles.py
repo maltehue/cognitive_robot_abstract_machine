@@ -16,15 +16,20 @@ from ...pytest_environment import runs_in_continuous_integration
 
 from semantic_digital_twin.adapters.multi_sim import MujocoSim
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.exceptions import ParticlesDoNotFitError
+from semantic_digital_twin.exceptions import (
+    EmptyContainerCalibrationError,
+    ParticlesDoNotFitError,
+)
 from semantic_digital_twin.physics.particles import (
     HollowCylinder,
+    MeasuredCommittedFillLevel,
     MeasuredFillLevel,
     MeasuredInflowRate,
     ParticleFill,
 )
 from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
+    Point3,
 )
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.world import World
@@ -501,12 +506,13 @@ def _hang_container_on_a_tilt_in(world: World) -> tuple[Body, RevoluteConnection
 
 
 @pytestmark_physics
-def test_a_measurement_reports_the_share_of_the_contents_standing_in_the_container(
+def test_a_measurement_reports_the_share_of_the_capacity_the_contents_take_up(
     cup_in_a_simulation,
 ):
     """
     What a perception pipeline would report about a container is what stands in it, not
-    what an equation integrated into it.
+    what an equation integrated into it, and how full it is means against its own
+    capacity rather than against everything that was poured.
     """
     world, container, simulation = cup_in_a_simulation
     annotation = PourableContainer(name=PrefixedName("contents"), root=container)
@@ -525,12 +531,15 @@ def test_a_measurement_reports_the_share_of_the_contents_standing_in_the_contain
     measurement = MeasuredFillLevel(
         contents=fill,
         container=container,
+        capacity=CUP.cavity_volume,
         connection=annotation.fill_connection,
         world=world,
     )
 
-    assert measurement.measure() == pytest.approx(fill.fraction_inside(container))
-    assert measurement.measure() == pytest.approx(1.0)
+    assert measurement.measure() == pytest.approx(
+        fill.bulk_volume_in(container) / CUP.cavity_volume
+    )
+    assert measurement.measure() < 1.0, "half a cup of particles is not a full cup"
 
 
 @pytestmark_physics
@@ -555,6 +564,7 @@ def test_a_report_replaces_the_level_the_controller_holds(cup_in_a_simulation):
     measurement = MeasuredFillLevel(
         contents=fill,
         container=container,
+        capacity=CUP.cavity_volume,
         connection=annotation.fill_connection,
         world=world,
     )
@@ -586,6 +596,7 @@ def test_an_empty_container_is_reported_as_empty(cup_in_a_simulation):
     measurement = MeasuredFillLevel(
         contents=fill,
         container=container,
+        capacity=CUP.cavity_volume,
         connection=annotation.fill_connection,
         world=world,
     )
@@ -595,6 +606,25 @@ def test_an_empty_container_is_reported_as_empty(cup_in_a_simulation):
 
 
 # %% how fast the contents are arriving
+
+
+def _level_of(world: World, fill: ParticleFill, container: Body) -> MeasuredFillLevel:
+    """
+    A fill-level measurement of a container that carries no annotation of its own.
+    """
+    annotation = PourableContainer(
+        name=PrefixedName(f"level_of_{container.name.name}"), root=container
+    )
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    return MeasuredFillLevel(
+        contents=fill,
+        container=container,
+        capacity=CUP.cavity_volume,
+        connection=annotation.fill_connection,
+        world=world,
+    )
 
 
 @pytestmark_physics
@@ -612,8 +642,8 @@ def test_nothing_arriving_is_reported_as_no_inflow(cup_in_a_simulation):
         count=8,
     )
     elsewhere = _stand_container_in(world, name="elsewhere", offset=1.0)
+    rate = MeasuredInflowRate(level=_level_of(world, fill, elsewhere))
     simulation.step_simulation(SETTLE)
-    rate = MeasuredInflowRate(contents=fill, container=elsewhere)
     rate.observe(at=0.0)
 
     assert rate.observe(at=1.0) == 0.0
@@ -636,8 +666,9 @@ def test_the_inflow_is_the_share_that_arrived_over_the_time_it_took(
         count=8,
     )
     catcher = _stand_container_in(world, name="catcher", offset=1.0)
+    caught_level = _level_of(world, fill, catcher)
+    rate = MeasuredInflowRate(level=caught_level)
     simulation.step_simulation(SETTLE)
-    rate = MeasuredInflowRate(contents=fill, container=catcher)
     rate.observe(at=0.0)
 
     caught = fill.names[:2]
@@ -650,7 +681,9 @@ def test_the_inflow_is_the_share_that_arrived_over_the_time_it_took(
     observed = rate.observe(at=0.5)
 
     assert fill.count_inside(catcher) == len(caught)
-    assert observed == pytest.approx(len(caught) / len(fill.names) / 0.5)
+    assert observed == pytest.approx(
+        caught_level.measure() / 0.5
+    ), "the rate is the change in the very level the controller reads"
 
 
 @pytestmark_physics
@@ -667,8 +700,243 @@ def test_an_observation_at_no_elapsed_time_reports_no_inflow(cup_in_a_simulation
         particle_radius=PARTICLE_RADIUS,
         count=4,
     )
+    rate = MeasuredInflowRate(level=_level_of(world, fill, container))
     simulation.step_simulation(SETTLE)
-    rate = MeasuredInflowRate(contents=fill, container=container)
     rate.observe(at=1.0)
 
     assert rate.observe(at=1.0) == 0.0
+
+
+@pytestmark_physics
+def test_a_bigger_container_holding_the_same_contents_reads_emptier(
+    cup_in_a_simulation,
+):
+    """
+    A fill level is a question about the container, so the same contents answer it
+    differently depending on what is holding them. This is what the share of everything
+    poured could not express.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+    )
+    simulation.step_simulation(SETTLE)
+
+    def measured(capacity: float) -> float:
+        return MeasuredFillLevel(
+            contents=fill,
+            container=container,
+            capacity=capacity,
+            connection=annotation.fill_connection,
+            world=world,
+        ).measure()
+
+    assert measured(2 * CUP.cavity_volume) == pytest.approx(
+        0.5 * measured(CUP.cavity_volume)
+    )
+
+
+@pytestmark_physics
+def test_contents_filling_their_container_read_full_and_no_more(cup_in_a_simulation):
+    """
+    Contents taking up exactly the capacity read full, and more than it cannot read
+    more than full, since a fill level is a share.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+    )
+    simulation.step_simulation(SETTLE)
+    fill.bulk_volume_per_particle = CUP.cavity_volume / fill.count_inside(container)
+
+    def measured(capacity: float) -> float:
+        return MeasuredFillLevel(
+            contents=fill,
+            container=container,
+            capacity=capacity,
+            connection=annotation.fill_connection,
+            world=world,
+        ).measure()
+
+    assert measured(CUP.cavity_volume) == pytest.approx(1.0)
+    assert measured(CUP.cavity_volume / 2) == pytest.approx(1.0)
+
+
+@pytestmark_physics
+def test_calibrating_in_a_container_makes_its_measurement_match_how_far_they_reach(
+    cup_in_a_simulation,
+):
+    """
+    The conversion from a count to a volume is measured rather than assumed: read off a
+    container the contents stand in, it reproduces how far up it they reach.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+    )
+    simulation.step_simulation(SETTLE)
+    fill.bulk_volume_per_particle = fill.bulk_volume_per_particle_in(
+        container, CUP.cavity_volume
+    )
+
+    measurement = MeasuredFillLevel(
+        contents=fill,
+        container=container,
+        capacity=CUP.cavity_volume,
+        connection=annotation.fill_connection,
+        world=world,
+    )
+
+    assert measurement.measure() == pytest.approx(fill.filled_height_in(container))
+
+
+@pytestmark_physics
+def test_calibrating_needs_contents_to_measure(cup_in_a_simulation):
+    """
+    An empty container says nothing about how much volume a particle takes up.
+    """
+    world, container, simulation = cup_in_a_simulation
+    fill = ParticleFill.spawn_in(
+        simulator=simulation.simulator,
+        container=container,
+        world_T_container=world.compute_forward_kinematics_np(world.root, container),
+        positions=[],
+        particle_radius=PARTICLE_RADIUS,
+    )
+
+    with pytest.raises(EmptyContainerCalibrationError):
+        fill.bulk_volume_per_particle_in(container, CUP.cavity_volume)
+
+
+# %% counting what is still on its way
+
+
+@pytestmark_physics
+def test_particles_are_counted_by_how_high_they_stand(cup_in_a_simulation):
+    """
+    Whether contents have landed is a question about where they are, which is what
+    separates what is still falling from what has arrived.
+    """
+    world, container, simulation = cup_in_a_simulation
+    world_T_container = world.compute_forward_kinematics_np(world.root, container)
+    base = world_T_container[2, 3]
+    fill = ParticleFill.spawn_in(
+        simulator=simulation.simulator,
+        container=container,
+        world_T_container=world_T_container,
+        positions=[
+            Point3(x=0.0, y=0.0, z=height, reference_frame=container)
+            for height in (0.4, 0.6, 0.8)
+        ],
+        particle_radius=PARTICLE_RADIUS,
+    )
+    simulation.step_simulation(timedelta(milliseconds=10))
+
+    assert fill.count_above(base + 0.5) == 2
+    assert fill.count_above(base + 0.7) == 1
+    assert fill.count_above(base + 1.0) == 0
+
+
+@pytestmark_physics
+def test_contents_still_in_the_source_are_not_counted_as_on_their_way(
+    cup_in_a_simulation,
+):
+    """
+    The source stands above the container it pours into, so its own contents are above
+    the opening too; only what has left it is arriving.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=CUP.particle_capacity(PARTICLE_RADIUS, fill_fraction=0.5),
+    )
+    simulation.step_simulation(SETTLE)
+    world_T_container = world.compute_forward_kinematics_np(world.root, container)
+
+    measurement = MeasuredCommittedFillLevel(
+        contents=fill,
+        container=container,
+        capacity=CUP.cavity_volume,
+        connection=annotation.fill_connection,
+        world=world,
+        source=container,
+        opening_height=world_T_container[2, 3] - 1.0,
+    )
+
+    assert fill.count_above(measurement.opening_height) == len(fill.names)
+    assert measurement.count_on_the_way() == 0
+
+
+@pytestmark_physics
+def test_what_has_left_the_source_is_counted_before_it_lands(cup_in_a_simulation):
+    """
+    The point of the measurement: a container reads as fuller than it is by exactly
+    what is still falling into it, so a controller stops before that lands.
+    """
+    world, container, simulation = cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    world_T_container = world.compute_forward_kinematics_np(world.root, container)
+    falling = 2
+    fill = ParticleFill.spawn_in(
+        simulator=simulation.simulator,
+        container=container,
+        world_T_container=world_T_container,
+        positions=[
+            Point3(x=0.0, y=0.0, z=0.5 + 0.1 * index, reference_frame=container)
+            for index in range(falling)
+        ],
+        particle_radius=PARTICLE_RADIUS,
+    )
+    simulation.step_simulation(timedelta(milliseconds=10))
+
+    arguments = dict(
+        contents=fill,
+        container=container,
+        capacity=CUP.cavity_volume,
+        connection=annotation.fill_connection,
+        world=world,
+    )
+    landed = MeasuredFillLevel(**arguments)
+    committed = MeasuredCommittedFillLevel(
+        **arguments, source=container, opening_height=world_T_container[2, 3]
+    )
+
+    assert landed.measure() == 0.0, "nothing has reached the cup yet"
+    assert committed.count_on_the_way() == falling
+    assert committed.measure() == pytest.approx(
+        falling * fill.bulk_volume_per_particle / CUP.cavity_volume
+    )
