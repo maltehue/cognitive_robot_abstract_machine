@@ -13,6 +13,7 @@ from semantic_digital_twin.adapters.usd.asset_library import (
 from semantic_digital_twin.adapters.usd.scene_parser import USDSceneParser
 from semantic_digital_twin.adapters.usd.stage_parser import (
     RootPlacement,
+    Sdf,
     Usd,
     UsdGeom,
     UsdPhysics,
@@ -68,6 +69,36 @@ def placed_bodies(world) -> dict:
     }
 
 
+def asset_layer(world_layer, object_name: str, layer_name: str):
+    """
+    :return: One layer of a written asset, read without composing it.
+    """
+    asset = world_layer.parent / "Assets" / object_name
+    return Sdf.Layer.FindOrOpen(str(asset / f"{object_name}_{layer_name}"))
+
+
+def physics_in(layer) -> list:
+    """
+    :return: The path of every prim spec of a layer that says anything about physics.
+    """
+    said = []
+
+    def visit(path):
+        spec = layer.GetObjectAtPath(path)
+        if not isinstance(spec, Sdf.PrimSpec):
+            return
+        applied = (
+            spec.GetInfo("apiSchemas").GetAddedOrExplicitItems()
+            if spec.HasInfo("apiSchemas")
+            else []
+        )
+        if any(schema.startswith("Physics") for schema in applied):
+            said.append(path.pathString)
+
+    layer.Traverse(Sdf.Path.absoluteRootPath, visit)
+    return said
+
+
 def mesh_under(stage, object_name: str):
     [mesh] = [
         prim
@@ -96,6 +127,7 @@ def test_an_asset_keeps_its_geometry_and_its_material_in_separate_layers(tmp_pat
         "wall_a_geo.usd",
         "wall_a_look.usda",
         "wall_a_payload.usda",
+        "wall_a_physics.usda",
     ]
 
 
@@ -228,6 +260,35 @@ def test_a_collision_proxy_encloses_the_geometry_it_stands_for(tmp_path):
 
     np.testing.assert_allclose(bounds.GetMin(), mesh_bounds.GetMin(), atol=1e-9)
     np.testing.assert_allclose(bounds.GetMax(), mesh_bounds.GetMax(), atol=1e-9)
+
+
+def test_collision_is_written_apart_from_the_geometry_it_stands_for(tmp_path):
+    # Collision is the part of an asset that gets retuned; the geometry beside it is a
+    # binary crate nobody wants to rewrite to change a box.
+    _, world_layer, _ = written_library(tmp_path)
+
+    assert physics_in(asset_layer(world_layer, "wall_a", "geo.usd")) == []
+    assert physics_in(asset_layer(world_layer, "wall_a", "physics.usda")) == [
+        "/wall_a/collision"
+    ]
+
+
+def test_a_surface_collided_against_is_said_so_apart_from_the_surface(tmp_path):
+    _, world_layer, _ = written_library(
+        tmp_path, collision_proxy=CollisionProxy.CONVEX_DECOMPOSITION
+    )
+
+    assert physics_in(asset_layer(world_layer, "wall_a", "geo.usd")) == []
+    assert physics_in(asset_layer(world_layer, "wall_a", "physics.usda")) == [
+        "/wall_a/mesh"
+    ]
+
+
+def test_collision_is_written_as_text_a_person_can_edit(tmp_path):
+    _, world_layer, _ = written_library(tmp_path)
+
+    physics = world_layer.parent / "Assets" / "wall_a" / "wall_a_physics.usda"
+    assert physics.read_text().startswith("#usda")
 
 
 def test_a_material_binding_points_inside_the_asset_it_was_written_with(tmp_path):

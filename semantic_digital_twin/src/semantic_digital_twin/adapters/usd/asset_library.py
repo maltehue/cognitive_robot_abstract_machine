@@ -117,8 +117,10 @@ class AssetFiles:
     """
     The files one asset is written as.
 
-    Geometry and materials are kept apart so either can be read without the other, and
-    both sit behind a payload so a scene can be opened without any of them.
+    Geometry, materials and physics are kept apart so any of them can be read without
+    the others, and all of them sit behind a payload so a scene can be opened without
+    any. What an asset is collided against is the part that gets retuned, so it is
+    written as text of its own rather than into the binary crate holding the surfaces.
     """
 
     directory: Path
@@ -158,6 +160,13 @@ class AssetFiles:
         The layer holding the asset's materials.
         """
         return self.directory / f"{self.name}_look.usda"
+
+    @property
+    def physics(self) -> Path:
+        """
+        The layer holding what a physics engine collides the asset against.
+        """
+        return self.directory / f"{self.name}_physics.usda"
 
     @property
     def textures(self) -> Path:
@@ -390,6 +399,7 @@ class USDAssetLibrary:
 
         self._write_geometry(object_prim, files)
         self._write_material(object_prim, files)
+        self._write_physics(object_prim, files)
         self._write_payload(files)
         self._write_interface(object_prim, files)
         return files
@@ -407,7 +417,7 @@ class USDAssetLibrary:
 
     def _write_geometry(self, object_prim: Usd.Prim, files: AssetFiles) -> None:
         """
-        Write the asset's surfaces, and the box standing in for them in collision.
+        Write the asset's surfaces.
 
         :param object_prim: The prim whose geometry to write.
         :param files: The files the asset is written as.
@@ -425,7 +435,6 @@ class USDAssetLibrary:
         self._retarget_relationships(layer, object_prim, files.name)
         if self.vertex_sharing is VertexSharing.BY_POSITION:
             self._share_vertices(layer)
-        self._author_collision(layer, object_prim, files.name)
         layer.Save()
 
     def _write_material(self, object_prim: Usd.Prim, files: AssetFiles) -> None:
@@ -449,6 +458,24 @@ class USDAssetLibrary:
         self._copy_textures(object_prim, files, layer)
         layer.Save()
 
+    def _write_physics(self, object_prim: Usd.Prim, files: AssetFiles) -> None:
+        """
+        Write what a physics engine collides the asset against, on top of the surfaces
+        it stands for so that editing it never means rewriting them.
+
+        :param object_prim: The prim whose geometry is collided against.
+        :param files: The files the asset is written as.
+        """
+        layer = Sdf.Layer.CreateNew(str(files.physics))
+        stage = Usd.Stage.CreateInMemory()
+        stage.GetRootLayer().subLayerPaths = [
+            str(files.physics.resolve()),
+            str(files.geometry.resolve()),
+        ]
+        stage.SetEditTarget(Usd.EditTarget(layer))
+        self._author_collision(stage, object_prim, files.name)
+        layer.Save()
+
     @staticmethod
     def _write_payload(files: AssetFiles) -> None:
         """
@@ -457,7 +484,11 @@ class USDAssetLibrary:
         :param files: The files the asset is written as.
         """
         layer = Sdf.Layer.CreateNew(str(files.payload))
-        layer.subLayerPaths = [f"./{files.geometry.name}", f"./{files.material.name}"]
+        layer.subLayerPaths = [
+            f"./{files.physics.name}",
+            f"./{files.geometry.name}",
+            f"./{files.material.name}",
+        ]
         stage = Usd.Stage.Open(layer)
         stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, f"/{files.name}").GetPrim())
         layer.Save()
@@ -573,29 +604,28 @@ class USDAssetLibrary:
     # %% collision
 
     def _author_collision(
-        self, layer: Sdf.Layer, object_prim: Usd.Prim, name: str
+        self, stage: Usd.Stage, object_prim: Usd.Prim, name: str
     ) -> None:
         """
         Give a physics engine something to collide the asset against.
 
-        :param layer: The geometry layer to author into.
+        :param stage: The asset's surfaces, open for physics to be written on top of.
         :param object_prim: The prim whose geometry is collided against.
         :param name: The asset's name.
         """
         if self.collision_proxy is CollisionProxy.CONVEX_DECOMPOSITION:
-            self._collide_against_the_surface(layer)
+            self._collide_against_the_surface(stage)
             return
-        self._author_collision_proxy(layer, object_prim, name)
+        self._author_collision_proxy(stage, object_prim, name)
 
     @staticmethod
-    def _collide_against_the_surface(layer: Sdf.Layer) -> None:
+    def _collide_against_the_surface(stage: Usd.Stage) -> None:
         """
         Mark the asset's own surfaces as what it is collided against, for a physics
         engine to approximate by convex pieces when it loads them.
 
-        :param layer: The geometry layer to author into.
+        :param stage: The asset's surfaces, open for physics to be written on top of.
         """
-        stage = Usd.Stage.Open(layer)
         for prim in stage.TraverseAll():
             if not prim.IsA(UsdGeom.Mesh):
                 continue
@@ -606,13 +636,13 @@ class USDAssetLibrary:
 
     @staticmethod
     def _author_collision_proxy(
-        layer: Sdf.Layer, object_prim: Usd.Prim, name: str
+        stage: Usd.Stage, object_prim: Usd.Prim, name: str
     ) -> None:
         """
         Author the box a physics engine collides against in place of the asset's own
         surfaces, as a guide the renderer leaves out of the picture.
 
-        :param layer: The geometry layer to author into.
+        :param stage: The asset's surfaces, open for physics to be written on top of.
         :param object_prim: The prim whose geometry the box encloses.
         :param name: The asset's name.
         """
@@ -624,7 +654,6 @@ class USDAssetLibrary:
         if bounds.IsEmpty():
             return
 
-        stage = Usd.Stage.Open(layer)
         proxy = UsdGeom.Cube.Define(stage, f"/{name}/collision")
         proxy.GetSizeAttr().Set(1.0)
         proxy.CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
