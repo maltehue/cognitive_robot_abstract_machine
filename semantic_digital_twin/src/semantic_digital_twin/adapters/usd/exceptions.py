@@ -105,3 +105,34 @@ class UnsupportedUsdGeometryTypeError(ParsingError):
         if not self.supported_types:
             return ""
         return f"Use one of the supported types: {', '.join(sorted(self.supported_types))}."
+
+
+@dataclass
+class PrimDefinedOutsideRootLayerError(ParsingError):
+    """
+    Raised when a prim to be split into an asset of its own is not defined entirely in
+    its stage's root layer.
+
+    Splitting copies a prim's authored specs out of one layer, so a prim whose opinions
+    are spread across a layer stack would be copied only in part, silently losing
+    whatever the other layers contributed.
+    """
+
+    prim_path: str = field(kw_only=True)
+    """
+    The prim's stage path.
+    """
+
+    layers: List[str] = field(kw_only=True, default_factory=list)
+    """
+    The layers holding opinions about the prim.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Stage '{self.file_path}' defines the prim at '{self.prim_path}' across "
+            f"{len(self.layers)} layers: {', '.join(self.layers)}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Flatten the stage into a single layer before splitting it into assets."

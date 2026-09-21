@@ -123,7 +123,7 @@ class _MockedSdfModule(MockedModule):
 
 
 try:
-    from pxr import Ar, Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Ar, Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 except ImportError:
     logger.warning(
         "usd-core is required for USD parsing. Please install it using "
@@ -135,6 +135,7 @@ except ImportError:
     # No member of these is used as a dataclass field type, so a bare mock is enough to
     # keep this module - and the ones importing these names from it - importable.
     Ar = MockedModule()
+    Kind = MockedModule()
     UsdGeom = MockedModule()
     UsdPhysics = MockedModule()
     UsdShade = MockedModule()
@@ -428,7 +429,7 @@ class UsdMeshShapeBuilder(UsdShapeBuilder):
                 file_type=MeshFileType.GLB,
             )
 
-        texture_file_path = self._downscaled_texture_path(
+        texture_file_path = downscaled_texture_path(
             texture_file_path, self.maximum_texture_size
         )
 
@@ -519,59 +520,7 @@ class UsdMeshShapeBuilder(UsdShapeBuilder):
         asset_path = file_input.Get() if file_input else None
         if asset_path is None or not asset_path.resolvedPath:
             return None
-        return UsdMeshShapeBuilder._readable_texture_path(asset_path.resolvedPath)
-
-    @staticmethod
-    def _readable_texture_path(resolved_path: str) -> str:
-        """
-        Makes a resolved texture path one an image reader can open.
-
-        A texture inside a USD package (a ``.usdz``) resolves to a path of the form
-        ``package[path/inside]``, which only USD's asset resolver can read, so its bytes
-        are written out to a file of their own.
-
-        :param resolved_path: The texture's resolved asset path.
-        :return: A filesystem path holding the texture's bytes.
-        """
-        if not Ar.IsPackageRelativePath(resolved_path):
-            return resolved_path
-
-        _, path_inside_package = Ar.SplitPackageRelativePathInner(resolved_path)
-        extracted_path = (
-            MeshFileStorage().allocate_directory() / Path(path_inside_package).name
-        )
-        asset = Ar.GetResolver().OpenAsset(Ar.ResolvedPath(resolved_path))
-        extracted_path.write_bytes(asset.GetBuffer())
-        return str(extracted_path)
-
-    @staticmethod
-    def _downscaled_texture_path(
-        texture_file_path: str, maximum_texture_size: Optional[int]
-    ) -> str:
-        """
-        Shrinks a texture whose longest side is past a maximum, keeping its shape.
-
-        A scanned surface can carry a texture of hundreds of megapixels, which a
-        viewer holds decoded in memory whatever the size of the file it came from.
-
-        :param texture_file_path: Path of the texture image.
-        :param maximum_texture_size: Longest side the texture may have, in pixels, or
-            ``None`` to keep it at the size it was authored.
-        :return: A filesystem path holding a texture within the maximum.
-        """
-        if maximum_texture_size is None:
-            return texture_file_path
-
-        texture = Image.open(texture_file_path)
-        if max(texture.size) <= maximum_texture_size:
-            return texture_file_path
-
-        texture.thumbnail((maximum_texture_size, maximum_texture_size))
-        downscaled_path = (
-            MeshFileStorage().allocate_directory() / Path(texture_file_path).name
-        )
-        texture.save(downscaled_path)
-        return str(downscaled_path)
+        return readable_texture_path(asset_path.resolvedPath)
 
     @staticmethod
     def _uv_coordinates(mesh_prim: Usd.Prim) -> Optional[NDArray[np.float64]]:
@@ -616,6 +565,84 @@ class UsdMeshShapeBuilder(UsdShapeBuilder):
                 triangles.append((face[0], face[i], face[i + 1]))
             cursor += count
         return np.array(triangles, dtype=np.int64)
+
+
+# %% the prims a stage holds
+
+
+def geometry_owning_prims(stage: Usd.Stage) -> List[Usd.Prim]:
+    """
+    :param stage: The stage to search.
+    :return: Every prim of the stage that directly holds renderable geometry, in stage
+        order - each geometry prim belongs to exactly one of them, so no geometry of
+        the stage is left out.
+    """
+    owning_prims = []
+    seen_paths = set()
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdGeom.Gprim):
+            continue
+        parent = prim.GetParent()
+        if parent.GetPath() in seen_paths:
+            continue
+        seen_paths.add(parent.GetPath())
+        owning_prims.append(parent)
+    return owning_prims
+
+
+# %% texture files
+
+
+def readable_texture_path(resolved_path: str) -> str:
+    """
+    Makes a resolved texture path one an image reader can open.
+
+    A texture inside a USD package (a ``.usdz``) resolves to a path of the form
+    ``package[path/inside]``, which only USD's asset resolver can read, so its bytes
+    are written out to a file of their own.
+
+    :param resolved_path: The texture's resolved asset path.
+    :return: A filesystem path holding the texture's bytes.
+    """
+    if not Ar.IsPackageRelativePath(resolved_path):
+        return resolved_path
+
+    _, path_inside_package = Ar.SplitPackageRelativePathInner(resolved_path)
+    extracted_path = (
+        MeshFileStorage().allocate_directory() / Path(path_inside_package).name
+    )
+    asset = Ar.GetResolver().OpenAsset(Ar.ResolvedPath(resolved_path))
+    extracted_path.write_bytes(asset.GetBuffer())
+    return str(extracted_path)
+
+
+def downscaled_texture_path(
+    texture_file_path: str, maximum_texture_size: Optional[int]
+) -> str:
+    """
+    Shrinks a texture whose longest side is past a maximum, keeping its shape.
+
+    A scanned surface can carry a texture of hundreds of megapixels, which a viewer
+    holds decoded in memory whatever the size of the file it came from.
+
+    :param texture_file_path: Path of the texture image.
+    :param maximum_texture_size: Longest side the texture may have, in pixels, or
+        ``None`` to keep it at the size it was authored.
+    :return: A filesystem path holding a texture within the maximum.
+    """
+    if maximum_texture_size is None:
+        return texture_file_path
+
+    texture = Image.open(texture_file_path)
+    if max(texture.size) <= maximum_texture_size:
+        return texture_file_path
+
+    texture.thumbnail((maximum_texture_size, maximum_texture_size))
+    downscaled_path = (
+        MeshFileStorage().allocate_directory() / Path(texture_file_path).name
+    )
+    texture.save(downscaled_path)
+    return str(downscaled_path)
 
 
 # %% stage parser

@@ -13,6 +13,7 @@ from semantic_digital_twin.adapters.usd.stage_parser import (
     UsdGeom,
     USDStageParser,
     _usd_pose_to_transform,
+    geometry_owning_prims,
 )
 from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
@@ -300,17 +301,7 @@ class USDSceneParser(USDStageParser):
             stage order - each geometry prim belongs to exactly one of them, so no
             geometry of the stage is left without a body to hold it.
         """
-        object_prims = []
-        seen_paths = set()
-        for prim in self.stage.Traverse():
-            if not prim.IsA(UsdGeom.Gprim):
-                continue
-            parent = prim.GetParent()
-            if parent.GetPath() in seen_paths:
-                continue
-            seen_paths.add(parent.GetPath())
-            object_prims.append(parent)
-        return object_prims
+        return geometry_owning_prims(self.stage)
 
     def _create_object(self, object_prim: Usd.Prim) -> PlacedObject:
         """

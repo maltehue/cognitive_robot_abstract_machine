@@ -157,24 +157,37 @@ def build_stage_with_textured_mesh(texture_file_path: str) -> Usd.Stage:
     )
     st.Set([(0, 0), (1, 0), (1, 1), (0, 1)])
 
-    material = UsdShade.Material.Define(stage, "/object/material")
-    pbr_shader = UsdShade.Shader.Define(stage, "/object/material/PBRShader")
+    _bind_textured_material(stage, "/object", texture_file_path)
+
+    return stage
+
+
+def _bind_textured_material(
+    stage: Usd.Stage, object_path: str, texture_file_path: str
+) -> None:
+    """
+    Define a ``UsdPreviewSurface`` material under ``object_path`` whose diffuse colour
+    is read from ``texture_file_path``, and bind it to the mesh beside it.
+    """
+    material = UsdShade.Material.Define(stage, f"{object_path}/material")
+    pbr_shader = UsdShade.Shader.Define(stage, f"{object_path}/material/PBRShader")
     pbr_shader.CreateIdAttr("UsdPreviewSurface")
     material.CreateSurfaceOutput().ConnectToSource(
         pbr_shader.ConnectableAPI(), "surface"
     )
 
-    texture_shader = UsdShade.Shader.Define(stage, "/object/material/diffuseTexture")
+    texture_shader = UsdShade.Shader.Define(
+        stage, f"{object_path}/material/diffuseTexture"
+    )
     texture_shader.CreateIdAttr("UsdUVTexture")
     texture_shader.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(texture_file_path)
     pbr_shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(
         texture_shader.ConnectableAPI(), "rgb"
     )
 
-    UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim())
-    UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
-
-    return stage
+    mesh_prim = stage.GetPrimAtPath(f"{object_path}/mesh")
+    UsdShade.MaterialBindingAPI.Apply(mesh_prim)
+    UsdShade.MaterialBindingAPI(mesh_prim).Bind(material)
 
 
 def build_stage_with_scaled_mesh(scale: tuple[float, float, float]) -> Usd.Stage:
@@ -489,5 +502,35 @@ def build_stage_with_a_double_sided_mesh(double_sided: bool) -> Usd.Stage:
     mesh.CreateFaceVertexCountsAttr([3, 3])
     mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 0, 2, 3])
     mesh.CreateDoubleSidedAttr(double_sided)
+
+    return stage
+
+
+def build_scene_stage_with_textured_objects(texture_file_path: str) -> Usd.Stage:
+    """
+    A minimal in-memory stage shaped like the export of a scanned building.
+
+    Category ``Xform`` groups carry a transform and hold the separately placed
+    geometry-owning prims, each of which holds both its mesh and the material bound to
+    it - the layout a photogrammetry export writes, and the one an asset library is
+    split along.
+
+    :param texture_file_path: Path to the texture image each object's material reads.
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    root = UsdGeom.Xform.Define(stage, "/scene")
+    stage.SetDefaultPrim(root.GetPrim())
+
+    wall_group = UsdGeom.Xform.Define(stage, "/scene/Wall")
+    wall_group.AddTranslateOp().Set(Gf.Vec3d(10, 0, 0))
+    for name, translation in (("wall_a", (1, 0, 0)), ("wall_b", (0, 2, 0))):
+        _define_placed_instance(stage, f"/scene/Wall/{name}", translation)
+        _bind_textured_material(stage, f"/scene/Wall/{name}", texture_file_path)
+
+    UsdGeom.Xform.Define(stage, "/scene/Floor")
+    _define_placed_instance(stage, "/scene/Floor/floor_a", (0, 0, 3))
+    _bind_textured_material(stage, "/scene/Floor/floor_a", texture_file_path)
 
     return stage
