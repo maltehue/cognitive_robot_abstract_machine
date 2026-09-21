@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing_extensions import Optional
+
 try:
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade, UsdUtils
 
@@ -327,6 +329,7 @@ def build_single_joint_stage_with_mass(
     mass: float = 2.0,
     center_of_mass: tuple[float, float, float] = (0.0, 0.0, 0.0),
     diagonal_inertia: tuple[float, float, float] = (1.0, 2.0, 3.0),
+    principal_axes: Optional[tuple[float, float, float, float]] = (1.0, 0.0, 0.0, 0.0),
 ) -> Usd.Stage:
     """
     A minimal in-memory stage like :func:`build_single_joint_stage`, but with
@@ -335,6 +338,8 @@ def build_single_joint_stage_with_mass(
     :param mass: The child link's authored mass.
     :param center_of_mass: The child link's authored centre of mass.
     :param diagonal_inertia: The child link's authored diagonal inertia.
+    :param principal_axes: The child link's authored principal axes as ``(w, x, y, z)``,
+        or ``None`` to leave them unauthored the way a file stating only a mass does.
     :return: The built in-memory stage.
     """
     stage = build_single_joint_stage("FixedJoint")
@@ -343,7 +348,8 @@ def build_single_joint_stage_with_mass(
     mass_api.CreateMassAttr(mass)
     mass_api.CreateCenterOfMassAttr(Gf.Vec3f(*center_of_mass))
     mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(*diagonal_inertia))
-    mass_api.CreatePrincipalAxesAttr(Gf.Quatf(1, 0, 0, 0))
+    if principal_axes is not None:
+        mass_api.CreatePrincipalAxesAttr(Gf.Quatf(*principal_axes))
 
     return stage
 
@@ -616,5 +622,25 @@ def build_stage_with_face_varying_texture_coordinates(
     st.Set([(0, 0), (1, 0), (1, 1), (0.25, 0.25), (0.5, 0.5), (0.75, 0.75)])
 
     _bind_textured_material(stage, "/object", texture_file_path)
+
+    return stage
+
+
+def build_scene_stage_with_repeated_container_names() -> Usd.Stage:
+    """
+    A minimal in-memory stage shaped like a referenced asset library.
+
+    Each object is placed as an actor holding a geometry container, and every asset
+    names those the same way, so the prim holding the geometry says nothing about which
+    object it belongs to.
+
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, "/scene").GetPrim())
+
+    for asset in ("sofa", "chair"):
+        _define_placed_instance(stage, f"/scene/{asset}/Actor_0000/Geom", (1, 0, 0))
 
     return stage

@@ -621,3 +621,37 @@ def test_a_mesh_texturing_each_corner_separately_keeps_every_coordinate(texture_
         np.unique(np.round(shape.mesh.visual.uv, 6), axis=0),
         np.unique(np.round(authored, 6), axis=0),
     )
+
+
+# %% inertials a file only half states
+
+
+def test_parse_inertial_of_a_link_stating_only_a_mass():
+    # USD answers an unauthored principalAxes with the zero quaternion rather than
+    # identity, which is no rotation at all - and a file stating a mass without axes
+    # is the common case, not an exotic one.
+    stage = build_single_joint_stage_with_mass(principal_axes=None)
+    link_prim = stage.GetPrimAtPath("/object/child")
+    body = Body(name=PrefixedName("test_body"))
+
+    inertial = USDParser._parse_inertial(link_prim, body)
+
+    assert inertial is not None
+    assert inertial.mass == pytest.approx(2.0)
+    # a prim of a stage nothing refers to any more stops answering, so the stage the
+    # expectation is read from is held for as long as it is needed
+    stated = build_single_joint_stage_with_mass(principal_axes=(1.0, 0.0, 0.0, 0.0))
+    np.testing.assert_allclose(
+        inertial.inertia.data,
+        USDParser._parse_inertial(
+            stated.GetPrimAtPath("/object/child"), body
+        ).inertia.data,
+    )
+
+
+def test_parse_a_scene_whose_objects_state_only_a_mass():
+    stage = build_single_joint_stage_with_mass(principal_axes=None)
+
+    world = parse(stage)
+
+    assert world.bodies

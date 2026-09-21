@@ -214,6 +214,15 @@ class Shading(StrEnum):
     """
 
 
+UNAUTHORED_PRINCIPAL_AXES = (1.0, 0.0, 0.0, 0.0)
+"""
+The rotation to read as an inertia's principal axes when a file states an inertia
+without saying which way they point, as ``(w, x, y, z)``.
+
+USD answers that attribute with the zero quaternion rather than with identity, which
+is no rotation at all, so the fallback has to be spelled out here.
+"""
+
 FULLY_EMISSIVE = (1.0, 1.0, 1.0)
 """
 The emissive colour that has a renderer draw a surface at the brightness its texture
@@ -700,6 +709,27 @@ def scene_ground(stage: Usd.Stage, prims: List[Usd.Prim]) -> Gf.Vec3d:
     return ground
 
 
+def unique_prim_names(prims: List[Usd.Prim]) -> Dict[str, str]:
+    """
+    Name each prim so that no two share a name.
+
+    An asset library names every object's geometry container alike, so a leaf name
+    alone leaves most of a scene impossible to look up. The shortest tail of the path
+    that tells every prim apart is used instead, the same length for all of them so
+    that what a name is made of does not vary across one scene.
+
+    :param prims: The prims to name.
+    :return: The name of each prim, by its stage path.
+    """
+    paths = [prim.GetPath().pathString.strip("/").split("/") for prim in prims]
+    names = [path[-1] for path in paths]
+    for segments in range(2, max((len(path) for path in paths), default=0) + 1):
+        if len(set(names)) == len(names):
+            break
+        names = ["_".join(path[-segments:]) for path in paths]
+    return {prim.GetPath().pathString: name for prim, name in zip(prims, names)}
+
+
 # %% texture files
 
 
@@ -937,15 +967,17 @@ class USDStageParser(WorldModelParser, ABC):
 
         center_of_mass = mass_api.GetCenterOfMassAttr().Get() or (0.0, 0.0, 0.0)
         diagonal_inertia = mass_api.GetDiagonalInertiaAttr().Get() or (0.0, 0.0, 0.0)
-        principal_axes = mass_api.GetPrincipalAxesAttr().Get()
+        principal_axes_attribute = mass_api.GetPrincipalAxesAttr()
+        principal_axes = (
+            principal_axes_attribute.Get()
+            if principal_axes_attribute.HasAuthoredValue()
+            else Gf.Quatf(*UNAUTHORED_PRINCIPAL_AXES)
+        )
 
         principal_moments = PrincipalMoments.from_values(
             i1=diagonal_inertia[0], i2=diagonal_inertia[1], i3=diagonal_inertia[2]
         )
-        axes_rotation = _usd_pose_to_transform(
-            Gf.Vec3d(0, 0, 0),
-            principal_axes if principal_axes is not None else Gf.Quatf(1, 0, 0, 0),
-        )
+        axes_rotation = _usd_pose_to_transform(Gf.Vec3d(0, 0, 0), principal_axes)
         inertia_tensor = InertiaTensor.from_principal_moments_and_axes(
             moments=principal_moments,
             axes=PrincipalAxes.from_rotation_matrix(

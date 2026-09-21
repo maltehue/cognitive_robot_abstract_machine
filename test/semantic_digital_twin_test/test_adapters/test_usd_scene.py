@@ -33,6 +33,7 @@ from .usd_stages import (
     build_scene_stage_with_a_scaled_group,
     build_scene_stage_with_grouped_instances,
     build_scene_stage_with_nested_objects,
+    build_scene_stage_with_repeated_container_names,
     build_scene_stage_with_semantic_labels,
     build_stage_with_textured_mesh,
 )
@@ -354,3 +355,24 @@ def test_parse_leaves_a_guide_out_of_what_an_object_looks_like():
 
     [shape] = body_named(world, "wall_a").visual.shapes
     assert isinstance(shape, Mesh)
+
+
+# %% naming the bodies a scene is made of
+
+
+def test_parse_names_every_body_so_it_can_be_addressed():
+    # An asset library names every object's geometry container the same, so the leaf
+    # name alone leaves most of a scene impossible to look up.
+    world = parse(build_scene_stage_with_repeated_container_names())
+
+    names = [body.name.name for body in world.bodies if body is not world.root]
+
+    assert sorted(names) == ["chair_Actor_0000_Geom", "sofa_Actor_0000_Geom"]
+
+
+def test_parse_keeps_a_name_short_when_it_is_already_unique():
+    world = parse(build_scene_stage_with_grouped_instances())
+
+    names = [body.name.name for body in world.bodies if body is not world.root]
+
+    assert sorted(names) == ["floor_a", "wall_a", "wall_b"]

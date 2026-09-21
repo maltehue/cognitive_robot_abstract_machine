@@ -16,6 +16,7 @@ from semantic_digital_twin.adapters.usd.stage_parser import (
     _usd_pose_to_transform,
     geometry_owning_prims,
     scene_ground,
+    unique_prim_names,
 )
 from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
@@ -196,8 +197,11 @@ class USDSceneParser(USDStageParser):
         root_shapes = (
             self._object_shapes(root_prim, root_pose) if root_prim is not None else []
         )
+        body_names = unique_prim_names(
+            [prim for prim in object_prims if prim.GetPath() != root_path]
+        )
         objects = [
-            self._create_object(prim)
+            self._create_object(prim, body_names[prim.GetPath().pathString])
             for prim in object_prims
             if prim.GetPath() != root_path
         ]
@@ -260,18 +264,19 @@ class USDSceneParser(USDStageParser):
         """
         return geometry_owning_prims(self.stage)
 
-    def _create_object(self, object_prim: Usd.Prim) -> PlacedObject:
+    def _create_object(self, object_prim: Usd.Prim, name: str) -> PlacedObject:
         """
         Creates the body for one geometry-owning prim, with a Shape for every geometry
         prim it holds and its :class:`~pxr.UsdPhysics.MassAPI` inertial properties, if
         applied.
 
         :param object_prim: The prim to build an object for.
+        :param name: What to call the body, unique across the scene.
         :return: The created object, its body not yet added to a world.
         """
         world_pose = _rigid_world_pose(object_prim)
         body = Body(
-            name=PrefixedName(object_prim.GetName(), self.prefix),
+            name=PrefixedName(name, self.prefix),
             visual=ShapeCollection(self._object_shapes(object_prim, world_pose)),
         )
         inertial = self._parse_inertial(object_prim, body)
