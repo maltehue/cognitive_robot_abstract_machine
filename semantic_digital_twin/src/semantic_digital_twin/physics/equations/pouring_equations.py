@@ -10,7 +10,10 @@ from krrood.patterns.field_metadata import JSONMetadata
 from krrood.symbolic_math.symbolic_math import FloatVariable, Scalar
 from typing_extensions import Self, Tuple
 
-from semantic_digital_twin.exceptions import NonPositiveContainerGeometryError
+from semantic_digital_twin.exceptions import (
+    NonPositiveContainerCapacityError,
+    NonPositiveContainerGeometryError,
+)
 from semantic_digital_twin.physics.equations.differential_equation import (
     DifferentialEquation,
 )
@@ -123,25 +126,28 @@ class RectangularContainerGeometry:
     Inner width of the rectangular container (twice the half-width), in metres.
     """
 
+    capacity: float | None = None
+    """
+    Volume the container holds at full fill, in cubic metres.
+
+    Converts between a normalized fill rate and a volume rate, so a transfer moves the
+    same volume out of the source as into the receiver whatever shape either has.
+
+    Falls back to the box the extents bound, taking the depth the 2-D model does not
+    carry to equal the width. A container that knows its own third extent, or its true
+    capacity, states it instead.
+    """
+
     def __post_init__(self) -> None:
         if self.container_height <= 0.0 or self.container_width <= 0.0:
             raise NonPositiveContainerGeometryError(
                 container_height=self.container_height,
                 container_width=self.container_width,
             )
-
-    @property
-    def half_cross_section_area(self) -> float:
-        """
-        Area of half the rectangular cross-section, ``(width / 2) * height``, in square
-        metres.
-
-        Converts between normalized fill rates and volume rates. Following the half-
-        width convention of the 2-D cup model, it spans from the centre axis to the
-        pouring lip; the drain and the inflow both normalize with it, so a coupled
-        transfer stays volume-consistent.
-        """
-        return self.container_width / 2 * self.container_height
+        if self.capacity is None:
+            self.capacity = self.container_width**2 * self.container_height
+        elif self.capacity <= 0.0:
+            raise NonPositiveContainerCapacityError(capacity=self.capacity)
 
 
 @dataclass
@@ -265,6 +271,16 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
     container width when not given.
     """
 
+    repose_angle: float = field(default=0.0, kw_only=True)
+    """
+    Angle the contents' surface holds before it slumps, in radians.
+
+    Zero is a free liquid surface, which spills as soon as the lip dips below it. Solids
+    that stand in a heap hold their contents until the surface has steepened past this
+    angle, so it raises both the tilt a pour starts at and the amount a tilt leaves
+    behind. It describes the contents rather than the container.
+    """
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.lip_offset is None:
@@ -274,9 +290,11 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         result = super().to_json()
         result["container_height"] = self.container_height
         result["container_width"] = self.container_width
+        result["capacity"] = self.capacity
         result["outflow_rate_constant"] = self.outflow_rate_constant
         result["discharge_coefficient"] = self.discharge_coefficient
         result["lip_offset"] = self.lip_offset
+        result["repose_angle"] = self.repose_angle
         return result
 
     @classmethod
@@ -296,11 +314,13 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         return {
             "container_height": data["container_height"],
             "container_width": data["container_width"],
+            "capacity": data.get("capacity"),
             "outflow_rate_constant": data["outflow_rate_constant"],
             "discharge_coefficient": data.get(
                 "discharge_coefficient", DEFAULT_DISCHARGE_COEFFICIENT
             ),
             "lip_offset": data.get("lip_offset"),
+            "repose_angle": data.get("repose_angle", 0.0),
         }
 
     @classmethod
@@ -323,16 +343,19 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
             lip_offset=self.lip_offset,
+            repose_angle=self.repose_angle,
+            capacity=self.capacity,
             outflow_scale=self.outflow_scale,
             gate=gate,
         )
 
     def head_above_lip(self, context: FillContext) -> Scalar:
         """
-        Height of the liquid surface above the pouring lip, in metres.
+        Height of the contents' surface above the pouring lip, in metres.
 
-        Positive only while the tilt lifts the liquid past the lip, so it is zero
-        whenever the container is not spilling.  This is the head that drives the pour.
+        Positive only while the tilt lifts the contents past the lip by more than the
+        angle they stand at, so it is zero whenever the container is not spilling. This
+        is the head that drives the pour.
 
         :param context: Kinematic context providing the tilt and fill symbols.
         :return: Symbolic head above the lip.
@@ -340,11 +363,25 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         height = self.container_height
         liquid_height = context.fill_position * height
         lip_distance = sm.sqrt((height - liquid_height) ** 2 + self.lip_offset**2)
-        lip_angle = sm.atan2(height - liquid_height, self.lip_offset)
         return sm.max(
             sm.Scalar(0.0),
-            lip_distance * sm.sin(context.tilt_expression - lip_angle),
+            lip_distance
+            * sm.sin(context.tilt_expression - self.onset_tilt(context.fill_position)),
         )
+
+    def onset_tilt(self, fill: sm.ScalarData) -> Scalar:
+        """
+        Tilt at which a container this full starts to pour, in radians.
+
+        The head is measured against this angle, so it is zero below it and grows above
+        it. A fuller container starts sooner, and contents that stand in a heap start
+        later by the angle they hold.
+
+        :param fill: Normalized fill level in ``[0, 1]``.
+        :return: Symbolic onset tilt.
+        """
+        dry_height = self.container_height * (1 - fill)
+        return sm.atan2(dry_height, self.lip_offset) + self.repose_angle
 
     def exit_velocity(self, context: FillContext) -> Scalar:
         """
@@ -411,6 +448,8 @@ class GatedArticulatedPouringEquation(ArticulatedPouringEquation):
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
             lip_offset=self.lip_offset,
+            repose_angle=self.repose_angle,
+            capacity=self.capacity,
         )
 
 
@@ -452,7 +491,7 @@ class InflowEquation(RectangularContainerGeometry, FillEquation):
 
         :return: Normalised fill velocity from inflow.
         """
-        return self.inflow / self.half_cross_section_area
+        return self.inflow / self.capacity
 
 
 @dataclass

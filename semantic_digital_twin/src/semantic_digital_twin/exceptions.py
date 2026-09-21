@@ -1357,6 +1357,48 @@ class NonPositiveContainerGeometryError(UsageError):
 
 
 @dataclass
+class NonPositiveContainerCapacityError(UsageError):
+    """
+    Raised when a pouring-domain container is described with a non-positive capacity.
+    """
+
+    capacity: float
+    """
+    The capacity that was given, in cubic metres.
+    """
+
+    def error_message(self) -> str:
+        return f"Container capacity must be strictly positive, got {self.capacity}."
+
+    def suggest_correction(self) -> str:
+        return (
+            "give the volume the container holds at full fill, in cubic metres, or "
+            "leave it out to have it taken from the container's extents."
+        )
+
+
+@dataclass
+class EmptyContainerCalibrationError(UsageError):
+    """
+    Raised when the volume a particle takes up is read off a container holding none.
+    """
+
+    container: Body
+    """
+    The container that was found empty.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Cannot measure how much volume a particle takes up from "
+            f"{self.container.name}, which holds none."
+        )
+
+    def suggest_correction(self) -> str:
+        return "measure it in a container the contents are standing in."
+
+
+@dataclass
 class FillLevelAlreadyInitializedError(UsageError):
     """
     Raised when a fill level is initialized on a container that already carries one.

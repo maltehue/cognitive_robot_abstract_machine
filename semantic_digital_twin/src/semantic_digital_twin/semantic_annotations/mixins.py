@@ -1737,6 +1737,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         inflow_equation = GatedInflowEquation(
             container_height=self.root.collision.height,
             container_width=self.root.collision.width,
+            capacity=self.capacity,
             inflow=source_volume_rate,
             gate=gate.product,
             height_gate=gate.height,
@@ -1838,7 +1839,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         :return: Symbolic outflow volume rate, positive while pouring.
         """
         normalised_drain = self.fill_equation.symbolic_velocity(self.fill_connection)
-        return -normalised_drain * self.fill_equation.half_cross_section_area
+        return -normalised_drain * self.fill_equation.capacity
 
     def create_pouring_equation(
         self, world: World, outflow_rate_constant: float, discharge_coefficient: float
@@ -1857,6 +1858,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         return ArticulatedPouringEquation(
             container_width=self.root.collision.width,
             container_height=self.root.collision.height,
+            capacity=self.capacity,
             outflow_rate_constant=outflow_rate_constant,
             discharge_coefficient=discharge_coefficient,
         )
@@ -2045,6 +2047,18 @@ class HasFillLevel(HasRootBody, LiquidSource):
     def opening_radius(self) -> float:
         """Radius of this container's opening, in metres."""
         return self.root.collision.width / 2
+
+    @property
+    def capacity(self) -> float:
+        """
+        Volume this container holds at full fill, in cubic metres.
+
+        Read from the collision geometry as the box its extents bound. The shape factor
+        this leaves out is the same for containers of the same shape, so it cancels in a
+        transfer between them; a container whose true capacity is known overrides this.
+        """
+        collision = self.root.collision
+        return collision.depth * collision.width * collision.height
 
     def opening_point(self, world: World) -> Point3:
         """

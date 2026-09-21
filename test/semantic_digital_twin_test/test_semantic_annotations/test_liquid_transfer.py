@@ -82,6 +82,14 @@ def _evaluated_xyz(spatial: Point3 | Vector3) -> np.ndarray:
     )
 
 
+def _container_volume(container: HasFillLevel) -> float:
+    """
+    The liquid volume of a container at full fill, read off its collision geometry.
+    """
+    collision = container.root.collision
+    return collision.depth * collision.width * collision.height
+
+
 # %% test containers and sources
 
 
@@ -182,6 +190,8 @@ def _build_world(
     source_axis: Vector3 | None = None,
     source_height: float = 0.3,
     receiver_height: float = 0.2,
+    receiver_depth: float = 0.1,
+    scale_factor: float = 1.0,
     couple: bool = True,
     initialize_receiver_fill: bool = True,
     exit_speed: float = DEFAULT_POUR_EXIT_SPEED,
@@ -196,6 +206,11 @@ def _build_world(
         x.
     :param source_height: Height of the source's origin above the world root, in metres.
     :param receiver_height: Height of the receiver's collision geometry, in metres.
+    :param receiver_depth: Depth of the receiver's collision geometry, in metres. The
+        receiver holds more liquid as it deepens, while the width its pouring model
+        reads stays the same.
+    :param scale_factor: Factor every length in the scene is multiplied by, so a scene
+        built twice with different factors is geometrically similar.
     :param couple: Whether the receiver's inflow is coupled to the source's outflow.
     :param initialize_receiver_fill: Whether the receiver's fill level is initialized.
     :param exit_speed: Nominal exit speed forwarded to the coupling.
@@ -221,19 +236,23 @@ def _build_world(
                 axis=Vector3(1, 0, 0),
                 dof_limits=wide_limits,
             ),
-            scale=Scale(0.1, 0.1, receiver_height),
+            scale=Scale(
+                receiver_depth * scale_factor,
+                0.1 * scale_factor,
+                receiver_height * scale_factor,
+            ),
         )
         source = source_class.create_with_new_body_in_world(
             name="source",
             world=world,
             world_root_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(
-                z=source_height
+                z=source_height * scale_factor
             ),
             parent_connection_specification=source_class.parent_connection_specification(
                 axis=source_axis,
                 dof_limits=wide_limits,
             ),
-            scale=Scale(0.1, 0.1, 0.2),
+            scale=Scale(0.1 * scale_factor, 0.1 * scale_factor, 0.2 * scale_factor),
         )
     if initialize_receiver_fill:
         receiver.initialize_fill_level(world=world, initial_fill=0.0)
@@ -264,12 +283,14 @@ class TestGatedInflowEquation:
     Validates the volume-conserving, gated inflow conversion.
     """
 
-    def test_half_cross_section_area_matches_rectangular_area(self):
+    def test_the_capacity_defaults_to_the_box_the_extents_describe(self):
         """
-        The 2-D cup volume is half-width times height.
+        An equation given only the two extents of the 2-D model reads the depth it does
+        not carry as the width, so its capacity still grows with the square of the width
+        as a real container's does.
         """
         equation = InflowEquation(container_height=0.2, container_width=0.08)
-        assert equation.half_cross_section_area == pytest.approx(0.04 * 0.2)
+        assert equation.capacity == pytest.approx(0.08 * 0.08 * 0.2)
 
     def test_gate_scales_the_inflow_velocity(self):
         """
@@ -295,41 +316,41 @@ class TestGatedInflowEquation:
         )
 
     @pytest.mark.parametrize(
-        "source_size, receiver_size",
-        [((0.2, 0.08), (0.2, 0.08)), ((0.2, 0.08), (0.1, 0.06))],
+        "source_capacity, receiver_capacity",
+        [(1e-3, 1e-3), (1e-3, 4e-4), (4e-4, 1e-3)],
     )
-    def test_transfer_is_volume_conserving(self, source_size, receiver_size):
+    def test_a_transfer_moves_the_share_the_capacities_relate(
+        self, source_capacity, receiver_capacity
+    ):
         """
-        The volume the receiver gains per second equals the volume the source loses, for
-        both equal and unequal cups, while the gate is fully open.
+        The share of itself the receiver gains is the share the source lost, scaled by
+        how the two capacities compare, so the volume leaving one is the volume entering
+        the other whatever shape either has.
         """
-        source_height, source_width = source_size
-        receiver_height, receiver_width = receiver_size
         source = ArticulatedPouringEquation(
-            container_height=source_height,
-            container_width=source_width,
+            container_height=0.2,
+            container_width=0.08,
+            capacity=source_capacity,
             outflow_rate_constant=1.0,
         )
-        tilt, fill = sm.Scalar(1.3), sm.Scalar(0.8)
-        source_normalized_loss = source.symbolic_velocity(
-            SymbolicFillContext(tilt, fill)
-        )
-        source_volume_rate = -source_normalized_loss * source.half_cross_section_area
+        source_drain = source.symbolic_velocity(
+            SymbolicFillContext(sm.Scalar(1.3), sm.Scalar(0.8))
+        ).evaluate()[0]
 
         receiver = GatedInflowEquation(
-            container_height=receiver_height,
-            container_width=receiver_width,
-            inflow=source_volume_rate,
+            container_height=0.1,
+            container_width=0.06,
+            capacity=receiver_capacity,
+            inflow=-source.symbolic_velocity(
+                SymbolicFillContext(sm.Scalar(1.3), sm.Scalar(0.8))
+            )
+            * source_capacity,
             gate=sm.Scalar(1.0),
         )
-        receiver_volume_gain = (
-            receiver.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[0]
-            * receiver.half_cross_section_area
-        )
-        source_volume_loss = (
-            -source_normalized_loss.evaluate()[0] * source.half_cross_section_area
-        )
-        assert receiver_volume_gain == pytest.approx(source_volume_loss)
+
+        assert receiver.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[
+            0
+        ] == pytest.approx(-source_drain * source_capacity / receiver_capacity)
 
 
 # %% gated source outflow
@@ -395,20 +416,61 @@ class TestGatedSourceOutflow:
             container_height=0.2,
             container_width=0.08,
             inflow=-ungated.symbolic_velocity(SymbolicFillContext(tilt, fill))
-            * ungated.half_cross_section_area,
+            * ungated.capacity,
             gate=gate,
         )
         source_volume_loss = (
             -gated_source.symbolic_velocity(SymbolicFillContext(tilt, fill)).evaluate()[
                 0
             ]
-            * gated_source.half_cross_section_area
+            * gated_source.capacity
         )
         receiver_volume_gain = (
             receiver.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[0]
-            * receiver.half_cross_section_area
+            * receiver.capacity
         )
         assert receiver_volume_gain == pytest.approx(source_volume_loss)
+
+
+# %% cross-container volume conversion
+
+
+class TestCrossContainerVolumeConversion:
+    """
+    Validates that a transfer moves the same liquid volume out of the source as it moves
+    into the receiver, whatever the two containers' shapes.
+    """
+
+    def test_containers_of_different_depth_conserve_volume(self):
+        """
+        A receiver that holds four times the liquid of the source at the same fill must
+        rise four times more slowly than the source drops.
+
+        Both rates carry the same transfer gate, so their ratio is the volume conversion
+        the transfer applies, whatever the gate is currently worth.
+        """
+        world, source, receiver = _build_world(
+            source_class=_TiltingContainer,
+            source_axis=Vector3(0, 1, 0),
+            receiver_depth=0.4,
+        )
+        _set_source_offset(world, source, 0.6)
+
+        source_fill_loss_rate = (
+            -source.fill_connection.outflow_equation.symbolic_velocity(
+                source.fill_connection
+            ).evaluate()[0]
+        )
+        receiver_fill_gain_rate = (
+            receiver.fill_connection.inflow_equation.symbolic_velocity(
+                receiver.fill_connection
+            ).evaluate()[0]
+        )
+        assert source_fill_loss_rate > 0.0, "the source must be draining"
+
+        assert receiver_fill_gain_rate / source_fill_loss_rate == pytest.approx(
+            _container_volume(source) / _container_volume(receiver)
+        )
 
 
 # %% geometric transfer gate
@@ -457,6 +519,32 @@ class TestTransferGate:
         _set_source_offset(world, source, 0.05)
         gradient = gate.jacobian([source_position])[0, 0].evaluate()[0]
         assert abs(gradient) > 1e-3
+
+    def test_height_gate_is_unchanged_by_a_uniform_scene_scaling(self):
+        """
+        The height gate reports whether the source's lip clears the receiver's opening,
+        which is a question about the shape of the arrangement alone. Two scenes that
+        differ only by a uniform scaling of every length are the same arrangement, so
+        the gate must read the same in both.
+
+        The receiver is tall enough that its opening sits just below the source's lip,
+        which puts the clearance in the gate's transition rather than at either end.
+        """
+        gates = []
+        for scale_factor in (1.0, 4.0):
+            world, source, receiver = _build_world(
+                receiver_height=0.76,
+                scale_factor=scale_factor,
+            )
+            _set_source_offset(world, source, 0.0)
+            gates.append(
+                receiver.fill_connection.inflow_equation.height_gate.evaluate()[0]
+            )
+        assert (
+            0.01 < gates[0] < 0.99
+        ), "the setup must hold the lip in the gate's transition, not at either end"
+
+        assert gates[1] == pytest.approx(gates[0])
 
     def test_gate_closes_when_source_tilts(self):
         """
