@@ -122,3 +122,18 @@ def test_the_factor_never_makes_the_model_pour_faster_than_it_was_calibrated_to(
     calibrated.calibrate(measured_inflow=10 * UNCORRECTED_INFLOW)
 
     assert calibrated.value == pytest.approx(1.0)
+
+
+# %% the factor on both paths
+
+
+def test_a_registered_factor_is_readable_without_a_compiled_expression():
+    """
+    The physics integrates the same drain between control cycles, by evaluating it
+    rather than through the compiled controller, so the factor has to answer there too.
+    """
+    calibrated = build_scale(smoothing=1.0)
+
+    calibrated.calibrate(measured_inflow=0.5 * UNCORRECTED_INFLOW)
+
+    assert calibrated.inflow.evaluate()[0] == pytest.approx(0.5 * UNCORRECTED_INFLOW)

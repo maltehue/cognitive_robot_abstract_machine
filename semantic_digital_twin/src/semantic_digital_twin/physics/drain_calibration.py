@@ -28,12 +28,11 @@ class CalibratedDrainScale:
     The factor is a free variable, so the compiled expressions read its current value
     every cycle and a correction reaches a controller that is already running.
 
-    ..warning:: A free variable answers to a compiled expression but not to
-        :meth:`~krrood.symbolic_math.symbolic_math.Scalar.evaluate`, which resolves its
-        variables one by one. A drain scaled by one therefore cannot also be integrated
-        by :meth:`~...connections.LiquidConnection.update_state`, which evaluates it
-        that way: carrying the factor there too means carrying it as the fill level is
-        carried, on a connection of its own.
+    ..note:: Registering the factor is what lets the physics between cycles integrate
+        the same drain: the registration gives the variable the resolve function that
+        :meth:`~krrood.symbolic_math.symbolic_math.Scalar.evaluate` looks for. It has to
+        be registered before anything evaluates the drain, and every controller sharing
+        the world has to share the registration.
     """
 
     MINIMUM_PREDICTED_INFLOW: ClassVar[float] = 1e-6

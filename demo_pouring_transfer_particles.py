@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 from typing_extensions import Callable, List, Optional
@@ -44,6 +44,9 @@ from semantic_digital_twin.api import RobotSpecification
 from semantic_digital_twin.datastructures.definitions import StaticJointState
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from krrood.symbolic_math.float_variable_data import FloatVariableData
+from krrood.symbolic_math.symbolic_math import FloatVariable
+from semantic_digital_twin.physics.drain_calibration import CalibratedDrainScale
 from semantic_digital_twin.physics.particles import (
     HollowCylinder,
     MeasuredFillLevel,
@@ -178,6 +181,11 @@ Without it the controller reasons about the pour its own drain model predicts. W
 the levels it steers by are the ones the grains actually produced, on both cups.
 """
 
+CALIBRATION_SMOOTHING = 0.3
+"""
+How far towards each measured inflow the drain's factor moves.
+"""
+
 REPORT_EVERY = 200
 """
 How many control cycles pass between two lines of the report.
@@ -228,6 +236,17 @@ class TransferScene:
     tool_frame: Body
     """
     The frame of the hand holding the source.
+    """
+
+    drain_scale: FloatVariable
+    """
+    The factor the source's drain is scaled by, which the measured inflow corrects.
+    """
+
+    variables: FloatVariableData
+    """
+    The one place the factor's value lives, shared by every controller of the run so
+    they all read the same correction.
     """
 
 
@@ -285,6 +304,14 @@ def build_scene() -> TransferScene:
         outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
     )
     receiver.initialize_fill_level(world=world, initial_fill=0.0)
+    drain_scale = FloatVariable("source_drain_scale")
+    variables = FloatVariableData()
+    variables.register_expression(drain_scale)
+    variables.set_value(drain_scale, 1.0)
+    with world.modify_world():
+        source.add_fill_equation(
+            replace(source.fill_equation, outflow_scale=drain_scale)
+        )
     receiver.receive_outflow_from(source=source, world=world)
     return TransferScene(
         world=world,
@@ -292,6 +319,8 @@ def build_scene() -> TransferScene:
         source=source,
         receiver=receiver,
         tool_frame=tool_frame,
+        drain_scale=drain_scale,
+        variables=variables,
     )
 
 
@@ -484,12 +513,27 @@ def _run_motion(
                 target_frequency=CONTROL_FREQUENCY,
                 prediction_horizon=PREDICTION_HORIZON,
             ),
+            float_variable_data=scene.variables,
         ),
         pacer=SteppedSimulationPacer(simulation),
     )
+    calibration = (
+        CalibratedDrainScale(
+            scale=scene.drain_scale,
+            inflow=scene.receiver.fill_connection.inflow_equation.symbolic_velocity(
+                scene.receiver.fill_connection
+            ),
+            variables=scene.variables,
+            smoothing=CALIBRATION_SMOOTHING,
+        )
+        if arriving is not None
+        else None
+    )
     executor.compile(motion_statechart=statechart)
     if fill is not None:
-        executor.tick = _reporting_tick(executor, scene, fill, perception, arriving)
+        executor.tick = _reporting_tick(
+            executor, scene, fill, perception, arriving, calibration
+        )
     try:
         executor.tick_until_end(timeout=TICK_LIMIT)
         print(
@@ -506,6 +550,7 @@ def _reporting_tick(
     fill: ParticleFill,
     perception: Optional[List[MeasuredFillLevel]],
     arriving: Optional[MeasuredInflowRate],
+    calibration: Optional[CalibratedDrainScale],
 ) -> Callable[[], None]:
     """
     Wrap an executor's tick so the receiver is measured and the pour reported as the
@@ -517,6 +562,7 @@ def _reporting_tick(
     :param perception: What reports the containers' fill levels, if the run closes
         that loop.
     :param arriving: What measures how fast the contents reach the receiver.
+    :param calibration: What holds the drain's factor at what that measurement says.
     :return: The wrapped tick.
     """
     tick = executor.tick
@@ -535,8 +581,10 @@ def _reporting_tick(
                     measurement.report()
             if arriving is not None:
                 measured_rate[0] = arriving.observe(at=cycle / CONTROL_FREQUENCY)
+                if calibration is not None:
+                    calibration.calibrate(measured_inflow=measured_rate[0])
         if cycle % REPORT_EVERY == 0:
-            _report(cycle, scene, fill, measured_rate[0])
+            _report(cycle, scene, fill, measured_rate[0], calibration)
 
     return tick_and_report
 
@@ -553,7 +601,11 @@ def _nudge_wrist(scene: TransferScene) -> None:
 
 
 def _report(
-    tick: int, scene: TransferScene, fill: ParticleFill, measured_rate: float = 0.0
+    tick: int,
+    scene: TransferScene,
+    fill: ParticleFill,
+    measured_rate: float = 0.0,
+    calibration: Optional[CalibratedDrainScale] = None,
 ) -> None:
     """
     Print one line comparing the commanded fill levels and inflow against the particles.
@@ -562,6 +614,7 @@ def _report(
     :param scene: The scene being reported on.
     :param fill: The contents being poured.
     :param measured_rate: How fast the contents were last seen reaching the receiver.
+    :param calibration: What holds the drain's factor, if the run corrects it.
     """
     in_source = fill.count_inside(scene.source.root)
     in_receiver = fill.count_inside(scene.receiver.root)
@@ -574,6 +627,7 @@ def _report(
         f"spilled: {len(fill.names) - in_source - in_receiver:3d}  "
         f"inflow {measured_rate:+5.2f} measured vs "
         f"{_predicted_inflow(scene):+5.2f} predicted /s"
+        + (f"  drain scale {calibration.value:4.2f}" if calibration else "")
     )
 
 
