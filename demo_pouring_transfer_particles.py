@@ -81,12 +81,14 @@ PARTICLE_RADIUS = 0.005
 Radius of one particle, in metres.
 """
 
-INITIAL_FILL = 1.0
+PACKED_SHARE = 0.45
 """
-How deep the source cup is packed, as a share of its cavity.
+The share of the source cup's cavity to pack with grains.
 
-A loose packing settles to about half the depth it was packed to, so a cup packed to its
-rim holds its contents at about half its height once they have come to rest.
+What the grains settle to is read off them rather than predicted from this, so the fill
+the model starts at is right whatever this is set to. Below a full cup on purpose: the
+physics costs a contact per pair of touching grains, and a cup packed to its rim runs
+several times slower than the rest of the scene.
 """
 
 GOAL_FILL = 0.06
@@ -141,7 +143,7 @@ How the source cup sits in the gripper, as a roll about the tool's own x axis: u
 with its opening away from the palm.
 """
 
-MINIMUM_RIM_CLEARANCE = 0.2
+MINIMUM_RIM_CLEARANCE = 0.1
 """
 How far the source's rim is kept above the receiver's, in metres.
 """
@@ -172,9 +174,13 @@ TICK_LIMIT = 4000
 How many control cycles the motion is given before the run gives up.
 """
 
-SETTLE_TIME = timedelta(milliseconds=500)
+SETTLE_TIME = timedelta(seconds=3)
 """
 How long the contents settle in the cup before the pour starts.
+
+A packing is released looser than what it settles into and takes a couple of seconds to
+compact; read too early, a full cup reads half full and the pour starts against a fill
+level the contents do not have.
 """
 
 PERCEPTION_FREQUENCY = 10
@@ -204,9 +210,33 @@ REPORT_EVERY = 200
 How many control cycles pass between two lines of the report.
 """
 
-OUTFLOW_RATE_CONSTANT = 1.0
+OUTFLOW_RATE_CONSTANT = 0.24
 """
 Outflow rate constant of the source's drain.
+
+Fitted to the relaxation the grains of this scene actually show, 6.35 s at 85 degrees,
+against the model's own time constant at :data:`SOURCE_REPOSE_ANGLE`. The two cannot be
+fitted apart: the time constant moves 7.6-fold between a repose of zero and this one.
+"""
+
+SOURCE_REPOSE_ANGLE = math.radians(36.8)
+"""
+Angle the source's contents hold before they start to flow, in radians.
+
+Fitted to the tilt-against-retained-fill curve of this cup, which it reproduces to 0.007
+in fill with every geometric parameter left at its measured value. Fitted rather than
+measured on purpose: the grains heap at about zero degrees on a flat plate, so this
+number is not the contents' angle of repose and does not carry to another container.
+See ``semantic_digital_twin/doc/pouring_effect_model_evaluation.md``.
+"""
+
+FILL_PREDICTION_WINDOW = 3.0
+"""
+How far ahead the fill row predicts, in seconds.
+
+About half the contents' measured relaxation. The task's own default of 1.5 s is a
+quarter of it, which leaves the fill barely moving inside the horizon, so the controller
+reads its tilt as ineffective and asks for more of it.
 """
 
 
@@ -263,11 +293,13 @@ class TransferScene:
     """
 
 
-def build_scene() -> TransferScene:
+def build_scene(repose_angle: float = SOURCE_REPOSE_ANGLE) -> TransferScene:
     """
     Build Tracy with both arms parked, a source cup in its left hand and a receiving
     cup on the table, coupled so what leaves one enters the other.
 
+    :param repose_angle: Angle the source's contents hold before they flow. Zero is the
+        model as it stands before any parameter of the contents is estimated.
     :return: The scene.
     """
     world = World()
@@ -313,9 +345,14 @@ def build_scene() -> TransferScene:
         world.add_semantic_annotation(receiver)
     source.initialize_fill_level(
         world=world,
-        initial_fill=INITIAL_FILL,
+        initial_fill=PACKED_SHARE,
         outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
     )
+    if repose_angle:
+        with world.modify_world():
+            source.add_fill_equation(
+                replace(source.fill_equation, repose_angle=repose_angle)
+            )
     receiver.initialize_fill_level(world=world, initial_fill=0.0)
     drain_scale = FloatVariable("source_drain_scale")
     variables = FloatVariableData()
@@ -408,11 +445,14 @@ def pour_start_tilt(source: PourableContainer, contents: ParticleFill) -> float:
     return float(onset) + POUR_START_TILT_MARGIN
 
 
-def build_transfer_motion(scene: TransferScene) -> MotionStatechart:
+def build_transfer_motion(
+    scene: TransferScene, prediction_window: float = FILL_PREDICTION_WINDOW
+) -> MotionStatechart:
     """
     Build the motion that pours the source into the receiver.
 
     :param scene: The scene the motion runs in.
+    :param prediction_window: How far ahead the fill row predicts, in seconds.
     :return: The statechart, ending when the receiver has reached its goal.
     """
     transfer = FillByTransferTask(
@@ -420,6 +460,7 @@ def build_transfer_motion(scene: TransferScene) -> MotionStatechart:
         goal_value=GOAL_FILL,
         fill_level_tolerance=FILL_TOLERANCE,
         reference_velocity=TRANSFER_REFERENCE_VELOCITY,
+        prediction_duration=prediction_window,
     )
     no_spill = KeepProjectileInReceiver(receiver=scene.receiver, source=scene.source)
     keep_above = KeepSourceRimAboveReceiverRim(
@@ -445,14 +486,20 @@ def build_transfer_motion(scene: TransferScene) -> MotionStatechart:
 # %% running the pour
 
 
-def run(headless: bool) -> None:
+def run(headless: bool, nominal: bool = False) -> None:
     """
     Carry the cup upright, fill it, pour it into the receiver under the pouring tasks,
     and report where the contents went.
 
     :param headless: Whether to run without the MuJoCo viewer.
     """
-    scene = build_scene()
+    scene = build_scene(repose_angle=0.0 if nominal else SOURCE_REPOSE_ANGLE)
+    print(
+        "the source's contents are modelled as holding "
+        f"{math.degrees(0.0 if nominal else SOURCE_REPOSE_ANGLE):.1f} degrees "
+        f"before they flow, and the fill is predicted "
+        f"{FILL_PREDICTION_WINDOW if not nominal else 1.5} s ahead"
+    )
     ParticleFill.settling_contact().apply_to(scene.world.bodies)
 
     simulation = MujocoSim(
@@ -472,12 +519,13 @@ def run(headless: bool) -> None:
             world=scene.world,
             simulator=simulation.simulator,
             particle_radius=PARTICLE_RADIUS,
-            count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=INITIAL_FILL),
+            count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=PACKED_SHARE),
         )
         simulation.step_simulation(SETTLE_TIME)
         fill.bulk_volume_per_particle = fill.bulk_volume_per_particle_in(
             scene.source.root, scene.source.capacity
         )
+        _seed_fill_level_from_the_contents(scene, fill)
         perception = [
             MeasuredFillLevel(
                 contents=fill,
@@ -513,7 +561,9 @@ def run(headless: bool) -> None:
             build_carry_motion(scene, tilt=tilt), scene, simulation, "pre-tilt", fill
         )
         _run_motion(
-            build_transfer_motion(scene),
+            build_transfer_motion(
+                scene, prediction_window=1.5 if nominal else FILL_PREDICTION_WINDOW
+            ),
             scene,
             simulation,
             "transfer",
@@ -631,6 +681,24 @@ def _reporting_tick(
     return tick_and_report
 
 
+def _seed_fill_level_from_the_contents(
+    scene: TransferScene, contents: ParticleFill
+) -> None:
+    """
+    Start the source's fill level where its contents actually stand.
+
+    A packing is released looser than what it settles into, so how full a count of
+    grains makes a cup is something to read off them once they have come to rest rather
+    than something to predict from the count.
+
+    :param scene: The scene whose source is to be seeded.
+    :param contents: The grains standing in that source.
+    """
+    JointState.from_mapping(
+        {scene.source.fill_connection: contents.filled_height_in(scene.source.root)}
+    ).apply_to(scene.world)
+
+
 def _nudge_wrist(scene: TransferScene) -> None:
     """
     Turn the wrist out of the carry pose, so the pour does not start from a wrist that
@@ -722,4 +790,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--headless", action="store_true", help="run without the MuJoCo viewer"
     )
-    run(headless=parser.parse_args().headless)
+    parser.add_argument(
+        "--nominal",
+        action="store_true",
+        help="pour with no parameter of the contents estimated, for comparison",
+    )
+    arguments = parser.parse_args()
+    run(headless=arguments.headless, nominal=arguments.nominal)

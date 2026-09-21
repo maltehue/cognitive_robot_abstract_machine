@@ -47,11 +47,13 @@ SOURCE = HollowCylinder(inner_radius=0.035, height=0.1)
 RECEIVER = HollowCylinder(inner_radius=0.07, height=0.1)
 PARTICLE_RADIUS = 0.005
 
-INITIAL_FILL = 0.6
+PACKED_SHARE = 0.25
 """
-How deep the source cup starts, as a share of its cavity: the particles are packed to
-that depth and the analytic fill level starts at the same number, so the two describe
-the same cup.
+The share of the source cup's cavity to pack with grains.
+
+What they settle to is read off them and is what the pouring equation starts from, so
+this only sets how many grains the physics carries. Kept low because the physics costs
+a contact per pair of touching grains.
 """
 
 SOURCE_STAND = (-0.02, 0.2)
@@ -75,7 +77,7 @@ FINAL_TILT = 2.2
 How far the source cup turns over, in radians: past horizontal, so it empties.
 """
 
-SETTLE_TIME = timedelta(seconds=0.5)
+SETTLE_TIME = timedelta(seconds=3)
 """
 How long the contents stand before the pour starts.
 """
@@ -186,7 +188,7 @@ def build_world() -> tuple[World, Body, Body, RevoluteConnection, PourableContai
         world.add_semantic_annotation(pourable_source)
     pourable_source.initialize_fill_level(
         world=world,
-        initial_fill=INITIAL_FILL,
+        initial_fill=PACKED_SHARE,
         outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
     )
     return world, source, receiver, tilt, pourable_source
@@ -218,7 +220,7 @@ def run(headless: bool) -> None:
             world=world,
             simulator=simulation.simulator,
             particle_radius=PARTICLE_RADIUS,
-            count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=INITIAL_FILL),
+            count=SOURCE.particle_capacity(PARTICLE_RADIUS, fill_fraction=PACKED_SHARE),
         )
         print(
             f"{len(fill.names)} particles of radius {PARTICLE_RADIUS} m "
