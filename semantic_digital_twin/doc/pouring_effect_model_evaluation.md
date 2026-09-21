@@ -110,220 +110,193 @@ column is what they would be re-backed by.
 
 ## Findings so far
 
-All from the MuJoCo particle scene: 105 spherical grains of 5 mm radius in a cup of
-35 mm inner radius and 60 mm height, contacts at sliding friction 0.6 with no rolling
-resistance.
+All from the MuJoCo particle scene: spherical grains of 5 mm radius in a cup of 35 mm
+inner radius and 60 mm height, contacts at sliding friction 0.6.
 
-### 1. Tilt sets how much is left, and the model's curve is in the wrong place
+Findings 1, 2, 5, 6 and 7 were re-measured after two defects were found in how the scene
+was set up, and the corrections are larger than the findings they replace. Findings 8, 9
+and 10 were measured before those fixes and have not been repeated; they are marked
+where they stand.
 
-Tilting the cup one step at a time and letting it settle at each, without refilling
-between steps, grains still in the source:
+### 0. Two defects in the measurement, not in the model
 
-| measured tilt | after 1 s | after 2 s | after 4 s | model drains to |
-| --- | --- | --- | --- | --- |
-| 64° | 105 | 105 | 105 | 0 |
-| 68° | 105 | 105 | 105 | 0 |
-| 72° | 103 | 102 | 100 | 0 |
-| 76° | 95 | 91 | 91 | 0 |
-| 80° | 84 | 80 | 76 | 0 |
-| 84° | 66 | 64 | 59 | 0 |
+**The source was half as full as the code believed.** `HollowCylinder.particle_capacity`
+counted seats in the spawn packing. A packing holds its grains clear of each other, so it
+stands looser than what they settle into: a cup packed to its rim settled to 0.50 of its
+cavity while the model was initialised at 1.00. Every equilibrium point, every transient
+and every closed-loop run of the first round was measured against a fill the model had
+wrong by a factor of two. The count is taken by volume now, a packing may stand above the
+rim and drop in as the grains below it compact, and the demo seeds the model's fill from
+what the contents settle to rather than from what was asked for.
 
-The model empties this cup at 59.7° and predicts that a *full* cup pours at any tilt at
-all. The grains have not started at 68°. The model's whole useful range lies below the
-tilt at which anything happens.
+**Two of the three friction coefficients never reached the solver.** Both the world
+geometry and the particles wrote a three-coefficient friction without asking for a contact
+resolved in enough dimensions to use it, so the engine kept the sliding coefficient and
+discarded the torsional and rolling ones. Four different rolling coefficients produced
+settled piles identical to the last digit. The grains were frictionless ball bearings,
+and `ContactParameters.create_for_grasped_object` — which raises both coefficients
+deliberately, to stop a held object spinning or rolling between the pads — had never had
+any effect either.
 
-### 2. No estimate of the existing parameters rescues it; one new parameter nearly does
+Both are fixed. Neither was a defect in the effect model, and both changed what the model
+was being judged against.
 
-Least squares of the model's equilibrium against the six observations:
+### 1. Tilt sets how much is left, and the model's curve is in the right place
 
-| free parameters | lip offset | repose | RMS error (fill units) |
+Gravity walked around a fixed cup, which is the same as tilting it for a quasi-static
+equilibrium and leaves out the arm, the grasp and the swing. Settled fill, as the share of
+capacity the retained grains take up:
+
+| tilt | 0–60° | 65° | 70° | 75° | 80° | 90° | 100° |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| fill held | 0.63 | 0.62 | 0.60 | 0.55 | 0.45 | 0.22 | 0.00 |
+
+Nothing moves until about 70°, which is what the first round saw. What changed is the
+comparison: the model was being asked to predict this from a starting fill of 1.00 while
+the cup stood at 0.63.
+
+### 2. With the fill counted honestly, the model fits at its true geometry
+
+Least squares of the model's equilibrium against the curve above:
+
+| free parameters | repose | lip offset | rms |
 | --- | --- | --- | --- |
-| none, geometry as built | 35 mm | — | 0.87 |
-| lip offset | hits bound | — | 0.87 |
-| repose angle, geometry pinned to truth | 35 mm | 59.3° | 0.092 |
-| both | 111 mm | 71.1° | 0.015 |
+| repose, geometry pinned to truth | **36.8°** | 35 mm | **0.007** |
+| repose and lip offset | 32.5° | 30 mm | 0.006 |
 
-Freeing the lip offset changes nothing, and not because the optimum is weak: at full
-fill the head is `r·sin α`, positive for *any* tilt and *any* lip offset, so "nothing
-happens until 68°" is unreachable by estimating the parameters the model has. Adding an
-angle of repose — a real, named, independently measurable property, and the first
-parameter of the *contents* rather than the container — drops the error ninefold with
-every container parameter left truthful.
+Freeing the lip buys nothing: the error moves by 0.001 and the lip moves 5 mm, where the
+first round's fit demanded 155 mm on a cup whose rim is 35 mm out. The structure
+represents this equilibrium with every geometric parameter at its measured value, and it
+tracks the falling limb and not only the onset — the descent spans 0.63 in fill and the
+error over all fourteen points is 0.007.
 
-The last row is the case the semantic-clarity criterion exists for. It fits six times
-better again, and does so by putting the lip 111 mm from the tilt axis on a cup whose rim
-is 35 mm out. The fit improved while a parameter with a ground truth walked away from it.
-That second error signal — distance from the independently measured value — is what
-separates "the parameters were unknown" from "the structure is wrong", and it is the
-argument for insisting on semantically clear parameters. A black-box model reaching 0.015
-would have looked like success.
+This reverses the first round's sharpest conclusion, that the structure could not
+represent the equilibrium with honest geometry. That conclusion was drawn from a fit to a
+curve the model was being shown from the wrong starting state.
 
-Caveat: this curve is a property of the contact parameters chosen for the simulation, not
-of a measured material. A 47–68° effective repose angle is far above any real granular
-material (sand is about 34°), which suggests jamming in a coarse discrete packing — six
-grains across the cup — rather than a continuum property. The numbers are evidence about
-the *shape* of the mismatch, not calibration targets.
-
-### 3. Feedback on a wrong model rescued liveness, not accuracy
+### 3. Feedback on a wrong model rescues liveness, not accuracy
 
 `CalibratedDrainScale` (`semantic_digital_twin/physics/drain_calibration.py`) holds a
 multiplicative factor on the drain at whatever makes the prediction match the measured
-inflow. It was the difference between nothing pouring at all and grains being delivered
-— and against a goal of 32 grains it empties the source completely, landing 97 in the
-receiver and spilling the other 8.
+inflow. It is still the difference between nothing pouring and grains being delivered,
+and it still overshoots: against a goal of 42 grains the nominal model delivers 0 without
+it and 77 with it (finding 7).
 
-The reason is structural, and it is the hypothesis this work should state: **feedback
-compensates model error only in the directions the adapted parameters span.** A gain on
-the rate spans "how fast", while the true error is in "at what tilt does it start". Once
-the controller tilts past the real onset, the gain keeps reporting "still not enough"
-until it commands a tilt that empties the cup — here 107.5°.
-
-Note also that this factor is the *wrong kind* of parameter for the evaluation: it has no
-units, no referent and no measurable truth, so it can absorb any modelling error and
-therefore reports nothing about whether the model is right. It is a usable controller
-crutch; it is not evidence.
+The reason is structural. A gain on the drain cannot move the tilt at which the drain
+*starts*, and the onset is what the nominal model has wrong — it puts it at 27° where the
+grains need 70°. Scaling a rate that is zero leaves it zero, so the correction can only
+act once the pour is already under way, by which point the cup is past 100°.
 
 ### 4. A quantified error in a semantically clear parameter, now fixed
 
-`outflow_volume_rate` converted normalized fill to a volume with
-`half_cross_section_area = (width / 2) · height`, which is an *area*: dimensionally wrong
-for a volume, and scaling linearly with the container's width where a volume scales
-quadratically. It therefore cancelled only between containers of equal width.
+(unchanged — the capacity conversion, corrected in `d9e813c88`.)
 
-- Cup-to-cup in the demo (35 mm into 60 mm inner radius): the receiver's level rose 1.64×
-  faster than it should.
-- The faucet path, where the inflow is a genuine volume rate, was off by 3.9× for the
-  demo receiver, and dividing a volume rate by an area.
+### 5. The contents are a state relation, reached about six seconds after the tilt
 
-Replaced by an explicit `capacity` — the volume held at full fill, in cubic metres — read
-from the collision box, statable when known. The scaling law is now right and only a
-constant shape factor remains, which cancels between containers of the same shape.
-
-Nothing in any fit would have revealed this. Checking a parameter against its definition
-did, which is the same argument as finding 2 from the other side.
-
-### 5. The contents are a state relation, reached about three times slower than the model thinks
-
-Holding the same tilt (83.9°) for twenty seconds, reached either straight from a full
-cup or through the staircase of every lower tilt, grains still in the source:
+Holding 85° for twenty seconds, reached either straight from the settled cup or through a
+staircase of five lower tilts, fill retained:
 
 | path | 1 s | 2 s | 4 s | 8 s | 12 s | 20 s |
 | --- | --- | --- | --- | --- | --- | --- |
-| direct, from full | 84 | 74 | 67 | 61 | 49 | **44** |
-| staircase | 66 | 64 | 59 | 50 | 49 | **45** |
+| direct | 0.489 | 0.472 | 0.403 | 0.341 | 0.295 | **0.261** |
+| staircase | 0.494 | 0.477 | 0.420 | 0.358 | 0.307 | **0.250** |
 
 **The two paths converge**, to within one grain. The settled amount at a tilt does not
-depend on how the cup got there, so the contents are a state relation after all, and the
-four-to-nine grain gap visible at four seconds was elapsed time rather than history.
+depend on how the cup got there, so the contents are a state relation and the model's
+form survives. That part of the first round holds unchanged.
 
-What separates the model from the measurement is not the form but the rate. Fitting a
-single relaxation gives 2.96 s on the direct path and 4.03 s on the staircase, while the
-model's own time constant — `−1/(∂ḣ/∂h)`, read straight off
-:meth:`symbolic_ode_jacobians` — is 9.41 s at `outflow_rate_constant = 1`. Since that
-time constant is inversely proportional to the rate constant, matching the observation
-needs `outflow_rate_constant` near 3. It has never been estimated and sits at its
-default of 1.
+The rate does not. Fitting a single relaxation gives **6.35 s** on the direct path and
+7.80 s on the staircase, against the first round's 2.96 s and 4.03 s.
 
-This is also why the closed loop overshoots, without any structural explanation being
-needed. The fill row predicts over a 1.5 s window, which at the model's 9.41 s is 16% of
-a time constant: the fill barely moves inside the horizon, so the controller reads its
-tilt as ineffective and asks for more. At the measured 3 s the same window is half a time
-constant and the predicted response is roughly three times larger.
+The first round divided its 2.96 s into the model's own time constant and concluded
+`outflow_rate_constant` should be near 3. That reasoning does not survive either, for a
+reason independent of the fill bug: **the rate constant is not separably estimable from
+the repose angle.** The model's time constant at 85° and `outflow_rate_constant = 1`
+depends strongly on the repose it is evaluated with —
 
-Two limits worth recording. A single relaxation is a good but not exact description — two
-timescales fit better (rms 0.015 against 0.043 on the direct path) — and the settling is
-intermittent rather than smooth: the direct trace loses more between 8 and 12 s than
-between 4 and 8 s, which is an avalanche, not a decay. A first-order ODE tracks the
-envelope, not the stick-slip. For a pour lasting one to three seconds the fast component
-is what matters, so this is a known limit rather than a blocking one.
+| model | time constant at k=1 | k needed for the measured 6.35 s |
+| --- | --- | --- |
+| repose 0° | 11.47 s | 1.81 |
+| repose 36.8° | **1.50 s** | **0.24** |
 
-### 6. Estimating the parameters does not rescue the model, and a third definition disagrees
+— because the repose shifts the operating point close to onset, where the head is small
+and `∂f/∂h` is steep. A rate constant is only meaningful alongside the repose it was
+fitted with. The self-consistent estimate for this scene is **repose 36.8° with k = 0.24**.
 
-With the converged curve of finding 5 as the data, fitting the model's equilibrium:
+### 6. The parameter that makes the model fit is not the quantity it is named after
 
-| free parameters | repose | lip offset | RMS |
+The angle of repose is measurable without any cup: drop the same grains on a flat plate
+and read the slope of the pile they make. Across a 150× sweep of the only coefficient
+that controls it, 200 grains released from a column:
+
+| rolling friction | apex | spread | interior slope |
 | --- | --- | --- | --- |
-| none, model as it stands | — | 35 mm | 0.704 |
-| repose, geometry true | 45.4° | 35 mm | 0.180 |
-| repose and lip offset | 70.9° | **155 mm** | 0.020 |
+| 0.0001 (production) | 4.7 mm | 2064 mm | no pile at all |
+| 0.001 | 7.4 mm | 179 mm | ~0° |
+| 0.002 | 12.2 mm | 110 mm | ~0° |
+| 0.008 | 13.0 mm | 115 mm | ~0° |
+| 0.015 | 17.9 mm | 131 mm | ~0° |
 
-Sharper than finding 2 and pointing the other way. With the lip where it actually is,
-the best repose angle still leaves 0.180 on a quantity bounded in `[0, 1]`: it predicts
-0.76 where the cup holds 0.96 and 0.46 where it holds 0.22. The observed curve is far
-steeper than `1 − (r/A)·tan(α − θ)` can be at the true lever arm, whatever the angle.
-Only moving the lip to 4.4× its measured distance fits. So for granular contents the
-structure cannot represent the equilibrium with honest geometry, and the criterion fires
-negative.
+The crest profile at the strongest setting, in millimetres of height against radius:
 
-The closed-loop half of the comparison could not be run, for a reason worth more than the
-comparison would have been. Every variant — nominal, honest estimate, best fit, with and
-without the gain — empties the source against a goal of 32 of 105 grains:
+```
+r:   5.5  16.5  27.5  38.5  49.5  60.5  71.5  82.5  93.5  104.5
+z:  12.6  15.4  17.9  13.0  12.5  12.5  12.5  11.9  11.7    4.7
+```
 
-| variant | gain | delivered | spilled | peak tilt |
-| --- | --- | --- | --- | --- |
-| nominal, k=1, repose 0 | on | 97 | 8 | 107.7° |
-| honest estimate, k=0.05, repose 45.4° | off | 88 | 17 | 109.5° |
-| honest estimate | on | 88 | 17 | 111.4° |
-| fitted geometry, k=0.1, repose 70.9°, lip 155 mm | off | 87 | 18 | 112.0° |
-| fitted geometry | on | 92 | 13 | 112.3° |
+That is a flat-topped plateau with a sharp edge, not a cone. A material with an angle of
+repose builds a cone; these build a puddle. **The measured repose angle is about zero.
+The fitted one is 36.8°.**
 
-A model fitting the grains to rms 0.020 controls no better than one at rms 0.704, which
-says the comparison is measuring something else. It is: **the goal is unreachable in the
-model's own units.** Draining the entire source raises the receiver's modelled fill by
-0.223, against a goal of 0.3, so the controller saturates its tilt whatever its
-parameters are.
+This is what the semantic-distance criterion exists for, and it is the one place in this
+investigation where it has paid. The model's structure is adequate (finding 2) and one
+parameter calibrates it to rms 0.007 — but that parameter's independent measurement
+contradicts its fitted value, so it is absorbing something else. The most plausible
+candidate is jamming in a cavity seven grains wide, which is a property of the container,
+not of the contents.
 
-The cause is a third quantity with two definitions. `MeasuredFillLevel` reports the share
-of *the contents* standing in a container, so all the grains in the receiver reads 1.0.
-The fill DOF the model integrates is the share of *that container's capacity*, where the
-same state reads 0.223. Perception overwrites the DOF with the first while the ODE
-integrates the second; for a 35 mm source pouring into a 60 mm receiver they differ by
-4.5×.
+The practical consequence: the calibration is **local**. It cannot be obtained by
+measuring the material and carried to another container, because it is not a property of
+the material. A black-box model reaching rms 0.007 would have looked like success, and the
+second error signal — distance from the independently measured value — is the only thing
+that says otherwise.
 
-This is also the real cause of the overshoot, rather than anything in the drain model,
-and it is why fixing the capacity made the closed loop slightly worse: the old conversion
-put the reachable receiver fill at 0.366, just above the goal, and the corrected one puts
-it at 0.223, below it. The controller went from chasing a barely reachable target to an
-impossible one.
+### 7. Estimating the parameters turns a controller that delivers nothing into one that hits its goal
 
-### 7. A better-fitting model controls worse
+Goal 42 of 111 grains, one run per variant, the simulation being deterministic:
 
-With fill level meaning one thing (finding 6 fixed: the share of the container's own
-capacity, counts converted through the measured volume one grain occupies) the goal is
-reachable and the comparison runs. Goal 48 of 105 grains, one run per variant, the
-simulation being deterministic:
+| variant | gain | delivered | left in source | spilled | peak tilt | cycles |
+| --- | --- | --- | --- | --- | --- | --- |
+| nominal, k=1, repose 0° | off | **0** | 111 | 0 | 38.1° | timed out |
+| nominal | on | 77 | 17 | 17 | 102.6° | 401 |
+| mixed, k=1.5, repose 36.8° | off | 33 | 65 | 13 | 83.3° | timed out |
+| mixed | on | 66 | 15 | 30 | 100.4° | 404 |
+| estimated, k=0.24, repose 36.8° | off | 78 | 25 | 8 | 99.5° | 193 |
+| estimated | on | 95 | 0 | 16 | 104.6° | 357 |
 
-| variant | equilibrium fit | gain | delivered | spilled | peak tilt |
-| --- | --- | --- | --- | --- | --- |
-| nominal, k=1, repose 0 | rms 0.704 | off | **0** | 0 | 49.9° |
-| nominal | rms 0.704 | on | **61** | 22 | 97.8° |
-| honest estimate, k=0.05, repose 45.4° | rms 0.180 | off | 64 | 41 | 113.8° |
-| honest estimate | rms 0.180 | on | 73 | 32 | 111.3° |
-| fitted geometry, k=0.1, repose 70.9°, lip 155 mm | rms 0.020 | off | **98** | 7 | 103.0° |
-| fitted geometry | rms 0.020 | on | 99 | 6 | 104.6° |
+**The onset parameter is decisive.** The nominal model puts the onset at 27°, so at 38° it
+believes it is pouring, the terminal-state row is satisfied in prediction, and the
+controller stops tilting while no grain has moved. It sits there until the tick limit.
+Adding the fitted repose moves the model's onset to 64° against a true 70°, and the same
+controller with no feedback at all begins to deliver.
 
-Two things, and the second is the more important.
+This reverses the first round's headline, that a better-fitting model controls worse. That
+comparison was between three parameter sets all fitted to the distorted curve.
 
-**The gain rescues liveness, as finding 3 said.** The nominal model without it delivers
-nothing at all: at 49.9° the model believes it is pouring freely, the terminal-state row
-is satisfied in prediction, and the controller stops tilting while the grains have not
-begun to move. The gain is what breaks it out, and it is the best performer in the table.
+**The rate constant trades undershoot against overshoot**, and the honestly estimated one
+overshoots: k=0.24 delivers 78 where the wrong k=1.5 delivers 33. That is not a property
+of the model — see finding 11.
 
-**Model accuracy runs the other way from control quality.** Ordering the variants by how
-well they predict the grains orders them inversely by how close they land: rms 0.704
-delivers 61, rms 0.180 delivers 64 to 73, rms 0.020 delivers 98 — twice the goal. The
-best model is the worst controller.
+### Findings 8 to 10 — measured before the fixes of finding 0
 
-The mechanism is visible in the cycle counts: the accurate model reaches the goal in 158
-control cycles against the nominal one's 373. A model that predicts the pour correctly
-asks for it sooner, and pouring cannot be undone. By the time the goal is crossed the
-cup is near 103°, the grains past the lip are committed, and reversing the tilt takes
-over a second. Accuracy buys a faster approach, and a faster approach commits more.
-
-So the limit here is not the effect model at all. The task says reach a fill level; it
-does not say that over-delivering cannot be taken back. Nothing in the formulation
-distinguishes arriving at the goal from passing through it, so a model good enough to
-arrive quickly is punished for it. That is a statement about the task, not about pouring.
+The three that follow were all measured with the source half as full as the model
+believed and the grains rolling frictionlessly. They are kept because their
+*mechanisms* are still informative and two of them record experiments whose code was
+removed, but none of their numbers should be quoted. In particular the peak tilt of
+97° to 98° that finding 10 flags as an unexplained invariant across fourteen runs is
+no longer an invariant: the same configurations now reach 38° to 105°, and the tilt
+tracks the model's onset parameter. Whatever held it was in the scene, not the
+controller.
 
 ### 8. Counting what is committed removes the lag, and most of the overshoot is not lag
 
@@ -446,6 +419,38 @@ reporting, ceiling and floor. Fourteen runs, one tilt. Whatever holds it there i
 the fill goal, since nothing done to the fill goal moves it, and it should be identified
 before another constraint is written.
 
+### 11. The prediction window, not the rate constant, caused the overshoot
+
+`TerminalFillConstraintTask.prediction_duration` is a fixed 1.5 s. Against a measured
+relaxation of 6.35 s that is a quarter of a time constant: the fill barely moves inside
+the horizon, the controller reads its tilt as ineffective, and it asks for more. Finding 5
+of the first round had already written the mechanism down; nothing had connected it to the
+overshoot, because the rate constant was being blamed instead.
+
+Same estimated model, same grains, no feedback gain, only the window changed:
+
+| prediction window | delivered (goal 42) | spilled | peak tilt | cycles |
+| --- | --- | --- | --- | --- |
+| 1.5 s (the default) | 78 | 8 | 99.5° | 193 |
+| **3.0 s** | **42** | **3** | 91.7° | 243 |
+| 6.0 s | 37 | 14 | 84.3° | 1828 |
+
+Monotonic in the window, with the optimum near half the measured time constant. At 3.0 s
+the controller hits the goal exactly, spills three grains, and converges — the best run of
+the investigation, and the first one to land on the goal rather than pass through it.
+
+**`prediction_duration` should be derived from the measured time constant of the contents,
+not left at a constant.** It is currently a controller tuning parameter standing in for a
+property of the material, which is the same category error the repose angle makes in the
+other direction.
+
+One caution before this is leaned on. The 3.0 s was found by trying three values, so it is
+a tuned number, not a measured one; what is measured is the trend and the mechanism. And
+the same caveat as finding 6 applies to the whole set — repose and rate were both fitted
+to this cup's own curves, so this is a well-calibrated controller for this scene, not a
+demonstration that the physics transfers.
+
+
 ## Experiments this sets up
 
 **E1 — Is the contents' behaviour a state relation at all?** Run and answered: yes. The
@@ -454,22 +459,36 @@ settled amount is a function of the tilt and the model's form survives. What it 
 the right target and the right rate, both of which are existing parameters.
 
 **E2 — Does the semantically right parameter beat a semantically empty one?** Estimate an
-*onset* parameter online (the repose angle, or equivalently the lip offset) from the same
-measurements that currently drive the gain, and compare against `CalibratedDrainScale` on
-identical runs. Prediction from finding 3: the onset parameter recovers the goal where the
-gain overshoots, without the model becoming more correct in any other respect.
+*onset* parameter (the repose angle, or equivalently the lip offset) and compare against
+`CalibratedDrainScale` on identical runs.
 
-Run and answered, in finding 7, and answered against the hypothesis: the semantically
-clear estimate does not beat the bare gain, and the parameters that fit best control
-worst. The bottleneck is that the task does not express the irreversibility of pouring,
-so better prediction only buys a faster commitment. Worth repeating across goals and
-scenes before it is leaned on — one run per variant, deterministic but a single
-scenario.
+Run and answered, in findings 7 and 11, and answered *for* the hypothesis once the scene
+defects of finding 0 were fixed. The onset parameter is the difference between a
+controller that delivers nothing and one that delivers; with the prediction window set
+from the measured time constant it lands exactly on the goal, open loop, with three
+grains spilled, where the bare gain overshoots by 83% and empties the source.
+
+The first round answered the opposite, from the same experiment run against a half-full
+cup. Worth repeating across goals and scenes before it is leaned on — one run per
+variant, deterministic but a single scenario.
 
 **E3 — Identify the coefficients from transients.** Held tilts carry no information about
 `k` or `C_d`; they only set how fast the equilibrium is approached. Estimating them needs
 tilt steps and the landing point, and they should be fitted separately from the geometry
 rather than thrown into one fit.
+
+Partly run, in finding 5, with one result that changes how it should be done: `k` and the
+repose angle are **not separably estimable**. The model's time constant at one tilt moves
+7.6× between repose 0° and repose 36.8°, so a rate fitted against the wrong onset is
+wrong by that factor. They have to be fitted jointly, or the onset fixed first from the
+equilibrium curve and the rate fitted against it.
+
+**E5 — Does the calibration transfer?** The open question finding 6 leaves. Repeat the
+equilibrium fit in a second container of a different width with the same grains. If the
+fitted repose angle follows the container it is a jamming parameter and has to be
+re-estimated per vessel; if it stays put it is a property of the contents after all and
+the plate measurement is the thing that is wrong. This is the experiment that decides
+whether any of this is physics or bookkeeping, and it is cheap.
 
 **E4 — Repeat against hardware.** The measurement column above is chosen so that the same
 observers re-back onto a wrist force/torque sensor and a scale. Until then every number
@@ -486,3 +505,10 @@ here is a statement about the simulator's contact model.
 - Whether the guard floors should be stated as model parameters, since
   `MINIMUM_POUR_HEAD` makes the model predict a stream from a container that is not
   pouring.
+- Whether `prediction_duration` belongs to the task at all. Finding 11 makes it a
+  function of the contents' time constant, which is a property of the material the task
+  is acting on rather than of the controller acting on it.
+- What the fitted repose angle is actually measuring, given the contents have none
+  (finding 6). If it is jamming against the walls, the model has no parameter for the
+  thing that dominates its onset, and naming that parameter honestly matters more than
+  fitting it well.
