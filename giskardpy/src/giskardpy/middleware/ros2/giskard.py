@@ -10,7 +10,10 @@ import rclpy
 from json_msgs.action import JsonAction
 from sqlalchemy.orm import sessionmaker
 
-from giskardpy.data_types.exceptions import NoControlledJointsError
+from giskardpy.data_types.exceptions import (
+    NoControlledJointsError,
+    RobotNotInWorldError,
+)
 from giskardpy.executor import Executor
 from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.action_server import ActionServerHandler
@@ -82,13 +85,15 @@ class Giskard:
     executor: Executor = field(init=False)
     motion_server: MotionServer = field(init=False)
     world_synchronizer: WorldSynchronizer = field(init=False)
-    tf_publisher: TFPublisher = field(init=False)
-    viz_marker_publisher: VizMarkerPublisher = field(init=False)
-    collision_marker_publisher: CollisionVisualizationMarkerPublisher = field(
-        init=False
+    tf_publisher: TFPublisher | None = field(init=False, default=None)
+    viz_marker_publisher: VizMarkerPublisher | None = field(init=False, default=None)
+    collision_marker_publisher: CollisionVisualizationMarkerPublisher | None = field(
+        init=False, default=None
     )
-    model_reload_synchronizer: ModelReloadSynchronizer = field(init=False)
-    world_fetcher: FetchWorldServer = field(init=False)
+    model_reload_synchronizer: ModelReloadSynchronizer | None = field(
+        init=False, default=None
+    )
+    world_fetcher: FetchWorldServer | None = field(init=False, default=None)
 
     def setup(self):
         """
@@ -170,6 +175,10 @@ class Giskard:
         return plotters
 
     def setup_world_model_ros_interface(self):
+        """
+        Attach the ros entities through which this world is kept in step with the other
+        processes, and, unless the server config forbids it, serve and draw it.
+        """
         try:
             semantic_digital_twin_database_uri = os.environ.get(
                 "SEMANTIC_DIGITAL_TWIN_DATABASE_URI"
@@ -201,6 +210,8 @@ class Giskard:
             node=rospy.get_node(),
             defer_incoming_updates=True,
         )
+        if not self.server_config.publishes_world:
+            return
         self.world_fetcher = FetchWorldServer(
             node=rospy.get_node(), world=self.world_config.world
         )
@@ -226,16 +237,32 @@ class Giskard:
         self.world_synchronizer.close()
         if self.model_reload_synchronizer is not None:
             self.model_reload_synchronizer.close()
-        self.world_fetcher.close()
-        self.tf_publisher.stop()
-        self.viz_marker_publisher.stop()
+        if self.world_fetcher is not None:
+            self.world_fetcher.close()
+        if self.tf_publisher is not None:
+            self.tf_publisher.stop()
+        if self.viz_marker_publisher is not None:
+            self.viz_marker_publisher.stop()
 
     def sanity_check(self):
         self._controlled_joints_sanity_check()
 
     @property
     def robot(self) -> AbstractRobot:
-        return self.robots[0]
+        """
+        The robot this giskard controls: the one of the type its world config names, or
+        the world's first robot where the config names none.
+
+        :raises RobotNotInWorldError: If the world holds no robot of the named type.
+        """
+        if self.world_config.robot_type is None:
+            return self.robots[0]
+        robots = self.world_config.world.get_semantic_annotations_by_type(
+            self.world_config.robot_type
+        )
+        if not robots:
+            raise RobotNotInWorldError(robot_type=self.world_config.robot_type)
+        return robots[0]
 
     @property
     def robots(self) -> List[AbstractRobot]:
