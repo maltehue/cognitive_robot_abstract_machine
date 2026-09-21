@@ -657,6 +657,49 @@ def geometry_owning_prims(stage: Usd.Stage) -> List[Usd.Prim]:
     return owning_prims
 
 
+# %% where a scene stands
+
+
+class RootPlacement(StrEnum):
+    """
+    Where the root of a scene is placed.
+    """
+
+    STAGE_ORIGIN = "stage_origin"
+    """
+    At the stage's own origin, keeping the coordinates the scene was authored in.
+    """
+
+    SCENE_GROUND = "scene_ground"
+    """
+    On the ground below the centre of the scene, so a scene authored far from its
+    stage's origin still stands around the origin.
+    """
+
+
+def scene_ground(stage: Usd.Stage, prims: List[Usd.Prim]) -> Gf.Vec3d:
+    """
+    :param stage: The stage the prims belong to, read for which way is up.
+    :param prims: The prims the scene is made of.
+    :return: The point below the centre of the scene where it meets the ground - the
+        middle of the bounding box holding every prim across, and its lowest point
+        along the stage's up axis - or the stage's origin for a scene holding no
+        geometry at all.
+    """
+    bounds_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+    bounds = Gf.BBox3d()
+    for prim in prims:
+        bounds = Gf.BBox3d.Combine(bounds, bounds_cache.ComputeWorldBound(prim))
+    aligned_bounds = bounds.ComputeAlignedRange()
+    if aligned_bounds.IsEmpty():
+        return Gf.Vec3d(0, 0, 0)
+
+    ground = Gf.Vec3d(aligned_bounds.GetMidpoint())
+    up_axis = UsdAxis(UsdGeom.GetStageUpAxis(stage))
+    ground[up_axis.index] = aligned_bounds.GetMin()[up_axis.index]
+    return ground
+
+
 # %% texture files
 
 

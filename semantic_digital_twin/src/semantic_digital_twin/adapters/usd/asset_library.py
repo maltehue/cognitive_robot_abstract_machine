@@ -15,6 +15,7 @@ from semantic_digital_twin.adapters.usd.exceptions import (
 from semantic_digital_twin.adapters.usd.stage_parser import (
     Gf,
     Kind,
+    RootPlacement,
     Sdf,
     Usd,
     UsdGeom,
@@ -23,6 +24,7 @@ from semantic_digital_twin.adapters.usd.stage_parser import (
     downscaled_texture_path,
     geometry_owning_prims,
     readable_texture_path,
+    scene_ground,
 )
 
 # %% the layout a library is written in
@@ -56,10 +58,36 @@ The shader that reads an image file, and so the one whose asset path is rewritte
 the asset's own copy.
 """
 
+PHYSICS_SCENE_NAME = "physicsScene"
+"""
+The scene a physics engine runs the library in, without which nothing simulates until
+a caller authors one.
+"""
+
 TEXTURE_FILE_INPUT = "file"
 """
 The input of a texture shader naming the image it reads.
 """
+
+
+class CollisionProxy(StrEnum):
+    """
+    What a physics engine is given to collide an asset against.
+    """
+
+    BOUNDING_BOX = "bounding_box"
+    """
+    One box enclosing the asset, authored as a guide so a renderer leaves it out of
+    the picture. The cheapest thing to collide against, and a close fit only for what
+    is already box shaped - a floor, a flat wall.
+    """
+
+    CONVEX_DECOMPOSITION = "convex_decomposition"
+    """
+    The asset's own surface, which a physics engine approximates by convex pieces when
+    it loads the library. Follows the surface far more closely than a box, at the cost
+    of that engine having to work the pieces out from every triangle.
+    """
 
 
 class VertexSharing(StrEnum):
@@ -287,6 +315,17 @@ class USDAssetLibrary:
     Whether the faces of a written mesh share the vertices they meet at.
     """
 
+    collision_proxy: CollisionProxy = CollisionProxy.BOUNDING_BOX
+    """
+    What a physics engine is given to collide the library's assets against.
+    """
+
+    root_placement: RootPlacement = RootPlacement.STAGE_ORIGIN
+    """
+    Where the library's own root sits, which decides whether the scene keeps the
+    coordinates it was captured in.
+    """
+
     # %% construction
 
     @classmethod
@@ -317,7 +356,10 @@ class USDAssetLibrary:
         UsdGeom.SetStageUpAxis(world, UsdGeom.GetStageUpAxis(self.stage))
         UsdGeom.SetStageMetersPerUnit(world, UsdGeom.GetStageMetersPerUnit(self.stage))
         root_path = Sdf.Path(f"/{self._root_name()}")
-        world.SetDefaultPrim(UsdGeom.Xform.Define(world, root_path).GetPrim())
+        root = UsdGeom.Xform.Define(world, root_path)
+        world.SetDefaultPrim(root.GetPrim())
+        self._stand_scene(root)
+        UsdPhysics.Scene.Define(world, root_path.AppendChild(PHYSICS_SCENE_NAME))
 
         names: Dict[str, int] = {}
         for object_prim in geometry_owning_prims(self.stage):
@@ -383,7 +425,7 @@ class USDAssetLibrary:
         self._retarget_relationships(layer, object_prim, files.name)
         if self.vertex_sharing is VertexSharing.BY_POSITION:
             self._share_vertices(layer)
-        self._author_collision_proxy(layer, object_prim, files.name)
+        self._author_collision(layer, object_prim, files.name)
         layer.Save()
 
     def _write_material(self, object_prim: Usd.Prim, files: AssetFiles) -> None:
@@ -530,6 +572,38 @@ class USDAssetLibrary:
 
     # %% collision
 
+    def _author_collision(
+        self, layer: Sdf.Layer, object_prim: Usd.Prim, name: str
+    ) -> None:
+        """
+        Give a physics engine something to collide the asset against.
+
+        :param layer: The geometry layer to author into.
+        :param object_prim: The prim whose geometry is collided against.
+        :param name: The asset's name.
+        """
+        if self.collision_proxy is CollisionProxy.CONVEX_DECOMPOSITION:
+            self._collide_against_the_surface(layer)
+            return
+        self._author_collision_proxy(layer, object_prim, name)
+
+    @staticmethod
+    def _collide_against_the_surface(layer: Sdf.Layer) -> None:
+        """
+        Mark the asset's own surfaces as what it is collided against, for a physics
+        engine to approximate by convex pieces when it loads them.
+
+        :param layer: The geometry layer to author into.
+        """
+        stage = Usd.Stage.Open(layer)
+        for prim in stage.TraverseAll():
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            UsdPhysics.CollisionAPI.Apply(prim)
+            UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr().Set(
+                UsdPhysics.Tokens.convexDecomposition
+            )
+
     @staticmethod
     def _author_collision_proxy(
         layer: Sdf.Layer, object_prim: Usd.Prim, name: str
@@ -559,6 +633,17 @@ class USDAssetLibrary:
         UsdPhysics.CollisionAPI.Apply(proxy.GetPrim())
 
     # %% placement
+
+    def _stand_scene(self, root: UsdGeom.Xform) -> None:
+        """
+        Move the library's root so the scene stands where it was asked to.
+
+        :param root: The library's root, which every placement sits beneath.
+        """
+        if self.root_placement is RootPlacement.STAGE_ORIGIN:
+            return
+        ground = scene_ground(self.stage, geometry_owning_prims(self.stage))
+        root.AddTranslateOp().Set(-ground)
 
     def _root_name(self) -> str:
         """

@@ -11,9 +11,11 @@ from semantic_digital_twin.adapters.usd.stage_parser import (
     Sdf,
     Usd,
     UsdGeom,
+    RootPlacement,
     USDStageParser,
     _usd_pose_to_transform,
     geometry_owning_prims,
+    scene_ground,
 )
 from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
@@ -89,26 +91,6 @@ def _stage_origin_in(root_pose: Gf.Matrix4d, root_body: Body) -> Point3:
     """
     origin = root_pose.GetInverse().Transform(Gf.Vec3d(0, 0, 0))
     return Point3(origin[0], origin[1], origin[2], reference_frame=root_body)
-
-
-# %% root placement
-
-
-class RootPlacement(StrEnum):
-    """
-    Where the world root of a parsed scene is placed.
-    """
-
-    STAGE_ORIGIN = "stage_origin"
-    """
-    At the stage's own origin, keeping the coordinates the scene was authored in.
-    """
-
-    SCENE_GROUND = "scene_ground"
-    """
-    On the ground below the centre of the scene, so a scene authored far from its
-    stage's origin still stands around the world's.
-    """
 
 
 # %% placed objects
@@ -263,35 +245,10 @@ class USDSceneParser(USDStageParser):
         :return: The rigid world pose the root body sits at.
         """
         if self.root_placement is RootPlacement.SCENE_GROUND:
-            return _translation(self._scene_ground(object_prims))
+            return _translation(scene_ground(self.stage, object_prims))
         if root_prim is None:
             return Gf.Matrix4d(1.0)
         return _rigid_world_pose(root_prim)
-
-    def _scene_ground(self, object_prims: List[Usd.Prim]) -> Gf.Vec3d:
-        """
-        :param object_prims: Every geometry-owning prim of the stage.
-        :return: The point below the centre of the scene where it meets the ground -
-            the middle of the bounding box holding every object across, and its lowest
-            point along the stage's up axis - or the stage's origin for a stage that
-            holds no geometry at all.
-        """
-        bounds_cache = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(), [UsdGeom.Tokens.default_]
-        )
-        bounds = Gf.BBox3d()
-        for object_prim in object_prims:
-            bounds = Gf.BBox3d.Combine(
-                bounds, bounds_cache.ComputeWorldBound(object_prim)
-            )
-        aligned_bounds = bounds.ComputeAlignedRange()
-        if aligned_bounds.IsEmpty():
-            return Gf.Vec3d(0, 0, 0)
-
-        ground = Gf.Vec3d(aligned_bounds.GetMidpoint())
-        up_axis = UsdAxis(UsdGeom.GetStageUpAxis(self.stage))
-        ground[up_axis.index] = aligned_bounds.GetMin()[up_axis.index]
-        return ground
 
     # %% objects
 

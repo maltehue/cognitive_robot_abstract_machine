@@ -6,11 +6,18 @@ import pytest
 from PIL import Image
 
 from semantic_digital_twin.adapters.usd.asset_library import (
+    CollisionProxy,
     USDAssetLibrary,
     VertexSharing,
 )
 from semantic_digital_twin.adapters.usd.scene_parser import USDSceneParser
-from semantic_digital_twin.adapters.usd.stage_parser import Usd, UsdGeom, UsdShade
+from semantic_digital_twin.adapters.usd.stage_parser import (
+    RootPlacement,
+    Usd,
+    UsdGeom,
+    UsdPhysics,
+    UsdShade,
+)
 
 from .usd_stages import (
     PXR_AVAILABLE,
@@ -358,3 +365,89 @@ def test_sharing_vertices_stops_a_renderer_subdividing_the_result(tmp_path):
     split = soup_library(tmp_path, vertex_sharing=VertexSharing.BY_POSITION)
 
     assert split.written.GetSubdivisionSchemeAttr().Get() == UsdGeom.Tokens.none
+
+
+# %% simulating the library
+
+
+def composed_bounds(stage):
+    bounds = (
+        UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        .ComputeWorldBound(stage.GetDefaultPrim())
+        .ComputeAlignedRange()
+    )
+    return np.array(bounds.GetMin()), np.array(bounds.GetMax())
+
+
+def test_the_library_declares_a_scene_for_physics_to_run_in(tmp_path):
+    # Without one nothing simulates until a caller authors it, which a library meant
+    # to be opened and played should not require.
+    _, _, library = written_library(tmp_path)
+
+    scenes = [prim for prim in library.TraverseAll() if prim.IsA(UsdPhysics.Scene)]
+
+    assert len(scenes) == 1
+
+
+# %% where the library stands
+
+
+def test_the_library_keeps_the_coordinates_it_was_authored_in_by_default(tmp_path):
+    source, _, library = written_library(tmp_path)
+
+    np.testing.assert_allclose(
+        composed_bounds(library), composed_bounds(source), atol=1e-6
+    )
+
+
+def test_the_library_can_stand_its_scene_on_the_origin(tmp_path):
+    # A scan is authored wherever it was captured, which for the innolab is 250 m from
+    # its stage's origin - far enough that anything placed by hand misses it.
+    _, _, library = written_library(tmp_path, root_placement=RootPlacement.SCENE_GROUND)
+
+    low, high = composed_bounds(library)
+
+    np.testing.assert_allclose((low + high)[:2] / 2, [0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(low[2], 0.0, atol=1e-6)
+
+
+def test_standing_the_scene_on_the_origin_moves_every_object_together(tmp_path):
+    source, _, standing = written_library(
+        tmp_path, root_placement=RootPlacement.SCENE_GROUND
+    )
+
+    def separation(stage):
+        return (
+            world_transform(mesh_under(stage, "wall_a"))[3, :3]
+            - world_transform(mesh_under(stage, "floor_a"))[3, :3]
+        )
+
+    np.testing.assert_allclose(separation(standing), separation(source), atol=1e-6)
+
+
+# %% what the library is collided against
+
+
+def test_the_surface_itself_can_be_collided_against_instead_of_a_box(tmp_path):
+    _, _, library = written_library(
+        tmp_path, collision_proxy=CollisionProxy.CONVEX_DECOMPOSITION
+    )
+
+    assert [prim for prim in library.TraverseAll() if prim.IsA(UsdGeom.Cube)] == []
+    meshes = [prim for prim in library.TraverseAll() if prim.IsA(UsdGeom.Mesh)]
+    assert meshes
+    assert all(prim.HasAPI(UsdPhysics.CollisionAPI) for prim in meshes)
+    assert {
+        UsdPhysics.MeshCollisionAPI(prim).GetApproximationAttr().Get()
+        for prim in meshes
+    } == {UsdPhysics.Tokens.convexDecomposition}
+
+
+def test_a_box_is_what_the_library_is_collided_against_by_default(tmp_path):
+    _, _, library = written_library(tmp_path)
+
+    meshes = [prim for prim in library.TraverseAll() if prim.IsA(UsdGeom.Mesh)]
+    assert not any(prim.HasAPI(UsdPhysics.CollisionAPI) for prim in meshes)
+    assert len(
+        [prim for prim in library.TraverseAll() if prim.IsA(UsdGeom.Cube)]
+    ) == len(OBJECT_NAMES)
