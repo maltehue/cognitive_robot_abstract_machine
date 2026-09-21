@@ -560,3 +560,57 @@ def test_is_textured_agrees_with_the_loaded_mesh_for_other_formats(tmp_path):
     mesh.export(path, file_type="obj")
 
     assert Mesh(filename=str(path)).is_textured
+
+
+# %% the bounds a mesh spans
+
+
+def glb_placed_by_a_node_transform(tmp_path, translation) -> str:
+    scene = trimesh.Scene()
+    scene.add_geometry(
+        trimesh.creation.box(),
+        node_name="placed",
+        transform=trimesh.transformations.translation_matrix(translation),
+    )
+    path = tmp_path / "placed.glb"
+    scene.export(path, file_type="glb")
+    return str(path)
+
+
+def test_bounds_of_a_glb_matches_the_loaded_mesh(tmp_path):
+    mesh = Mesh(filename=untextured_glb(tmp_path))
+
+    np.testing.assert_allclose(mesh.bounds, mesh.mesh.bounds)
+
+
+def test_bounds_does_not_load_the_geometry_of_a_glb(tmp_path):
+    # Enclosing a scanned scene in boxes costs gigabytes if every surface has to be
+    # read back, for a question the file answers in its first few kilobytes.
+    mesh = Mesh(filename=untextured_glb(tmp_path))
+
+    mesh.bounds
+
+    assert "mesh" not in mesh.__dict__
+    assert "unscaled_mesh" not in mesh.__dict__
+
+
+def test_bounds_applies_the_shapes_scale(tmp_path):
+    mesh = Mesh(filename=untextured_glb(tmp_path), scale=Scale(2.0, 3.0, 4.0))
+
+    np.testing.assert_allclose(mesh.bounds, mesh.mesh.bounds)
+
+
+def test_bounds_of_a_glb_placed_by_a_node_transform_matches_the_loaded_mesh(tmp_path):
+    # The bounds a glTF accessor states are the ones its own buffer holds, which a node
+    # placing that mesh elsewhere moves away from.
+    mesh = Mesh(filename=glb_placed_by_a_node_transform(tmp_path, [10.0, 20.0, 30.0]))
+
+    np.testing.assert_allclose(mesh.bounds, mesh.mesh.bounds)
+
+
+def test_bounds_agrees_with_the_loaded_mesh_for_other_formats(tmp_path):
+    path = tmp_path / "plain.obj"
+    trimesh.creation.box().export(path, file_type="obj")
+    mesh = Mesh(filename=str(path))
+
+    np.testing.assert_allclose(mesh.bounds, mesh.mesh.bounds)

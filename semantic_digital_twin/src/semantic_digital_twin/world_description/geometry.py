@@ -427,6 +427,12 @@ def _gltf_header(file_path: Path) -> Dict[str, Any]:
         return json.loads(file.read(json_length))
 
 
+GLTF_NODE_PLACEMENT_KEYS = frozenset({"matrix", "translation", "rotation", "scale"})
+"""
+The glTF node properties that place a mesh away from the bounds its accessors state.
+"""
+
+
 UNTINTED_DIFFUSE = (255, 255, 255, 255)
 """
 The material colour that leaves a texture at the brightness its image holds, since a
@@ -810,6 +816,14 @@ class Mesh(Shape):
         return mesh
 
     @property
+    def is_gltf_binary(self) -> bool:
+        """
+        Whether the mesh's file is a glTF binary, which describes itself in a header
+        that can be read without its geometry.
+        """
+        return self.local_file.suffix.lstrip(".").lower() == MeshFileType.GLB
+
+    @property
     def is_textured(self) -> bool:
         """
         Whether the mesh file carries a texture image of its own.
@@ -818,9 +832,54 @@ class Mesh(Shape):
         of millions of triangles does not have to be read into memory to be asked.
         Any other format is answered by the mesh itself.
         """
-        if self.local_file.suffix.lstrip(".").lower() != MeshFileType.GLB:
+        if not self.is_gltf_binary:
             return self.mesh.visual.kind == TextureVisuals().kind
         return bool(_gltf_header(self.local_file).get("images"))
+
+    @property
+    def bounds(self) -> np.ndarray:
+        """
+        The lowest and highest corner of the axis-aligned box the mesh spans, with this
+        shape's scale applied.
+
+        A glTF binary states the extent of its own vertex data in its header, so a
+        scanned surface of tens of millions of triangles is enclosed without reading
+        any of it. Every other file, and a glTF binary that places its meshes with a
+        node transform the header's extents know nothing about, is answered by the
+        mesh itself.
+        """
+        stated_bounds = self._stated_bounds()
+        if stated_bounds is None:
+            return self.mesh.bounds
+        return np.sort(stated_bounds * self.scale.to_np(), axis=0)
+
+    def _stated_bounds(self) -> Optional[np.ndarray]:
+        """
+        :return: The unscaled bounds the mesh's file states in its header, or ``None``
+            if the file does not state bounds its vertices are actually at.
+        """
+        if not self.is_gltf_binary:
+            return None
+        header = _gltf_header(self.local_file)
+        nodes = header.get("nodes", [])
+        if any(GLTF_NODE_PLACEMENT_KEYS & node.keys() for node in nodes):
+            return None
+
+        position_accessors = {
+            primitive["attributes"]["POSITION"]
+            for mesh in header.get("meshes", [])
+            for primitive in mesh.get("primitives", [])
+            if "POSITION" in primitive["attributes"]
+        }
+        extents = [header["accessors"][index] for index in position_accessors]
+        if not extents or not all("min" in extent for extent in extents):
+            return None
+        return np.array(
+            [
+                np.min([extent["min"] for extent in extents], axis=0),
+                np.max([extent["max"] for extent in extents], axis=0),
+            ]
+        )
 
     @cached_property
     def mesh(self) -> trimesh.Trimesh:

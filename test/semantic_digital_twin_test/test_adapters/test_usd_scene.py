@@ -6,11 +6,14 @@ from semantic_digital_twin.adapters.usd.exceptions import (
     UnsupportedUsdGeometryTypeError,
 )
 from semantic_digital_twin.adapters.usd.scene_parser import (
-    CollisionGeometry,
     RootPlacement,
     USDSceneParser,
 )
 from semantic_digital_twin.adapters.usd.stage_parser import Shading
+from semantic_digital_twin.pipeline.mesh_decomposition.bounding_box import (
+    BoundingBoxDecomposer,
+)
+from semantic_digital_twin.pipeline.pipeline import Pipeline
 from semantic_digital_twin.semantic_annotations.usd_semantics import (
     UsdSemanticLabels,
     UsdStageOrigin,
@@ -303,40 +306,41 @@ def test_parse_draws_the_scene_unlit_when_asked(tmp_path):
 # %% collision geometry
 
 
-def test_parse_builds_a_box_around_each_object_for_collision():
-    # A scanned surface is far too dense to collide against, and its bounding box is
-    # already a close fit for the slabs a building is made of.
+def test_parse_leaves_what_a_scene_collides_as_to_a_decomposition_step():
+    # What a scene is collided against is a MeshDecomposer step's choice to make, so
+    # the parser reports the surfaces the stage holds and nothing else.
     world = parse(build_scene_stage_with_grouped_instances())
+    wall = body_named(world, "wall_a")
 
-    [collision] = body_named(world, "wall_a").collision.shapes
-    assert isinstance(collision, Box)
-    np.testing.assert_allclose(
-        [collision.scale.x, collision.scale.y, collision.scale.z],
-        [1.0, 1.0, 0.0],
-        atol=1e-6,
-    )
-
-
-def test_parse_keeps_the_full_mesh_for_display_while_colliding_with_a_box():
-    world = parse(build_scene_stage_with_grouped_instances())
-
-    [visual] = body_named(world, "wall_a").visual.shapes
+    [visual] = wall.visual.shapes
     assert isinstance(visual, Mesh)
+    assert wall.collision.shapes == []
 
 
-def test_parse_collides_with_the_mesh_itself_when_asked():
-    world = USDSceneParser(
-        stage=build_scene_stage_with_grouped_instances(),
-        prefix="scene",
-        collision_geometry=CollisionGeometry.MESH,
-    ).parse()
-
-    [collision] = body_named(world, "wall_a").collision.shapes
-    assert isinstance(collision, Mesh)
-
-
-def test_parse_builds_a_box_around_the_geometry_the_root_prim_owns():
+def test_parse_leaves_the_geometry_the_root_prim_owns_uncollided():
     world = parse(build_jointless_stage_with_a_default_prim())
 
-    [collision] = world.root.collision.shapes
+    assert world.root.visual.shapes != []
+    assert world.root.collision.shapes == []
+
+
+def test_parse_does_not_read_back_the_surfaces_it_writes():
+    # A scanned stage becomes unloadable if every surface is read into memory again,
+    # which is what reaches the collision detector the moment one is collided against.
+    world = parse(build_scene_stage_with_grouped_instances())
+
+    surfaces = [shape for body in world.bodies for shape in body.visual]
+    assert surfaces
+    assert all("mesh" not in surface.__dict__ for surface in surfaces)
+
+
+def test_a_parsed_scene_can_be_enclosed_in_boxes():
+    world = parse(build_scene_stage_with_grouped_instances())
+    [visual] = body_named(world, "wall_a").visual.shapes
+    low, high = visual.bounds
+
+    Pipeline([BoundingBoxDecomposer()]).apply(world)
+
+    [collision] = body_named(world, "wall_a").collision.shapes
     assert isinstance(collision, Box)
+    np.testing.assert_allclose(collision.scale.to_np(), high - low, atol=1e-6)

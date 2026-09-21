@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass
 from enum import StrEnum
 
-import numpy as np
 from typing_extensions import Dict, List, Optional, Self
 
 from semantic_digital_twin.adapters.usd.stage_parser import (
@@ -25,7 +23,7 @@ from semantic_digital_twin.spatial_types.spatial_types import (
 )
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import FixedConnection
-from semantic_digital_twin.world_description.geometry import Box, Scale, Shape
+from semantic_digital_twin.world_description.geometry import Shape
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -95,27 +93,6 @@ def _stage_origin_in(root_pose: Gf.Matrix4d, root_body: Body) -> Point3:
 # %% root placement
 
 
-class CollisionGeometry(StrEnum):
-    """
-    What an object's collision shapes are built from.
-    """
-
-    BOUNDING_BOX = "bounding_box"
-    """
-    The box enclosing the object's geometry. A scanned surface carries far too many
-    triangles to collide against, while the slabs a building is made of - walls, a
-    floor - are already close to boxes.
-    """
-
-    MESH = "mesh"
-    """
-    The object's own surface, collided against exactly as it is displayed.
-    """
-
-
-# %% root placement
-
-
 class RootPlacement(StrEnum):
     """
     Where the world root of a parsed scene is placed.
@@ -177,6 +154,12 @@ class USDSceneParser(USDStageParser):
     A grouping prim that owns no geometry itself is not a body; its transform still
     reaches the objects it holds, through their own local-to-world transforms.
 
+    The surfaces the stage holds are reported as visual geometry, and nothing is
+    collided against: a scanned stage authors no collision geometry of its own, and
+    handing a scanned surface to a collision detector reads all of it back into memory.
+    Apply a :class:`~semantic_digital_twin.pipeline.mesh_decomposition.base.MeshDecomposer`
+    step to decide what the scene collides as.
+
     .. note::
         A stage describing one physically articulated asset is read by
         :class:`~semantic_digital_twin.adapters.usd.parser.USDParser` instead.
@@ -185,11 +168,6 @@ class USDSceneParser(USDStageParser):
     root_placement: RootPlacement = RootPlacement.STAGE_ORIGIN
     """
     Where the world root is placed.
-    """
-
-    collision_geometry: CollisionGeometry = CollisionGeometry.BOUNDING_BOX
-    """
-    What the objects of this scene are collided against.
     """
 
     # %% construction
@@ -235,11 +213,6 @@ class USDSceneParser(USDStageParser):
         root_shapes = (
             self._object_shapes(root_prim, root_pose) if root_prim is not None else []
         )
-        root_collision_shapes = (
-            self._collision_shapes(root_prim, root_pose, root_shapes)
-            if root_prim is not None
-            else []
-        )
         objects = [
             self._create_object(prim)
             for prim in object_prims
@@ -253,9 +226,6 @@ class USDSceneParser(USDStageParser):
         visual = ShapeCollection(root_shapes, reference_frame=world.root)
         visual.transform_all_shapes_to_own_frame()
         world.root.visual = visual
-        world.root.collision = ShapeCollection(
-            root_collision_shapes, reference_frame=world.root
-        )
 
         objects_by_path: Dict[Sdf.Path, PlacedObject] = {
             placed_object.prim.GetPath(): placed_object for placed_object in objects
@@ -352,13 +322,9 @@ class USDSceneParser(USDStageParser):
         :return: The created object, its body not yet added to a world.
         """
         world_pose = _rigid_world_pose(object_prim)
-        shapes = self._object_shapes(object_prim, world_pose)
         body = Body(
             name=PrefixedName(object_prim.GetName(), self.prefix),
-            visual=ShapeCollection(shapes),
-            collision=ShapeCollection(
-                self._collision_shapes(object_prim, world_pose, shapes)
-            ),
+            visual=ShapeCollection(self._object_shapes(object_prim, world_pose)),
         )
         inertial = self._parse_inertial(object_prim, body)
         if inertial is not None:
@@ -380,66 +346,6 @@ class USDSceneParser(USDStageParser):
             self._create_shape(child, world_pose) for child in object_prim.GetChildren()
         ]
         return [shape for shape in shapes if shape is not None]
-
-    # %% collision
-
-    def _collision_shapes(
-        self, object_prim: Usd.Prim, world_pose: Gf.Matrix4d, shapes: List[Shape]
-    ) -> List[Shape]:
-        """
-        Creates the shapes one object is collided against.
-
-        :param object_prim: The prim whose geometry to enclose.
-        :param world_pose: The object's rigid local-to-world transform, which its
-            shapes are positioned relative to.
-        :param shapes: The object's visual shapes, collided against as they are unless
-            a box is asked for instead.
-        :return: The created shapes.
-        """
-        if self.collision_geometry is CollisionGeometry.MESH:
-            return shapes
-        bounding_box = self._bounding_box(object_prim, world_pose)
-        return [] if bounding_box is None else [bounding_box]
-
-    @staticmethod
-    def _bounding_box(object_prim: Usd.Prim, world_pose: Gf.Matrix4d) -> Optional[Box]:
-        """
-        Creates the box enclosing the geometry one object holds.
-
-        The bounds come from the stage's own extents rather than from the built
-        shapes, so no mesh has to be read back to collide against an object.
-
-        :param object_prim: The prim whose geometry to enclose.
-        :param world_pose: The object's rigid local-to-world transform, which the box
-            is positioned relative to.
-        :return: The enclosing box, or ``None`` if the object holds no geometry with
-            bounds of its own.
-        """
-        bounds_cache = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(), [UsdGeom.Tokens.default_]
-        )
-        bounds = Gf.Range3d()
-        for child in object_prim.GetChildren():
-            if child.IsA(UsdGeom.Gprim):
-                bounds = Gf.Range3d.GetUnion(
-                    bounds, bounds_cache.ComputeWorldBound(child).ComputeAlignedRange()
-                )
-        if bounds.IsEmpty():
-            return None
-
-        world_T_object = world_pose.GetInverse()
-        corners = np.array(
-            [
-                world_T_object.Transform(Gf.Vec3d(*corner))
-                for corner in itertools.product(*zip(bounds.GetMin(), bounds.GetMax()))
-            ]
-        )
-        low, high = corners.min(axis=0), corners.max(axis=0)
-        center = (low + high) / 2.0
-        return Box(
-            origin=HomogeneousTransformationMatrix.from_xyz_rpy(*center),
-            scale=Scale(*(high - low)),
-        )
 
     # %% placement
 
