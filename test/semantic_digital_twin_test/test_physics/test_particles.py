@@ -5,7 +5,7 @@ Tests for containers that hold their contents as individual particles.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 import mujoco
@@ -41,6 +41,7 @@ from semantic_digital_twin.world_description.degree_of_freedom import (
     DegreeOfFreedomLimits,
     DerivativeMap,
 )
+from semantic_digital_twin.world_description.contact import ContactFriction
 from semantic_digital_twin.world_description.geometry import Box, Scale
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.spatial_types.spatial_types import Vector3
@@ -435,6 +436,60 @@ def test_a_cavity_filled_to_capacity_settles_full(world_with_ground):
     finally:
         if simulation.is_running():
             simulation.stop_simulation()
+
+
+@pytestmark_physics
+def test_a_rolling_coefficient_keeps_the_contents_from_rolling_away(world_with_ground):
+    """
+    All three friction coefficients have to reach the solver.
+
+    A physics engine resolves a contact in as many dimensions as it is asked for and
+    reads only the coefficients that fit, so a sphere given a rolling coefficient in a
+    contact resolved in the tangent plane alone is a frictionless ball bearing, and the
+    coefficient may as well not have been set.
+    """
+
+    def spread_at(rolling: float) -> float:
+        world = World()
+        with world.modify_world():
+            world.add_kinematic_structure_entity(
+                Body.from_shape_collection(
+                    name=PrefixedName("ground"),
+                    shape_collection=ShapeCollection(
+                        [
+                            Box(
+                                origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                                    z=-0.05
+                                ),
+                                scale=Scale(4.0, 4.0, 0.1),
+                            )
+                        ]
+                    ),
+                )
+            )
+        simulation = MujocoSim(world=world, headless=True)
+        simulation.start_stepped_simulation()
+        try:
+            simulation.step_simulation(SETTLE)
+            fill = ParticleFill.spawn_in(
+                simulator=simulation.simulator,
+                container=world.root,
+                world_T_container=numpy.eye(4),
+                positions=CUP.particle_positions(PARTICLE_RADIUS, count=30),
+                particle_radius=PARTICLE_RADIUS,
+                contact=replace(
+                    ParticleFill.settling_contact(),
+                    friction=ContactFriction(sliding=0.6, rolling=rolling),
+                ),
+            )
+            simulation.step_simulation(SETTLING_TIME)
+            standing = fill.positions_in(world.root)
+            return float(numpy.hypot(standing[:, 0], standing[:, 1]).max())
+        finally:
+            if simulation.is_running():
+                simulation.stop_simulation()
+
+    assert spread_at(rolling=0.1) < spread_at(rolling=0.0001)
 
 
 @pytestmark_physics

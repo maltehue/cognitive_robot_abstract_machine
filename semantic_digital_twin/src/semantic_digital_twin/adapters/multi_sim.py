@@ -76,7 +76,10 @@ from semantic_digital_twin.world_description.geometry import (
     Mesh,
     Color,
 )
-from semantic_digital_twin.world_description.contact import ContactParameters
+from semantic_digital_twin.world_description.contact import (
+    ContactFriction,
+    ContactParameters,
+)
 from semantic_digital_twin.world_description.world_entity import (
     Region,
     Body,
@@ -2010,6 +2013,7 @@ class MujocoBuilder(MultiSimBuilder):
                 )
         contact = shape.get_simulator_property_of_type(ContactParameters)
         if contact is not None:
+            geom_props["condim"] = ContactFriction.RESOLVED_DIMENSIONS
             geom_props["friction"] = contact.friction.to_list()
             if contact.stiffness is not None:
                 geom_props["solref"] = contact.stiffness.to_list()

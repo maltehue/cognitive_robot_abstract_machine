@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
-from typing_extensions import TYPE_CHECKING, Iterable, List, Optional
+from typing_extensions import TYPE_CHECKING, ClassVar, Iterable, List, Optional
 
 from semantic_digital_twin.mixin import UniqueSimulatorProperty
 
@@ -39,6 +39,17 @@ class ContactFriction:
     rolling: float = 0.0001
     """
     Friction around both axes of the tangent plane.
+    """
+
+    RESOLVED_DIMENSIONS: ClassVar[int] = 6
+    """
+    How many dimensions a contact has to be resolved in for all three coefficients to
+    act.
+
+    An engine resolves a contact in as many dimensions as it is asked for and reads only
+    the coefficients that fit. Three cover the tangent plane alone, which is the usual
+    default and drops the torsional and the rolling coefficient without complaint, so a
+    sphere given one is a frictionless ball bearing.
     """
 
     def to_list(self) -> List[float]:

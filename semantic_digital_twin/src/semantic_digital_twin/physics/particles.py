@@ -454,6 +454,7 @@ class ParticleFill:
             "type": mujoco.mjtGeom.mjGEOM_SPHERE,
             "size": [particle_radius, 0.0, 0.0],
             "rgba": color.to_rgba(),
+            "condim": ContactFriction.RESOLVED_DIMENSIONS,
             "friction": contact.friction.to_list(),
         }
         if contact.stiffness is not None:
