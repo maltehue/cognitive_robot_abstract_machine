@@ -181,6 +181,14 @@ Without it the controller reasons about the pour its own drain model predicts. W
 the levels it steers by are the ones the grains actually produced, on both cups.
 """
 
+TRANSFER_REFERENCE_VELOCITY = 0.03
+"""
+How fast the fill task asks its fill level to change, per second.
+
+It sets how quickly the cup turns, and so how far past the tilt at which the contents
+start moving the cup gets before any of them have arrived to say so.
+"""
+
 CALIBRATION_SMOOTHING = 0.3
 """
 How far towards each measured inflow the drain's factor moves.
@@ -389,7 +397,7 @@ def build_transfer_motion(scene: TransferScene) -> MotionStatechart:
         receiver=scene.receiver,
         goal_value=GOAL_FILL,
         fill_level_tolerance=FILL_TOLERANCE,
-        reference_velocity=0.03,
+        reference_velocity=TRANSFER_REFERENCE_VELOCITY,
     )
     no_spill = KeepProjectileInReceiver(receiver=scene.receiver, source=scene.source)
     keep_above = KeepSourceRimAboveReceiverRim(
