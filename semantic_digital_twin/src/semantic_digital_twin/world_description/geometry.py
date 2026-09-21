@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import math
 import os
@@ -9,6 +10,7 @@ import shutil
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, Field
+from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
 
@@ -405,6 +407,66 @@ class Scale:
         return Scale(self.x, self.y, 0)
 
 
+GLTF_HEADER_LENGTH = 20
+"""
+Bytes a glTF binary spends on its file header and the header of its first chunk, after
+which the chunk's own JSON begins.
+"""
+
+
+def _gltf_header(file_path: Path) -> Dict[str, Any]:
+    """
+    Read the JSON a glTF binary describes itself with, without reading its geometry.
+
+    :param file_path: Path of the ``.glb`` file.
+    :return: The file's glTF JSON.
+    """
+    with file_path.open("rb") as file:
+        header = file.read(GLTF_HEADER_LENGTH)
+        json_length = int.from_bytes(header[12:16], "little")
+        return json.loads(file.read(json_length))
+
+
+UNTINTED_DIFFUSE = (255, 255, 255, 255)
+"""
+The material colour that leaves a texture at the brightness its image holds, since a
+material's colour multiplies the texture it carries.
+"""
+
+
+class MeshFileType(StrEnum):
+    """
+    The file formats a mesh is exported to.
+    """
+
+    OBJ = "obj"
+    """
+    Wavefront OBJ. Spells every coordinate out as decimal text, which makes it large,
+    but carries per-vertex colours and is read by every simulator here.
+    """
+
+    GLB = "glb"
+    """
+    Binary glTF. Holds coordinates and texture as binary, so it is several times
+    smaller than the same mesh as OBJ.
+    """
+
+    STL = "stl"
+    """
+    Binary STL. Carries triangles alone - no texture, no colour.
+    """
+
+    PLY = "ply"
+    """
+    Binary PLY.
+    """
+
+    DAE = "dae"
+    """
+    Collada.
+    """
+
+
 @dataclass
 class Shape(ABC, SubclassJSONSerializer, HasSimulatorProperties):
     """
@@ -666,7 +728,7 @@ class Mesh(Shape):
         # Export colored meshes as OBJ, which preserves per-vertex colors and is
         # readable by the visualizer and the collision loader.
         if vertex_colors is not None:
-            file_type = "obj"
+            file_type = MeshFileType.OBJ
         return cls.from_trimesh(
             mesh=mesh, origin=origin, scale=scale, file_type=file_type
         )
@@ -691,9 +753,22 @@ class Mesh(Shape):
     def add_texture(
         cls, mesh: trimesh.Trimesh, texture_file_path: str
     ) -> trimesh.Trimesh:
+        """
+        Applies a texture image to a mesh.
+
+        The material's own colour multiplies the texture wherever the mesh is drawn, so
+        it is left white: trimesh's default is a 40% grey, which would darken the
+        texture to 40% brightness.
+
+        :param mesh: The mesh to texture.
+        :param texture_file_path: Path of the texture image to apply.
+        :return: The textured mesh.
+        """
         image = Image.open(texture_file_path)
         material_name = os.path.splitext(os.path.basename(texture_file_path))[0]
-        mesh.visual.material = SimpleMaterial(name=material_name, image=image)
+        mesh.visual.material = SimpleMaterial(
+            name=material_name, image=image, diffuse=UNTINTED_DIFFUSE
+        )
         return mesh
 
     def scale_mesh(self, scale: Scale) -> trimesh.Trimesh:
@@ -733,6 +808,19 @@ class Mesh(Shape):
             # already the ones that were serialized.
             mesh.merge_vertices()
         return mesh
+
+    @property
+    def is_textured(self) -> bool:
+        """
+        Whether the mesh file carries a texture image of its own.
+
+        A glTF binary is answered from its header alone, so a scanned surface of tens
+        of millions of triangles does not have to be read into memory to be asked.
+        Any other format is answered by the mesh itself.
+        """
+        if self.local_file.suffix.lstrip(".").lower() != MeshFileType.GLB:
+            return self.mesh.visual.kind == TextureVisuals().kind
+        return bool(_gltf_header(self.local_file).get("images"))
 
     @cached_property
     def mesh(self) -> trimesh.Trimesh:
@@ -817,7 +905,7 @@ class Mesh(Shape):
             mesh=mesh,
             origin=origin,
             scale=scale,
-            file_type="obj",
+            file_type=MeshFileType.OBJ,
             texture_file_path=texture_file_path,
         )
 
@@ -830,7 +918,7 @@ class Mesh(Shape):
         uv: Optional[np.ndarray] = None,
         texture_file_path: Optional[str] = None,
         directory: Optional[Path] = None,
-        file_type: str = "obj",
+        file_type: MeshFileType = MeshFileType.OBJ,
     ) -> "Mesh":
         """
         Create a Mesh by exporting a trimesh to a file.

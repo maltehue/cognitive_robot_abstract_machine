@@ -3,6 +3,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from importlib.resources import files
+from enum import StrEnum
 from pathlib import Path
 from typing import Dict, Any
 from typing import List, Tuple, Optional
@@ -247,6 +248,59 @@ def create_compound_shape(
     return out
 
 
+class BulletMeshFormat(StrEnum):
+    """
+    The mesh file formats Bullet loads, and the one anything else is converted to.
+    """
+
+    OBJ = "obj"
+    """
+    Wavefront OBJ, which every other format is converted to.
+    """
+
+    STL = "stl"
+    """
+    Binary STL.
+    """
+
+    DAE = "dae"
+    """
+    Collada.
+    """
+
+
+def convert_to_obj_and_save_in_tmp(mesh: Mesh, cache_dir: Path = CACHE_DIR) -> str:
+    """
+    Writes a mesh Bullet cannot load itself out as an OBJ, cached by its geometry.
+
+    :param mesh: the mesh to convert.
+    :param cache_dir: the cache directory to save the OBJ in.
+    :return: the path to the OBJ file.
+    """
+    trimesh_mesh = mesh.mesh
+    obj_file_name = str(
+        cache_dir / f"{trimesh_quantized_hash(trimesh_mesh)}.{BulletMeshFormat.OBJ}"
+    )
+    if not os.path.exists(obj_file_name):
+        create_path(obj_file_name)
+        with open(obj_file_name, "w") as file:
+            file.write(trimesh.exchange.obj.export_obj(trimesh_mesh))
+    return obj_file_name
+
+
+def bullet_readable_file(mesh: Mesh) -> str:
+    """
+    :param mesh: the mesh to load.
+    :return: the path of a mesh file Bullet can load, converting the mesh first if its
+        own file is in a format Bullet does not read.
+    """
+    mesh_file_path = str(mesh.local_file)
+    mesh_format = os.path.splitext(mesh_file_path)[1].lstrip(".").lower()
+    if mesh_format in [format.value for format in BulletMeshFormat]:
+        return mesh_file_path
+    return convert_to_obj_and_save_in_tmp(mesh)
+
+
 def load_convex_mesh_shape(
     mesh: Mesh,
     single_shape: bool,
@@ -267,7 +321,7 @@ def load_convex_mesh_shape(
             mesh=mesh, mesh_decomposer=mesh_decomposer
         )
     else:
-        obj_pkg_filename = str(mesh.local_file)
+        obj_pkg_filename = bullet_readable_file(mesh)
     return bullet.load_convex_shape(
         obj_pkg_filename,
         single_shape=single_shape,

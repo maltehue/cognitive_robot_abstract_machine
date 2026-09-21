@@ -1,0 +1,493 @@
+from __future__ import annotations
+
+import itertools
+from dataclasses import dataclass
+from enum import StrEnum
+
+import numpy as np
+from typing_extensions import Dict, List, Optional, Self
+
+from semantic_digital_twin.adapters.usd.stage_parser import (
+    Gf,
+    UsdAxis,
+    Sdf,
+    Usd,
+    UsdGeom,
+    USDStageParser,
+    _usd_pose_to_transform,
+)
+from semantic_digital_twin.adapters.package_resolver import PathResolver
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.semantic_annotations.usd_semantics import UsdStageOrigin
+from semantic_digital_twin.spatial_types.spatial_types import (
+    HomogeneousTransformationMatrix,
+    Point3,
+)
+from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.world_description.geometry import Box, Scale, Shape
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
+from semantic_digital_twin.world_description.world_entity import Body
+
+# %% rigid poses
+
+
+def _rigid_world_pose(prim: Usd.Prim) -> Gf.Matrix4d:
+    """
+    Build the rigid part of a prim's local-to-world transform, dropping any scale or
+    shear an enclosing prim contributes.
+
+    A connection places a body rigidly, so a body's frame can only be the rigid part;
+    what is dropped here is what the shape builders bake into the geometry instead,
+    which they are given this same pose to do.
+
+    :param prim: The prim whose world pose to build.
+    :return: The prim's rigid local-to-world transform.
+    """
+    transform = Gf.Transform(
+        UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    )
+    pose = Gf.Matrix4d(1.0)
+    pose.SetRotate(transform.GetRotation().GetQuat())
+    pose.SetTranslateOnly(transform.GetTranslation())
+    return pose
+
+
+def _translation(offset: Gf.Vec3d) -> Gf.Matrix4d:
+    """
+    :param offset: The translation the pose consists of.
+    :return: A pose translated by ``offset``, with no rotation.
+    """
+    pose = Gf.Matrix4d(1.0)
+    pose.SetTranslateOnly(offset)
+    return pose
+
+
+def _relative_transform(
+    parent_pose: Gf.Matrix4d, child_pose: Gf.Matrix4d, reference_frame: Body
+) -> HomogeneousTransformationMatrix:
+    """
+    Build the transform of one rigid world pose relative to another.
+
+    :param parent_pose: The pose the result is expressed relative to.
+    :param child_pose: The pose to express.
+    :param reference_frame: The frame the result is expressed in.
+    :return: The child's pose relative to the parent.
+    """
+    transform = Gf.Transform(child_pose * parent_pose.GetInverse())
+    return _usd_pose_to_transform(
+        transform.GetTranslation(),
+        transform.GetRotation().GetQuat(),
+        reference_frame=reference_frame,
+    )
+
+
+def _stage_origin_in(root_pose: Gf.Matrix4d, root_body: Body) -> Point3:
+    """
+    :param root_pose: The rigid world pose the root body sits at.
+    :param root_body: The body the result is expressed in.
+    :return: The stage's origin, in the root body's frame.
+    """
+    origin = root_pose.GetInverse().Transform(Gf.Vec3d(0, 0, 0))
+    return Point3(origin[0], origin[1], origin[2], reference_frame=root_body)
+
+
+# %% root placement
+
+
+class CollisionGeometry(StrEnum):
+    """
+    What an object's collision shapes are built from.
+    """
+
+    BOUNDING_BOX = "bounding_box"
+    """
+    The box enclosing the object's geometry. A scanned surface carries far too many
+    triangles to collide against, while the slabs a building is made of - walls, a
+    floor - are already close to boxes.
+    """
+
+    MESH = "mesh"
+    """
+    The object's own surface, collided against exactly as it is displayed.
+    """
+
+
+# %% root placement
+
+
+class RootPlacement(StrEnum):
+    """
+    Where the world root of a parsed scene is placed.
+    """
+
+    STAGE_ORIGIN = "stage_origin"
+    """
+    At the stage's own origin, keeping the coordinates the scene was authored in.
+    """
+
+    SCENE_GROUND = "scene_ground"
+    """
+    On the ground below the centre of the scene, so a scene authored far from its
+    stage's origin still stands around the world's.
+    """
+
+
+# %% placed objects
+
+
+@dataclass
+class PlacedObject:
+    """
+    One object of a scene stage: the body built for a geometry-owning prim, and the
+    rigid world pose it is placed at.
+    """
+
+    body: Body
+    """
+    The body built for the object.
+    """
+
+    world_pose: Gf.Matrix4d
+    """
+    The rigid part of the object's local-to-world transform.
+    """
+
+    prim: Optional[Usd.Prim] = None
+    """
+    The prim the object was built from, ``None`` for a synthetic root that no prim of
+    the stage corresponds to.
+    """
+
+
+# %% scene parser
+
+
+@dataclass
+class USDSceneParser(USDStageParser):
+    """
+    Parses a USD stage describing separately placed static objects into a world.
+
+    Where an articulated asset's structure is its physics joints, a scene's is its
+    transform hierarchy: a laser scan or a dressed set carries no physics at all, only
+    prims that own geometry and the ``Xform`` groups that place them. Every prim that
+    directly holds geometry becomes a body, fixed where the stage places it - rigidly,
+    since a measured object is not freely posable.
+
+    A grouping prim that owns no geometry itself is not a body; its transform still
+    reaches the objects it holds, through their own local-to-world transforms.
+
+    .. note::
+        A stage describing one physically articulated asset is read by
+        :class:`~semantic_digital_twin.adapters.usd.parser.USDParser` instead.
+    """
+
+    root_placement: RootPlacement = RootPlacement.STAGE_ORIGIN
+    """
+    Where the world root is placed.
+    """
+
+    collision_geometry: CollisionGeometry = CollisionGeometry.BOUNDING_BOX
+    """
+    What the objects of this scene are collided against.
+    """
+
+    # %% construction
+
+    @classmethod
+    def from_file(
+        cls,
+        file_path: str,
+        prefix: Optional[str] = None,
+        path_resolver: Optional[PathResolver] = None,
+        root_placement: RootPlacement = RootPlacement.STAGE_ORIGIN,
+    ) -> Self:
+        """
+        Creates a parser for a USD scene stage file.
+
+        :param file_path: The path of the stage file to parse.
+        :param prefix: The prefix for every name used in this world.
+        :param path_resolver: The resolver for the asset references of the stage.
+        :param root_placement: Where the world root is placed.
+        :return: A parser for the described world.
+        """
+        parser = super().from_file(file_path, prefix, path_resolver)
+        parser.root_placement = root_placement
+        return parser
+
+    # %% entry point
+
+    def parse(self) -> World:
+        """
+        Parses the stage into a world.
+
+        :return: The parsed world.
+        :raises UnsupportedUsdGeometryTypeError: If the stage contains a renderable
+            geometric primitive of a type this parser does not build a Shape for.
+        """
+        object_prims = self._object_prims()
+        root_prim = self._root_prim()
+        root_path = root_prim.GetPath() if root_prim is not None else None
+        root_pose = self._root_pose(root_prim, object_prims)
+
+        # Every shape is built before the world exists: a World left partway through a
+        # failed modification is unusable, and unsupported geometry raises.
+        root_shapes = (
+            self._object_shapes(root_prim, root_pose) if root_prim is not None else []
+        )
+        root_collision_shapes = (
+            self._collision_shapes(root_prim, root_pose, root_shapes)
+            if root_prim is not None
+            else []
+        )
+        objects = [
+            self._create_object(prim)
+            for prim in object_prims
+            if prim.GetPath() != root_path
+        ]
+
+        world = World.create_with_root_body(
+            root_prim.GetName() if root_prim is not None else self.prefix, self.prefix
+        )
+        root = PlacedObject(body=world.root, world_pose=root_pose, prim=root_prim)
+        visual = ShapeCollection(root_shapes, reference_frame=world.root)
+        visual.transform_all_shapes_to_own_frame()
+        world.root.visual = visual
+        world.root.collision = ShapeCollection(
+            root_collision_shapes, reference_frame=world.root
+        )
+
+        objects_by_path: Dict[Sdf.Path, PlacedObject] = {
+            placed_object.prim.GetPath(): placed_object for placed_object in objects
+        }
+        if root_path is not None:
+            objects_by_path[root_path] = root
+
+        with world.modify_world():
+            world.add_semantic_annotation(
+                UsdStageOrigin(
+                    root=world.root, position=_stage_origin_in(root_pose, world.root)
+                )
+            )
+            if root_prim is not None:
+                self._attach_semantic_labels(world, root_prim, world.root)
+            for placed_object in objects:
+                world.add_body(placed_object.body)
+                self._attach_semantic_labels(
+                    world, placed_object.prim, placed_object.body
+                )
+            for placed_object in objects:
+                self._connect(world, placed_object, objects_by_path, root)
+        return world
+
+    # %% root placement
+
+    def _root_pose(
+        self, root_prim: Optional[Usd.Prim], object_prims: List[Usd.Prim]
+    ) -> Gf.Matrix4d:
+        """
+        :param root_prim: The prim the world is rooted at, ``None`` for a synthetic
+            root no prim of the stage corresponds to.
+        :param object_prims: Every geometry-owning prim of the stage.
+        :return: The rigid world pose the root body sits at.
+        """
+        if self.root_placement is RootPlacement.SCENE_GROUND:
+            return _translation(self._scene_ground(object_prims))
+        if root_prim is None:
+            return Gf.Matrix4d(1.0)
+        return _rigid_world_pose(root_prim)
+
+    def _scene_ground(self, object_prims: List[Usd.Prim]) -> Gf.Vec3d:
+        """
+        :param object_prims: Every geometry-owning prim of the stage.
+        :return: The point below the centre of the scene where it meets the ground -
+            the middle of the bounding box holding every object across, and its lowest
+            point along the stage's up axis - or the stage's origin for a stage that
+            holds no geometry at all.
+        """
+        bounds_cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(), [UsdGeom.Tokens.default_]
+        )
+        bounds = Gf.BBox3d()
+        for object_prim in object_prims:
+            bounds = Gf.BBox3d.Combine(
+                bounds, bounds_cache.ComputeWorldBound(object_prim)
+            )
+        aligned_bounds = bounds.ComputeAlignedRange()
+        if aligned_bounds.IsEmpty():
+            return Gf.Vec3d(0, 0, 0)
+
+        ground = Gf.Vec3d(aligned_bounds.GetMidpoint())
+        up_axis = UsdAxis(UsdGeom.GetStageUpAxis(self.stage))
+        ground[up_axis.index] = aligned_bounds.GetMin()[up_axis.index]
+        return ground
+
+    # %% objects
+
+    def _object_prims(self) -> List[Usd.Prim]:
+        """
+        :return: Every prim of the stage that directly holds renderable geometry, in
+            stage order - each geometry prim belongs to exactly one of them, so no
+            geometry of the stage is left without a body to hold it.
+        """
+        object_prims = []
+        seen_paths = set()
+        for prim in self.stage.Traverse():
+            if not prim.IsA(UsdGeom.Gprim):
+                continue
+            parent = prim.GetParent()
+            if parent.GetPath() in seen_paths:
+                continue
+            seen_paths.add(parent.GetPath())
+            object_prims.append(parent)
+        return object_prims
+
+    def _create_object(self, object_prim: Usd.Prim) -> PlacedObject:
+        """
+        Creates the body for one geometry-owning prim, with a Shape for every geometry
+        prim it holds and its :class:`~pxr.UsdPhysics.MassAPI` inertial properties, if
+        applied.
+
+        :param object_prim: The prim to build an object for.
+        :return: The created object, its body not yet added to a world.
+        """
+        world_pose = _rigid_world_pose(object_prim)
+        shapes = self._object_shapes(object_prim, world_pose)
+        body = Body(
+            name=PrefixedName(object_prim.GetName(), self.prefix),
+            visual=ShapeCollection(shapes),
+            collision=ShapeCollection(
+                self._collision_shapes(object_prim, world_pose, shapes)
+            ),
+        )
+        inertial = self._parse_inertial(object_prim, body)
+        if inertial is not None:
+            body.inertial = inertial
+        return PlacedObject(body=body, world_pose=world_pose, prim=object_prim)
+
+    def _object_shapes(
+        self, object_prim: Usd.Prim, world_pose: Gf.Matrix4d
+    ) -> List[Shape]:
+        """
+        Creates the Shape for every geometry prim one object holds.
+
+        :param object_prim: The prim whose geometry to build shapes for.
+        :param world_pose: The object's rigid local-to-world transform, which its
+            shapes are positioned relative to.
+        :return: The created shapes.
+        """
+        shapes = [
+            self._create_shape(child, world_pose) for child in object_prim.GetChildren()
+        ]
+        return [shape for shape in shapes if shape is not None]
+
+    # %% collision
+
+    def _collision_shapes(
+        self, object_prim: Usd.Prim, world_pose: Gf.Matrix4d, shapes: List[Shape]
+    ) -> List[Shape]:
+        """
+        Creates the shapes one object is collided against.
+
+        :param object_prim: The prim whose geometry to enclose.
+        :param world_pose: The object's rigid local-to-world transform, which its
+            shapes are positioned relative to.
+        :param shapes: The object's visual shapes, collided against as they are unless
+            a box is asked for instead.
+        :return: The created shapes.
+        """
+        if self.collision_geometry is CollisionGeometry.MESH:
+            return shapes
+        bounding_box = self._bounding_box(object_prim, world_pose)
+        return [] if bounding_box is None else [bounding_box]
+
+    @staticmethod
+    def _bounding_box(object_prim: Usd.Prim, world_pose: Gf.Matrix4d) -> Optional[Box]:
+        """
+        Creates the box enclosing the geometry one object holds.
+
+        The bounds come from the stage's own extents rather than from the built
+        shapes, so no mesh has to be read back to collide against an object.
+
+        :param object_prim: The prim whose geometry to enclose.
+        :param world_pose: The object's rigid local-to-world transform, which the box
+            is positioned relative to.
+        :return: The enclosing box, or ``None`` if the object holds no geometry with
+            bounds of its own.
+        """
+        bounds_cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(), [UsdGeom.Tokens.default_]
+        )
+        bounds = Gf.Range3d()
+        for child in object_prim.GetChildren():
+            if child.IsA(UsdGeom.Gprim):
+                bounds = Gf.Range3d.GetUnion(
+                    bounds, bounds_cache.ComputeWorldBound(child).ComputeAlignedRange()
+                )
+        if bounds.IsEmpty():
+            return None
+
+        world_T_object = world_pose.GetInverse()
+        corners = np.array(
+            [
+                world_T_object.Transform(Gf.Vec3d(*corner))
+                for corner in itertools.product(*zip(bounds.GetMin(), bounds.GetMax()))
+            ]
+        )
+        low, high = corners.min(axis=0), corners.max(axis=0)
+        center = (low + high) / 2.0
+        return Box(
+            origin=HomogeneousTransformationMatrix.from_xyz_rpy(*center),
+            scale=Scale(*(high - low)),
+        )
+
+    # %% placement
+
+    def _connect(
+        self,
+        world: World,
+        placed_object: PlacedObject,
+        objects_by_path: Dict[Sdf.Path, PlacedObject],
+        root: PlacedObject,
+    ) -> None:
+        """
+        Fixes one object to the object whose subtree holds it.
+
+        :param world: The world to add the connection to.
+        :param placed_object: The object to fix in place.
+        :param objects_by_path: Every object of the stage, by the path of its prim.
+        :param root: The object to fall back to when no prim above this one holds
+            geometry.
+        """
+        parent = self._enclosing_object(placed_object.prim, objects_by_path, root)
+        world.add_connection(
+            FixedConnection.create_with_dofs(
+                world=world,
+                parent=parent.body,
+                child=placed_object.body,
+                parent_T_connection_expression=_relative_transform(
+                    parent.world_pose, placed_object.world_pose, parent.body
+                ),
+            )
+        )
+
+    @staticmethod
+    def _enclosing_object(
+        object_prim: Usd.Prim,
+        objects_by_path: Dict[Sdf.Path, PlacedObject],
+        root: PlacedObject,
+    ) -> PlacedObject:
+        """
+        :param object_prim: The prim whose enclosing object to find.
+        :param objects_by_path: Every object of the stage, by the path of its prim.
+        :param root: The object to fall back to when no prim above ``object_prim``
+            holds geometry.
+        :return: The nearest object above ``object_prim`` in the stage.
+        """
+        ancestor = object_prim.GetParent()
+        while ancestor.IsValid() and not ancestor.IsPseudoRoot():
+            enclosing_object = objects_by_path.get(ancestor.GetPath())
+            if enclosing_object is not None:
+                return enclosing_object
+            ancestor = ancestor.GetParent()
+        return root

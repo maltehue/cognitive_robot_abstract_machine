@@ -1,6 +1,7 @@
 import itertools
 
 import pytest
+import trimesh
 
 from semantic_digital_twin.collision_checking.collision_matrix import (
     CollisionMatrix,
@@ -8,11 +9,17 @@ from semantic_digital_twin.collision_checking.collision_matrix import (
 )
 from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
     BulletCollisionDetector,
+    load_convex_mesh_shape,
 )
 from semantic_digital_twin.collision_checking.trimesh_collision_detector import (
     FCLCollisionDetector,
 )
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from semantic_digital_twin.world_description.geometry import (
+    Mesh,
+    MeshFileType,
+    Scale,
+)
 from semantic_digital_twin.testing import world_setup_simple
 import numpy as np
 
@@ -142,3 +149,20 @@ def test_all_collisions(world_setup_simple, collision_detector):
     ).contacts
     assert len(collisions) == 1
     assert {collisions[0].body_a, collisions[0].body_b} == {body1, body2}
+
+
+# %% mesh formats
+
+
+def test_load_convex_mesh_shape_reads_a_format_bullet_cannot_load_itself(tmp_path):
+    # Bullet loads only a few mesh formats; anything else - a glTF binary, say - has to
+    # be converted before it reaches it, rather than raising "is not .obj, .stl, .dae".
+    box = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    mesh_file = str(tmp_path / f"crate.{MeshFileType.GLB}")
+    box.export(mesh_file)
+
+    shape = load_convex_mesh_shape(
+        mesh=Mesh(filename=mesh_file), single_shape=True, scale=Scale(1, 1, 1)
+    )
+
+    assert shape is not None

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 try:
-    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade, UsdUtils
 
     PXR_AVAILABLE = True
 except ImportError:
@@ -135,7 +137,8 @@ def build_stage_with_mesh_targeted_body0() -> Usd.Stage:
 
 def build_stage_with_textured_mesh(texture_file_path: str) -> Usd.Stage:
     """
-    A minimal in-memory stage with a single quad mesh, per-point ``st`` UV
+    A minimal in-memory stage with a single quad mesh, per-point ``st`` UV.
+
     coordinates, and a material whose ``diffuseColor`` is driven by a texture read
     from ``texture_file_path`` - the layout
     ``USDParser._diffuse_texture_path``/``_uv_coordinates`` read.
@@ -348,5 +351,143 @@ def build_single_joint_stage_with_semantic_labels() -> Usd.Stage:
     UsdSemantics.LabelsAPI.Apply(link_prim, "category").CreateLabelsAttr().Set(
         ["seating"]
     )
+
+    return stage
+
+
+# %% scene stages
+
+
+def _define_placed_instance(
+    stage: Usd.Stage, path: str, translation: tuple[float, float, float]
+) -> None:
+    """
+    Define a link ``Xform`` at ``path`` holding one quad mesh, translated by
+    ``translation`` relative to its parent prim.
+    """
+    _define_link(stage, path)
+    UsdGeom.Xform(stage.GetPrimAtPath(path)).AddTranslateOp().Set(
+        Gf.Vec3d(*translation)
+    )
+
+
+def build_scene_stage_with_grouped_instances(up_axis: str = "Z") -> Usd.Stage:
+    """
+    A minimal in-memory stage shaped like a scanned building.
+
+    A default prim holds category ``Xform`` groups that carry a transform but no
+    geometry of their own, each holding the separately placed instances that do - the
+    shape a USD scene of independent static objects takes, as opposed to one
+    articulated asset.
+
+    :param up_axis: The stage's up axis token, which decides which way is down and so
+        where the ground of the scene lies.
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, up_axis)
+    root = UsdGeom.Xform.Define(stage, "/scene")
+    stage.SetDefaultPrim(root.GetPrim())
+
+    wall_group = UsdGeom.Xform.Define(stage, "/scene/Wall")
+    wall_group.AddTranslateOp().Set(Gf.Vec3d(10, 0, 0))
+    _define_placed_instance(stage, "/scene/Wall/wall_a", (1, 0, 0))
+    _define_placed_instance(stage, "/scene/Wall/wall_b", (0, 2, 0))
+
+    UsdGeom.Xform.Define(stage, "/scene/Floor")
+    _define_placed_instance(stage, "/scene/Floor/floor_a", (0, 0, 3))
+
+    return stage
+
+
+def build_scene_stage_with_nested_objects() -> Usd.Stage:
+    """
+    A minimal in-memory stage where one geometry-owning prim sits inside another's
+    subtree, so the inner object's nearest enclosing object - not the stage root - is
+    what it is placed relative to.
+
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    root = UsdGeom.Xform.Define(stage, "/scene")
+    stage.SetDefaultPrim(root.GetPrim())
+    _define_placed_instance(stage, "/scene/outer", (1, 0, 0))
+    _define_placed_instance(stage, "/scene/outer/inner", (0, 1, 0))
+
+    return stage
+
+
+def build_scene_stage_with_a_scaled_group() -> Usd.Stage:
+    """
+    A minimal in-memory stage whose grouping ``Xform`` carries a non-uniform scale, so
+    the object it holds is both displaced and scaled by it.
+
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    root = UsdGeom.Xform.Define(stage, "/scene")
+    stage.SetDefaultPrim(root.GetPrim())
+    group = UsdGeom.Xform.Define(stage, "/scene/group")
+    group.AddScaleOp().Set(Gf.Vec3f(2, 3, 4))
+    _define_placed_instance(stage, "/scene/group/object", (1, 0, 0))
+
+    return stage
+
+
+def build_scene_stage_with_semantic_labels() -> Usd.Stage:
+    """
+    A minimal in-memory stage like :func:`build_scene_stage_with_grouped_instances`, but
+    with :class:`~pxr.UsdSemantics.LabelsAPI` labels applied to one instance.
+
+    :return: The built in-memory stage.
+    """
+    stage = build_scene_stage_with_grouped_instances()
+    UsdSemantics.LabelsAPI.Apply(
+        stage.GetPrimAtPath("/scene/Wall/wall_a"), "class"
+    ).CreateLabelsAttr().Set(["wall"])
+
+    return stage
+
+
+def build_usdz_package_with_a_textured_mesh(
+    directory: Path, texture_file_path: str
+) -> str:
+    """
+    Write a ``.usdz`` package holding a textured mesh and the texture itself.
+
+    A texture travelling inside the package resolves to a path only USD's asset resolver
+    can read, unlike one lying beside the stage as a plain file.
+
+    :param directory: The directory to write the package and its source stage to.
+    :param texture_file_path: Path to the texture image to package.
+    :return: The path of the written package.
+    """
+    stage = build_stage_with_textured_mesh(texture_file_path)
+    stage.SetDefaultPrim(stage.GetPrimAtPath("/object"))
+    source_path = directory / "textured.usda"
+    stage.GetRootLayer().Export(str(source_path))
+
+    package_path = directory / "textured.usdz"
+    UsdUtils.CreateNewUsdzPackage(Sdf.AssetPath(str(source_path)), str(package_path))
+    return str(package_path)
+
+
+def build_stage_with_a_double_sided_mesh(double_sided: bool) -> Usd.Stage:
+    """
+    A minimal in-memory stage with a two-triangle mesh whose ``doubleSided`` attribute
+    is authored either way.
+
+    A scanned surface is a sheet rather than a solid, so it carries this flag to say it
+    must be drawn whichever side it is seen from.
+
+    :param double_sided: The value to author on the mesh's ``doubleSided`` attribute.
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    mesh = UsdGeom.Mesh.Define(stage, "/object/mesh")
+    mesh.CreatePointsAttr([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
+    mesh.CreateFaceVertexCountsAttr([3, 3])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 0, 2, 3])
+    mesh.CreateDoubleSidedAttr(double_sided)
 
     return stage

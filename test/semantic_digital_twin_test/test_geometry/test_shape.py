@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import trimesh
+from PIL import Image
 
 from krrood.adapters.json_serializer import from_json, to_json
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
@@ -486,3 +487,76 @@ def test_a_shape_survives_a_json_round_trip(shape):
 
     assert restored == shape
     assert restored.to_json() == payload
+
+
+# %% textures
+
+
+def test_add_texture_shows_the_texture_at_full_brightness(tmp_path):
+    # trimesh's SimpleMaterial defaults to a 40% grey diffuse, which every renderer
+    # multiplies the texture by - leaving a textured mesh at 40% brightness.
+    texture_file = tmp_path / "wood.png"
+    Image.new("RGB", (2, 2), color=(200, 100, 50)).save(texture_file)
+    mesh = trimesh.creation.box()
+    mesh.visual = trimesh.visual.TextureVisuals(uv=np.zeros((len(mesh.vertices), 2)))
+
+    textured = Mesh.add_texture(mesh=mesh, texture_file_path=str(texture_file))
+
+    np.testing.assert_array_equal(
+        textured.visual.material.diffuse, [255, 255, 255, 255]
+    )
+
+
+# %% textured meshes
+
+
+def textured_glb(tmp_path) -> str:
+    mesh = trimesh.creation.box()
+    mesh.visual = trimesh.visual.TextureVisuals(
+        uv=np.zeros((len(mesh.vertices), 2)),
+        material=trimesh.visual.material.SimpleMaterial(
+            image=Image.new("RGB", (2, 2), color=(200, 100, 50))
+        ),
+    )
+    path = tmp_path / "textured.glb"
+    mesh.export(path, file_type="glb")
+    return str(path)
+
+
+def untextured_glb(tmp_path) -> str:
+    path = tmp_path / "plain.glb"
+    trimesh.creation.box().export(path, file_type="glb")
+    return str(path)
+
+
+def test_is_textured_finds_the_texture_of_a_glb(tmp_path):
+    assert Mesh(filename=textured_glb(tmp_path)).is_textured
+
+
+def test_is_textured_is_false_for_a_glb_without_one(tmp_path):
+    assert not Mesh(filename=untextured_glb(tmp_path)).is_textured
+
+
+def test_is_textured_does_not_load_the_geometry_of_a_glb(tmp_path):
+    # Answering this by loading the mesh costs gigabytes on a scanned scene, for a
+    # question the file answers in its first few kilobytes.
+    mesh = Mesh(filename=textured_glb(tmp_path))
+
+    mesh.is_textured
+
+    assert "mesh" not in mesh.__dict__
+    assert "unscaled_mesh" not in mesh.__dict__
+
+
+def test_is_textured_agrees_with_the_loaded_mesh_for_other_formats(tmp_path):
+    mesh = trimesh.creation.box()
+    mesh.visual = trimesh.visual.TextureVisuals(
+        uv=np.zeros((len(mesh.vertices), 2)),
+        material=trimesh.visual.material.SimpleMaterial(
+            image=Image.new("RGB", (2, 2), color=(200, 100, 50))
+        ),
+    )
+    path = tmp_path / "textured.obj"
+    mesh.export(path, file_type="obj")
+
+    assert Mesh(filename=str(path)).is_textured

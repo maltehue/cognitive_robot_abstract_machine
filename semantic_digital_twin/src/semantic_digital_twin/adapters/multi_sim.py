@@ -12,7 +12,7 @@ import trimesh
 import PIL.ImageFile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import IntEnum, IntFlag
+from enum import IntEnum, IntFlag, StrEnum
 from types import NoneType
 from typing_extensions import (
     Dict,
@@ -1870,6 +1870,27 @@ class MultiSimBuilder(ABC):
         return self._world
 
 
+class MujocoMeshFormat(StrEnum):
+    """
+    The mesh file formats MuJoCo loads, and the one anything else is converted to.
+    """
+
+    OBJ = "obj"
+    """
+    Wavefront OBJ.
+    """
+
+    STL = "stl"
+    """
+    Binary STL, which every other format is converted to.
+    """
+
+    MSH = "msh"
+    """
+    MuJoCo's own mesh format.
+    """
+
+
 @dataclass
 class MujocoBuilder(MultiSimBuilder):
     """
@@ -2031,18 +2052,15 @@ class MujocoBuilder(MultiSimBuilder):
                 action="add",
             )
 
-    def _create_stl_from_dae_mesh(
-        self, original_mesh_file_path: str, stl_file_path: str
-    ):
+    def _create_stl_from_mesh(self, original_mesh_file_path: str, stl_file_path: str):
         """
-        Creates an .stl mesh at the location specified by stl_file_path from the original .dae mesh.
+        Creates an .stl mesh at the location specified by stl_file_path from a mesh
+        MuJoCo cannot read itself.
 
-        :param original_mesh_file_path: filepath to the original .dae mesh
+        :param original_mesh_file_path: filepath to the original mesh
         :param stl_file_path: filepath to save the new .stl mesh to
         """
-        logger.info(
-            f"Converting Collada mesh to STL for MuJoCo: {original_mesh_file_path}"
-        )
+        logger.info(f"Converting mesh to STL for MuJoCo: {original_mesh_file_path}")
         trimesh_mesh = trimesh.load(original_mesh_file_path, force="mesh")
 
         trimesh_mesh.export(stl_file_path)
@@ -2127,15 +2145,14 @@ class MujocoBuilder(MultiSimBuilder):
             raise NotImplementedError(
                 f"Mesh type {type(mesh_entity)} not supported in Mujoco."
             )
-        mesh_ext = os.path.splitext(mesh_file_path)[1].lower()
-        if mesh_ext == ".dae":
-            # Build output .stl path
+        mesh_format = os.path.splitext(mesh_file_path)[1].lstrip(".").lower()
+        if mesh_format not in [format.value for format in MujocoMeshFormat]:
             base_name = os.path.splitext(os.path.basename(mesh_file_path))[0]
-            stl_file_path = os.path.join(self.asset_folder_path, base_name + ".stl")
-
-            # create a .stl mesh from the original .dae mesh, as a replacement. If it not already exists.
+            stl_file_path = os.path.join(
+                self.asset_folder_path, f"{base_name}.{MujocoMeshFormat.STL}"
+            )
             if not os.path.exists(stl_file_path):
-                self._create_stl_from_dae_mesh(
+                self._create_stl_from_mesh(
                     original_mesh_file_path=mesh_file_path, stl_file_path=stl_file_path
                 )
             mesh_file_path = stl_file_path

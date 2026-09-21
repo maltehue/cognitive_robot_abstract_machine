@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -9,7 +10,11 @@ from semantic_digital_twin.adapters.usd.exceptions import (
     UnsupportedUsdPhysicsJointTypeError,
     UsdPhysicsJointMissingChildBodyError,
 )
-from semantic_digital_twin.adapters.usd.parser import USDParser, UsdMeshShapeBuilder
+from semantic_digital_twin.adapters.usd.parser import USDParser
+from semantic_digital_twin.adapters.usd.stage_parser import (
+    Shading,
+    UsdMeshShapeBuilder,
+)
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.semantic_annotations.usd_semantics import UsdSemanticLabels
 from semantic_digital_twin.world import World
@@ -19,7 +24,12 @@ from semantic_digital_twin.world_description.connections import (
     PrismaticConnection,
     RevoluteConnection,
 )
-from semantic_digital_twin.world_description.geometry import Box, Cylinder, Sphere
+from semantic_digital_twin.world_description.geometry import (
+    Box,
+    Cylinder,
+    MeshFileType,
+    Sphere,
+)
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
@@ -36,11 +46,13 @@ from .usd_stages import (
     build_stage_with_mesh_targeted_body0,
     build_stage_with_primitive_shapes,
     build_stage_with_scaled_mesh,
+    build_stage_with_a_double_sided_mesh,
     build_stage_with_textured_mesh,
+    build_usdz_package_with_a_textured_mesh,
 )
 
 if PXR_AVAILABLE:
-    from pxr import Gf, UsdGeom
+    from pxr import Gf, Usd, UsdGeom
 
 pytestmark = pytest.mark.skipif(
     not PXR_AVAILABLE, reason="usd-core (pxr) not installed"
@@ -381,6 +393,20 @@ def test_diffuse_texture_path_is_none_without_a_bound_material(texture_file):
     assert resolved is None
 
 
+def test_diffuse_texture_path_extracts_a_texture_packaged_inside_a_usdz(
+    texture_file, tmp_path
+):
+    # Inside a .usdz the texture resolves to "<package>[<inner path>]", which no image
+    # reader can open - its bytes have to be written out to a file of their own.
+    package_path = build_usdz_package_with_a_textured_mesh(tmp_path, texture_file)
+    stage = Usd.Stage.Open(package_path)
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    resolved = UsdMeshShapeBuilder._diffuse_texture_path(mesh_prim)
+
+    assert Path(resolved).read_bytes() == Path(texture_file).read_bytes()
+
+
 def test_uv_coordinates_reads_the_per_point_st_primvar(texture_file):
     stage = build_stage_with_textured_mesh(texture_file)
     mesh_prim = stage.GetPrimAtPath("/object/mesh")
@@ -408,6 +434,18 @@ def test_create_mesh_shape_applies_the_bound_texture(texture_file):
     mesh = shape.unscaled_mesh
     assert mesh.visual.kind == "texture"
     assert mesh.visual.uv is not None
+
+
+def test_create_mesh_shape_applies_a_texture_packaged_inside_a_usdz(
+    texture_file, tmp_path
+):
+    package_path = build_usdz_package_with_a_textured_mesh(tmp_path, texture_file)
+    stage = Usd.Stage.Open(package_path)
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(mesh_prim, Gf.Matrix4d(1)).build()
+
+    assert shape.unscaled_mesh.visual.kind == "texture"
 
 
 def test_create_mesh_shape_has_no_texture_without_a_bound_material(texture_file):
@@ -444,3 +482,112 @@ def test_triangulate_handles_multiple_faces_of_different_sizes():
     # A triangle followed by a quad, sharing no vertex indices.
     faces = UsdMeshShapeBuilder._triangulate([3, 4], [0, 1, 2, 3, 4, 5, 6])
     np.testing.assert_array_equal(faces, [[0, 1, 2], [3, 4, 5], [3, 5, 6]])
+
+
+# %% sidedness
+
+
+def test_both_windings_adds_the_reverse_of_every_face():
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+
+    both = UsdMeshShapeBuilder._both_windings(faces)
+
+    np.testing.assert_array_equal(both, [[0, 1, 2], [0, 2, 3], [2, 1, 0], [3, 2, 0]])
+
+
+def test_create_mesh_shape_draws_a_double_sided_mesh_from_both_sides():
+    # A renderer culling back faces leaves a single-sided sheet invisible from behind,
+    # so a doubleSided mesh gets each of its two triangles in both windings.
+    stage = build_stage_with_a_double_sided_mesh(double_sided=True)
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(mesh_prim, Gf.Matrix4d(1)).build()
+
+    assert len(shape.unscaled_mesh.faces) == 4
+
+
+def test_create_mesh_shape_leaves_a_single_sided_mesh_one_sided():
+    stage = build_stage_with_a_double_sided_mesh(double_sided=False)
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(mesh_prim, Gf.Matrix4d(1)).build()
+
+    assert len(shape.unscaled_mesh.faces) == 2
+
+
+def test_create_mesh_shape_exports_the_mesh_as_glb():
+    # A scanned stage's meshes are far too big to spell out as decimal text.
+    stage = build_stage_with_a_double_sided_mesh(double_sided=False)
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(mesh_prim, Gf.Matrix4d(1)).build()
+
+    assert Path(shape.filename).suffix == f".{MeshFileType.GLB}"
+
+
+# %% shading
+
+
+def test_create_mesh_shape_shades_a_textured_mesh_by_default(texture_file):
+    stage = build_stage_with_textured_mesh(texture_file)
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(mesh_prim, Gf.Matrix4d(1)).build()
+
+    assert not np.any(shape.unscaled_mesh.visual.material.emissiveFactor)
+
+
+def test_create_mesh_shape_draws_an_unlit_mesh_at_full_brightness(texture_file):
+    # A scan's texture is a photograph, so its lighting is already in the pixels and
+    # shading it again darkens it. An emissive material has the renderer draw the
+    # texture as it is.
+    stage = build_stage_with_textured_mesh(texture_file)
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(mesh_prim, Gf.Matrix4d(1), Shading.UNLIT).build()
+
+    np.testing.assert_array_equal(
+        shape.unscaled_mesh.visual.material.emissiveFactor, [1.0, 1.0, 1.0]
+    )
+
+
+# %% texture size
+
+
+def large_texture(tmp_path, pixels: int) -> str:
+    path = tmp_path / f"wood_{pixels}.png"
+    Image.new("RGB", (pixels, pixels), color=(120, 80, 40)).save(path)
+    return str(path)
+
+
+def test_create_mesh_shape_keeps_a_texture_at_its_own_size_by_default(tmp_path):
+    stage = build_stage_with_textured_mesh(large_texture(tmp_path, 64))
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(mesh_prim, Gf.Matrix4d(1)).build()
+
+    assert shape.unscaled_mesh.visual.material.baseColorTexture.size == (64, 64)
+
+
+def test_create_mesh_shape_downscales_a_texture_past_the_maximum(tmp_path):
+    # A scan can carry textures of hundreds of megapixels, which a viewer has to hold
+    # decoded in memory.
+    stage = build_stage_with_textured_mesh(large_texture(tmp_path, 64))
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(
+        mesh_prim, Gf.Matrix4d(1), maximum_texture_size=16
+    ).build()
+
+    assert shape.unscaled_mesh.visual.material.baseColorTexture.size == (16, 16)
+
+
+def test_create_mesh_shape_leaves_a_texture_within_the_maximum_alone(tmp_path):
+    stage = build_stage_with_textured_mesh(large_texture(tmp_path, 8))
+    mesh_prim = stage.GetPrimAtPath("/object/mesh")
+
+    shape = UsdMeshShapeBuilder(
+        mesh_prim, Gf.Matrix4d(1), maximum_texture_size=16
+    ).build()
+
+    assert shape.unscaled_mesh.visual.material.baseColorTexture.size == (8, 8)

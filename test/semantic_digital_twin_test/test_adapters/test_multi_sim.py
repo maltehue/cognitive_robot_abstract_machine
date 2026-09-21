@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import timedelta
+from pathlib import Path
 import threading
 import time
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ from semantic_digital_twin.adapters.multi_sim import (
     MujocoBuilder,
     MujocoGeom,
     MujocoLight,
+    MujocoMeshFormat,
     MujocoSynchronizer,
 )
 
@@ -534,9 +536,11 @@ def test_builder_writes_a_geoms_contact_bitmasks(tmp_path):
         root = Body(name=PrefixedName("root"))
         world.add_body(root)
         box_shape = Box(scale=Scale(1, 1, 1))
-        box_shape.add_simulator_property(MujocoGeom(
-            contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
-        ))
+        box_shape.add_simulator_property(
+            MujocoGeom(
+                contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
+            )
+        )
         link = Body(
             name=PrefixedName("link"),
             visual=ShapeCollection([box_shape]),
@@ -599,9 +603,11 @@ def test_builder_keeps_a_visual_only_geom_contactless_despite_its_bitmasks(tmp_p
         root = Body(name=PrefixedName("root"))
         world.add_body(root)
         box_shape = Box(scale=Scale(1, 1, 1))
-        box_shape.add_simulator_property(MujocoGeom(
-            contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
-        ))
+        box_shape.add_simulator_property(
+            MujocoGeom(
+                contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
+            )
+        )
         link = Body(name=PrefixedName("link"), visual=ShapeCollection([box_shape]))
         world.add_kinematic_structure_entity(link)
         world.add_connection(FixedConnection(parent=root, child=link))
@@ -1195,6 +1201,33 @@ def test_builder_compiles_a_body_with_a_flat_coloured_untextured_mesh(tmp_path):
 
     [mesh_spec] = builder.spec.meshes
     assert mesh_spec.name == "painted_box"
+
+
+def test_builder_converts_a_mesh_in_a_format_mujoco_cannot_read(tmp_path):
+    # MuJoCo reads only a handful of mesh formats; anything else - a glTF binary, say -
+    # has to be converted before it reaches the spec, the way Collada already was.
+    box = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    mesh_file = str(tmp_path / "crate.glb")
+    box.export(mesh_file)
+
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        mesh_shape = Mesh(filename=mesh_file, scale=Scale(1, 1, 1))
+        crate = Body(
+            name=PrefixedName("crate"),
+            visual=ShapeCollection([mesh_shape]),
+            collision=ShapeCollection([mesh_shape]),
+        )
+        world.add_kinematic_structure_entity(crate)
+        world.add_connection(FixedConnection(parent=root, child=crate))
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    [mesh_spec] = builder.spec.meshes
+    assert Path(mesh_spec.file).suffix == f".{MujocoMeshFormat.STL}"
 
 
 def test_thicken_if_near_planar_regenerates_instead_of_reusing_a_stale_file(tmp_path):
