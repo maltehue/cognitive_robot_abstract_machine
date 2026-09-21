@@ -1,22 +1,27 @@
 """
 A Stretch and a Tiago share one apartment, each held by a giskard process of its own and
-each moved from a window of its own.
+each moved from a source of its own.
 
 This process owns the world: it builds it, serves it, draws it and starts one
-``robot.py`` and one joint state publisher window per robot::
+``robot.py`` per robot. Without the robots on the network, a joint state publisher
+window per robot stands in for them::
 
     python demo.py
 
+With the robots on the network, publishing in their namespaces where their interfaces
+read, no window is opened::
+
+    python demo.py --real-robots
+
 Every robot process fetches this world and runs its robot's own velocity interface on
 it, in the robot's namespace, so the robots see each other while each of them is moved
-by a source of its own. The window stands in for the robot: moving a slider publishes
-that robot's joint states where its interface reads them; its giskard writes them into
-its copy of the world and announces them, and this process draws what happened. Their
-output goes to a log file each, whose place is printed, and every started process is
-stopped with this one.
+by its own source. Whatever that source publishes, the robot's giskard writes into its
+copy of the world and announces, and this process draws what happened. Their output goes
+to a log file each, whose place is printed, and every started process is stopped with
+this one.
 
-A robot's base stays where the world put it, because the window reports joint positions
-and no odometry.
+A window reports joint positions and no odometry, so a robot moved from one keeps its
+base where the world put it.
 
 Watching it in RViz
 -------------------
@@ -27,6 +32,7 @@ Set the fixed frame to ``apartment/apartment_root`` and add a ``MarkerArray`` di
 
 from __future__ import annotations
 
+import argparse
 import os
 import signal
 import subprocess
@@ -275,12 +281,19 @@ def wait_until_ready(robots: List[DemoRobot]) -> None:
 
 def main() -> None:
     """
-    Serve the world, wait for the robot processes, open a window per robot and keep
-    serving the world until interrupted.
+    Serve the world, wait for the robot processes, open a window per robot unless the
+    robots themselves are on the network, and keep serving the world until interrupted.
 
     The windows are opened once the robots hold the world, so that their start does not
     compete with the robots' fetches.
     """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--real-robots",
+        action="store_true",
+        help="the robots publish their own joint states; open no window for them",
+    )
+    real_robots = parser.parse_args().real_robots
     rospy.init_node("shared_world")
     world = build_world()
     print(f"built the apartment and its robots: {len(world.bodies)} bodies", flush=True)
@@ -293,7 +306,8 @@ def main() -> None:
     processes = [start_robot_process(robot) for robot in robots]
     try:
         wait_until_ready(robots)
-        processes.extend(start_joint_state_publisher(robot) for robot in robots)
+        if not real_robots:
+            processes.extend(start_joint_state_publisher(robot) for robot in robots)
         print("serving the world until interrupted", flush=True)
         signal.pause()
     finally:
