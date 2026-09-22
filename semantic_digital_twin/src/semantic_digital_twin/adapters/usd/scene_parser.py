@@ -11,6 +11,7 @@ from semantic_digital_twin.adapters.usd.stage_parser import (
     Sdf,
     Usd,
     UsdGeom,
+    UsdPhysics,
     RootPlacement,
     USDStageParser,
     _usd_pose_to_transform,
@@ -138,11 +139,14 @@ class USDSceneParser(USDStageParser):
     A grouping prim that owns no geometry itself is not a body; its transform still
     reaches the objects it holds, through their own local-to-world transforms.
 
-    The surfaces the stage holds are reported as visual geometry, and nothing is
-    collided against: a scanned stage authors no collision geometry of its own, and
-    handing a scanned surface to a collision detector reads all of it back into memory.
-    Apply a :class:`~semantic_digital_twin.pipeline.mesh_decomposition.base.MeshDecomposer`
-    step to decide what the scene collides as.
+    The surfaces the stage holds are reported as visual geometry. What a body is
+    collided against is what the stage says it is: every geometry prim below the object
+    that carries :class:`~pxr.UsdPhysics.CollisionAPI`, guides included, since a guide is
+    the shape a collision box authored beside a surface takes. A stage authoring no
+    collision - a scan straight from the vendor - is collided against by nothing, because
+    handing a scanned surface to a collision detector reads all of it back into memory;
+    apply a :class:`~semantic_digital_twin.pipeline.mesh_decomposition.base.MeshDecomposer`
+    step to decide what such a scene collides as.
 
     .. note::
         A stage describing one physically articulated asset is read by
@@ -278,6 +282,7 @@ class USDSceneParser(USDStageParser):
         body = Body(
             name=PrefixedName(name, self.prefix),
             visual=ShapeCollection(self._object_shapes(object_prim, world_pose)),
+            collision=ShapeCollection(self._collision_shapes(object_prim, world_pose)),
         )
         inertial = self._parse_inertial(object_prim, body)
         if inertial is not None:
@@ -299,6 +304,34 @@ class USDSceneParser(USDStageParser):
             self._create_shape(child, world_pose) for child in object_prim.GetChildren()
         ]
         return [shape for shape in shapes if shape is not None]
+
+    def _collision_shapes(
+        self, object_prim: Usd.Prim, world_pose: Gf.Matrix4d
+    ) -> List[Shape]:
+        """
+        Creates the Shape for every geometry prim a physics engine collides one object
+        against: the prims below it carrying :class:`~pxr.UsdPhysics.CollisionAPI`,
+        however deeply an asset library nested them, but not those of an object of its
+        own held beneath it, which collides as itself.
+
+        :param object_prim: The prim whose collision to build shapes for.
+        :param world_pose: The object's rigid local-to-world transform, which its
+            shapes are positioned relative to.
+        :return: The created shapes.
+        """
+        objects_of_their_own = {prim.GetPath() for prim in self._object_prims()}
+        shapes = []
+        below = iter(Usd.PrimRange(object_prim))
+        for prim in below:
+            if prim != object_prim and prim.GetPath() in objects_of_their_own:
+                below.PruneChildren()
+                continue
+            if not prim.HasAPI(UsdPhysics.CollisionAPI):
+                continue
+            shape = self._build_shape(prim, world_pose)
+            if shape is not None:
+                shapes.append(shape)
+        return shapes
 
     # %% placement
 

@@ -644,3 +644,136 @@ def build_scene_stage_with_repeated_container_names() -> Usd.Stage:
         _define_placed_instance(stage, f"/scene/{asset}/Actor_0000/Geom", (1, 0, 0))
 
     return stage
+
+
+def build_scene_stage_with_a_guide_under_a_prim_of_its_own() -> Usd.Stage:
+    """
+    A minimal in-memory stage whose object holds its collision boxes under prims that
+    hold nothing else.
+
+    An asset library writing one box per opening of a wall gives each box a prim of its
+    own beside the surface, so the only geometry those prims hold is a guide.
+
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, "/scene").GetPrim())
+
+    _define_placed_instance(stage, "/scene/Wall/wall_a", (1, 0, 0))
+    for name in ("box_0", "box_1"):
+        box = UsdGeom.Cube.Define(stage, f"/scene/Wall/wall_a/Collision/{name}/cube")
+        box.CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
+
+    return stage
+
+
+def build_scene_stage_with_an_object_of_several_faces(
+    texture_file_path: str,
+) -> Usd.Stage:
+    """
+    A minimal in-memory stage whose object is made of more than one face.
+
+    Two squares side by side, textured per point, so that a segmentation taking some of
+    the faces has something to leave behind.
+
+    :param texture_file_path: Path to the texture image the object's material reads.
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, "/scene").GetPrim())
+
+    UsdGeom.Xform.Define(stage, "/scene/Wall/wall_a")
+    mesh = UsdGeom.Mesh.Define(stage, "/scene/Wall/wall_a/mesh")
+    mesh.CreatePointsAttr(
+        [
+            (0, 0, 0),
+            (1, 0, 0),
+            (1, 0, 1),
+            (0, 0, 1),
+            (2, 0, 0),
+            (2, 0, 1),
+        ]
+    )
+    mesh.CreateFaceVertexCountsAttr([4, 4])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3, 1, 4, 5, 2])
+    mesh.CreateNormalsAttr([(0, -1, 0), (0, -1, 0)])
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.uniform)
+    mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
+        "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex
+    ).Set([(0, 0), (0.5, 0), (0.5, 1), (0, 1), (1, 0), (1, 1)])
+
+    _bind_textured_material(stage, "/scene/Wall/wall_a", texture_file_path)
+
+    return stage
+
+
+def _define_collision_box(
+    stage: Usd.Stage,
+    path: str,
+    translation: tuple[float, float, float],
+    turn: float,
+    extents: tuple[float, float, float],
+) -> None:
+    """
+    Define one collision box the way an asset library writes it: an ``Xform`` placing it
+    under a ``Cube`` scaled to its extents, marked a guide and collided against.
+
+    :param stage: The stage to define it in.
+    :param path: The ``Xform``'s path; the ``Cube`` is its child ``cube``.
+    :param translation: Where the box's middle sits relative to its parent.
+    :param turn: How far the box is turned about the upright axis, in degrees.
+    :param extents: The box's full size along each of its own axes.
+    """
+    placement = UsdGeom.Xform.Define(stage, path)
+    placement.AddTranslateOp().Set(Gf.Vec3d(*translation))
+    placement.AddRotateZOp().Set(turn)
+    cube = UsdGeom.Cube.Define(stage, f"{path}/cube")
+    cube.GetSizeAttr().Set(1.0)
+    cube.AddScaleOp().Set(Gf.Vec3f(*extents))
+    cube.CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
+    UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+
+
+def build_scene_stage_with_authored_collision() -> Usd.Stage:
+    """
+    A minimal in-memory stage whose wall carries the collision an asset library
+    writes: two boxes under a ``Collision`` scope, a door leaf of its own beneath the
+    wall with one box of its own, and one guide that is collided against by nothing.
+
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, "/scene").GetPrim())
+
+    _define_placed_instance(stage, "/scene/Wall/wall_a", (1, 0, 0))
+    _define_collision_box(
+        stage,
+        "/scene/Wall/wall_a/Collision/box_0",
+        (2.0, 0.0, 1.25),
+        30.0,
+        (4.0, 0.2, 2.5),
+    )
+    _define_collision_box(
+        stage,
+        "/scene/Wall/wall_a/Collision/box_1",
+        (5.0, 0.0, 2.0),
+        30.0,
+        (1.0, 0.2, 1.0),
+    )
+    UsdGeom.Cube.Define(stage, "/scene/Wall/wall_a/proxy").CreatePurposeAttr().Set(
+        UsdGeom.Tokens.guide
+    )
+
+    _define_placed_instance(stage, "/scene/Wall/wall_a/door_0", (3.0, 0.0, 0.0))
+    _define_collision_box(
+        stage,
+        "/scene/Wall/wall_a/door_0/Collision/box_0",
+        (0.5, 0.0, 1.0),
+        0.0,
+        (1.0, 0.04, 2.0),
+    )
+    return stage

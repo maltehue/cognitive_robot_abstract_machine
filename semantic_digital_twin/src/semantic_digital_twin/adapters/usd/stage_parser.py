@@ -123,7 +123,7 @@ class _MockedSdfModule(MockedModule):
 
 
 try:
-    from pxr import Ar, Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Ar, Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade, Vt
 except ImportError:
     logger.warning(
         "usd-core is required for USD parsing. Please install it using "
@@ -648,6 +648,10 @@ class UsdMeshShapeBuilder(UsdShapeBuilder):
 
 def geometry_owning_prims(stage: Usd.Stage) -> List[Usd.Prim]:
     """
+    A guide is geometry a renderer draws nothing for, which is the shape a collision
+    proxy authored beside the surface it stands for takes, so a prim holding nothing
+    else owns no geometry of the scene.
+
     :param stage: The stage to search.
     :return: Every prim of the stage that directly holds renderable geometry, in stage
         order - each geometry prim belongs to exactly one of them, so no geometry of
@@ -657,6 +661,8 @@ def geometry_owning_prims(stage: Usd.Stage) -> List[Usd.Prim]:
     seen_paths = set()
     for prim in stage.Traverse():
         if not prim.IsA(UsdGeom.Gprim):
+            continue
+        if UsdGeom.Imageable(prim).ComputePurpose() == UsdGeom.Tokens.guide:
             continue
         parent = prim.GetParent()
         if parent.GetPath() in seen_paths:
@@ -928,7 +934,21 @@ class USDStageParser(WorldModelParser, ABC):
         """
         if UsdGeom.Imageable(prim).ComputePurpose() == UsdGeom.Tokens.guide:
             return None
+        return self._build_shape(prim, link_to_world)
 
+    def _build_shape(
+        self, prim: Usd.Prim, link_to_world: Gf.Matrix4d
+    ) -> Optional[Shape]:
+        """
+        Creates the Shape a geometry prim describes, whatever its purpose - which is
+        how a guide a physics engine collides against is read.
+
+        :param prim: The prim to create a shape for.
+        :param link_to_world: The enclosing link's local-to-world transform.
+        :return: The created shape, or ``None`` if ``prim`` is not shape geometry.
+        :raises UnsupportedUsdGeometryTypeError: If ``prim`` is a renderable geometric
+            primitive of a type this parser does not build a Shape for.
+        """
         type_name = prim.GetTypeName()
         try:
             geom_type = UsdGeomPrimType(type_name)

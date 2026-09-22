@@ -30,6 +30,8 @@ from .usd_stages import (
     build_jointless_stage_with_multiple_top_level_prims,
     build_jointless_stage_with_unsupported_geometry,
     build_scene_stage_with_a_guide_prim,
+    build_scene_stage_with_authored_collision,
+    build_scene_stage_with_a_guide_under_a_prim_of_its_own,
     build_scene_stage_with_a_scaled_group,
     build_scene_stage_with_grouped_instances,
     build_scene_stage_with_nested_objects,
@@ -355,6 +357,54 @@ def test_parse_leaves_a_guide_out_of_what_an_object_looks_like():
 
     [shape] = body_named(world, "wall_a").visual.shapes
     assert isinstance(shape, Mesh)
+
+
+def test_parse_gives_no_body_to_a_prim_holding_nothing_but_guides():
+    # A collision box written beside the surface it stands for owns no geometry a
+    # renderer draws, so the prim holding it is not an object of the scene.
+    world = parse(build_scene_stage_with_a_guide_under_a_prim_of_its_own())
+
+    assert [body.name.name for body in world.bodies if body is not world.root] == [
+        "wall_a"
+    ]
+
+
+def test_parse_reads_the_collision_a_stage_authors_into_the_body_it_belongs_to():
+    # An asset library writes what a physics engine collides an object against as
+    # guide boxes beside its surface; the body is collided as exactly those boxes.
+    world = parse(build_scene_stage_with_authored_collision())
+    wall = body_named(world, "wall_a")
+
+    [visual] = wall.visual.shapes
+    assert isinstance(visual, Mesh)
+    first, second = wall.collision.shapes
+    assert isinstance(first, Box) and isinstance(second, Box)
+    np.testing.assert_allclose(first.scale.to_np(), [4.0, 0.2, 2.5], atol=1e-6)
+    np.testing.assert_allclose(first.origin.to_np()[:3, 3], [2.0, 0.0, 1.25], atol=1e-6)
+    np.testing.assert_allclose(
+        first.origin.to_np()[:3, :3],
+        [
+            [np.cos(np.pi / 6), -np.sin(np.pi / 6), 0],
+            [np.sin(np.pi / 6), np.cos(np.pi / 6), 0],
+            [0, 0, 1],
+        ],
+        atol=1e-6,
+    )
+
+
+def test_parse_gives_a_nested_object_its_own_collision_and_not_its_holder_s():
+    world = parse(build_scene_stage_with_authored_collision())
+
+    [leaf_box] = body_named(world, "door_0").collision.shapes
+    np.testing.assert_allclose(leaf_box.scale.to_np(), [1.0, 0.04, 2.0], atol=1e-6)
+    assert len(body_named(world, "wall_a").collision.shapes) == 2
+
+
+def test_parse_collides_against_a_guide_only_when_the_stage_says_so():
+    # A guide nothing collides against stays what it was: not part of the object.
+    world = parse(build_scene_stage_with_a_guide_prim())
+
+    assert body_named(world, "wall_a").collision.shapes == []
 
 
 # %% naming the bodies a scene is made of
