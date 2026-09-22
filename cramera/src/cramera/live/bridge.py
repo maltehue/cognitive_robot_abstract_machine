@@ -51,9 +51,11 @@ from semantic_digital_twin.spatial_types import (
 from giskardpy.motion_statechart.data_types import LifeCycleValues
 from cramera.logging_setup import get_logger
 from cramera.body_geometry import POSE_PRECISION, rounded_pose
+from semantic_digital_twin.spatial_types.numeric import NumericPose
 from semantic_digital_twin.world_description.connections import (
     ActiveConnection1DOF,
     Connection6DoF,
+    FixedConnection,
 )
 
 from cramera.knowledge.enums import PlanNodeGroup
@@ -668,6 +670,14 @@ class WorldStateSnapshot:
     form as :attr:`base`, so a second robot or a moved environment model animates.
     """
 
+    joint_poses: Dict[str, List[float]] = field(default_factory=dict)
+    """
+    The parent-to-child pose of every connection that is neither fixed nor a one-axis
+    joint - a drive, a curved continuum section - by connection name, in the same
+    7-element form as :attr:`base`. The bundle writes such a connection as a floating
+    joint at the identity; this is what places its child.
+    """
+
     def to_payload(self) -> Dict[str, Any]:
         """
         The snapshot in the camel-cased JSON shape the viewer reads.
@@ -675,6 +685,7 @@ class WorldStateSnapshot:
         payload = asdict(self)
         payload["sequenceNumber"] = payload.pop("sequence_number")
         payload["modelBases"] = payload.pop("model_bases")
+        payload["jointPoses"] = payload.pop("joint_poses")
         payload["markersVersion"] = payload.pop("markers_version")
         return payload
 
@@ -822,6 +833,12 @@ class Bridge:
     _kinematic_connections: List[Connection] = field(default_factory=list)
     """
     Every world connection, of any kind, as the last bind discovered them.
+    """
+
+    _posed_connections: List[Connection] = field(default_factory=list)
+    """
+    The connections whose parent-to-child pose is streamed, because no joint value
+    expresses it.
     """
 
     _bodies: Dict[str, Body] = field(default_factory=dict)
@@ -2097,6 +2114,9 @@ class Bridge:
             self.robot = robots[0] if robots else None
         self._kinematic_connections = list(world.connections)
         self._connections = self._actuated_connections(self._kinematic_connections)
+        self._posed_connections = self._posed_connections_of(
+            self._kinematic_connections
+        )
         bodies: Dict[str, Body] = {}
         if self.robot is not None:
             bodies[ROBOT_BASE_KEY] = self.robot.root
@@ -2139,6 +2159,36 @@ class Bridge:
             if shape_collection.shapes:
                 return list(shape_collection.shapes)
         return []
+
+    @staticmethod
+    def _posed_connections_of(connections: List[Connection]) -> List[Connection]:
+        """
+        The connections that place their child by a pose rather than a joint value:
+        neither fixed nor one-axis. Their parent-to-child pose is streamed.
+
+        :param connections: The world's connections to pick them from.
+        """
+        return [
+            connection
+            for connection in connections
+            if not isinstance(connection, (FixedConnection, ActiveConnection1DOF))
+        ]
+
+    def _joint_poses(self) -> Dict[str, List[float]]:
+        """
+        The parent-to-child pose of every posed connection, rounded for publication.
+        """
+        return {
+            str(connection.name): [
+                round(value, POSE_PRECISION)
+                for value in NumericPose.from_transformation_matrix(
+                    self.world.compute_forward_kinematics_np(
+                        connection.parent, connection.child
+                    )
+                ).to_position_quaternion_list()
+            ]
+            for connection in self._posed_connections
+        }
 
     @staticmethod
     def _actuated_connections(
@@ -2270,6 +2320,7 @@ class Bridge:
                 objects=object_poses,
                 markers_version=self.marker_state["version"],
                 model_bases=robot_models.root_poses(),
+                joint_poses=self._joint_poses(),
             )
 
     def get_state(self) -> Dict[str, Any]:

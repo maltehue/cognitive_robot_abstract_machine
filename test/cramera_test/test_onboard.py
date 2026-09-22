@@ -425,6 +425,7 @@ class TestBundledModel:
             "robot": False,
             "links": len(report.links),
             "movableJoints": report.movable_joints,
+            "posedJoints": report.posed_joints,
         }
 
 
@@ -1370,9 +1371,16 @@ class TestUnsupportedConnections:
         assert 'type="floating"' in urdf
         assert report.movable_joints == [str(base.parent_connection.name)]
 
-    def test_a_connection_without_a_joint_type_grafts_the_child(
+    def test_a_connection_without_a_joint_type_becomes_a_posed_floating_joint(
         self, tmp_path, monkeypatch
     ):
+        """
+        A connection URDF has no type for still places its child relative to its.
+
+        parent, so it is written as a floating joint at the identity - the bridge
+        streams the pose it takes - rather than pinning the child where it happened to
+        stand when the bundle was written.
+        """
         world, root, base = self.drive_world()
         connection_types = dict(UrdfDocument.CONNECTION_JOINT_TYPES)
         del connection_types[OmniDrive]
@@ -1385,9 +1393,17 @@ class TestUnsupportedConnections:
             mesh_subdirectory="environment",
         )
 
-        urdf = Path(report.urdf).read_text()
-        graft_name = "%s_to_%s" % (UrdfDocument.SYNTHESIZED_ROOT_LINK, "pr2/base_link")
-        assert graft_name in urdf
+        urdf = ElementTree.fromstring(Path(report.urdf).read_text())
+        [joint] = [
+            joint
+            for joint in urdf.findall("joint")
+            if joint.find("child").attrib["link"] == "pr2/base_link"
+        ]
+        assert joint.attrib["name"] == str(base.parent_connection.name)
+        assert joint.attrib["type"] == "floating"
+        assert joint.find("parent").attrib["link"] == "world/root"
+        assert joint.find("origin").attrib["xyz"] == "0.0 0.0 0.0"
+        assert report.posed_joints == [str(base.parent_connection.name)]
 
     def test_a_grafted_body_of_a_robot_keeps_its_place_relative_to_the_robot_root(
         self, tmp_path, monkeypatch
@@ -1403,17 +1419,15 @@ class TestUnsupportedConnections:
         world, root, base = self.drive_world()
         segment = Body(name=PrefixedName("segment", prefix="pr2"))
         with world.modify_world():
+            # hung off the root, which the robot's document does not contain
             world.add_connection(
-                OmniDrive.create_with_dofs(parent=base, child=segment, world=world)
+                OmniDrive.create_with_dofs(parent=root, child=segment, world=world)
             )
             world.state[base.parent_connection.x.id].position = 3.0
             world.state[base.parent_connection.y.id].position = -2.0
-            world.state[segment.parent_connection.x.id].position = 0.5
+            world.state[segment.parent_connection.x.id].position = 3.5
             world.state[segment.parent_connection.yaw.id].position = 0.7
         world.notify_state_change()
-        connection_types = dict(UrdfDocument.CONNECTION_JOINT_TYPES)
-        del connection_types[OmniDrive]
-        monkeypatch.setattr(UrdfDocument, "CONNECTION_JOINT_TYPES", connection_types)
 
         report = UrdfDocument.of_bodies(
             bodies=[base, segment],

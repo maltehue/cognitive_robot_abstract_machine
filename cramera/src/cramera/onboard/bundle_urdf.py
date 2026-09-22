@@ -442,6 +442,12 @@ class BundleReport:
     References that could not be resolved to any file.
     """
 
+    posed_joints: List[str] = field(default_factory=list)
+    """
+    Names of the joints among :attr:`joints` written as ``floating`` to stand in for a
+    connection URDF has no type for; the live bridge streams their poses.
+    """
+
     @classmethod
     def of_source(
         cls,
@@ -561,6 +567,7 @@ class BundledModel:
             "robot": self.is_robot,
             "links": len(self.report.links),
             "movableJoints": self.report.movable_joints,
+            "posedJoints": self.report.posed_joints,
         }
 
 

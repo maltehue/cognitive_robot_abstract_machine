@@ -29,6 +29,7 @@ from semantic_digital_twin.spatial_types import (
 from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
+    OmniDrive,
     Connection6DoF,
     FixedConnection,
     RevoluteConnection,
@@ -873,6 +874,46 @@ class TestWorldDrivenDiscovery:
 
         objects = bridge.get_state()["objects"]
         assert objects["milk.stl"] == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
+class TestPosedJoints:
+    """
+    A connection that is neither fixed nor a one-axis joint - a drive, a curved
+    continuum section - places its child by a pose no joint value expresses, so the
+    snapshot streams that pose, parent to child, under the connection's name.
+    """
+
+    def test_snapshot_streams_the_pose_of_a_connection_without_a_joint_value(self):
+        world = World()
+        root = Body(name=PrefixedName("root", prefix="world"))
+        base = Body(name=PrefixedName("base_link", prefix="pr2"))
+        with world.modify_world():
+            world.add_body(root)
+            world.add_connection(
+                OmniDrive.create_with_dofs(parent=root, child=base, world=world)
+            )
+            world.state[base.parent_connection.x.id].position = 1.5
+            world.state[base.parent_connection.y.id].position = -2.0
+        world.notify_state_change()
+        bridge = Bridge()
+        bridge.world = world
+
+        bridge.bind()
+        bridge.snapshot()
+
+        poses = bridge.get_state()["jointPoses"]
+        assert poses == {
+            str(base.parent_connection.name): [1.5, -2.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        }
+
+    def test_a_fixed_connection_streams_no_pose(self):
+        bridge = Bridge()
+        bridge.world = world_with(shaped_body("montessori", "board"))
+
+        bridge.bind()
+        bridge.snapshot()
+
+        assert bridge.get_state()["jointPoses"] == {}
 
 
 class TestBundleSignature:

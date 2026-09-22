@@ -103,6 +103,7 @@ class TestReadOnlyEndpoints:
             "base": None,
             "objects": {},
             "modelBases": {},
+            "jointPoses": {},
             "markersVersion": 0,
         }
 
@@ -175,7 +176,9 @@ class TestJointMoves:
             )
         ]
 
-    def test_a_malformed_joint_move_is_rejected_on_the_http_thread(self, server, bridge):
+    def test_a_malformed_joint_move_is_rejected_on_the_http_thread(
+        self, server, bridge
+    ):
         status, body = post(server + "/joint", {"joint": "", "position": 1.2})
 
         assert status == 400

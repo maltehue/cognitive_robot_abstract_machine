@@ -1785,6 +1785,15 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
       if (j !== draggedJoint) j.setJointValue(st.frames[k]);
     }
     syncJointControls();
+    // a connection URDF has no joint type for -- a drive, a curved continuum section --
+    // was bundled as a floating joint at the identity, so the pose the bridge streams
+    // for it is the joint's whole local transform
+    for (const k in (st.jointPoses || {})) {
+      const j = JointRouting.jointFor(models, k);
+      if (!j || j.jointType !== 'floating') continue;
+      setPose(j, st.jointPoses[k], st.jointPoses[k], 0);
+      j.matrixWorldNeedsUpdate = true;
+    }
     if (robotModel && st.base) setPose(robotModel.obj, st.base, st.base, 0);
     // every bundled model root the bridge streams: a second robot drives, a moved
     // environment model follows (the primary robot's entry re-applies st.base)

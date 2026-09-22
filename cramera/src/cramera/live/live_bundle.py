@@ -270,6 +270,7 @@ def _model_payload(report: BundleReport, is_robot: bool) -> Dict[str, Any]:
         "robot": is_robot,
         "links": len(report.links),
         "movableJoints": report.movable_joints,
+        "posedJoints": report.posed_joints,
         "missing": report.missing,
     }
 

@@ -141,6 +141,12 @@ class UrdfDocument:
     Names of the added joints that are not fixed.
     """
 
+    posed_joint_names: List[str] = field(default_factory=list)
+    """
+    Names of the added floating joints standing in for connections URDF has no type for,
+    whose parent-to-child pose the live bridge streams.
+    """
+
     @classmethod
     def of_world(
         cls, world: World, name: str, output_directory: str, mesh_subdirectory: str
@@ -216,6 +222,8 @@ class UrdfDocument:
                 and cls.supports(connection)
             ):
                 document.add_joint(connection)
+            elif connection is not None and str(connection.parent.name) in serialized:
+                document.add_posed_joint(connection)
             elif identity_root is not None:
                 # The viewer puts the robot's live pose on the whole model, so a part
                 # grafted at its world pose would carry that pose twice.
@@ -228,6 +236,32 @@ class UrdfDocument:
             else:
                 document.graft_onto_root(body)
         return document.write(name, bodies)
+
+    def add_posed_joint(self, connection: Connection) -> None:
+        """
+        Add a ``floating`` joint for a connection URDF has no type for.
+
+        A drive or a curved continuum section places its child by a pose no joint value
+        expresses. The joint is written at the identity and the live bridge streams the
+        parent-to-child pose under the connection's name, so the child follows the world
+        instead of being pinned where it stood when the bundle was written.
+
+        :param connection: The connection the joint stands in for.
+        """
+        joint_element = ElementTree.SubElement(
+            self.root_element,
+            "joint",
+            {"name": str(connection.name), "type": JointType.FLOATING.name.lower()},
+        )
+        ElementTree.SubElement(
+            joint_element, "parent", {"link": str(connection.parent.name)}
+        )
+        ElementTree.SubElement(
+            joint_element, "child", {"link": str(connection.child.name)}
+        )
+        self._set_origin(joint_element, HomogeneousTransformationMatrix())
+        self.joint_names.append(str(connection.name))
+        self.posed_joint_names.append(str(connection.name))
 
     def graft_onto_root(
         self, body: Body, pose: Optional[HomogeneousTransformationMatrix] = None
@@ -275,6 +309,7 @@ class UrdfDocument:
             links=[str(body.name) for body in bodies],
             joints=self.joint_names,
             movable_joints=self.movable_joint_names,
+            posed_joints=self.posed_joint_names,
             meshes_copied=len(self.assets.copied),
             mesh_suffixes=self.assets.mesh_suffixes,
             references_rewritten=len(self.assets.copied),
