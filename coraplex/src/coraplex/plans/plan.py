@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 from dataclasses import field, dataclass
+from datetime import datetime
 
 import rustworkx as rx
 import rustworkx.visualization
@@ -18,8 +19,10 @@ from typing_extensions import (
 )
 
 from coraplex.plans.plan_entity import PlanEntity
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.plans.plan_node import (
     PlanNode,
+    MotionNode,
     ActionNode,
     DesignatorNode,
 )
@@ -38,6 +41,7 @@ from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.world import World
 
 if TYPE_CHECKING:
+    from giskardpy.motion_statechart.motion_statechart import MotionStatechart
     from coraplex.plans.plan_callbacks import PlanCallback
     from coraplex.datastructures.dataclasses import Context
     from coraplex.plans.designator import Designator
@@ -262,6 +266,100 @@ class Plan:
         result = self.root.perform()
         return result
 
+    def notify_node_started(self, node: PlanNode) -> None:
+        """
+        Notify every registered callback that a node started executing.
+
+        :param node: The node that started.
+        """
+        ancestors = (
+            []
+            if isinstance(node, MotionNode) and node._execution_in_progress
+            else node.path
+        )
+        for ancestor in reversed(ancestors):
+            if ancestor.status == LifeCycleValues.NOT_STARTED:
+                ancestor.status = LifeCycleValues.RUNNING
+                ancestor.start_time = datetime.now()
+                ancestor.end_time = None
+                for callback in self.node_callbacks:
+                    callback.on_start(ancestor)
+        for callback in self.node_callbacks:
+            callback.on_start(node)
+
+    def notify_node_ended(self, node: PlanNode) -> None:
+        """
+        Notify every registered callback that a node finished executing.
+
+        :param node: The node that ended.
+        """
+        for callback in self.node_callbacks:
+            callback.on_end(node)
+        if not (isinstance(node, MotionNode) and node._execution_in_progress):
+            self._complete_collapsed_ancestors(node)
+
+    def _complete_collapsed_ancestors(self, node: PlanNode) -> None:
+        """
+        Complete ancestors represented by their children's executables.
+
+        :param node: Child whose terminal lifecycle was just reported.
+        """
+        for ancestor in node.path:
+            if ancestor._execution_in_progress:
+                break
+            if ancestor.status not in (
+                LifeCycleValues.NOT_STARTED,
+                LifeCycleValues.RUNNING,
+            ):
+                continue
+            status = ancestor.completed_children_status
+            if status is None:
+                continue
+            ancestor.status = status
+            ancestor.end_time = datetime.now()
+            if status == LifeCycleValues.FAILED:
+                failed = next(
+                    child
+                    for child in ancestor.execution_children
+                    if child.status == LifeCycleValues.FAILED
+                )
+                ancestor.reason = failed.reason
+                ancestor.execution_error = failed.execution_error
+            for callback in self.node_callbacks:
+                callback.on_end(ancestor)
+
+    def notify_node_reset(self, node: PlanNode) -> None:
+        """
+        Clear derived completion when a native retry resets a child motion.
+
+        :param node: The motion returned to its unstarted state by native history.
+        """
+        for ancestor in node.path:
+            if ancestor._execution_in_progress:
+                break
+            pending = all(
+                child.status == LifeCycleValues.NOT_STARTED
+                for child in ancestor.execution_children
+            )
+            ancestor.status = (
+                LifeCycleValues.NOT_STARTED if pending else LifeCycleValues.RUNNING
+            )
+            ancestor.end_time = None
+            ancestor.reason = None
+            ancestor.execution_error = None
+            if pending:
+                ancestor.start_time = None
+
+    def notify_motion_tick(self, statechart: MotionStatechart) -> None:
+        """
+        Notify every registered callback that the motion executor ticked once while
+        realizing this plan's motions.
+
+        :param statechart: The motion statechart the executor is ticking.
+        """
+        for callback in self.node_callbacks:
+            callback.on_motion_tick(statechart)
+
     def re_perform(self):
         for child in self.root.descendants:
             if child.is_leaf:
@@ -374,7 +472,7 @@ class Plan:
             f"start: {node.start_time}",
             f"end: {node.end_time}",
             f"result: {node.result}",
-            f"reason: {node.reason}",
+            f"reason: {node.execution_error or node.reason}",
         ]
 
     def __repr__(self):

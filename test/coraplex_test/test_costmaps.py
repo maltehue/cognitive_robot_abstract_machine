@@ -98,6 +98,36 @@ def test_occupancy_robot_exclusion(immutable_model_world):
     assert np.sum(occupancy_map.map) == 137641
 
 
+def test_inflate_obstacles_marks_only_fully_free_windows(immutable_model_world):
+    """
+    A cell survives inflation only when every cell of the sliding window around it is
+    free: one obstacle cell must clear all windows that contain it.
+    """
+    world, robot_view, context = immutable_model_world
+    occupancy_map = OccupancyCostmap(
+        distance_to_obstacle=0.2,
+        height=20,
+        width=20,
+        resolution=0.1,
+        robot_view=robot_view,
+        origin=Pose.from_xyz_quaternion(0, 0, 0, 0, 0, 0, 1, world.root),
+        world=world,
+    )
+    free_space = np.ones((12, 12))
+    free_space[5, 6] = 0
+    window = occupancy_map._distance_to_obstacle_index * 2
+    expected = np.array(
+        [
+            [
+                int(np.all(free_space[row : row + window, column : column + window]))
+                for column in range(free_space.shape[1] - window + 1)
+            ]
+            for row in range(free_space.shape[0] - window + 1)
+        ]
+    )
+    assert np.array_equal(occupancy_map.inflate_obstacles(free_space), expected)
+
+
 def test_occupancy_leaves_the_floor_free(immutable_model_world):
     """
     The ground the robot drives on is not an obstacle: over a patch of open floor every

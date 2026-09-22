@@ -1,0 +1,57 @@
+# Runs in the standalone cramera repository (see sync.yml). Publishes the viewer as a
+# static site with two ready-made recordings from cram2/cram-scenes: the frontend needs
+# no Python for replaying a recorded scene, only for the EQL and knowledge panels,
+# which the demo build leaves out.
+name: Publish the demo site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  SCENES: g1_multiple_pkg_warehouse pr2_pouring
+  DEFAULT_SCENE: g1_multiple_pkg_warehouse
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch only the recordings the demo shows
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/cram2/cram-scenes.git scenes-repo
+          git -C scenes-repo sparse-checkout set $SCENES
+
+      - name: Assemble the site
+        run: |
+          mkdir -p site/scenes
+          cp -r src/cramera/web/. site/
+          for scene in $SCENES; do cp -r "scenes-repo/$scene" site/scenes/; done
+          python3 src/cramera/demo_site.py scenes-repo/index.json site/scenes/index.json "$DEFAULT_SCENE" $SCENES
+          cp scripts/demo_site_config.js site/config.js
+          du -sh site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

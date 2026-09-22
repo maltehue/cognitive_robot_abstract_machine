@@ -972,6 +972,17 @@ class AbstractRobot(Agent, HasRobotParts, ABC):
         except AttributeError:
             pass
 
+    def pose_facing(self, heading: Pose) -> Pose:
+        """
+        Resolve a desired heading into the corresponding robot root pose.
+
+        :param heading: Position and orientation of the robot's desired forward axis.
+        :return: The mobile base's pose, or the unchanged heading for a bare drive.
+        """
+        if isinstance(self, HasMobileBase):
+            return self.mobile_base.pose_facing(heading)
+        return heading
+
     def set_root_pose(self, pose: Pose) -> None:
         """
         Place the robot's root at ``pose``.

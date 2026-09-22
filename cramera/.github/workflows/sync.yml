@@ -1,0 +1,53 @@
+# Runs in the standalone cramera repository, which is a read-only mirror of the
+# ``cramera/`` directory of the CRAM monorepo. GitHub ignores this file inside the
+# monorepo (workflows only run from a repository's own root ``.github/``).
+#
+# The mirror pulls, so the monorepo needs no secret: the monorepo branch is public and
+# the push goes to this repository with its own token. Pushing a *changed* workflow file
+# needs the ``workflow`` scope the default token lacks; set a ``MIRROR_TOKEN`` secret
+# (classic PAT with repo + workflow) or push that one change by hand.
+name: Sync from the CRAM monorepo
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  MONOREPO: https://github.com/sunava/cognitive_robot_abstract_machine.git
+  BRANCH: cramera-port
+  PREFIX: cramera
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.MIRROR_TOKEN || github.token }}
+
+      - name: Fetch the monorepo branch
+        run: |
+          git remote add monorepo "$MONOREPO"
+          git fetch --no-tags monorepo "$BRANCH"
+
+      - name: Split the cramera directory out of it and publish
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          split=$(git subtree split --prefix="$PREFIX" "monorepo/$BRANCH")
+          if [ "$(git rev-parse HEAD)" = "$split" ]; then
+            echo "main already at $split"
+            exit 0
+          fi
+          git push --force origin "$split:refs/heads/main"
+          # a push made with the workflow token starts no other workflow, so the demo
+          # site is rebuilt by asking for it
+          gh workflow run pages.yml --ref main
+        env:
+          GH_TOKEN: ${{ secrets.MIRROR_TOKEN || github.token }}

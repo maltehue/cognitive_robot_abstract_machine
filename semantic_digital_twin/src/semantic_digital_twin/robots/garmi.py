@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
 from typing import ClassVar, List, Self
@@ -46,6 +47,41 @@ from semantic_digital_twin.world_description.connections import (
 from semantic_digital_twin.world_description.world_entity import (
     KinematicStructureEntity,
 )
+
+
+class GarmiJoint(StrEnum):
+    """
+    Names of GARMI's commandable connections, as spelled in its URDF.
+
+    Members are usable wherever a connection name is expected, so a configuration keyed by
+    them stays a plain mapping of names to positions.
+
+    ..note:: Connections that take no joint goal of their own are left out: the base
+        wheels, which the base controller drives, and the lift's upper stage and each
+        gripper's second finger, which mimic the joint below them.
+    """
+
+    LIFT = "lift_0_lower_joint"
+    NECK_PAN = "o1_motor_1"
+    NECK_TILT = "o1_motor_2"
+
+    LEFT_ARM_JOINT_1 = "left_fr3_joint1"
+    LEFT_ARM_JOINT_2 = "left_fr3_joint2"
+    LEFT_ARM_JOINT_3 = "left_fr3_joint3"
+    LEFT_ARM_JOINT_4 = "left_fr3_joint4"
+    LEFT_ARM_JOINT_5 = "left_fr3_joint5"
+    LEFT_ARM_JOINT_6 = "left_fr3_joint6"
+    LEFT_ARM_JOINT_7 = "left_fr3_joint7"
+    LEFT_GRIPPER_FINGER = "left_fr3_finger_joint1"
+
+    RIGHT_ARM_JOINT_1 = "right_fr3_joint1"
+    RIGHT_ARM_JOINT_2 = "right_fr3_joint2"
+    RIGHT_ARM_JOINT_3 = "right_fr3_joint3"
+    RIGHT_ARM_JOINT_4 = "right_fr3_joint4"
+    RIGHT_ARM_JOINT_5 = "right_fr3_joint5"
+    RIGHT_ARM_JOINT_6 = "right_fr3_joint6"
+    RIGHT_ARM_JOINT_7 = "right_fr3_joint7"
+    RIGHT_GRIPPER_FINGER = "right_fr3_finger_joint1"
 
 
 @dataclass(eq=False)
@@ -92,7 +128,7 @@ class GarmiNeck(Neck[GarmiCamera]):
         """
         Sets up hardware interfaces for the neck's pan and tilt joints.
         """
-        for joint_name in ("head_pan_joint", "head_tilt_joint"):
+        for joint_name in (GarmiJoint.NECK_PAN, GarmiJoint.NECK_TILT):
             self._world.get_connection_by_name(joint_name).has_hardware_interface = True
 
     def setup_joint_states(self) -> List[JointState]:
@@ -140,10 +176,10 @@ class GarmiLeftGripperLeftFinger(Finger):
         """
         return cls(
             root=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_0_gripper_fr3_hand"
+                robot_root, "left_fr3_hand"
             ),
             tip=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_0_gripper_fr3_leftfinger"
+                robot_root, "left_fr3_leftfinger"
             ),
         )
 
@@ -174,10 +210,10 @@ class GarmiLeftGripperRightFinger(Finger):
         """
         return cls(
             root=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_0_gripper_fr3_hand"
+                robot_root, "left_fr3_hand"
             ),
             tip=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_0_gripper_fr3_rightfinger"
+                robot_root, "left_fr3_rightfinger"
             ),
         )
 
@@ -208,10 +244,10 @@ class GarmiRightGripperLeftFinger(Finger):
         """
         return cls(
             root=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_1_gripper_fr3_hand"
+                robot_root, "right_fr3_hand"
             ),
             tip=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_1_gripper_fr3_leftfinger"
+                robot_root, "right_fr3_leftfinger"
             ),
         )
 
@@ -242,10 +278,10 @@ class GarmiRightGripperRightFinger(Finger):
         """
         return cls(
             root=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_1_gripper_fr3_hand"
+                robot_root, "right_fr3_hand"
             ),
             tip=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_1_gripper_fr3_rightfinger"
+                robot_root, "right_fr3_rightfinger"
             ),
         )
 
@@ -263,8 +299,8 @@ class GarmiLeftGripper(
         Sets up hardware interfaces for the gripper's finger joints.
         """
         for joint_name in (
-            "arm_0_gripper_fr3_finger_joint1",
-            "arm_0_gripper_fr3_finger_joint2",
+            "left_fr3_finger_joint1",
+            "left_fr3_finger_joint2",
         ):
             self._world.get_connection_by_name(joint_name).has_hardware_interface = True
 
@@ -294,12 +330,12 @@ class GarmiLeftGripper(
         """
         return cls(
             root=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_0_gripper_fr3_hand"
+                robot_root, "left_fr3_hand"
             ),
             tool_frame=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_0_gripper_fr3_hand_tcp"
+                robot_root, "left_fr3_hand_tcp"
             ),
-            front_facing_orientation=Quaternion(0, 0, 0, 1),
+            front_facing_orientation=Quaternion(0, -0.70711, 0, -0.70711),
         )
 
 
@@ -317,8 +353,8 @@ class GarmiRightGripper(
         Sets up hardware interfaces for the gripper's finger joints.
         """
         for joint_name in (
-            "arm_1_gripper_fr3_finger_joint1",
-            "arm_1_gripper_fr3_finger_joint2",
+            "right_fr3_finger_joint1",
+            "right_fr3_finger_joint2",
         ):
             self._world.get_connection_by_name(joint_name).has_hardware_interface = True
 
@@ -348,12 +384,12 @@ class GarmiRightGripper(
         """
         return cls(
             root=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_1_gripper_fr3_hand"
+                robot_root, "right_fr3_hand"
             ),
             tool_frame=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_1_gripper_fr3_hand_tcp"
+                robot_root, "right_fr3_hand_tcp"
             ),
-            front_facing_orientation=Quaternion(0, 0, 0, 1),
+            front_facing_orientation=Quaternion(0, -0.70711, 0, -0.70711),
         )
 
 
@@ -379,7 +415,7 @@ class GarmiLeftArm(Arm[GarmiLeftGripper]):
         """
         for joint_index in range(1, 8):
             self._world.get_connection_by_name(
-                f"arm_0_fr3_joint{joint_index}"
+                f"left_fr3_joint{joint_index}"
             ).has_hardware_interface = True
 
     def setup_joint_states(self) -> List[JointState]:
@@ -411,7 +447,7 @@ class GarmiLeftArm(Arm[GarmiLeftGripper]):
                 robot_root, "arm_mount_left_link"
             ),
             tip=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_0_fr3_link8"
+                robot_root, "left_fr3_link8"
             ),
         )
 
@@ -438,7 +474,7 @@ class GarmiRightArm(Arm[GarmiRightGripper]):
         """
         for joint_index in range(1, 8):
             self._world.get_connection_by_name(
-                f"arm_1_fr3_joint{joint_index}"
+                f"right_fr3_joint{joint_index}"
             ).has_hardware_interface = True
 
     def setup_joint_states(self) -> List[JointState]:
@@ -470,7 +506,7 @@ class GarmiRightArm(Arm[GarmiRightGripper]):
                 robot_root, "arm_mount_right_link"
             ),
             tip=robot_root._world.get_body_in_branch_by_name(
-                robot_root, "arm_1_fr3_link8"
+                robot_root, "right_fr3_link8"
             ),
         )
 
@@ -582,9 +618,9 @@ class Garmi(AbstractRobot, HasMobileBase[GarmiMobileBase]):
     @classmethod
     def get_ros_file_path(cls) -> str:
         """
-        Returns the ROS file path for the GARMI robot description.
+        Returns the file path for the GARMI robot description.
         """
-        raise NotImplementedError("We dont have the ROS Package yet")
+        return "package://garmi_description/urdf/garmi.urdf"
 
     @classmethod
     def _get_root_body_name(cls) -> str:
@@ -605,7 +641,7 @@ class Garmi(AbstractRobot, HasMobileBase[GarmiMobileBase]):
             "rear_right_wheel_joint",
         ):
             vel_limits[self._world.get_connection_by_name(joint_name)] = 1.3
-        for joint_name in ("head_pan_joint", "head_tilt_joint"):
+        for joint_name in (GarmiJoint.NECK_PAN, GarmiJoint.NECK_TILT):
             vel_limits[self._world.get_connection_by_name(joint_name)] = 1.0
         self.tighten_dof_velocity_limits_of_1dof_connections(new_limits=vel_limits)
 

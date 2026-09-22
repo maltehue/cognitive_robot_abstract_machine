@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from typing_extensions import Dict, Optional, Tuple, Union, List
@@ -8,6 +9,8 @@ from xacro import process_file
 
 from semantic_digital_twin.adapters.package_resolver import (
     CompositePathResolver,
+    FileUriResolver,
+    PackageUriResolver,
     PathResolver,
 )
 from semantic_digital_twin.adapters.world_model_parser import WorldModelParser
@@ -147,9 +150,17 @@ class URDFParser(WorldModelParser):
         if file_path.endswith(".xacro"):
             return cls.from_xacro(file_path, prefix)
 
-        path_resolver = path_resolver or CompositePathResolver()
-
-        file_path = path_resolver.resolve(file_path)
+        file_path = (path_resolver or CompositePathResolver()).resolve(file_path)
+        if path_resolver is None:
+            # A URDF that names its meshes by a path relative to itself (rather than by a
+            # package:// URI) is only portable if those paths resolve against the URDF's
+            # own directory instead of the current working directory.
+            path_resolver = CompositePathResolver(
+                resolvers=[
+                    FileUriResolver(base_directory=os.path.dirname(file_path)),
+                    PackageUriResolver(),
+                ]
+            )
         if file_path is not None:
             with open(file_path, "r") as file:
                 # Since parsing URDF causes a lot of warning messages which can't be deactivated, we suppress them
@@ -183,7 +194,7 @@ class URDFParser(WorldModelParser):
         return URDFParser(urdf=urdf, prefix=prefix)
 
     def parse(self) -> World:
-        prefix = self.parsed.name
+        prefix = self.prefix
         links = [
             self.parse_link(link, PrefixedName(link.name, prefix))
             for link in self.parsed.links
@@ -365,6 +376,38 @@ class URDFParser(WorldModelParser):
             inertia=inertia_in_link_frame,
         )
 
+    @property
+    def material_colors(self) -> Dict[str, Tuple[float, float, float, float]]:
+        """
+        The rgba every named material of this description is declared with.
+
+        Material names are global in URDF, and a description may declare one inside the
+        visual of the first link that uses it and refer to it by name everywhere else,
+        so declarations are collected from the links as well as from the top level.
+        """
+        declarations = [
+            visual.material
+            for link in self.parsed.links
+            for visual in link.visuals
+            if visual.material is not None
+        ] + list(self.parsed.materials)
+        return {
+            material.name: tuple(material.color.rgba)
+            for material in declarations
+            if material.color is not None
+        }
+
+    def color_of(self, geometry: Union[urdfpy.Collision, urdfpy.Visual]) -> Color:
+        """
+        The color a single geometry's material gives it, white without one.
+
+        :param geometry: The visual or collision geometry to read the material off.
+        """
+        material = getattr(geometry, "material", None)
+        if material is None:
+            return Color()
+        return Color(*self.material_colors.get(material.name, (1, 1, 1, 1)))
+
     def parse_geometry(
         self,
         geometry: Union[List[urdfpy.Collision], List[urdfpy.Visual]],
@@ -378,26 +421,13 @@ class URDFParser(WorldModelParser):
         :return: A List of shapes corresponding to the URDF geometry.
         """
         res = []
-        material_dict = dict(
-            zip(
-                [material.name for material in self.parsed.materials],
-                [
-                    material.color.rgba if material.color else None
-                    for material in self.parsed.materials
-                ],
-            )
-        )
         for i, geom in enumerate(geometry):
             params = (*(geom.origin.xyz + geom.origin.rpy),) if geom.origin else ()
             origin_transform = HomogeneousTransformationMatrix.from_xyz_rpy(
                 *params, reference_frame=body
             )
             if isinstance(geom.geometry, urdfpy.Box):
-                color = (
-                    Color(*material_dict.get(geom.material.name, (1, 1, 1, 1)))
-                    if hasattr(geom, "material") and geom.material
-                    else Color(1, 1, 1, 1)
-                )
+                color = self.color_of(geom)
                 res.append(
                     Box(
                         origin=origin_transform,
@@ -406,11 +436,7 @@ class URDFParser(WorldModelParser):
                     )
                 )
             elif isinstance(geom.geometry, urdfpy.Sphere):
-                color = (
-                    Color(*material_dict.get(geom.material.name, (1, 1, 1, 1)))
-                    if hasattr(geom, "material") and geom.material
-                    else Color(1, 1, 1, 1)
-                )
+                color = self.color_of(geom)
                 res.append(
                     Sphere(
                         origin=origin_transform,
@@ -419,11 +445,7 @@ class URDFParser(WorldModelParser):
                     )
                 )
             elif isinstance(geom.geometry, urdfpy.Cylinder):
-                color = (
-                    Color(*material_dict.get(geom.material.name, (1, 1, 1, 1)))
-                    if hasattr(geom, "material") and geom.material
-                    else Color(1, 1, 1, 1)
-                )
+                color = self.color_of(geom)
                 res.append(
                     Cylinder(
                         origin=origin_transform,
@@ -440,6 +462,7 @@ class URDFParser(WorldModelParser):
                         origin=origin_transform,
                         filename=self.path_resolver.resolve(geom.geometry.filename),
                         scale=Scale(*(geom.geometry.scale or (1, 1, 1))),
+                        color=self.color_of(geom),
                     )
                 )
         return ShapeCollection(res, reference_frame=body)

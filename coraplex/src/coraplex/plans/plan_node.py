@@ -3,27 +3,31 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod, ABC
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Any, List, Type, TYPE_CHECKING, Iterable
+from typing import Optional, Any, List, Type, TYPE_CHECKING, Iterable, ClassVar
 
-from typing_extensions import Union
+from typing_extensions import Union, Iterator
 
 from coraplex.plans.designator import Designator
+from coraplex.datastructures.manipulation_contacts import HasManipulationContactPolicy
+from coraplex.plans.failures import PlanFailure
 from giskardpy.motion_statechart.goals.templates import NodeListGoal
 from giskardpy.motion_statechart.graph_node import Goal
 from krrood.entity_query_language.query.match import Match
+from krrood.patterns.field_metadata import JSONMetadata
 from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.datastructures.execution_data import ExecutionData
 from coraplex.plans.executables import (
     Executable,
     GiskardExecutable,
 )
-from coraplex.plans.failures import PlanFailure
 from coraplex.plans.motion_state_chart_building import BuildsMotionStateChart
 from coraplex.plans.plan_entity import PlanEntity
 
 if TYPE_CHECKING:
+    from giskardpy.motion_statechart.motion_statechart import MotionStatechart
     from giskardpy.motion_statechart.graph_node import Task
     from coraplex.datastructures.dataclasses import Context
     from coraplex.robot_plans.actions.base import ActionDescription
@@ -47,6 +51,11 @@ class PlanNode(PlanEntity):
     A node in the plan.
     """
 
+    succeeds_with_any_child: ClassVar[bool] = False
+    """
+    Whether any successful completed alternative establishes success.
+    """
+
     status: LifeCycleValues = LifeCycleValues.NOT_STARTED
     """
     Where this node is in its execution.
@@ -62,14 +71,32 @@ class PlanNode(PlanEntity):
     The ending time of the function, optional.
     """
 
-    reason: Optional[PlanFailure] = None
+    reason: PlanFailure | None = None
     """
-    The reason of failure if the action failed.
+    The structured plan failure retained in persisted execution records.
+    """
+
+    execution_error: BaseException | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+        metadata=JSONMetadata(serialize=False).as_dict(),
+    )
+    """
+    The original runtime exception, excluded from persistent execution records.
     """
 
     result: Optional[Any] = None
     """
     Result from the execution of this node.
+    """
+
+    _execution_in_progress: bool = field(
+        default=False, init=False, repr=False, compare=False
+    )
+    """
+    Whether a call is already executing this node.
     """
 
     index: Optional[int] = field(default=None, init=False, repr=False)
@@ -114,6 +141,36 @@ class PlanNode(PlanEntity):
         """
         children = self.plan.plan_graph.successors(self.index)
         return list(sort_by_layer_index(children))
+
+    @property
+    def execution_children(self) -> List[PlanNode]:
+        """
+        :return: Children contributing to the outcome of this execution.
+        """
+        return self.children
+
+    @property
+    def completed_children_status(self) -> Optional[LifeCycleValues]:
+        """
+        :return: The terminal outcome established by children, or None while pending.
+        """
+        statuses = {child.status for child in self.execution_children}
+        if self.succeeds_with_any_child:
+            if statuses & {
+                LifeCycleValues.NOT_STARTED,
+                LifeCycleValues.RUNNING,
+                LifeCycleValues.PAUSED,
+            }:
+                return None
+            if LifeCycleValues.SUCCEEDED in statuses:
+                return LifeCycleValues.SUCCEEDED
+        if LifeCycleValues.FAILED in statuses:
+            return LifeCycleValues.FAILED
+        if LifeCycleValues.INTERRUPTED in statuses:
+            return LifeCycleValues.INTERRUPTED
+        if statuses == {LifeCycleValues.SUCCEEDED}:
+            return LifeCycleValues.SUCCEEDED
+        return None
 
     @property
     def descendants(self) -> List[PlanNode]:
@@ -287,17 +344,60 @@ class PlanNode(PlanEntity):
                 self.status = LifeCycleValues.INTERRUPTED
                 return
 
-        self.status = LifeCycleValues.RUNNING
-        try:
+        with self.execution_scope():
             self.notify()
             self.result = self.parse().execute()
-        except PlanFailure as e:
-            self.status = LifeCycleValues.FAILED
-            self.reason = e
-            raise e
+        return self.result
+
+    @property
+    def reports_execution_boundaries(self) -> bool:
+        """
+        Return whether the call scope publishes this node's start and end events.
+        """
+        return True
+
+    @contextmanager
+    def execution_scope(self) -> Iterator[None]:
+        """
+        Track execution and publish boundaries owned by the call scope.
+        """
+        if self._execution_in_progress:
+            yield
+            return
+        self._execution_in_progress = True
+        if self.reports_execution_boundaries:
+            self.status = LifeCycleValues.RUNNING
+            self.start_time = datetime.now()
+            self.end_time = None
+        self.reason = None
+        self.execution_error = None
+        try:
+            if self.reports_execution_boundaries:
+                self.plan.notify_node_started(self)
+            yield
+            if (
+                self.reports_execution_boundaries
+                and self.status == LifeCycleValues.RUNNING
+            ):
+                self.status = LifeCycleValues.SUCCEEDED
+        except BaseException as error:
+            self.execution_error = error
+            self.reason = error if isinstance(error, PlanFailure) else None
+            self.status = (
+                LifeCycleValues.FAILED
+                if isinstance(error, Exception)
+                else LifeCycleValues.INTERRUPTED
+            )
+            raise
         finally:
-            self.end_time = datetime.now()
-        self.status = LifeCycleValues.SUCCEEDED
+            self._execution_in_progress = False
+            try:
+                if self.reports_execution_boundaries:
+                    self.end_time = datetime.now()
+                    self.plan.notify_node_ended(self)
+            finally:
+                if self.execution_error is not None:
+                    raise self.execution_error
 
     def mount_subplan(self, root: PlanNode):
         """
@@ -370,9 +470,8 @@ class PlanNode(PlanEntity):
         Whether this node or any of its descendants splits the plan into separate motion
         state charts.
         """
-        return any(
-            isinstance(node, ExecutionBoundaryNode)
-            for node in [self] + self.descendants
+        return isinstance(self, ExecutionBoundaryNode) or any(
+            child.contains_execution_boundary for child in self.children
         )
 
     def __node_info__(self):
@@ -381,7 +480,7 @@ class PlanNode(PlanEntity):
             f"start: {self.start_time}",
             f"end: {self.end_time}",
             f"result: {self.result}",
-            f"reason: {self.reason}",
+            f"reason: {self.execution_error or self.reason}",
         ]
 
     def __node_label__(self):
@@ -475,6 +574,33 @@ class ActionNode(DesignatorNode, BuildsMotionStateChart):
     def action(self) -> ActionDescription:
         return self.designator
 
+    @property
+    def execution_children(self) -> List[PlanNode]:
+        """
+        :return: The action body and conditions that actually ran.
+
+        Condition nodes that were not evaluated retain CREATED and do not determine
+        whether the executed action body completed.
+        """
+        from coraplex.plans.condition_nodes import ConditionNode
+
+        return [
+            child
+            for child in self.children
+            if not isinstance(child, ConditionNode)
+            or child.status != LifeCycleValues.NOT_STARTED
+        ]
+
+    @property
+    def contains_execution_boundary(self) -> bool:
+        """
+        Separate intended-contact actions from surrounding motion groups.
+        """
+        return (
+            isinstance(self.action, HasManipulationContactPolicy)
+            or super().contains_execution_boundary
+        )
+
     def create_execution_data_pre_perform(self):
         """
         Create the ExecutionData and logs additional information about the execution of
@@ -567,7 +693,8 @@ class ActionNode(DesignatorNode, BuildsMotionStateChart):
         return executable
 
     def execute(self):
-        self.parse().execute()
+        with self.execution_scope():
+            self.parse().execute()
 
 
 @dataclass(eq=False, repr=False)
@@ -583,6 +710,20 @@ class MotionNode(DesignatorNode, BuildsMotionStateChart):
     """
     Reference to the motion designator which is linked to this node.
     """
+
+    motion_statechart: MotionStatechart | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    """
+    The native chart bound to this motion for its current execution.
+    """
+
+    @property
+    def reports_execution_boundaries(self) -> bool:
+        """
+        Leave motion boundaries to the native task history.
+        """
+        return False
 
     @property
     def motion(self) -> BaseMotion:
@@ -609,6 +750,13 @@ class MotionNode(DesignatorNode, BuildsMotionStateChart):
             if isinstance(node, ActionNode):
                 return node
         return None
+
+    @property
+    def contains_execution_boundary(self) -> bool:
+        """
+        Defer state-dependent motion expansion until earlier groups execute.
+        """
+        return self.motion.requires_individual_execution
 
     @property
     def has_motions(self) -> bool:

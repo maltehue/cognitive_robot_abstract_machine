@@ -1,0 +1,5 @@
+# Read only by git in the standalone cramera repository, where this directory is the
+# root; the monorepo declares the same submodule in its own root .gitmodules.
+[submodule "scenes"]
+	path = scenes
+	url = https://github.com/cram2/cram-scenes.git

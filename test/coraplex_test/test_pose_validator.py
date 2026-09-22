@@ -399,6 +399,7 @@ def test_validation_frees_the_gripper_like_the_reach_it_validates(
     """
     world, robot_view, context = immutable_model_world
     validator = _reachability_validator(world, robot_view, context)
+    validator.allow_gripper_collision = True
 
     with ExecutionEnvironment(ExecutionType.SIMULATED, collision_avoidance=True):
         msc = validator.create_msc()

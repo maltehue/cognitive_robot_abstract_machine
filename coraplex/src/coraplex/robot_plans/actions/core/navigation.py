@@ -55,12 +55,18 @@ class NavigateAction(ActionDescription):
     Keep the joint states of the robot the same during the navigation.
     """
 
+    face_travel_direction: bool = field(default=True, kw_only=True)
+    """
+    Turn toward travel where space permits, retaining the requested final orientation.
+    """
+
     @property
     def _action_plan(self) -> PlanNode:
         return execute_single(
             MoveMotion(
-                self.robot.mobile_base.pose_facing(self.target_location),
+                self.robot.pose_facing(self.target_location),
                 self.keep_joint_states,
+                face_travel_direction=self.face_travel_direction,
             )
         )
 
@@ -87,7 +93,7 @@ class NavigateAction(ActionDescription):
         """
         return allclose(
             variable_from(context.robot.root).global_pose,
-            context.robot.mobile_base.pose_facing(kwargs["target_location"]),
+            context.robot.pose_facing(kwargs["target_location"]),
             atol=0.03,
         )
 
@@ -122,8 +128,8 @@ class PathPlanningNavigateAction(ActionDescription):
     The free space is decomposed into a graph of convex sets, so the robot drives around
     the furniture and walls between it and the target instead of straight at them.
 
-
-    This works for obstacles which are known in the environment beforehand not such that are added during navigation.
+     This works for obstacles which are known in the environment beforehand not such
+    that are added during navigation.
     """
 
     target: Pose
@@ -133,7 +139,7 @@ class PathPlanningNavigateAction(ActionDescription):
 
     @property
     def _action_plan(self) -> PlanNode:
-        return sequential([MoveMotion(waypoint) for waypoint in self._path()])
+        return execute_single(MoveMotion(self.target, keep_joint_states=True))
 
     @property
     def _floor(self) -> Floor:

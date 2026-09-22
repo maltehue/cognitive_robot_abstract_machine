@@ -18,24 +18,24 @@ The CoraPlex plan language is a way to structure the execution of your plan. In 
 execute designators either sequential or in parallel. Furthermore, exceptions that occur during execution of a plan with
 the plan language do not interrupt the execution instead they are caught and handed to the failure handling module.
 The language create a tree structure of the plan where the language expressions one kine of nodes among designators
-these nodes store additional information about the execution of the plan including the exceptions that occurred and the 
+these nodes store additional information about the execution of the plan including the exceptions that occurred and the
 status of execution.
 
 There are 4 language expressions:
 
-| Name             | Description                                                                                                                                                                                                                                                                                | 
+| Name             | Description                                                                                                                                                                                                                                                                                |
 |------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Sequential**   | Executes the designators one after another, if one of the designators raises an exception the execution is aborted and the state FAILED will be returned.                                                                                                                                  |
 | **Try In Order** | Executes the designators one after another, if one designator raises an exception the exception is caught and saved but the execution is not interrupted and the other designators are executed. Returns the state SUCCEDED if at least one designator can be executed without exception. |
-| **Repeat**       | Repeat the previous language expression a number of time. Has to be used with a language expression and an integer.                                                                                                                                                                        | 
+| **Repeat**       | Repeat the previous language expression a number of time. Has to be used with a language expression and an integer.                                                                                                                                                                        |
 | **Parallel**     | Executes all designators in parallel. For each designator there will be a new thread created and the designator is executed in this thread. If one of the designators raises an exception the returned state will be FAILED.                                                               |
 | **Try All**      | Executes all designators in parallel with a designated thread for each designator. Returns the state SUCCEDED if at least one designator can be executed without an exception                                                                                                              |
-| **Monitor**      | Monitors the execution of the attached langauge expression, will interrupt or pause it once a given condition is fulfilled.                                                                                                                                                                 | 
+| **Monitor**      | Monitors the execution of the attached langauge expression, will interrupt or pause it once a given condition is fulfilled.                                                                                                                                                                 |
 
 The Sequential plan is the only one which aborts the execution once an error is raised.
 
 When using the plan language a tree structure of the plan is created where the language expressions are nodes and
-designators are leafs. 
+designators are leafs.
 
 # Setup the World
 
@@ -198,7 +198,7 @@ arbitrary code in a plan.
 
 The callable can either be a lambda expression or, for more complex code, a function.
 
-Although this expression is more intended for debugging and testing purposes since the code can not really interact with 
+Although this expression is more intended for debugging and testing purposes since the code can not really interact with
 other parts of the plan.
 
 ```python

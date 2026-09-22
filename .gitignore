@@ -22,7 +22,10 @@ msg/_*.py
 # check-setup.sh looks for, so this one fixture is checked in.
 !.claude/hooks/tests/fixtures/set-up-clone/**/*.txt
 *.png
+!coraplex/resources/objects/*.png
 !.claude/skills/plan-dashboard/example/screenshots/*.png
+!cramera/src/cramera/web/img/aicor-logo.png
+!cramera/src/cramera/web/img/ai-picture.png
 *.lprof
 tmp_data/
 tmp/
@@ -111,6 +114,8 @@ test/krrood_test/test_ripple_down_rules/test_generated_rdrs
 *.lo
 *.o
 *.obj
+# ... but the object library's meshes are assets, not build output
+!coraplex/resources/objects/*.obj
 
 # Precompiled Headers
 *.gch
@@ -188,3 +193,7 @@ CLAUDE.local.md
 # Tracking a generated file made every branch switch fail while a checkout held its own
 # copy, which is what git refuses to overwrite.
 **/ormatic_interface.py
+
+# Local parallel test reports
+.coverage.*
+.living_worlds_tally/

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRAMERA · Offline-Tour</title>
+  <link rel="stylesheet" href="tour.css" />
+  <script src="tour.js" defer></script>
+</head>
+<body>
+  <header class="tour-header">
+    <div><span class="eyebrow">CRAMERA · LOKALE AUFNAHMEN</span><h1 id="tour-title">Offline-Tour</h1></div>
+    <p id="tour-description">Die Tour wird geladen …</p>
+  </header>
+  <main>
+    <nav aria-label="Kapitel"><h2>Kapitel</h2><ol id="tour-chapters"></ol></nav>
+    <section class="presentation" aria-label="Vorführung">
+      <iframe id="tour-viewer" title="CRAMERA: Szene, Wissen und Plan"></iframe>
+      <div class="narration">
+        <span class="eyebrow" id="tour-counter"></span>
+        <h2 id="chapter-title">Vorbereitung</h2>
+        <p id="chapter-narration">Die gespeicherten Szenen bleiben vollständig auf diesem Rechner.</p>
+        <p id="tour-status" role="status" aria-live="polite">Manifest wird geladen …</p>
+        <p id="tour-complete" hidden>Tour abgeschlossen. Alle Kapitel wurden gezeigt.</p>
+      </div>
+    </section>
+  </main>
+  <footer>
+    <div class="controls">
+      <button id="tour-previous" type="button" disabled>← Zurück</button>
+      <button id="tour-start" type="button" class="primary" disabled>Start</button>
+      <button id="tour-next" type="button" disabled>Weiter →</button>
+    </div>
+    <progress id="tour-progress" max="1" value="0" aria-label="Fortschritt der Tour"></progress>
+    <span class="offline-note">Offline · ohne laufenden Roboter</span>
+  </footer>
+</body>
+</html>

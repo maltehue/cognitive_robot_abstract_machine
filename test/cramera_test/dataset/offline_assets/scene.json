@@ -1,0 +1,7 @@
+{
+  "models": [{"urdf": "robot.urdf"}],
+  "objects": [{"mesh": "meshes/object.obj", "mtl": "meshes/materials/surface.mtl"}, {"mesh": "meshes/object.gltf"}],
+  "trajectory": "motion%20data.json",
+  "statecharts": "states.json",
+  "missingAssets": []
+}

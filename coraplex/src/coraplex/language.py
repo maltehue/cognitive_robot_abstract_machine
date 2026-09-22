@@ -5,6 +5,7 @@ import logging
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing_extensions import ClassVar
 from typing_extensions import (
     Any,
     Callable,
@@ -162,7 +163,7 @@ class ParallelNode(ExecutesInParallel):
         self._perform_parallel(self.children)
         for child in self.children:
             if child.status == LifeCycleValues.FAILED:
-                raise child.reason
+                raise child.execution_error or child.reason or PlanFailure()
 
 
 @dataclass(eq=False)
@@ -253,6 +254,11 @@ class TryInOrderNode(ExecutesSequentially):
     Tries all children in order sequentially and fails if all children fail.
     """
 
+    succeeds_with_any_child: ClassVar[bool] = True
+    """
+    Any completed alternative may establish success.
+    """
+
     motion_state_chart_template: Type[NodeListGoal] = field(
         kw_only=True, default=TryInOrder
     )
@@ -276,6 +282,11 @@ class TryAllNode(ExecutesInParallel):
     Executes all children in parallel.
 
     Only raise a failure if all children fail.
+    """
+
+    succeeds_with_any_child: ClassVar[bool] = True
+    """
+    Any completed alternative may establish success.
     """
 
     motion_state_chart_template: Type[NodeListGoal] = field(

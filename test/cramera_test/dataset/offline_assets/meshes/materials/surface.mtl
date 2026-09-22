@@ -1,0 +1,4 @@
+newmtl surface
+map_Kd -s 1 1 1 -o 0 0 0 -clamp on ../../textures/paint%20coat.svg
+bump -bm 0.5 ../../textures/paint%20coat.svg
+norm ../../textures/paint%20coat.svg

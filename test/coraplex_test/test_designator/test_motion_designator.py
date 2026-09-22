@@ -20,7 +20,7 @@ from coraplex.execution_environment import simulated_robot, real_robot
 from coraplex.plans.executables import MoveBranchExecutable
 from coraplex.plans.factories import sequential, execute_single
 from coraplex.plans.plan_node import MotionNode, ActionNode
-from coraplex.robot_plans.actions.core.navigation import NavigateAction
+from coraplex.robot_plans.actions.core.navigation import NavigateAction, LookAtAction
 from coraplex.robot_plans.actions.core.pick_up import GraspingAction, PickUpAction
 from coraplex.robot_plans.actions.core.placing import PlaceAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
@@ -739,6 +739,37 @@ def test_looking_motion_pointing_parameters(immutable_model_world):
     assert pointing.pointing_axis.reference_frame is camera.root
     assert pointing.goal_point.reference_frame is world.root
     assert np.array_equal(pointing.goal_point.to_np(), target.to_position().to_np())
+
+
+def test_look_at_action_turns_the_head_towards_a_body(immutable_model_world):
+    """
+    Performing a look-at aimed at a body's pose leaves the camera's forward axis on that
+    body, which is what a plan gains by carrying the action instead of only recording
+    the wish to look.
+    """
+    world, view, context = immutable_model_world
+    milk = world.get_body_by_name("milk.stl")
+    camera = view.get_default_camera()
+
+    def angle_to_milk() -> float:
+        world_T_camera = world.compute_forward_kinematics(world.root, camera.root)
+        to_milk = (
+            milk.global_pose.to_position().to_np()[:3]
+            - world_T_camera.to_position().to_np()[:3]
+        )
+        forward = world_T_camera.dot(camera.forward_facing_axis).to_np()[:3]
+        cosine = np.dot(to_milk, forward) / (
+            np.linalg.norm(to_milk) * np.linalg.norm(forward)
+        )
+        return float(np.arccos(np.clip(cosine, -1.0, 1.0)))
+
+    before = angle_to_milk()
+    plan = execute_single(LookAtAction(milk.global_pose), context=context)
+    with simulated_robot:
+        plan.perform()
+
+    assert before > 0.1
+    assert angle_to_milk() == pytest.approx(0.0, abs=0.05)
 
 
 # %% stretch tool center point

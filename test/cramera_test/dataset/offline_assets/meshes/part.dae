@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema">
+  <library_images><image id="paint_image"><init_from>../textures/paint%20coat.svg</init_from></image></library_images>
+  <library_effects><effect id="paint"><profile_COMMON><newparam sid="surface"><surface type="2D"><init_from>paint_image</init_from></surface></newparam></profile_COMMON></effect></library_effects>
+</COLLADA>

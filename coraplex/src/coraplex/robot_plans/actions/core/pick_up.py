@@ -25,6 +25,10 @@ from coraplex.datastructures.enums import (
     DetectionTechnique,
 )
 from coraplex.datastructures.grasp import GraspDescription
+from coraplex.datastructures.manipulation_contacts import (
+    HasManipulationContactPolicy,
+    ManipulationContactPolicy,
+)
 from coraplex.plans.factories import sequential
 from coraplex.querying.predicates import GripperIsFree
 from coraplex.exceptions import PerceptionTargetMissing
@@ -54,6 +58,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ReachAction(
     ActionDescription,
+    HasManipulationContactPolicy,
     ReachTuningParameters,
     HasGraspDetectionThreshold,
     HasTcpGoalThresholds,
@@ -102,6 +107,21 @@ class ReachAction(
     """
 
     @property
+    def manipulation_contact_policy(self) -> ManipulationContactPolicy | None:
+        """
+        Permit contact only with the object selected for this reach.
+        """
+        if self.object_designator is None:
+            return None
+        return ManipulationContactPolicy(
+            self.object_designator.root,
+            ViewManager.get_end_effector_view(
+                self.arm, self.robot
+            ).bodies_with_collision,
+            self.object_designator.root.global_pose,
+        )
+
+    @property
     def _action_plan(self) -> PlanNode:
         if self.perceive_before_grasp and self.object_designator is None:
             raise PerceptionTargetMissing(self)
@@ -114,7 +134,7 @@ class ReachAction(
             MoveToolCenterPointMotion(
                 target_pre_pose,
                 self.arm,
-                allow_gripper_collision=True,
+                allow_gripper_collision=False,
                 max_linear_velocity=self.pre_approach_linear_velocity,
                 position_threshold=self.position_threshold,
                 orientation_threshold=self.orientation_threshold,
@@ -139,7 +159,7 @@ class ReachAction(
             MoveToolCenterPointMotion(
                 target_pose,
                 self.arm,
-                allow_gripper_collision=True,
+                allow_gripper_collision=False,
                 max_linear_velocity=self.final_approach_linear_velocity,
                 position_threshold=self.position_threshold,
                 orientation_threshold=self.orientation_threshold,
@@ -201,6 +221,7 @@ class ReachAction(
 @dataclass
 class PickUpAction(
     ActionDescription,
+    HasManipulationContactPolicy,
     PickUpTuningParameters,
     HasGraspDetectionThreshold,
     HasTcpGoalThresholds,
@@ -243,6 +264,19 @@ class PickUpAction(
     :attr:`ReachAction.perceive_before_grasp`.
     """
 
+    @property
+    def manipulation_contact_policy(self) -> ManipulationContactPolicy:
+        """
+        Permit grasp contact with the selected object at its support.
+        """
+        return ManipulationContactPolicy(
+            self.object_designator.root,
+            ViewManager.get_end_effector_view(
+                self.arm, self.robot
+            ).bodies_with_collision,
+            self.object_designator.root.global_pose,
+        )
+
     def _grasp_attempt_plan(self) -> PlanNode:
         """
         :return: One reach-and-close attempt at grasping :attr:`object_designator`,
@@ -267,7 +301,7 @@ class PickUpAction(
                 MoveGripperMotion(
                     motion=GripperState.CLOSE,
                     gripper=self.arm,
-                    allow_gripper_collision=True,
+                    allow_gripper_collision=False,
                     finger_velocity=self.grasp_closing_velocity,
                     stall_minimum_time=self.grasp_stall_minimum_time,
                     tolerate_stall=self.tolerate_grasp_stall,
@@ -292,7 +326,7 @@ class PickUpAction(
                 MoveToolCenterPointMotion(
                     lift_to_pose,
                     self.arm,
-                    allow_gripper_collision=True,
+                    allow_gripper_collision=False,
                     movement_type=MovementType.TRANSLATION,
                     max_linear_velocity=self.lift_linear_velocity,
                     position_threshold=self.position_threshold,
@@ -347,7 +381,9 @@ class PickUpAction(
 
 
 @dataclass
-class GraspingAction(ActionDescription, HasTcpGoalThresholds):
+class GraspingAction(
+    ActionDescription, HasManipulationContactPolicy, HasTcpGoalThresholds
+):
     """
     Grasps an object described by the given Object Designator description.
     """
@@ -368,6 +404,19 @@ class GraspingAction(ActionDescription, HasTcpGoalThresholds):
     """
 
     @property
+    def manipulation_contact_policy(self) -> ManipulationContactPolicy:
+        """
+        Permit the selected gripper to contact the grasped body at its support.
+        """
+        return ManipulationContactPolicy(
+            self.object_designator,
+            ViewManager.get_end_effector_view(
+                self.arm, self.robot
+            ).bodies_with_collision,
+            self.object_designator.global_pose,
+        )
+
+    @property
     def _action_plan(self) -> PlanNode:
         pre_pose, grasp_pose, _ = self.grasp_description.grasp_pose_sequence(
             self.object_designator
@@ -380,18 +429,18 @@ class GraspingAction(ActionDescription, HasTcpGoalThresholds):
                     self.arm,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
-                    allow_gripper_collision=True,
+                    allow_gripper_collision=False,
                 ),
                 MoveGripperMotion(GripperState.OPEN, self.arm),
                 MoveToolCenterPointMotion(
                     grasp_pose,
                     self.arm,
-                    allow_gripper_collision=True,
+                    allow_gripper_collision=False,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
                 ),
                 MoveGripperMotion(
-                    GripperState.CLOSE, self.arm, allow_gripper_collision=True
+                    GripperState.CLOSE, self.arm, allow_gripper_collision=False
                 ),
             ]
         )

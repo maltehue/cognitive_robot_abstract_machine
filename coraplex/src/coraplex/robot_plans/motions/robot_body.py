@@ -4,6 +4,7 @@ from typing import Optional
 from typing_extensions import List
 
 from giskardpy.motion_statechart.goals.templates import Parallel
+from giskardpy.motion_statechart.graph_node import MotionStatechartNode
 from giskardpy.motion_statechart.tasks.joint_tasks import (
     JointPositionList,
     JointState,
@@ -12,20 +13,27 @@ from giskardpy.motion_statechart.tasks.joint_tasks import (
 from giskardpy.motion_statechart.tasks.pointing import Pointing
 from coraplex.robot_plans.mixins import HasMaxJointVelocity
 from coraplex.robot_plans.motions.base import BaseMotion
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.exceptions import (
+    DuplicateWorldEntityError,
+    WorldEntityNotFoundError,
+)
 from semantic_digital_twin.robots.robot_parts import Camera
 from semantic_digital_twin.spatial_types import Vector3
 from semantic_digital_twin.spatial_types.spatial_types import Pose
+from semantic_digital_twin.world_description.world_entity import Connection
 
 
+# %% selected robot joints
 @dataclass
 class MoveJointsMotion(BaseMotion, HasMaxJointVelocity):
     """
     Moves any joint on the robot.
     """
 
-    names: List[str]
+    names: list[str | PrefixedName]
     """
-    List of joint names that should be moved 
+    Local or explicitly namespaced joint names belonging to the selected robot.
     """
     positions: List[float]
     """
@@ -63,8 +71,11 @@ class MoveJointsMotion(BaseMotion, HasMaxJointVelocity):
         return
 
     @property
-    def _motion_chart(self):
-        dofs = [self.world.get_connection_by_name(name) for name in self.names]
+    def _motion_chart(self) -> MotionStatechartNode:
+        """
+        Build joint targets and optional speed limits for the selected robot.
+        """
+        dofs = [self._resolve_joint(name) for name in self.names]
         joint_task = JointPositionList(
             goal_state=JointState.from_mapping(dict(zip(dofs, self.positions))),
         )
@@ -79,7 +90,32 @@ class MoveJointsMotion(BaseMotion, HasMaxJointVelocity):
             ]
         )
 
+    def _resolve_joint(self, name: str | PrefixedName) -> Connection:
+        """
+        Resolve one native joint within the selected robot's connections.
 
+        :param name: Local name, structured name, or slash-qualified name.
+        :return: Unique matching connection owned by the current robot.
+        :raises WorldEntityNotFoundError: If the requested joint is outside this robot.
+        :raises DuplicateWorldEntityError: If its local name remains ambiguous.
+        """
+        if isinstance(name, str) and "/" in name:
+            prefix, local_name = name.rsplit("/", 1)
+            name = PrefixedName(local_name, prefix=prefix)
+        robot_connections = set(self.robot.connections)
+        matches = [
+            connection
+            for connection in self.world.get_connections_by_name(name)
+            if connection in robot_connections
+        ]
+        if not matches:
+            raise WorldEntityNotFoundError(name)
+        if len(matches) > 1:
+            raise DuplicateWorldEntityError(matches)
+        return matches[0]
+
+
+# %% selected robot camera
 @dataclass
 class LookingMotion(BaseMotion):
     """

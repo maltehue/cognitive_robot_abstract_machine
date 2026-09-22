@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sandbox · cramera</title>
+<link rel="stylesheet" href="app.css" />
+<style>
+  .tele-main { display: flex; gap: 14px; padding: 14px; box-sizing: border-box; height: calc(100vh - 52px); }
+  .tele-controls { width: 320px; flex: 0 0 320px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+  .tele-scene { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .tele-scene iframe { flex: 1; width: 100%; border: 1px solid var(--border, #3a3a3a); border-radius: 8px; background: #111; }
+  .tele-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tele-sel { padding: 6px 8px; border-radius: 6px; background: var(--panel, #222); color: inherit; border: 1px solid var(--border, #3a3a3a); }
+  .tele-btn { padding: 7px 12px; border-radius: 6px; border: 1px solid var(--border, #3a3a3a); background: var(--panel, #222); color: inherit; cursor: pointer; }
+  .tele-btn.primary { background: #2f7dd1; border-color: #2f7dd1; color: #fff; }
+  .tele-btn:disabled { opacity: 0.5; cursor: default; }
+  .tele-pad-wrap { display: flex; gap: 12px; }
+  .tele-pad { position: relative; width: 240px; height: 240px; border: 1px solid var(--border, #3a3a3a); border-radius: 10px;
+    background: repeating-linear-gradient(0deg, transparent 0 23px, rgba(127,127,127,.15) 23px 24px),
+                repeating-linear-gradient(90deg, transparent 0 23px, rgba(127,127,127,.15) 23px 24px);
+    touch-action: none; cursor: crosshair; }
+  .tele-dot { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: #2f7dd1; box-shadow: 0 0 0 3px rgba(47,125,209,.3); pointer-events: none; }
+  .tele-pad-axes { position: absolute; inset: 0; pointer-events: none; font-size: 11px; color: #888; }
+  .tele-pad-axes span { position: absolute; }
+  .tele-zslider { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; color: #888; }
+  .tele-zslider input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 28px; height: 210px; }
+  .tele-status { font-size: 13px; padding: 8px 10px; border-radius: 6px; background: var(--panel, #222); border: 1px solid var(--border, #3a3a3a); }
+  .tele-status.ok { color: #6bd06b; } .tele-status.err { color: #ff8f8f; }
+  .tele-hint { font-size: 12px; color: #999; line-height: 1.5; }
+  .tele-read { font-family: ui-monospace, monospace; font-size: 12px; color: #aab; }
+  h2 { font-size: 14px; margin: 6px 0; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <nav class="page-tabs">
+    <a href="index.html">Scene</a>
+    <a href="models.html">Models</a>
+    <a href="plan_builder.html">Plan Builder</a>
+    <a href="teleop.html" class="active">Sandbox</a>
+  </nav>
+  <div class="topbar-actions"></div>
+</header>
+
+<main class="tele-main">
+  <section class="tele-controls">
+    <h2>Scene</h2>
+    <div class="tele-row">
+      <select id="te-env" class="tele-sel" title="Environment">
+        <option value="warehouse6.urdf">Warehouse</option>
+        <option value="warehouse_demo_hall.urdf">Warehouse (demo hall)</option>
+        <option value="kitchen.urdf">Kitchen</option>
+        <option value="apartment.urdf">Apartment</option>
+      </select>
+      <button id="te-start" class="tele-btn primary">▶ Start scene</button>
+      <button id="te-stop" class="tele-btn">■ Stop</button>
+    </div>
+    <div id="te-status" class="tele-status">not running</div>
+
+    <h2>Hand → arm</h2>
+    <div class="tele-row">
+      <label>Arm
+        <select id="te-arm" class="tele-sel">
+          <option value="left">Left</option>
+          <option value="right">Right</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="te-stream" checked /> stream while dragging</label>
+    </div>
+    <div class="tele-pad-wrap">
+      <div id="te-pad" class="tele-pad">
+        <div class="tele-pad-axes">
+          <span style="top:4px;left:50%;transform:translateX(-50%)">forward +x</span>
+          <span style="bottom:4px;left:50%;transform:translateX(-50%)">back −x</span>
+          <span style="top:50%;left:4px;transform:translateY(-50%)">+y</span>
+          <span style="top:50%;right:4px;transform:translateY(-50%)">−y</span>
+        </div>
+        <div id="te-dot" class="tele-dot" style="left:50%;top:50%"></div>
+      </div>
+      <div class="tele-zslider">
+        <span>up</span>
+        <input type="range" id="te-z" min="-1" max="1" step="0.02" value="0" />
+        <span>down</span>
+        <span>z</span>
+      </div>
+    </div>
+    <div class="tele-read" id="te-read">x 0.00  y 0.00  z 0.00</div>
+    <div class="tele-hint">
+      <b>Start scene</b>, wait for the world to come up, then <b>drag inside the pad</b> to move the
+      selected arm's hand. Up/down on the pad reaches the arm forward/back, left/right moves it
+      sideways; the <b>z</b> slider raises/lowers it. Motion is clamped to the arm's reach.
+    </div>
+
+    <h2 style="margin-top:6px">Camera hand tracking</h2>
+    <div class="tele-row">
+      <button id="te-cam" class="tele-btn primary">▶ Start camera</button>
+      <span id="te-cam-status" class="tele-hint">off</span>
+    </div>
+    <video id="te-video" playsinline muted style="display:none"></video>
+    <canvas id="te-cam-canvas" width="320" height="240"
+            style="width:300px;border:1px solid var(--border,#3a3a3a);border-radius:8px;background:#111"></canvas>
+    <div class="tele-hint">
+      Move your <b>hand</b> in front of the camera; its wrist drives the selected arm — left/right
+      and up/down mimic your hand, moving your hand <b>nearer/further</b> reaches the arm
+      forward/back, and <b>pinch</b> your fingers to close the gripper (open hand = open).
+      The camera overrides the pad while it runs.
+    </div>
+  </section>
+
+  <section class="tele-scene">
+    <h2>Live 3D scene</h2>
+    <iframe id="te-3d" title="live 3D scene" src="about:blank"></iframe>
+  </section>
+</main>
+
+<script type="module" src="teleop_hand.mjs"></script>
+<script src="teleop.js"></script>
+</body>
+</html>

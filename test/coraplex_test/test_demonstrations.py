@@ -6,19 +6,35 @@ which world a run acts on, whether it has to spawn its scene, and who owns the R
 context. None of it needs a controller.
 """
 
+import threading
+import time
 from dataclasses import dataclass, field
 
 import pytest
 import rclpy
+from typing_extensions import List
 
 from coraplex.datastructures.dataclasses import Context
-from coraplex.datastructures.enums import ExecutionType
+from coraplex.datastructures.enums import ExecutionType, VisualizationBackend
+from coraplex.visualization import VisualizationSession
 from coraplex.plans.executables import GiskardExecutable
 from coraplex.plans.factories import code
 from coraplex.plans.plan_node import PlanNode
-from coraplex.demonstrations import RobotDemonstration, RobotDemonstrationRosSession
+from coraplex.demonstrations import (
+    SPIN_THREAD_JOIN_TIMEOUT_SECONDS,
+    RobotDemonstration,
+    RobotDemonstrationRosSession,
+)
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
 from semantic_digital_twin.world import World
+
+SPIN_THREAD_REACHES_WAIT_SECONDS = 0.3
+"""
+How long to give a freshly started spin thread to reach rclpy's wait set.
+
+A thread shut down before it gets there never enters the wait and so never sees the
+external shutdown, which would make the test pass without the behaviour under test.
+"""
 
 
 class PlanDeliberatelyFailed(Exception):
@@ -36,6 +52,11 @@ class RecordingDemonstration(RobotDemonstration):
     world: World
     """
     World handed to this demonstration instead of one it builds itself.
+    """
+
+    default_visualization_backend: VisualizationBackend = VisualizationBackend.NONE
+    """
+    Headless unless a test asks to be watched, so a run leaves no viewer behind.
     """
 
     scene_already_populated: bool = False
@@ -197,6 +218,71 @@ def test_tear_down_runs_when_the_plan_fails(cylinder_bot_world):
     assert demonstration.tear_down_calls == 1
 
 
+# %% the viewer outliving the plan
+
+
+def test_explicit_session_keeps_the_viewer_showing_the_finished_world(
+    cylinder_bot_world,
+):
+    """
+    A viewer closed the moment the plan ends shows nothing worth watching, and
+    ``cramera-live`` keeps the process alive precisely so the finished run can be
+    inspected.
+    """
+    demonstration = RecordingDemonstration(
+        world=cylinder_bot_world,
+        used_robot=MinimalRobot,
+        default_visualization_backend=VisualizationBackend.RVIZ,
+    )
+
+    with VisualizationSession():
+        demonstration.run()
+
+        assert demonstration.visualization is not None
+        assert demonstration.visualization.ros_node is not None
+        assert demonstration.ros_session is not None
+    assert demonstration.visualization is None
+    assert demonstration.ros_session is None
+
+
+def test_stopping_the_visualization_releases_the_session_it_published_through(
+    cylinder_bot_world,
+):
+    """
+    The RViz backend publishes through the demonstration's own session, so that session
+    outlives :meth:`tear_down` and is released together with the viewer.
+    """
+    assert not rclpy.ok(), "another test left a ROS context running"
+    demonstration = RecordingDemonstration(
+        world=cylinder_bot_world,
+        used_robot=MinimalRobot,
+        default_visualization_backend=VisualizationBackend.RVIZ,
+    )
+    demonstration.run()
+
+    demonstration.stop_visualization()
+
+    assert demonstration.visualization is None
+    assert demonstration.ros_session is None
+    assert not rclpy.ok()
+
+
+def test_leaving_the_context_manager_closes_the_viewer(cylinder_bot_world):
+    """
+    A caller that wants the viewer gone at a definite point says so with ``with``.
+    """
+    with RecordingDemonstration(
+        world=cylinder_bot_world,
+        used_robot=MinimalRobot,
+        default_visualization_backend=VisualizationBackend.RVIZ,
+    ) as demonstration:
+        demonstration.run()
+        assert demonstration.visualization is not None
+
+    assert demonstration.visualization is None
+    assert demonstration.ros_session is None
+
+
 # %% ros context ownership
 
 
@@ -225,3 +311,30 @@ def test_session_leaves_a_context_somebody_else_started(rclpy_node):
 
     session.stop()
     assert rclpy.ok()
+
+
+def test_spin_thread_ends_quietly_when_somebody_else_ends_the_context(monkeypatch):
+    """
+    A session borrowing somebody else's context is left running by
+    :meth:`RobotDemonstration.tear_down`, so its executor is still spinning when that
+    owner ends the context.
+
+    rclpy reports this to a spinning executor as
+    :class:`ExternalShutdownException`, and unlike the shutdown of the executor itself it
+    is not swallowed by ``spin_once``, so it escapes the spin thread and gets printed as
+    an unhandled exception -- in the middle of a run that otherwise succeeded.
+    """
+    assert not rclpy.ok(), "another test left a ROS context running"
+    rclpy.init()  # stands in for the owner: giskardpy's node, or an embedding application
+    session = RobotDemonstrationRosSession.start("external_shutdown_probe")
+    assert not session.owns_context
+    time.sleep(SPIN_THREAD_REACHES_WAIT_SECONDS)  # let it reach rclpy's wait set
+
+    escaped: List[threading.ExceptHookArgs] = []
+    monkeypatch.setattr(threading, "excepthook", escaped.append)
+
+    rclpy.shutdown()
+    session.spin_thread.join(timeout=SPIN_THREAD_JOIN_TIMEOUT_SECONDS)
+
+    assert not session.spin_thread.is_alive()
+    assert [type(entry.exc_value).__name__ for entry in escaped] == []

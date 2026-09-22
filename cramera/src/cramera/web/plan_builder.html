@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Plan Builder · cramera</title>
+<link rel="stylesheet" href="app.css" />
+<link rel="stylesheet" href="plan_builder.css" />
+</head>
+<body>
+<header class="topbar">
+  <nav class="page-tabs">
+    <a href="index.html">Scene</a>
+    <a href="models.html">Models</a>
+    <a href="plan_builder.html" class="active">Plan Builder</a>
+    <a href="teleop.html">Sandbox</a>
+  </nav>
+  <div class="pb-title">Plan Builder <span class="pb-hint">compose a plan &amp; place objects → generate a demo file</span></div>
+  <div class="pb-actions">
+    <div class="pb-setup">
+      <button id="pb-setup-btn" class="pb-btn sm" title="demo name, environment, robot, output style, download / save">⚙ Setup ▾</button>
+      <div id="pb-setup-menu" class="pb-menu" hidden>
+        <label>Demo name<input id="pb-name" class="pb-name" placeholder="demo name" value="my_demo" /></label>
+        <label>Environment
+          <select id="pb-env" class="pb-sel" aria-label="Environment"><option value="apartment.urdf">Apartment (loading models…)</option></select>
+        </label>
+        <label>Output style
+          <select id="pb-style" class="pb-sel">
+            <option value="class">RobotDemonstration class</option>
+            <option value="script">Flat script</option>
+          </select>
+        </label>
+        <label>Collision avoidance
+          <select id="pb-collisions" class="pb-sel" disabled
+                  title="Collision avoidance is always enabled for generated runs."></select>
+        </label>
+        <label>Base while reaching
+          <select id="pb-base" class="pb-sel"
+                  title="whether the base may drive to help an arm reach (whole-body control)"></select>
+        </label>
+        <div class="pb-menu-sep"></div>
+        <button id="pb-download" class="pb-btn sm">⭳ Download</button>
+        <button id="pb-save" class="pb-btn sm">💾 Save to demos</button>
+      </div>
+    </div>
+    <button id="pb-generate" class="pb-btn primary">⚙ Generate demo.py</button>
+  </div>
+</header>
+
+<main class="pb-main">
+  <!-- palette -->
+  <aside class="pb-col pb-palette">
+    <h2>Robots in scene</h2>
+    <div class="pb-robots">
+      <label>Active robot<select id="pb-robot-instance" class="pb-sel" aria-describedby="pb-robot-plan-note"></select></label>
+      <div class="pb-robot-buttons"><button id="pb-add-robot" class="pb-btn sm">+ Add robot</button><button id="pb-remove-robot" class="pb-btn sm">Remove</button></div>
+      <label>Name<input id="pb-robot-label" class="pb-sel" maxlength="80" /></label>
+      <label>Model<select id="pb-robot" class="pb-sel" aria-describedby="pb-model-status"></select></label>
+      <div class="pb-robot-spawn">
+        <label>X<input id="pb-rx" class="pb-num" type="number" step="0.05" aria-label="Robot X"></label>
+        <label>Y<input id="pb-ry" class="pb-num" type="number" step="0.05" aria-label="Robot Y"></label>
+        <label>Heading °<input id="pb-ryaw" class="pb-num" type="number" step="5" aria-label="Robot heading in degrees"></label>
+      </div>
+      <div id="pb-model-status" class="pb-hint2" role="status">Loading annotated robots…</div>
+      <div id="pb-robot-plan-note" class="pb-hint2">Each robot keeps its own plan. Run executes the active robot; the others stay in the scene.</div>
+    </div>
+    <h2>Skills</h2>
+    <div class="pb-hint2">Click or drag a skill into the plan →</div>
+    <div id="pb-blocks"></div>
+    <h2 style="margin-top:18px">Objects</h2>
+    <div class="pb-hint2">Add, then drag in the scene to place</div>
+    <div class="pb-add-obj">
+      <select id="pb-mesh" class="pb-sel" aria-label="Object mesh"></select>
+      <button id="pb-add-obj" class="pb-btn sm">+ Add</button>
+    </div>
+    <div id="pb-objects"></div>
+
+    <h2 style="margin-top:18px">Constraints <button id="pb-con-info" class="pb-info-btn" title="How natural-language constraints are translated">ⓘ</button></h2>
+    <div class="pb-hint2">Write one, then drag it onto a plan step →</div>
+    <div class="pb-add-obj">
+      <input id="pb-con-in" class="pb-sel pb-con-in" placeholder="e.g. milk must stay upright" />
+      <button id="pb-con-add" class="pb-btn sm">+ Add</button>
+    </div>
+    <div id="pb-con-info-box" class="pb-con-info"></div>
+    <div id="pb-cons"></div>
+  </aside>
+
+  <div class="pb-divider" data-div="1" title="Drag to resize"></div>
+
+  <!-- plan -->
+  <section class="pb-col pb-plan">
+    <h2>Plan <span class="pb-count" id="pb-step-count"></span></h2>
+    <div id="pb-plan-robot" class="pb-hint2"></div>
+    <div id="pb-steps" class="pb-steps"><div class="pb-drop-hint">Drop skills here to build the sequence</div></div>
+  </section>
+
+  <div class="pb-divider" data-div="2" title="Drag to resize"></div>
+
+  <!-- live scene + code -->
+  <section class="pb-col pb-scene-col">
+    <div class="pb-scene-wrap">
+      <iframe id="pb-3d" class="pb-3d" title="live 3D scene" src="about:blank"></iframe>
+      <!-- floating controls menu (top layer) so the scene stays big -->
+      <div class="pb-scene-tools">
+        <button id="pb-live-start" class="pb-btn sm" title="bring up the world idle, to drag objects into place and capture their poses">▶ Start live scene</button>
+        <button id="pb-run" class="pb-btn primary sm" title="run the built plan and watch the robot perform it live">▶ Run plan</button>
+        <button id="pb-menu-btn" class="pb-btn sm" title="scene controls">⚙ Controls ▾</button>
+        <div id="pb-menu" class="pb-menu" hidden>
+          <button id="pb-live-stop" class="pb-btn sm">■ Stop</button>
+          <div class="pb-menu-sep"></div>
+          <button id="pb-reset-all" class="pb-btn sm" title="move every object back to its builder coordinates">⟲ Reset objects</button>
+          <button id="pb-drop" class="pb-btn sm" title="let every object fall straight down onto the nearest surface below it">⤓ Drop to surface</button>
+          <button id="pb-reload-3d" class="pb-btn sm" title="reload just the 3D view without losing your plan">⟳ Reload scene</button>
+          <button id="pb-log" class="pb-btn sm" title="show the run log (stdout/stderr of the demo)">⌕ Run log</button>
+          <a id="pb-open-3d" class="pb-btn sm" href="index.html?layout=scene" target="_blank">↗ Pop out</a>
+          <div class="pb-menu-sep"></div>
+          <button id="pb-show-code" class="pb-btn sm" title="show the generated demo.py">⌦ Generated code</button>
+        </div>
+      </div>
+      <div id="pb-live-status" class="pb-live-status pb-scene-status" role="status" aria-live="polite">not running</div>
+    </div>
+    <pre id="pb-scaffold-log" class="pb-code pb-scaffold-log" style="display:none"></pre>
+    <div id="pb-status" class="pb-status" role="status" aria-live="polite"></div>
+    <pre id="pb-code" class="pb-code" style="display:none">Click “Generate demo.py”.</pre>
+  </section>
+</main>
+
+<script src="core/base_control.js"></script>
+<script src="core/execution_environment.js"></script>
+<script src="core/plan_steps.js"></script>
+<script src="core/builder_state.js"></script>
+<script src="core/response.js"></script>
+<script src="core/plan_constraints.js"></script>
+<script src="plan_builder.js"></script>
+</body>
+</html>

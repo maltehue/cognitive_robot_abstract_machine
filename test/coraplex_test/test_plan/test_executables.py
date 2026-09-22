@@ -122,11 +122,10 @@ def test_parsing_populates_the_chart_with_the_motions(reach_action_executable):
     assert reach_action_executable.root_node in chart.nodes
     for task in tasks:
         assert task in _nodes_below(reach_action_executable.root_node)
-        # A reach that frees its gripper carries its Cartesian goal alongside the
-        # collision rules, so the mapped node is the pair rather than the goal itself.
-        assert (
-            len([node for node in task.nodes if isinstance(node, CartesianPose)]) == 1
-        )
+        # Intended object contacts are scoped to the enclosing reach, leaving the
+        # native Cartesian goal as the mapped motion.
+        assert isinstance(task, CartesianPose)
+    assert reach_action_executable._contact_scope().rules
 
 
 def test_parsing_mirrors_the_plan_tree_as_nested_goals(reach_action_executable):

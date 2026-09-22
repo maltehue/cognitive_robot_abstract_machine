@@ -603,8 +603,7 @@ class VolumetricGraphOfBoundingBoxes(
             connectivity.
         :param bloat_obstacles: The amount to bloat the obstacles.
         :param bloat_walls: The amount to bloat the walls.
-        :return: The connectivity graph. If no obstacles are found, an empty graph is
-            returned.
+        :return: The connectivity graph, including the full search space when empty.
         """
         bloated_obstacles = (
             semantic_obstacle_annotation.build_bloated_obstacle_collection(
@@ -782,16 +781,8 @@ class PlanarGraphOfBoundingBoxes(GraphOfBoundingBoxes[PlanarBoundingBox, Point2]
         :param bloat_walls: The amount to bloat the walls.
         :param obstacle_height_clearance: The amount every obstacle bounding box gets
             expanded by in z, regardless of ``bloat_obstacles``/``bloat_walls``.
-        :return: The connectivity graph. If no obstacles are found, an empty graph is
-            returned.
+        :return: The connectivity graph, including the full search space when empty.
         """
-        world = search_space.reference_frame._world
-        floor_search_space = BoundingBoxCollection.from_event(
-            cls.box_type(),
-            search_space.reference_frame,
-            search_space.event.marginal(SpatialVariables.xy),
-        )
-
         nav_obstacles = semantic_obstacle_annotation.build_bloated_obstacle_collection(
             search_space,
             semantic_wall_annotation,
@@ -800,21 +791,47 @@ class PlanarGraphOfBoundingBoxes(GraphOfBoundingBoxes[PlanarBoundingBox, Point2]
             obstacle_height_clearance,
         )
 
-        if not nav_obstacles:
-            return cls(world=world, search_space=floor_search_space)
+        return cls.navigation_map_from_bounding_boxes(
+            search_space, nav_obstacles, tolerance
+        )
 
+    @classmethod
+    def navigation_map_from_bounding_boxes(
+        cls,
+        search_space: BoundingBoxCollection,
+        nav_obstacles: BoundingBoxCollection[VolumetricBoundingBox, Point3],
+        tolerance: float = 0.001,
+    ) -> Self:
+        """
+        Construct planar connectivity from collision boxes with known clearance.
+
+        :param search_space: Region containing all navigable base positions.
+        :param nav_obstacles: Forbidden positions, including robot footprint clearance.
+        :param tolerance: Tolerance used to connect adjacent free-space boxes.
+        :return: The planar graph, retaining the entire search region when empty.
+        :raises ValueError: If obstacles and search space use different frames.
+        """
+        if nav_obstacles.reference_frame is not search_space.reference_frame:
+            raise ValueError(
+                "Search space and obstacles must use the same reference frame."
+            )
+        floor_search_space = BoundingBoxCollection.from_event(
+            cls.box_type(),
+            search_space.reference_frame,
+            search_space.event.marginal(SpatialVariables.xy),
+        )
         free_space = cls.free_space_from_bounding_boxes(
             nav_obstacles, search_space.event
         )
-
-        # create a connectivity graph from the free space and calculate the edges
-        result = cls(world=world, search_space=floor_search_space)
+        result = cls(
+            world=search_space.reference_frame._world, search_space=floor_search_space
+        )
         free_space_boxes = BoundingBoxCollection.from_event(
             cls.box_type(), search_space.reference_frame, free_space
         )
-        [result.add_node(bounding_box) for bounding_box in free_space_boxes]
+        for bounding_box in free_space_boxes:
+            result.add_node(bounding_box)
         result.calculate_connectivity(tolerance)
-
         return result
 
     @classmethod

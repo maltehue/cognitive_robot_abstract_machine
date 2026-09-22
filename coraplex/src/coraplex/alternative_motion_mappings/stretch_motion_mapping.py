@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
+from typing_extensions import ClassVar
 
 from giskardpy.motion_statechart.binding_policy import GoalBindingPolicy
 from giskardpy.motion_statechart.data_types import DefaultWeights
@@ -82,20 +84,14 @@ class StretchMoveToolCenterPoint(MoveToolCenterPointMotion, AlternativeMotion[St
         )
 
 
+@dataclass
 class StretchMoveSim(MoveMotion, AlternativeMotion[Stretch]):
     """
-    Different giskard goal for moving stretch to a goal pose, this uses a goal optimal
-    for a diff drive.
+    Navigate Stretch through free space using its differential drive controller.
     """
 
-    execution_type = ExecutionType.SIMULATED
-
-    def perform(self):
-        return
-
-    @property
-    def _motion_chart(self):
-        return DifferentialDriveBaseGoal(goal_pose=self.target, threshold=0.01)
+    execution_type: ClassVar[ExecutionType] = ExecutionType.SIMULATED
+    """Execution environment selecting this navigation mapping."""
 
 
 class StretchMoveReal(MoveMotion, AlternativeMotion[Stretch]):

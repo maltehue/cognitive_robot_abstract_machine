@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!--
+  The warehouse hall of coraplex_warehouse_demo as a coraplex world: a single fixed
+  link whose geometry is that demo's prepared warehouse_hall.stl (metres, Z-up, roof
+  off), so the Plan Builder can load it through URDFParser like the other worlds.
+
+  The mesh is referenced by a path relative to this file, so it stays with the demo it
+  belongs to rather than being copied here. The STL carries no colour of its own, so the
+  visual sets the grey-green the demo paints the hall (HALL_COLOUR in its demo.py).
+-->
+<robot name="warehouse_demo_hall">
+  <material name="hall_grey_green">
+    <color rgba="0.62 0.63 0.60 1.0"/>
+  </material>
+  <link name="warehouse_demo_hall">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../../demos/coraplex_warehouse_demo/resources/warehouse_hall.stl"/>
+      </geometry>
+      <material name="hall_grey_green"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../../demos/coraplex_warehouse_demo/resources/warehouse_hall.stl"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

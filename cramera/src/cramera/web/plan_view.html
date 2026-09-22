@@ -1,0 +1,442 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Plan view — step list (Option B)</title>
+<style>
+  :root{
+    --bg:#0b1220; --panel:#0f1729; --panel2:#0c1526; --line:#26324d; --ink:#dfe8fb; --muted:#8b9bc0; --faint:#5f7196;
+    --action:#b98cff; --motion:#ff7a9c; --condition:#ffb648; --attach:#39d5c8; --monitor:#4bd38a; --par:#5b8cff; --struct:#7f8db0;
+    --ok:#4bd38a; --run:#ffb648; --fail:#ff6b8b; --todo:#46557a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,sans-serif}
+  header{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+  header h1{font-size:15px;margin:0;font-weight:700}
+  header .task{font-size:12px;color:var(--muted)} header .task b{color:var(--ink)}
+  header .snap{color:var(--run)}
+  .stage{display:flex;height:calc(100vh - 50px)}
+
+  /* layers panel */
+  .layers{width:238px;flex:none;border-right:1px solid var(--line);background:var(--panel2);padding:16px 16px;overflow:auto}
+  .layers h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);margin:0 0 12px}
+  .layers .grp{margin-bottom:18px}
+  .lrow{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:6px;cursor:pointer;font-size:13px}
+  .lrow:hover{background:var(--panel)}
+  .lrow input{appearance:none;width:15px;height:15px;border:1.5px solid var(--faint);border-radius:4px;flex:none;cursor:pointer;position:relative}
+  .lrow input:checked{background:var(--run);border-color:var(--run)}
+  .lrow input:checked::after{content:"✓";position:absolute;inset:0;color:#0b1220;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .lrow input:disabled{opacity:.5;cursor:default}
+  .lrow .sw{width:9px;height:9px;border-radius:2px;flex:none}
+  .lrow .cnt{margin-left:auto;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .layers .hint{font-size:10.5px;color:var(--faint);line-height:1.5;margin-top:4px}
+  .layers .preset{display:flex;gap:6px;margin-top:8px}
+  .layers .preset button{flex:1;font:inherit;font-size:11px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:5px;cursor:pointer}
+  .layers .preset button:hover{border-color:var(--run);color:var(--ink)}
+
+  /* outline */
+  .outline{flex:1;overflow:auto;padding:20px 26px}
+  .tree{max-width:860px;margin:0 auto}
+  .step{margin:1px 0}
+  .row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;cursor:default;border:1px solid transparent}
+  .row.hask{cursor:pointer}
+  .row.hask:hover{background:var(--panel);border-color:var(--line)}
+  .tw{width:14px;flex:none;color:var(--faint);font-size:11px;text-align:center;user-select:none}
+  .num{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px;flex:none;min-width:38px}
+  .icon{width:9px;height:9px;border-radius:2px;flex:none}
+  .name{font-size:13.5px;font-weight:600}
+  .name.detail{font-weight:400;color:var(--muted);font-size:12.5px}
+  .meta{margin-left:auto;display:flex;gap:9px;align-items:center}
+  .dc{font-size:10.5px;color:var(--faint)}
+  .kids{margin-left:20px;border-left:1px solid var(--line);padding-left:8px;display:none}
+  .kids.open{display:block}
+
+  /* parallel group */
+  .par{margin:5px 0;border-left:2px solid var(--par);padding-left:2px;border-radius:2px}
+  .par-head{display:flex;align-items:center;gap:9px;padding:6px 10px}
+  .par-chip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;color:#bcd2ff;background:rgba(91,140,255,.16);padding:2px 9px;border-radius:999px}
+  .par-example{font-size:10px;color:var(--faint);font-style:italic}
+  .par .kids{display:block;border-left:0;margin-left:12px}
+
+  /* left sidebar as a column so Constraints can sit at the bottom and scroll */
+  .layers{display:flex;flex-direction:column}
+  .constraints-grp{flex:1;min-height:0;display:flex;flex-direction:column;border-top:1px solid var(--line);margin-top:4px;padding-top:14px}
+  .constraint-hint{font-size:10.5px;color:var(--faint);line-height:1.5;margin-bottom:10px}
+  .clist{flex:1;min-height:60px;overflow:auto;display:flex;flex-direction:column;gap:7px}
+  .ccard{display:flex;align-items:flex-start;gap:7px;padding:8px 9px;border:1px dashed #34405f;border-radius:7px;background:var(--panel);cursor:grab;font-size:12px;line-height:1.35}
+  .ccard:hover{border-color:var(--par);background:rgba(91,140,255,.07)}
+  .ccard.dragging{opacity:.45}
+  .ccard .grip{color:var(--faint);flex:none;font-size:12px;margin-top:1px}
+  .ccard .ctext{flex:1;color:var(--ink)}
+  .ccard .cdel{color:var(--faint);cursor:pointer;flex:none;font-size:13px;visibility:hidden}
+  .ccard:hover .cdel{visibility:visible}
+  .addc{display:flex;gap:6px;margin-top:10px}
+  .addc input{flex:1;min-width:0;background:var(--bg2,#0a1122);background:#0a1122;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-size:12px;padding:7px 9px}
+  .addc input:focus{outline:none;border-color:var(--par)}
+  .addc button{background:rgba(91,140,255,.16);border:1px solid var(--par);color:#bcd2ff;font:inherit;font-size:12px;font-weight:600;border-radius:6px;padding:0 12px;cursor:pointer}
+  /* a row that can receive a dropped constraint */
+  .row.drop-ok{background:rgba(91,140,255,.12);border-color:var(--par);box-shadow:inset 0 0 0 1px var(--par)}
+  .cons{display:inline-flex;gap:5px;flex-wrap:wrap;margin-left:2px}
+  .cchip{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:#bcd2ff;background:rgba(91,140,255,.16);border:1px solid rgba(91,140,255,.4);padding:1px 6px;border-radius:999px;white-space:nowrap;cursor:pointer}
+  .cchip.warn{color:#ffcf8a;background:rgba(255,182,72,.14);border-color:rgba(255,182,72,.45)}
+  .cchip .x{cursor:pointer;opacity:.7} .cchip .x:hover{opacity:1}
+  /* compiled-constraint popover */
+  #cpop{display:none;position:fixed;z-index:50;width:390px;max-width:92vw;background:#0d1526;border:1px solid var(--line);border-radius:10px;box-shadow:0 16px 44px rgba(0,0,0,.5);padding:14px 15px}
+  #cpop .pop-nl{font-size:13.5px;font-weight:700;color:var(--ink)}
+  #cpop .pop-arrow{font-size:11px;color:var(--faint);margin:7px 0}
+  #cpop .pop-sec{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);margin:12px 0 5px}
+  #cpop .pop-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;white-space:pre;overflow-x:auto;background:#0a1020;border:1px solid var(--line);border-radius:7px;padding:9px 11px;margin:0}
+  #cpop .pop-code.ok{color:#7fe0a8;border-color:rgba(75,211,138,.35)}
+  #cpop .pop-code.warn{color:#ffcf8a;border-color:rgba(255,182,72,.35)}
+  #cpop .pop-code.dim{color:#9aa7c4}
+  #cpop .pop-note{font-size:11px;color:var(--muted);margin-top:6px;font-style:italic}
+  #cpop .pop-foot{font-size:11px;color:var(--muted);margin-top:11px;display:flex;justify-content:space-between;align-items:center}
+  #cpop .pop-live{color:#04121a;background:var(--par);font-weight:700;padding:3px 10px;border-radius:5px;cursor:pointer}
+
+  /* status pill */
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .pill.sm{font-size:9.5px;padding:1px 6px}
+  .pill .d{width:7px;height:7px;border-radius:50%}
+  .s-SUCCEEDED{background:rgba(75,211,138,.14);color:#7fe0a8}.s-SUCCEEDED .d{background:var(--ok)}
+  .s-RUNNING{background:rgba(255,182,72,.16);color:#ffcf8a}.s-RUNNING .d{background:var(--run)}
+  .s-FAILED{background:rgba(255,107,139,.16);color:#ff9db1}.s-FAILED .d{background:var(--fail)}
+  .s-CREATED{background:rgba(70,85,122,.25);color:#9aa7c4}.s-CREATED .d{background:var(--todo)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Plan view · step list</h1>
+  <span class="task">Task: <b id="task">…</b> · <span id="cnt"></span> · <span class="snap">simulated execution snapshot</span></span>
+</header>
+<div class="stage">
+  <aside class="layers">
+    <div class="grp">
+      <h2>Layers</h2>
+      <label class="lrow"><input type="checkbox" data-l="action" checked disabled><span class="sw" style="background:var(--action)"></span>Actions<span class="cnt" id="c-action"></span></label>
+      <label class="lrow"><input type="checkbox" data-l="attach" checked><span class="sw" style="background:var(--attach)"></span>Grasp / release<span class="cnt" id="c-attach"></span></label>
+      <label class="lrow"><input type="checkbox" data-l="monitor" checked><span class="sw" style="background:var(--monitor)"></span>Monitors<span class="cnt" id="c-monitor"></span></label>
+      <label class="lrow"><input type="checkbox" data-l="condition"><span class="sw" style="background:var(--condition)"></span>Conditions / constraints<span class="cnt" id="c-condition"></span></label>
+      <label class="lrow"><input type="checkbox" data-l="motion"><span class="sw" style="background:var(--motion)"></span>Motions<span class="cnt" id="c-motion"></span></label>
+    </div>
+    <div class="grp">
+      <h2>Presets</h2>
+      <div class="preset">
+        <button data-preset="overview">Overview</button>
+        <button data-preset="all">Everything</button>
+      </div>
+      <div class="hint" style="margin-top:12px">“Overview” hides conditions &amp; motions for a clean read. Toggle any layer to drill in. Parallel groups are shown with a blue rail; sequential steps are numbered.</div>
+    </div>
+    <div class="grp constraints-grp">
+      <h2>Constraints</h2>
+      <div class="constraint-hint">Drag a constraint onto any step to attach it. <span style="color:var(--par)">Later this reconfigures the Giskard node live.</span></div>
+      <div class="clist" id="clist"></div>
+      <div class="addc">
+        <input id="newC" placeholder="e.g. milk must stay upright" autocomplete="off">
+        <button id="addC">Add</button>
+      </div>
+    </div>
+  </aside>
+  <main class="outline"><div class="tree" id="tree"></div></main>
+</div>
+<div id="cpop"></div>
+
+<script>
+let PLAN=null, ROOT=null, CURRENT_INJECT=null;
+const layers={ action:true, attach:true, monitor:true, condition:false, motion:false };
+// bridge base URL: pass ?bridge=http://host:port to render the LIVE plan and enable "Apply live".
+const BRIDGE=(new URLSearchParams(location.search).get('bridge')||'').replace(/\/$/,'');
+
+// ---- constraints palette (natural-language, drag onto a step to attach) ----
+let CONSTRAINTS=[
+  {id:'c1', text:'Milk must always stay upright'},
+  {id:'c2', text:'Robot must look where it operates'},
+  {id:'c3', text:'Keep the gripper closed while carrying'},
+];
+let cIdc=4;
+const ATTACH={};   // nodeId -> [constraintId]   (data model ready for the Giskard hookup later)
+const NODEIX={};   // stable id -> plan node
+const nodeById=id=>NODEIX[id];
+
+// ---- Step 1: compile a natural-language constraint into a REAL giskardpy motion-statechart
+// goal/monitor (classes verified in giskardpy/motion_statechart/monitors/cartesian_monitors.py). ----
+function objectIn(text,node){
+  const m=text.toLowerCase().match(/\b(milk|bowl|spoon|plate|cup|tray|bottle|flask|vial|sample|object)\b/);
+  if(m) return m[1];
+  if(node && node.target) return cleanT(node.target);
+  return 'object';
+}
+function compileConstraint(text,node){
+  const t=text.toLowerCase();
+  if(/upright|stay up|level|vertical|not? ?tip|don.?t tip|spill/.test(t)){
+    const o=objectIn(text,node);
+    return {goal:'VectorsAligned', params:{root_link:'map', tip_link:o, tip_normal:[0,0,1], goal_normal:[0,0,1], threshold:0.1},
+            note:'keep '+o+"'s local +Z aligned with world +Z (upright)"};
+  }
+  if(/look|watch|gaze|point|face|see where|operat/.test(t)){
+    return {goal:'PointingAt', params:{tip_link:'head_camera', root_link:'map', pointing_axis:[0,0,1], goal_point:'@operation_target', threshold:0.05},
+            note:'aim head_camera at the current operation target'};
+  }
+  if(/gripper.*clos|clos.*gripper|hold.*tight|grip.*firm|carry/.test(t)){
+    return {goal:'JointPositionReached', params:{joint:'gripper_joint', goal_position:0.0, threshold:0.005},
+            note:'hold the gripper joint closed while active'};
+  }
+  if(/height|above|below|higher|lower/.test(t)){
+    const o=objectIn(text,node);
+    return {goal:'HeightMonitor', params:{reference_point:'@surface', controlled_point:o, lower_limit:0.0, upper_limit:0.3}, note:'bound '+o+' height over the reference surface'};
+  }
+  if(/distance|away from|clearance|too close|keep clear|collision/.test(t)){
+    return {goal:'DistanceMonitor', params:{tip_link:'@link', reference:'@obstacle', lower_limit:0.05}, note:'maintain a minimum clearance'};
+  }
+  return {goal:null, params:{}, note:'not matched to a Giskard goal yet — an LLM step would map this'};
+}
+// ---- Step 3 preview: the message the bridge would send to inject this into the LIVE motion statechart
+function liveInject(node,comp){
+  return { op:'attach_monitor', target_plan_node:{id:node._id, kind:node.kind, label:node.label},
+           giskard_node:{ type:comp.goal, params:comp.params }, apply:'next_activation' };
+}
+const esc=s=>String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const shortC=t=>t.length>26?t.slice(0,24)+'…':t;
+
+function renderConstraints(){
+  const el=document.getElementById('clist'); el.innerHTML='';
+  CONSTRAINTS.forEach(c=>{
+    const d=document.createElement('div'); d.className='ccard'; d.draggable=true;
+    d.innerHTML='<span class="grip">⠿</span><span class="ctext">'+esc(c.text)+'</span><span class="cdel" title="delete">×</span>';
+    d.addEventListener('dragstart',e=>{ e.dataTransfer.setData('text/plain','constraint:'+c.id); e.dataTransfer.effectAllowed='copy'; d.classList.add('dragging'); });
+    d.addEventListener('dragend',()=>d.classList.remove('dragging'));
+    d.querySelector('.cdel').addEventListener('click',()=>{ CONSTRAINTS=CONSTRAINTS.filter(x=>x.id!==c.id); Object.keys(ATTACH).forEach(k=>ATTACH[k]=ATTACH[k].filter(id=>id!==c.id)); renderConstraints(); refreshAllCons(); });
+    el.appendChild(d);
+  });
+}
+function consChipsInner(nodeId){
+  return (ATTACH[nodeId]||[]).map(id=>{ const c=CONSTRAINTS.find(x=>x.id===id); if(!c)return '';
+    const ok=compileConstraint(c.text,nodeById(nodeId)).goal!=null;
+    return '<span class="cchip '+(ok?'ok':'warn')+'" data-open="'+nodeId+'|'+id+'" title="click to see the compiled Giskard constraint">⛓ '+esc(shortC(c.text))+' <span class="x" data-detach="'+nodeId+'|'+id+'">×</span></span>'; }).join('');
+}
+function refreshCons(nodeId){ const s=document.querySelector('.cons[data-node="'+nodeId+'"]'); if(s) s.innerHTML=consChipsInner(nodeId); }
+function refreshAllCons(){ document.querySelectorAll('.cons[data-node]').forEach(s=>s.innerHTML=consChipsInner(s.dataset.node)); }
+function attachConstraint(nodeId,cid){ ATTACH[nodeId]=ATTACH[nodeId]||[]; if(!ATTACH[nodeId].includes(cid)) ATTACH[nodeId].push(cid); refreshCons(nodeId); }
+
+// drop handlers (rows are re-created on each render, so attach per row)
+function onDragOver(e){ e.preventDefault(); e.dataTransfer.dropEffect='copy'; e.currentTarget.classList.add('drop-ok'); }
+function onDragLeave(e){ e.currentTarget.classList.remove('drop-ok'); }
+function onDrop(e){ e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('drop-ok');
+  const data=e.dataTransfer.getData('text/plain')||''; if(data.indexOf('constraint:')===0){ attachConstraint(e.currentTarget.dataset.node, data.slice(11)); } }
+
+const CLASS={ ActionNode:'action', AttachNode:'attach', DetachNode:'attach', MonitorNode:'monitor',
+  ConditionNode:'condition', MotionNode:'motion', SequentialNode:'seq', ParallelNode:'par', UnderspecifiedNode:'under' };
+const COLOR={ action:'#b98cff', attach:'#39d5c8', monitor:'#4bd38a', condition:'#ffb648', motion:'#ff7a9c', par:'#5b8cff' };
+const STEP=new Set(['action','attach']);          // rows that get a number
+const DETAIL=new Set(['condition','motion','monitor']);  // toggleable sub-rows
+const cls=n=>CLASS[n.kind]||'under';
+
+function humanize(n){
+  const c=cls(n);
+  if(c==='condition') return 'condition check';
+  if(c==='monitor') return 'monitor' + (n.label && n.label!=='MonitorNode' ? ' · '+words(n.label) : '');
+  if(n.kind==='AttachNode') return 'grasp' + (n.target?' '+cleanT(n.target):'');
+  if(n.kind==='DetachNode') return 'release' + (n.target?' '+cleanT(n.target):'');
+  if(c==='motion') return words((n.label||'motion').replace(/Motion$/,'')) || 'motion';
+  let l=words((n.label||n.kind).replace(/(Action|Node)$/,''));
+  if(n.arm && /park|move|reach|lift|carry/i.test(l) && n.arm!=='BOTH') l+=' ('+n.arm.toLowerCase()+')';
+  if(n.target) l+=' '+cleanT(n.target);
+  return l||'step';
+}
+function words(s){ s=String(s).replace(/([a-z0-9])([A-Z])/g,'$1 $2').trim().toLowerCase(); return s? s.charAt(0).toUpperCase()+s.slice(1):s; }
+function cleanT(t){ return String(t).replace(/\.(stl|obj|dae|urdf)$/i,'').replace(/_/g,' '); }
+
+// English status label
+function statusPill(s,small){ s=s||'CREATED';
+  const m={SUCCEEDED:'done',RUNNING:'running',FAILED:'failed',CREATED:'not started',NOT_STARTED:'not started'};
+  const key=(s==='NOT_STARTED')?'CREATED':s;
+  return '<span class="pill s-'+key+(small?' sm':'')+'"><span class="d"></span>'+(m[s]||s.toLowerCase())+'</span>'; }
+
+// ---- flatten structural containers, keep parallel groups, drop placeholder rows ----
+// returns ordered items: {t:'step',node} | {t:'par',items,example}
+function displayItems(node){
+  const out=[];
+  (node.children||[]).forEach(c=>{
+    const k=cls(c);
+    if(STEP.has(k)){ if(k==='attach' && !layers.attach) return; out.push({t:'step',node:c}); }
+    else if(DETAIL.has(k)){ /* handled as details on the parent step */ }
+    else if(k==='par'){ out.push({t:'par', items:displayItems(c), example:!!c._example, status:c._status}); }
+    else { /* seq / under → flatten through */ displayItems(c).forEach(x=>out.push(x)); }
+  });
+  return out;
+}
+// ALL detail nodes (conditions/motions/monitors) that belong to a step, gathered
+// through flattened structural containers — independent of layer toggles, so a step
+// with hidden detail is still discoverable (this is why "Reach" looked like a dead end).
+function gatherDetails(node){
+  const out=[];
+  (node.children||[]).forEach(c=>{ const k=cls(c);
+    if(DETAIL.has(k)) out.push(c);
+    else if(k==='seq'||k==='under') out.push.apply(out, gatherDetails(c)); // container's own details belong to this step
+  });
+  return out;
+}
+
+function render(){
+  const tree=document.getElementById('tree'); tree.innerHTML='';
+  const top=displayItems(ROOT);
+  renderList(top, tree, '', 'seq');
+  // open the first level by default
+  tree.querySelectorAll(':scope > .step > .row.hask').forEach((r,i)=>{ if(i<3) toggle(r); });
+}
+function letter(i){ return String.fromCharCode(97+i); }   // 0->a, 1->b …
+function renderList(items, el, prefix, mode){
+  let i=0;
+  items.forEach(it=>{
+    const number = prefix + (mode==='par' ? letter(i) : String(i+1));
+    if(it.t==='step') el.appendChild(renderStep(it.node, number, mode));
+    else el.appendChild(renderParallel(it, number));
+    i++;
+  });
+}
+function renderStep(node, number, mode){
+  const c=cls(node), wrap=document.createElement('div'); wrap.className='step';
+  const sub=displayItems(node);
+  const visD=gatherDetails(node).filter(d=>layers[cls(d)]);  // layers are a pure filter: off = gone
+  const hk = sub.length>0 || visD.length>0;
+  const row=document.createElement('div'); row.className='row'+(hk?' hask':''); row.dataset.node=node._id;
+  row.innerHTML =
+    '<span class="tw">'+(hk?'▸':'')+'</span>'+
+    '<span class="num">'+number+'</span>'+
+    '<span class="icon" style="background:'+COLOR[c]+'"></span>'+
+    '<span class="name">'+humanize(node)+'</span>'+
+    '<span class="cons" data-node="'+node._id+'">'+consChipsInner(node._id)+'</span>'+
+    '<span class="meta">'+(visD.length?'<span class="dc">'+visD.length+' detail'+(visD.length>1?'s':'')+'</span>':'')+statusPill(node._status)+'</span>';
+  row.addEventListener('dragover',onDragOver); row.addEventListener('dragleave',onDragLeave); row.addEventListener('drop',onDrop);
+  wrap.appendChild(row);
+  const kids=document.createElement('div'); kids.className='kids';
+  visD.forEach(d=>{
+    const l=document.createElement('div'); l.className='row';
+    l.innerHTML='<span class="tw"></span><span class="num"></span><span class="icon" style="background:'+COLOR[cls(d)]+'"></span><span class="name detail">'+humanize(d)+'</span><span class="meta">'+statusPill(d._status,true)+'</span>';
+    kids.appendChild(l);
+  });
+  renderList(sub, kids, number+'.', 'seq');   // nested steps are sequential
+  wrap.appendChild(kids);
+  if(hk) row.addEventListener('click',()=>toggle(row));
+  return wrap;
+}
+function renderParallel(group, number){
+  const wrap=document.createElement('div'); wrap.className='step';
+  const box=document.createElement('div'); box.className='par';
+  const head=document.createElement('div'); head.className='par-head';
+  head.innerHTML='<span class="tw">▾</span><span class="num">'+number+'</span><span class="par-chip">⇉ in parallel</span>'+
+    (group.example?'<span class="par-example">(example — sample plan is all-sequential)</span>':'')+
+    '<span class="meta">'+statusPill(group.status)+'</span>';
+  box.appendChild(head);
+  const kids=document.createElement('div'); kids.className='kids open';
+  renderList(group.items, kids, number, 'par');   // parallel children lettered: 4a, 4b …
+  box.appendChild(kids);
+  const tw=head.querySelector('.tw'); head.style.cursor='pointer';
+  head.addEventListener('click',()=>{ kids.classList.toggle('open'); tw.textContent=kids.classList.contains('open')?'▾':'▸'; });
+  wrap.appendChild(box);
+  return wrap;
+}
+function toggle(row){ const kids=row.parentElement.querySelector(':scope > .kids'); if(!kids)return; kids.classList.toggle('open'); const tw=row.querySelector('.tw'); if(tw && tw.textContent!=='•') tw.textContent=kids.classList.contains('open')?'▾':'▸'; }
+
+// ---- status snapshot (same as before) ----
+function applySnapshot(root){ const kids=root.children||[]; const active=Math.min(2,kids.length-1); root._status='RUNNING';
+  kids.forEach((c,i)=>{ if(i<active)setAll(c,'SUCCEEDED'); else if(i>active)setAll(c,'CREATED'); else setRun(c); }); }
+function setAll(n,s){ n._status=s; (n.children||[]).forEach(c=>setAll(c,s)); }
+function setRun(n){ n._status='RUNNING'; (n.children||[]).forEach((c,i)=>{ if(i===0)setAll(c,'SUCCEEDED'); else if(i===1)setRun(c); else setAll(c,'CREATED'); }); }
+
+// inject ONE illustrative ParallelNode so the parallel rendering is visible
+function injectParallelExample(root){
+  const kids=root.children||[];
+  // wrap the last two top-level transport steps into a parallel block
+  if(kids.length>=2){
+    const a=kids[kids.length-2], b=kids[kids.length-1];
+    const par={kind:'ParallelNode', label:'ParallelNode', _example:true, children:[a,b]};
+    kids.splice(kids.length-2,2,par);
+  }
+}
+function counts(){ const k={action:0,attach:0,monitor:0,condition:0,motion:0}; (function w(n){ const c=cls(n); if(k[c]!==undefined)k[c]++; (n.children||[]).forEach(w); })(ROOT);
+  Object.keys(k).forEach(x=>{ const el=document.getElementById('c-'+x); if(el)el.textContent=k[x]; }); }
+
+// build a nested tree from the bridge's flat /plan node list ({id,parent,kind,label,status,...})
+function treeFromFlat(nodes){
+  const by={}; (nodes||[]).forEach(n=>{ by[n.id]={kind:n.kind,label:n.label,target:n.target,arm:n.arm,group:n.group,_status:n.status,children:[]}; });
+  let root=null;
+  (nodes||[]).forEach(n=>{ const o=by[n.id]; if(n.parent&&by[n.parent]) by[n.parent].children.push(o); else if(!root) root=o; });
+  return root||{kind:'SequentialNode',label:'plan',children:[]};
+}
+function loadPlan(){
+  if(BRIDGE) return fetch(BRIDGE+'/plan').then(r=>r.json()).then(live=>({_live:true, task:'live plan', name:'live', planTrees:[treeFromFlat(live.nodes)]}));
+  return fetch('plan_sample.json').then(r=>r.json());
+}
+loadPlan().then(d=>{
+  PLAN=d; ROOT=d.planTrees[0];
+  if(!d._live){ applySnapshot(ROOT); injectParallelExample(ROOT); }   // live data already carries real statuses
+  let idc=0; (function assign(n){ n._id='p'+(idc++); NODEIX[n._id]=n; (n.children||[]).forEach(assign); })(ROOT);  // stable ids for attachments
+  renderConstraints();
+  document.getElementById('task').textContent=d.task||d.name||'plan';
+  const snap=document.querySelector('.snap'); if(snap) snap.textContent=d._live?'live from bridge':'simulated execution snapshot';
+  let n=0;(function c(x){n++;(x.children||[]).forEach(c);})(ROOT);
+  document.getElementById('cnt').textContent=n+' plan nodes';
+  counts();
+  if(location.hash==='#all'){ layers.condition=true; layers.motion=true; document.querySelectorAll('.lrow input[data-l]').forEach(cb=>{ if(!cb.disabled) cb.checked=layers[cb.dataset.l]; }); }
+  render();
+  if(location.hash==='#demo'||location.hash==='#pop'){ const k=ROOT.children||[]; if(k[2]){ATTACH[k[2]._id]=['c1'];refreshCons(k[2]._id);} if(k[0]){ATTACH[k[0]._id]=['c2'];refreshCons(k[0]._id);}
+    if(location.hash==='#pop'){ const chip=document.querySelector('.cchip[data-open]'); if(chip){ const [nid,cid]=chip.dataset.open.split('|'); openPop(nid,cid,chip); } } }
+}).catch(e=>{ const t=document.getElementById('tree'); if(t) t.innerHTML='<div style="padding:24px;color:#ff9db1">Could not load the plan ('+e+'). Pass <code>?bridge=&lt;url&gt;</code> for the live plan, or ensure <code>plan_sample.json</code> is served next to this page.</div>'; });
+
+// add-constraint input
+function addConstraint(){ const i=document.getElementById('newC'); const t=i.value.trim(); if(!t)return; CONSTRAINTS.push({id:'c'+(cIdc++),text:t}); i.value=''; renderConstraints(); i.focus(); }
+document.getElementById('addC').addEventListener('click',addConstraint);
+document.getElementById('newC').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); addConstraint(); } });
+// chip interactions (delegated; must not toggle the row): × detaches, body opens the compiled view
+document.getElementById('tree').addEventListener('click',e=>{
+  const del=e.target.closest('[data-detach]');
+  if(del){ e.stopPropagation(); const [nodeId,cid]=del.dataset.detach.split('|'); ATTACH[nodeId]=(ATTACH[nodeId]||[]).filter(id=>id!==cid); refreshCons(nodeId); closePop(); return; }
+  const op=e.target.closest('[data-open]');
+  if(op){ e.stopPropagation(); const [nodeId,cid]=op.dataset.open.split('|'); openPop(nodeId,cid,op); }
+});
+// compiled-constraint popover (Steps 1–3 made concrete)
+function openPop(nodeId,cid,anchor){
+  const node=nodeById(nodeId), c=CONSTRAINTS.find(x=>x.id===cid); if(!node||!c) return;
+  const comp=compileConstraint(c.text,node); const pop=document.getElementById('cpop');
+  const p=Object.entries(comp.params).map(([k,v])=>'    '+k+': '+JSON.stringify(v)).join('\n');
+  CURRENT_INJECT=comp.goal?liveInject(node,comp):null;
+  const inj=JSON.stringify(liveInject(node,comp),null,2);
+  pop.innerHTML=
+    '<div class="pop-nl">“'+esc(c.text)+'”</div>'+
+    '<div class="pop-arrow">↓ compiles to a giskardpy motion-statechart node</div>'+
+    (comp.goal
+      ? '<pre class="pop-code ok">'+esc(comp.goal)+'(\n'+esc(p)+'\n)</pre>'+
+        '<div class="pop-note">'+esc(comp.note)+'</div>'
+      : '<pre class="pop-code warn">⚠ '+esc(comp.note)+'</pre>')+
+    '<div class="pop-sec">Step 3 · live inject (via the bridge → giskardpy)</div>'+
+    '<pre class="pop-code dim">'+esc(inj)+'</pre>'+
+    '<div class="pop-foot">attached to <b>'+esc(humanize(node))+'</b> · <span class="pop-live">Apply live</span></div>';
+  const r=anchor.getBoundingClientRect();
+  pop.style.display='block';
+  pop.style.left=Math.min(r.left, window.innerWidth-pop.offsetWidth-16)+'px';
+  pop.style.top=(r.bottom+6)+'px';
+}
+function closePop(){ const p=document.getElementById('cpop'); if(p) p.style.display='none'; }
+document.getElementById('cpop').addEventListener('click',e=>{ const b=e.target.closest('.pop-live'); if(!b)return;
+  if(!CURRENT_INJECT){ b.textContent='⚠ not compilable'; b.style.background='#ffb648'; return; }
+  if(!BRIDGE){ b.textContent='✓ queued (preview)'; b.style.background='#4bd38a'; b.title='no ?bridge= set — this is a preview; with a bridge it POSTs /constraint'; return; }
+  b.textContent='sending…';
+  fetch(BRIDGE+'/constraint',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(CURRENT_INJECT)})
+    .then(r=>r.json()).then(j=>{ b.textContent=j.ok?'✓ applied live':'✗ '+(j.error||'error'); b.style.background=j.ok?'#4bd38a':'#ff6b8b'; })
+    .catch(err=>{ b.textContent='✗ '+err; b.style.background='#ff6b8b'; });
+});
+document.addEventListener('click',e=>{ if(!e.target.closest('#cpop') && !e.target.closest('[data-open]')) closePop(); });
+
+// layer toggles
+document.querySelectorAll('.lrow input[data-l]').forEach(cb=>{
+  cb.addEventListener('change',()=>{ layers[cb.dataset.l]=cb.checked; render(); });
+});
+document.querySelectorAll('.preset button').forEach(b=>b.addEventListener('click',()=>{
+  const all=b.dataset.preset==='all';
+  layers.condition=all; layers.motion=all; layers.attach=true; layers.monitor=true;
+  document.querySelectorAll('.lrow input[data-l]').forEach(cb=>{ if(!cb.disabled) cb.checked=layers[cb.dataset.l]; });
+  render();
+}));
+</script>
+</body>
+</html>

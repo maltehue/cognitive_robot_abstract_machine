@@ -1,23 +1,18 @@
-from giskardpy.motion_statechart.goals.cartesian_goals import DifferentialDriveBaseGoal
+from dataclasses import dataclass
+from typing_extensions import ClassVar
 from coraplex.datastructures.enums import ExecutionType
 from coraplex.robot_plans import MoveMotion
 from coraplex.robot_plans.motions.base import AlternativeMotion
 from semantic_digital_twin.robots.tiago import Tiago
 
 
+@dataclass
 class TiagoMoveSim(MoveMotion, AlternativeMotion[Tiago]):
     """
-    Uses a diff drive goal for the tiago base.
+    Navigate Tiago through free space using its differential drive controller.
     """
 
-    execution_type = ExecutionType.SIMULATED
-
-    def perform(self):
-        return
-
-    @property
-    def _motion_chart(self):
-
-        return DifferentialDriveBaseGoal(
-            goal_pose=self.target,
-        )
+    execution_type: ClassVar[ExecutionType] = ExecutionType.SIMULATED
+    """
+    Execution environment selecting this navigation mapping.
+    """

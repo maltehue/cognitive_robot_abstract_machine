@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Tuple
 
 import numpy as np
-from typing_extensions import Optional, Union, List, TYPE_CHECKING
+from typing_extensions import ClassVar, Optional, Union, List, TYPE_CHECKING
 
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.spatial_types.spatial_types import (
@@ -15,6 +15,7 @@ from semantic_digital_twin.spatial_types.spatial_types import (
     Vector3,
     Quaternion,
 )
+from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase
 from semantic_digital_twin.world_description.world_entity import (
     Body,
     KinematicStructureEntity,
@@ -208,17 +209,29 @@ class GraspDescription:
         """
         return self.pose_sequence(Pose(reference_frame=body), body)
 
-    def place_pose_sequence(self, pose: Pose) -> List[Pose]:
+    def place_pose_sequence(self, pose: Pose, body: Body | None = None) -> List[Pose]:
         """
-        Calculates the pose sequence to place a body at the given pose.
-
-        Assumes that the end_effector is holding a body which is being placed.
+        Place a held body using its measured attachment and the grasp clearances.
 
         :param pose: The pose at which the body in the end_effector should be placed
+        :param body: Held body; inferred when the tool frame has exactly one child.
         :return: The pose sequence.
+        :raises ValueError: If no body is given and the tool has no unique child.
         """
-        body = self.end_effector.tool_frame.child_kinematic_structure_entities[0]
-        return self.pose_sequence(pose, body, reverse=True)
+        tool_frame = self.end_effector.tool_frame
+        if body is None:
+            (body,) = tool_frame.child_kinematic_structure_entities
+        sequence = self.pose_sequence(pose, body, reverse=True)
+        object_T_tool = self.end_effector._world.compute_forward_kinematics(
+            body, tool_frame
+        )
+        reference_T_tool_goal = pose.to_homogeneous_matrix() @ object_T_tool
+        reference_T_nominal_tool = sequence[1].to_homogeneous_matrix()
+        nominal_tool_T_tool = reference_T_nominal_tool.inverse() @ reference_T_tool_goal
+        return [
+            (step.to_homogeneous_matrix() @ nominal_tool_T_tool).to_pose()
+            for step in sequence
+        ]
 
     def manipulation_axis(self) -> List[float]:
         """
@@ -394,6 +407,113 @@ class GraspDescription:
         ]
 
         return grasp_configs
+
+    #: an object is grasped from above (top) rather than the side when it is this flat:
+    #: its height is at most this fraction of its smaller horizontal side ...
+    TOP_GRASP_FLATNESS_RATIO: ClassVar[float] = 0.5
+    #: ... or at most this many metres tall in absolute terms.
+    TOP_GRASP_MAX_HEIGHT: ClassVar[float] = 0.05
+
+    @classmethod
+    def robot_relative_default(
+        cls,
+        end_effector: "EndEffector",
+        pose: Pose,
+        body: Optional[Body] = None,
+        grasp_alignment: Optional["PreferredGraspAlignment"] = None,
+    ) -> "GraspDescription":
+        """
+        The default grasp for an object: the side to approach from follows the robot's
+        reach (see :meth:`_approach_side`), and a **top** grasp is chosen automatically
+        for a clearly flat/short object (see :attr:`TOP_GRASP_FLATNESS_RATIO` /
+        :attr:`TOP_GRASP_MAX_HEIGHT`), for which a side grasp is awkward, keeping the
+        chosen side's yaw.
+
+        :param end_effector: The end effector that will grasp.
+        :param pose: The pose of the object to grasp.
+        :param body: The object body, used to decide side-vs-top from its geometry.
+        :param grasp_alignment: Optional explicit preferred alignment (overrides the
+            auto side/top choice).
+        :return: The grasp description to approach with.
+        """
+        best = cls._approach_side(end_effector, pose, grasp_alignment)
+        # auto top grasp for flat objects, unless the caller asked for a specific alignment
+        if grasp_alignment is None and body is not None and cls._is_flat(body):
+            return cls(
+                approach_direction=best.approach_direction,  # keep the chosen yaw
+                vertical_alignment=VerticalAlignment.TOP,
+                rotate_gripper=best.rotate_gripper,
+                end_effector=end_effector,
+            )
+        return best
+
+    @classmethod
+    def _approach_side(
+        cls,
+        end_effector: "EndEffector",
+        pose: Pose,
+        grasp_alignment: Optional["PreferredGraspAlignment"] = None,
+    ) -> "GraspDescription":
+        """
+        The side to approach an object from.
+
+        A robot that drives to the object approaches its own front side: it is not
+        standing where it will grasp from, so where it stands now says nothing about
+        which side it can reach, and picking a side from that position sends it around
+        the object for no reason. A robot whose base cannot move can only reach the side
+        already facing it, so for that one the facing side is picked.
+
+        :param end_effector: The end effector that will grasp.
+        :param pose: The pose of the object to grasp.
+        :param grasp_alignment: An explicit preferred alignment, which decides the side
+            for either kind of robot.
+        :return: The grasp description naming the side.
+        """
+        if grasp_alignment is None and cls._reaches_the_object_by_driving(end_effector):
+            return cls(
+                ApproachDirection.FRONT, VerticalAlignment.NoAlignment, end_effector
+            )
+        try:
+            candidates = cls.calculate_grasp_descriptions(
+                end_effector, pose, grasp_alignment
+            )
+        except Exception:
+            candidates = []
+        if not candidates:
+            return cls(
+                ApproachDirection.FRONT, VerticalAlignment.NoAlignment, end_effector
+            )
+        return candidates[0]
+
+    @staticmethod
+    def _reaches_the_object_by_driving(end_effector: "EndEffector") -> bool:
+        """
+        Whether the robot moves its base to the object rather than reaching from a fixed
+        stand.
+
+        :param end_effector: The end effector whose robot is asked.
+        """
+        return isinstance(end_effector._robot, HasMobileBase)
+
+    @classmethod
+    def _is_flat(cls, body: Body) -> bool:
+        """
+        Whether a body is flat/short enough to prefer a top grasp over a side grasp.
+        """
+        try:
+            dims = (
+                body.collision.as_bounding_box_collection_in_frame(body)
+                .bounding_box()
+                .dimensions
+            )
+        except Exception:
+            return False
+        height = dims[2]
+        footprint = min(dims[0], dims[1])
+        return (
+            height <= cls.TOP_GRASP_MAX_HEIGHT
+            or height <= cls.TOP_GRASP_FLATNESS_RATIO * footprint
+        )
 
     @staticmethod
     def calculate_closest_faces(

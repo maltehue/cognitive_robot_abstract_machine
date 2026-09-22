@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!--
+  warehouse6 as a coraplex world: a single fixed link showing the prepared warehouse6.glb
+  (metres, Z up, roof off), so the Plan Builder can load it through URDFParser like the
+  kitchen and apartment worlds.
+
+  Visual only, on purpose. The hall is one mesh whose collision fills the whole interior
+  as a solid block, so the occupancy costmap (it ray casts each floor cell down and marks
+  it blocked on any hit) finds zero free standing cells, and every costmap based action
+  (NavigateAction, TransportAction) fails with "Merged locations is empty". With no
+  collision the floor is free space again and those actions resolve. The trade off is
+  that nothing stops the robot passing through a rack; for a manipulation demo in
+  simulation that is fine.
+-->
+<robot name="warehouse6">
+  <link name="warehouse6">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="warehouse6.glb"/>
+      </geometry>
+    </visual>
+  </link>
+</robot>

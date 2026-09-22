@@ -1,0 +1,66 @@
+{
+  "title": "CRAM · Vom Weltmodell zur Handlung",
+  "description": "Aufgezeichnete Einzelroboter-Beispiele: semantische Szene, räumliche Fragen, Transport und Navigation. Die Siemens-Laborszene ist noch nicht enthalten. Alle Kapitel laufen lokal ohne Roboterverbindung.",
+  "chapters": [
+    {
+      "title": "Die Welt hat Bedeutung",
+      "narration": "CRAM kennt nicht nur Geometrie: Der semantische digitale Zwilling beschreibt Gegenstände, Griffe und nutzbare Flächen. Dieses aufgezeichnete Referenzszenario zeigt einen Tisch, Milch und zwei Griffe.",
+      "scene": "semantic_query_rehearsal",
+      "view": "knowledge",
+      "query": "show all semantic annotations",
+      "playback": false,
+      "speed": 0.5,
+      "durationSeconds": 12
+    },
+    {
+      "title": "Wissen wird sichtbar",
+      "narration": "Die Frage nach allen Griffen wird aus der gespeicherten Welt beantwortet. Die Antwort markiert die beiden Griffe direkt in der 3D-Szene.",
+      "scene": "semantic_query_rehearsal",
+      "view": "knowledge",
+      "query": "show all handles",
+      "playback": false,
+      "speed": 0.5,
+      "durationSeconds": 12
+    },
+    {
+      "title": "Einen freien Platz finden",
+      "narration": "Die freien Bereiche berücksichtigen die Größe des Objekts und vorhandene Hindernisse. Gezeigt werden zulässige Positionen für die Mitte der Milchpackung. Diese Antwort gehört zum gespeicherten Weltzustand.",
+      "scene": "semantic_query_rehearsal",
+      "view": "knowledge",
+      "query": "where can I place milk on table?",
+      "playback": false,
+      "speed": 0.5,
+      "durationSeconds": 12
+    },
+    {
+      "title": "Eine semantische Aufgabe ausführen",
+      "narration": "Tracy transportiert den Würfel auf den benannten Tisch. CRAM löst den Ablageort während der Ausführung auf und führt Greifen, Heben und Platzieren aus. Dies ist eine erfolgreiche Aufnahme mit aktiver Kollisionsvermeidung.",
+      "scene": "cramera_collision_avoidance_transport",
+      "view": "plan",
+      "query": null,
+      "playback": true,
+      "speed": 0.5,
+      "durationSeconds": 12
+    },
+    {
+      "title": "Den Plan erklären",
+      "narration": "Der Planbaum zerlegt Transport in konkrete Schritte. Einzelne passende Schritte können perspektivisch durch eine gelernte Policy ersetzt werden. In dieser Demonstration wird keine Policy ausgeführt. Der Baum zeigt die tatsächlich aufgezeichneten Aktionen.",
+      "scene": "cramera_collision_avoidance_transport",
+      "view": "plan",
+      "query": null,
+      "playback": false,
+      "speed": 0.5,
+      "durationSeconds": 12
+    },
+    {
+      "title": "Fahren statt springen",
+      "narration": "Ein separates PR2-Beispiel zeigt GCS-Navigation um ein Hindernis. Die Basis fährt kontinuierlich, dreht sich in Fahrtrichtung und hält Kollisionsvermeidung aktiv. Die unterschiedlichen Roboter gehören zu getrennten aufgezeichneten Welten.",
+      "scene": "cramera_navigation_facing",
+      "view": "plan",
+      "query": null,
+      "playback": true,
+      "speed": 0.5,
+      "durationSeconds": 12
+    }
+  ]
+}

@@ -151,6 +151,6 @@ out to show.
 
 ## Final takeway from this experiment
 
-**What it does prove:** The full pipeline works end-to-end on real, structured relational data, divided fitting, cause/confounder/causes_effect query marking, grounding through RelationalCircuitRegistry, support-determinism verification, and backdoor adjustment all produce a coherent result that matches a real chemistry signal (mutagenicity rising with branching-atom count, consistent with known QSAR correlates). That's genuine validation of the pipeline. 
+**What it does prove:** The full pipeline works end-to-end on real, structured relational data, divided fitting, cause/confounder/causes_effect query marking, grounding through RelationalCircuitRegistry, support-determinism verification, and backdoor adjustment all produce a coherent result that matches a real chemistry signal (mutagenicity rising with branching-atom count, consistent with known QSAR correlates). That's genuine validation of the pipeline.
 
 **What it doesn't prove:** It doesn't prove branching-atom count causes mutagenicity, that's inherent to backdoor adjustment itself (it's only as sound as the assumed confounder set), but not this pipeline gap.

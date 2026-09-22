@@ -297,7 +297,7 @@ class _CancelBecauseExternalCollisionViolated(_CancelBecauseCollisionViolated):
         for task in violated_tasks:
             collision = context.external_collision_manager.last_closest_contacts[
                 task.collision_group
-            ][0]
+            ][task.collision_index]
             collisions.append(collision)
             thresholds.append(task.violated_distance.evaluate()[0])
         raise CollisionViolatedError(

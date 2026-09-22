@@ -8,6 +8,7 @@ import pytest
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.robots.armar7 import Armar7, Armar7Joint
 from semantic_digital_twin.robots.daisy import DAiSy, DAiSyJoint
+from semantic_digital_twin.robots.garmi import Garmi, GarmiJoint
 from semantic_digital_twin.robots.hsrb import HSRB, HSRBJoint
 from semantic_digital_twin.robots.icub3 import ICub3, ICub3Joint
 from semantic_digital_twin.robots.justin import Justin, JustinJoint
@@ -35,12 +36,13 @@ ROBOTS_WITH_JOINT_ENUM: list[tuple[type[AbstractRobot], type[StrEnum]]] = [
     (Justin, JustinJoint),
     (UnitreeG1, UnitreeG1Joint),
     (MMPDresden, MMPDresdenJoint),
+    (Garmi, GarmiJoint),
 ]
 """
 Every robot whose description can be resolved, together with the enum naming its joints.
 
-Garmi and :class:`TiagoMujoco` are absent because their descriptions are unavailable, so
-their joint names cannot be checked against a parsed world.
+:class:`TiagoMujoco` is absent because its description is unavailable, so its joint
+names cannot be checked against a parsed world.
 """
 
 ROBOT_IDENTIFIERS = [robot.__name__ for robot, _ in ROBOTS_WITH_JOINT_ENUM]

@@ -1,0 +1,9 @@
+INFO:__main__:running demo: /home/hassouna/cram-worktrees/cram-viz/coraplex/demos/coraplex_generated/_builder_scaffold.py
+Unknown tag "material" in /robot[@name='apartment']/link[@name='coffe_machine']/collision[1]
+Unknown attribute "type" in /robot[@name='pr2']/link[@name='base_laser_link']
+Unknown attribute "type" in /robot[@name='pr2']/link[@name='wide_stereo_optical_frame']
+Unknown attribute "type" in /robot[@name='pr2']/link[@name='narrow_stereo_optical_frame']
+Unknown attribute "type" in /robot[@name='pr2']/link[@name='laser_tilt_link']
+Unknown tag "material" in /robot[@name='pr2']/link[@name='l_force_torque_link']/collision[1]
+INFO:cramera.live.bridge:attached to world (robot=PR2, 83 joints)
+INFO:cramera.live.ros_markers:watching markers on /semworld/viz_marker, /coraplex/viz_marker

@@ -183,6 +183,13 @@ class UnderspecifiedNode(ExecutionBoundaryNode):
     def designator_type(self) -> Type:
         return self.underspecified_action.type
 
+    @property
+    def execution_children(self) -> list[ActionNode]:
+        """
+        Return only the currently attempted candidate for the live outcome.
+        """
+        return [self.current_candidate] if self.current_candidate is not None else []
+
     def _pull_next_action(self) -> Optional[ActionDescription]:
         """
         Pull the next grounded action from the iterator, without attaching it anywhere.

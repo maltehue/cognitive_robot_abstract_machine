@@ -15,21 +15,34 @@ from krrood.entity_query_language.factories import (
     ConditionType,
 )
 from coraplex.datastructures.dataclasses import Context
-from coraplex.datastructures.enums import Arms
+from coraplex.datastructures.enums import (
+    Arms,
+    ApproachDirection,
+    VerticalAlignment,
+)
 from coraplex.datastructures.grasp import GraspDescription
 from coraplex.exceptions import BodyIsNotHeld
+from coraplex.datastructures.manipulation_contacts import (
+    HasManipulationContactPolicy,
+    ManipulationContactPolicy,
+)
 from coraplex.plans.factories import sequential
 from coraplex.querying.predicates import GripperIsFree
 from coraplex.robot_plans.actions.base import ActionDescription
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.robot_plans.mixins import (
     HasGraspDetectionThreshold,
-    HasTcpGoalThresholds,
     PlaceTuningParameters,
+    HasTcpGoalThresholds,
 )
 from coraplex.robot_plans.motions.gripper import (
     MoveGripperMotion,
     MoveToolCenterPointMotion,
+)
+from coraplex.robot_plans.motions.placement import (
+    MovePlacementMotion,
+    PlacementPoseSequence,
+    PlacementStage,
 )
 from coraplex.view_manager import ViewManager
 from semantic_digital_twin.datastructures.definitions import GripperState
@@ -46,8 +59,9 @@ if TYPE_CHECKING:
 class PlaceAction(
     ActionDescription,
     PlaceTuningParameters,
-    HasGraspDetectionThreshold,
     HasTcpGoalThresholds,
+    HasGraspDetectionThreshold,
+    HasManipulationContactPolicy,
 ):
     """
     Places an Object at a position using an arm.
@@ -74,17 +88,33 @@ class PlaceAction(
     :func:`~semantic_digital_twin.reasoning.robot_predicates.is_body_gripped`).
     """
 
-    def _retract_plan(self, retract_pose: Pose) -> PlanNode:
+    @property
+    def manipulation_contact_policy(self) -> ManipulationContactPolicy:
         """
+        Permit release contact with the selected object's destination support.
+        """
+        return ManipulationContactPolicy(
+            self.object_designator,
+            ViewManager.get_end_effector_view(
+                self.arm, self.robot
+            ).bodies_with_collision,
+            self.target_location,
+        )
+
+    def _retract_plan(self, placement: PlacementPoseSequence) -> PlanNode:
+        """
+        :param placement: Tool poses retained from the measured attachment.
         :return: The plan that re-parents the placed object back to the world and
             retracts the end effector away from it.
         """
         return sequential(
             [
                 ReAttachNode(body=self.object_designator, new_parent=self.world.root),
-                MoveToolCenterPointMotion(
-                    retract_pose,
+                MovePlacementMotion(
+                    placement.resolve(PlacementStage.RETRACT),
                     self.arm,
+                    placement=placement,
+                    stage=PlacementStage.RETRACT,
                     max_linear_velocity=self.retract_linear_velocity,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
@@ -123,25 +153,29 @@ class PlaceAction(
     @property
     def _action_plan(self) -> PlanNode:
         end_effector = ViewManager.get_arm_view(self.arm, self.robot).end_effector
-        grasp_description = self._grasp_description(end_effector)
-        transport_pose, placing_pose, retract_pose = grasp_description.pose_sequence(
-            self.target_location, self.object_designator, reverse=True
+        previous_grasp_description = self._grasp_description(end_effector)
+        placement = PlacementPoseSequence(
+            previous_grasp_description, self.object_designator, self.target_location
         )
 
         return sequential(
             [
-                MoveToolCenterPointMotion(
-                    transport_pose,
+                MovePlacementMotion(
+                    placement.resolve(PlacementStage.APPROACH),
                     self.arm,
-                    allow_gripper_collision=True,
+                    placement=placement,
+                    stage=PlacementStage.APPROACH,
+                    allow_gripper_collision=False,
                     max_linear_velocity=self.transport_linear_velocity,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
                 ),
-                MoveToolCenterPointMotion(
-                    placing_pose,
+                MovePlacementMotion(
+                    placement.resolve(PlacementStage.RELEASE),
                     self.arm,
-                    allow_gripper_collision=True,
+                    placement=placement,
+                    stage=PlacementStage.RELEASE,
+                    allow_gripper_collision=False,
                     max_linear_velocity=self.placing_linear_velocity,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
@@ -149,10 +183,9 @@ class PlaceAction(
                 MoveGripperMotion(
                     GripperState.OPEN,
                     self.arm,
-                    allow_gripper_collision=True,
                     finger_velocity=self.release_opening_velocity,
                 ),
-                self._retract_plan(retract_pose),
+                self._retract_plan(placement),
             ],
             self.context,
         )
