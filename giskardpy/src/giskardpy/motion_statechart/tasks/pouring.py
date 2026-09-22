@@ -10,6 +10,17 @@ from krrood.symbolic_math.symbolic_math import (
     Scalar,
     VariableParameters,
 )
+from semantic_digital_twin.physics.equations.pouring_equations import (
+    GatedInflowEquation,
+    PouringEquation,
+    SymbolicFillContext,
+    tilt_expression_from_fk,
+)
+from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel, LiquidSource
+from semantic_digital_twin.spatial_types.spatial_types import Point3, Vector3
+from semantic_digital_twin.world_description.connections import LiquidConnection
+from semantic_digital_twin.world_description.geometry import Color
+from semantic_digital_twin.world_description.world_entity import Body
 
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.data_types import (
@@ -27,17 +38,6 @@ from giskardpy.motion_statechart.graph_node import (
     NodeArtifacts,
     Task,
 )
-from semantic_digital_twin.physics.equations.pouring_equations import (
-    GatedInflowEquation,
-    PouringEquation,
-    SymbolicFillContext,
-    tilt_expression_from_fk,
-)
-from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel, LiquidSource
-from semantic_digital_twin.spatial_types.spatial_types import Point3, Vector3
-from semantic_digital_twin.world_description.connections import LiquidConnection
-from semantic_digital_twin.world_description.geometry import Color
-from semantic_digital_twin.world_description.world_entity import Body
 
 
 @dataclass(eq=False, repr=False)
@@ -399,6 +399,86 @@ class KeepProjectileInReceiver(Task):
                 name="landing", expression=landing_point, color=self.LANDING_POINT_COLOR
             ),
         ]
+
+
+@dataclass(eq=False, repr=False)
+class ShareAimWithReceiver(Task):
+    """
+    Moves the receiver horizontally towards the pour's predicted landing point, so the
+    hand holding the receiver shares the aiming correction with the hand holding the
+    source instead of leaving all of it to the source.
+
+    :class:`KeepProjectileInReceiver` drives the source towards the receiver's current
+    opening; only the source's side of that gap is differentiated into its constraint
+    row, so the receiver never gets a reason to move. This task closes the same gap from
+    the other side, by differentiating the receiver's opening instead and driving it
+    towards the source's current landing point. Both targets are the other side's
+    position at the start of the control cycle, re-evaluated every cycle, so the two
+    sides converge on each other gradually at the control frequency rather than either
+    one jumping to close the whole gap by itself.
+
+    Meant for a receiver a robot itself holds and can therefore usefully move; a
+    receiver resting on a support should not be given this task, since nothing then
+    stops the optimizer from sliding it across that support.
+    """
+
+    receiver: HasFillLevel
+    """
+    The container being poured into; its opening is driven towards the landing point.
+    """
+
+    source: LiquidSource
+    """
+    The liquid source being poured from.
+    """
+
+    reference_velocity: float = field(default=0.05, kw_only=True)
+    """
+    Reference velocity for normalization in m/s.
+
+    Below the aiming task's own reference velocity, so the source still does most of the
+    correcting and the receiver only helps.
+    """
+
+    weight: float = field(
+        default=DefaultWeights.WEIGHT_COLLISION_AVOIDANCE, kw_only=True
+    )
+    """
+    QP constraint weight for the receiver's share of the aiming correction.
+
+    Below the aiming task's own weight, so the source's aim still takes priority.
+    """
+
+    def build(self, context: MotionStatechartContext) -> NodeArtifacts:
+        """
+        Drive the receiver's opening towards the source's current predicted landing
+        point.
+
+        :param context: The build context.
+        :return: The generated task artifacts.
+        """
+        artifacts = NodeArtifacts()
+        self.receiver.ensure_inflow_coupling(context.world)
+        inflow_equation = self.receiver.fill_connection.inflow_equation
+        if inflow_equation is None:
+            raise MissingInflowEquationError(node=self)
+        exit_speed = self.source.current_outflow_velocity(context.world)
+        if exit_speed is None:
+            if not isinstance(inflow_equation, GatedInflowEquation):
+                raise MissingExitSpeedError(node=self)
+            exit_speed = inflow_equation.exit_speed
+        landing_point = self.receiver.projectile_landing_point(
+            self.source, context.world, exit_speed
+        )
+        receiver_opening = self.receiver.opening_point(context.world)
+        artifacts.geometry.add_point_goal_constraints(
+            name=f"{self.receiver.root.name}_share_aim",
+            frame_P_goal=landing_point,
+            frame_P_current=receiver_opening,
+            reference_velocity=self.reference_velocity,
+            quadratic_weight=self.weight,
+        )
+        return artifacts
 
 
 @dataclass(eq=False, repr=False)

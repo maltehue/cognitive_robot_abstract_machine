@@ -39,6 +39,7 @@ from giskardpy.motion_statechart.tasks.pouring import (
     KeepProjectileInReceiver,
     KeepSourceRimAboveReceiverRim,
     PouringTask,
+    ShareAimWithReceiver,
 )
 
 from .debug_expression_helpers import debug_expression_by_name
@@ -1292,6 +1293,71 @@ class TestFillTaskInitializationErrors:
 
         with pytest.raises(MissingExitSpeedError):
             no_spill.build(MotionStatechartContext(world=world))
+
+
+class TestShareAimWithReceiver:
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.ShareAimWithReceiver` gives the
+    receiver a reason to move towards the pour, which
+    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInReceiver` alone
+    does not: that task's constraint row only ever differentiates the source's side of
+    the landing-point-to-opening gap, so a robot holding the receiver in one hand and
+    the source in the other could never use the receiver hand to help aim.
+    """
+
+    def test_requires_inflow_coupling(self, world_with_cup) -> None:
+        """
+        Sharing the aim needs the receiver's inflow equation to derive the landing
+        point, exactly like the task it complements.
+        """
+        world, cup = world_with_cup
+        share_aim = ShareAimWithReceiver(receiver=cup, source=cup)
+
+        with pytest.raises(MissingInflowEquationError):
+            share_aim.build(MotionStatechartContext(world=world))
+
+    def test_requires_an_exit_speed(self, world_with_cup) -> None:
+        """
+        A source exposing no live outflow model combined with an ungated inflow equation
+        leaves no exit speed to derive the landing point from.
+        """
+        world, cup = world_with_cup
+        cup.fill_connection.inflow_equation = InflowEquation(
+            container_height=0.1, container_width=0.06
+        )
+        speedless_source = PourableContainer(
+            name=PrefixedName("speedless_source"),
+            root=Body(name=PrefixedName("speedless_source_body")),
+        )
+        share_aim = ShareAimWithReceiver(receiver=cup, source=speedless_source)
+
+        with pytest.raises(MissingExitSpeedError):
+            share_aim.build(MotionStatechartContext(world=world))
+
+    def test_constraint_row_moves_the_receiver_not_the_source(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The row this task adds must be sensitive to the receiver's own degree of
+        freedom, unlike :class:`KeepProjectileInReceiver`'s row, which is sensitive only
+        to the source's kinematic chain.
+        """
+        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        share_aim = ShareAimWithReceiver(receiver=receiving_cup, source=source_cup)
+        receiver_dof = receiving_cup.root.parent_connection.x.variables.position
+        source_dof = world.get_connection_by_name(
+            "left_shoulder_pan_joint"
+        ).dof.variables.position
+
+        artifacts = share_aim.build(MotionStatechartContext(world=world))
+
+        [row] = [
+            constraint
+            for constraint in artifacts.constraints.equality_constraints
+            if constraint.name.endswith("/0")
+        ]
+        assert row.expression.jacobian([receiver_dof])[0, 0].evaluate()[0] != 0.0
+        assert row.expression.jacobian([source_dof])[0, 0].evaluate()[0] == 0.0
 
 
 class TestProjectileAimingErrorIsHorizontal:
