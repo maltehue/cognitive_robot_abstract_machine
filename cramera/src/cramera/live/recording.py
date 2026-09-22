@@ -93,6 +93,9 @@ class RecordedFrame:
     unchanged shares one snapshot (see :meth:`Recording.append`).
     """
 
+    model_bases: Dict[str, List[float]] = field(default_factory=dict)
+    """World pose of every articulated robot, keyed by its stable instance identity."""
+
 
 @dataclass
 class Recording:
@@ -166,6 +169,9 @@ class Recording:
                     },
                     step=step,
                     statechart=self._held_statechart(statechart),
+                    model_bases={
+                        key: list(pose) for key, pose in snapshot.model_bases.items()
+                    },
                 )
             )
             self._tick_times.append(time.time())

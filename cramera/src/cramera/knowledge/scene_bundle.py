@@ -37,13 +37,17 @@ class SceneBundle:
     """
 
     @classmethod
-    def active_name(cls) -> Optional[str]:
+    def active_name(cls, index: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """
         The active scene: ``CRAMERA_SCENE``, else the scenes-index default.
+
+        :param index: An available-scene index, or None to read the stored index.
         """
         environment_override = os.environ.get("CRAMERA_SCENE")
         if environment_override:
             return environment_override
+        if index is not None:
+            return cls.default_of_index(index)
         index_path = paths.scenes_directory() / "index.json"
         if not index_path.is_file():
             return None
@@ -55,8 +59,8 @@ class SceneBundle:
     @classmethod
     def default_of_index(cls, index: Dict[str, Any]) -> Optional[str]:
         """
-        The scene a scenes index opens on: the default it declares, or its first
-        scene when that default is not one of the scenes it declares.
+        The scene a scenes index opens on: the default it declares, or its first scene
+        when that default is not one of the scenes it declares.
 
         A bundle can outlive the default recorded beside it -- a scene renamed or
         dropped upstream leaves a name that resolves to nothing -- and a scene the
@@ -192,13 +196,26 @@ class ParsedUrdf:
         :param scene_name: Name of the scene to parse, or None for the active one.
         """
         scene = SceneBundle.of_scene(scene_name).scene
-        robot_model = next(
-            (model for model in scene.get("models", []) if model.get("robot")), None
-        )
+        robot_models = [
+            model for model in scene.get("models", []) if model.get("robot")
+        ]
         directory = SceneBundle.directory_of(scene_name)
-        if not robot_model or not directory:
+        if not robot_models or not directory:
             return cls([], [])
-        urdf_path = directory / robot_model["urdf"]
+        parsed = [cls.of_file(directory / model["urdf"]) for model in robot_models]
+        return cls(
+            list(dict.fromkeys(link for model in parsed for link in model.links)),
+            [joint for model in parsed for joint in model.joints],
+        )
+
+    @classmethod
+    def of_file(cls, urdf_path: Path) -> ParsedUrdf:
+        """
+        Read one bundled articulated model.
+
+        :param urdf_path: Local URDF file belonging to one scene model.
+        :return: Its links and joints, or an empty tree when the file is absent.
+        """
         if not urdf_path.is_file():
             return cls([], [])
         text = urdf_path.read_text(encoding="utf-8", errors="replace")

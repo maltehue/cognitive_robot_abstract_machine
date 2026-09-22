@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import cast
 
 from typing_extensions import (
@@ -90,16 +90,10 @@ class Location(Iterable[Pose]):
         return next(iter(self))
 
     def __iter__(self) -> Iterator[Pose]:
-        test_world = deepcopy(self.world)
-        test_robot = cast(
-            AbstractRobot, test_world.get_semantic_annotation_by_id(self.robot.id)
-        )
+        test_context = PoseValidator.copy_context_for_validation(self.context)
+        test_world, test_robot = test_context.world, test_context.robot
         for validator in self.validators:
-            validator.context = Context(
-                world=test_world,
-                robot=test_robot,
-                alternative_motion_mappings=self.context.alternative_motion_mappings,
-            )
+            validator.context = test_context
 
         if self.context.debug:
             VizMarkerPublisher(
@@ -110,15 +104,20 @@ class Location(Iterable[Pose]):
 
             test_robot.set_root_pose(pose_candidate)
 
-            test_world.collision_manager.clear_temporary_rules()
-            test_world.collision_manager.add_temporary_rule(
-                AvoidExternalCollisions(robot=test_robot, violated_distance=0.05)
-            )
-            test_world.collision_manager.add_temporary_rule(
-                AllowSelfCollisions(robot=test_robot)
-            )
-            test_world.collision_manager.update_collision_matrix()
-            collisions = test_world.collision_manager.compute_collisions()
+            manager = test_world.collision_manager
+            original_rules = list(manager.temporary_rules)
+            try:
+                manager.clear_temporary_rules()
+                manager.add_temporary_rule(
+                    AvoidExternalCollisions(robot=test_robot, violated_distance=0.05)
+                )
+                manager.add_temporary_rule(AllowSelfCollisions(robot=test_robot))
+                manager.update_collision_matrix()
+                collisions = manager.compute_collisions()
+            finally:
+                manager.clear_temporary_rules()
+                manager.extend_temporary_rule(original_rules)
+                manager.update_collision_matrix()
 
             if collisions.contacts:
                 logger.debug(f"Candidate pose in collision, skipping")
@@ -212,6 +211,51 @@ class PoseValidator(Predicate):
     """
     Context that holds the important information about the robot and world.
     """
+
+    @staticmethod
+    def copy_context_for_validation(context: Context) -> Context:
+        """
+        Isolate world state while retaining active contact rules and motion settings.
+
+        Model-history serialization can omit transient rules or configured distances, so
+        collision policy is copied directly with references to the new world.
+
+        :param context: Execution context whose current state must be validated.
+        :return: An independent validation world with the original execution settings.
+        """
+        target_world = deepcopy(context.world)
+        target_robot = cast(
+            AbstractRobot, target_world.get_semantic_annotation_by_id(context.robot.id)
+        )
+        target_entities = {
+            entity.id: entity
+            for entity in (
+                target_world.kinematic_structure_entities
+                + target_world.semantic_annotations
+            )
+        }
+        memo = {id(context.world): target_world}
+        memo.update(
+            {
+                id(entity): target_entities[entity.id]
+                for entity in (
+                    context.world.kinematic_structure_entities
+                    + context.world.semantic_annotations
+                )
+            }
+        )
+        manager = target_world.collision_manager
+        source = context.world.collision_manager
+        manager.default_rules[:] = deepcopy(source.default_rules, memo)
+        manager.ignore_collision_rules[:] = deepcopy(
+            source.ignore_collision_rules, memo
+        )
+        manager.max_avoided_bodies_rules[:] = deepcopy(
+            source.max_avoided_bodies_rules, memo
+        )
+        manager.clear_temporary_rules()
+        manager.extend_temporary_rule(deepcopy(source.temporary_rules, memo))
+        return replace(context, world=target_world, robot=target_robot, plan=None)
 
     @abstractmethod
     def __call__(self, *args, **kwargs) -> bool:

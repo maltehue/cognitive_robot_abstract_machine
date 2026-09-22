@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Mapping
-from dataclasses import MISSING, dataclass, field, fields, is_dataclass
+from dataclasses import MISSING, asdict, dataclass, field, fields, is_dataclass
 from datetime import datetime
 
 from typing_extensions import (
@@ -29,6 +29,8 @@ from krrood.entity_query_language import factories as eql_factories
 from krrood.entity_query_language.evaluable import Evaluable
 from krrood.entity_query_language.scope import eql_factory_namespace
 from semantic_digital_twin.spatial_types import Point3, Pose
+from semantic_digital_twin.semantic_annotations.mixins import HasRootBody
+from semantic_digital_twin.world_description.world_entity import Body
 
 from cramera.body_geometry import NumericPose, pose_label, position_label
 from cramera.knowledge.entity import NamedEntity
@@ -42,6 +44,8 @@ from cramera.knowledge.workspace_classes import (
     WorkspaceClassNamespace,
 )
 from cramera.payload import CrameraPayload
+from cramera.live.markers import MarkerEntry
+from cramera.spatial_annotations import SpatialEntity, SpatialField
 
 DEFAULT_ROW_LIMIT = 200
 """
@@ -119,11 +123,14 @@ class RenderResult(CrameraPayload):
     The query read back as English, or None when there was no expression to word.
     """
 
+    spatial: List[MarkerEntry] = field(default_factory=list)
+    """Frozen geometry highlighted in the scene for these answer rows."""
+
     def to_payload(self) -> Dict[str, Any]:
         """
         The JSON-serializable shape the frontend's EQL panel expects.
         """
-        return {
+        payload = {
             "ok": self.ok,
             "kind": self.kind,
             "rows": self.rows,
@@ -140,6 +147,12 @@ class RenderResult(CrameraPayload):
                 else None
             ),
         }
+        if self.spatial:
+            payload[SpatialField.ANSWER] = [
+                {**asdict(marker), "pose": marker.position + marker.quaternion}
+                for marker in self.spatial
+            ]
+        return payload
 
 
 @dataclass
@@ -217,6 +230,9 @@ class RowRenderer:
     Ids of the graph nodes the rendered rows should highlight.
     """
 
+    spatial: List[MarkerEntry] = field(default_factory=list)
+    """World-space geometry collected while rendering semantic entities."""
+
     def rows_of(self, result: Any) -> _RenderedRows:
         """
         Render a query result into answer rows.
@@ -292,12 +308,23 @@ class RowRenderer:
 
         :param item: The entity to render as a row.
         """
+        if isinstance(item, (Body, HasRootBody)):
+            item = SpatialEntity.of_entity(item)
+        if isinstance(item, SpatialEntity):
+            self.spatial.extend(item.markers)
         name = self._row_title(item)
         if name:
             self.highlight.append(name)
         if isinstance(item, HighlightsRelatedNodes):
             self.highlight.extend(item.related_highlight_ids())
-        values = {"__entity__": name or repr(item), "__type__": type(item).__name__}
+        values = {
+            "__entity__": name or repr(item),
+            "__type__": (
+                item.semantic_type
+                if isinstance(item, SpatialEntity)
+                else type(item).__name__
+            ),
+        }
         instance_values = vars(item)
         for entity_field in fields(item):
             if entity_field.name == "name" or not entity_field.repr:
@@ -322,6 +349,11 @@ class RowRenderer:
 
         :param value: The raw query result value to render.
         """
+        if isinstance(value, (Body, HasRootBody)):
+            value = SpatialEntity.of_entity(value)
+        if isinstance(value, SpatialEntity):
+            self.spatial.extend(value.markers)
+            return value.name
         if isinstance(value, NumericPose):
             return value.label
         if isinstance(value, Point3):
@@ -488,11 +520,12 @@ class EqlQueryRunner:
             # evaluable, whereas the evaluated result is rows and no longer a question
             verbalization = QueryVerbalization.of_expression(result)
             result = self.evaluation.evaluate(result)
-        rendered = RowRenderer(
+        renderer = RowRenderer(
             limit=limit,
             entity_types=self.entity_types,
             highlightable_ids=self.highlightable_ids,
-        ).rows_of(result)
+        )
+        rendered = renderer.rows_of(result)
         kind = (
             "rows"
             if rendered.rows and "__entity__" not in rendered.rows[0].values
@@ -506,4 +539,5 @@ class EqlQueryRunner:
             highlight=sorted(set(rendered.highlight)),
             replay=[row.replay for row in rendered.rows],
             verbalization=verbalization,
+            spatial=renderer.spatial,
         )

@@ -4,12 +4,12 @@ import logging
 from abc import abstractmethod
 from dataclasses import dataclass
 from inspect import signature
-from typing_extensions import TypeVar, Type, Optional
+from typing_extensions import TypeVar, Type, Optional, ClassVar
 
 from giskardpy.motion_statechart.goals.collision_avoidance import (
     UpdateTemporaryCollisionRules,
 )
-from giskardpy.motion_statechart.graph_node import Task, MotionStatechartNode
+from giskardpy.motion_statechart.graph_node import MotionStatechartNode
 from coraplex.datastructures.enums import Arms
 from coraplex.plans.designator import Designator
 from coraplex.view_manager import ViewManager
@@ -34,6 +34,11 @@ class BaseMotion(Designator):
     motions or actions. Motions create exactly one goal.
     """
 
+    requires_individual_execution: ClassVar[bool] = False
+    """
+    Whether simulated expansion must wait until preceding motions finish.
+    """
+
     def perform(self):
         """
         Passes this designator to the process module for execution.
@@ -43,7 +48,7 @@ class BaseMotion(Designator):
         pass
 
     @property
-    def motion_chart(self) -> Task:
+    def motion_chart(self) -> MotionStatechartNode:
         """
         Returns the mapped motion chart for this motion or the alternative motion if
         there is one.
@@ -63,7 +68,7 @@ class BaseMotion(Designator):
 
     @property
     @abstractmethod
-    def _motion_chart(self) -> Task:
+    def _motion_chart(self) -> MotionStatechartNode:
         pass
 
     def get_alternative_motion(self) -> Optional[Type[AlternativeMotion]]:

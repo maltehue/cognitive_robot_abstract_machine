@@ -16,14 +16,17 @@ import shutil
 import threading
 from pathlib import Path
 
+import numpy as np
 from typing_extensions import Any, Dict, List, Optional
 
-from semantic_digital_twin.world_description.geometry import Box, Mesh
+from semantic_digital_twin.world_description.geometry import Box, Mesh, Scale, Shape
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 
 from cramera import paths
 from cramera.body_geometry import measure_body, POSE_PRECISION, rounded_scale
 from cramera.generated_json import write_json_atomically
+from cramera.knowledge.detected_events import SceneField
 from cramera.knowledge.recorded_statecharts import (
     RecordedStatecharts,
     STATECHART_FILE,
@@ -32,8 +35,11 @@ from cramera.live.bridge import Bridge, ObjectCatalogEntry, ObjectKind
 from cramera.live.live_bundle import bundle_world_models
 from cramera.live.recording import Recording, RecordedFrame, RecordingState
 from cramera.live.recording_segments import derive_segments
+from cramera.live.robot_models import RobotModels
+from cramera.robot_fields import RobotField
 from cramera.mesh_format import MeshFormat
 from cramera.onboard.bundle_urdf import BundledAssets
+from cramera.spatial_annotations import SpatialAnnotations
 
 RECORDING_BUILD_LOCK = threading.Lock()
 """
@@ -81,20 +87,34 @@ def write_recording_bundle(
             shutil.rmtree(output_directory)
         output_directory.mkdir(parents=True)
         geometry = bundle_world_models(
-            bridge.world, bridge.robot, output_directory, MESH_SUBDIRECTORY
+            bridge.world,
+            bridge.robot,
+            output_directory,
+            MESH_SUBDIRECTORY,
+            overlay_bodies=bridge.query_objects(),
         )
-        objects = _loose_object_entries(bridge, frames[0], output_directory)
+        objects = _loose_object_entries(bridge, frames, output_directory)
         scene = {
             "name": scene_name,
             "framesPerSecond": frames_per_second,
             "trajectory": "trajectory.json",
             "models": geometry.models,
             "robot": geometry.robot,
+            RobotField.ROBOTS: geometry.robots,
+            RobotField.ACTIVE_ROBOT: (
+                RobotModels.identifier(bridge.robot)
+                if bridge.robot is not None
+                else None
+            ),
             "objects": objects,
             "segments": [segment.to_payload() for segment in derive_segments(frames)],
             "missingAssets": geometry.missing_assets,
             "worldBound": True,
             "bundleSignature": bridge.bundle_signature(),
+            SceneField.PLAN_TREES: bridge.plan_state.recorded_trees(),
+            **SpatialAnnotations.of_world(
+                bridge.world, bridge.query_objects()
+            ).scene_fields(),
         }
         statecharts = RecordedStatecharts.of_snapshots(
             frame.statechart for frame in frames
@@ -112,6 +132,7 @@ def write_recording_bundle(
                 "frames": [frame.frames for frame in frames],
                 "base": [frame.base for frame in frames],
                 "objects": [frame.objects for frame in frames],
+                RobotField.MODEL_BASES: [frame.model_bases for frame in frames],
             },
         )
         return scene
@@ -152,24 +173,22 @@ def finalize_recording(bridge: Bridge, recording: Recording) -> Optional[str]:
 
 
 def _loose_object_entries(
-    bridge: Bridge, first_frame: RecordedFrame, output_directory: Path
+    bridge: Bridge, frames: List[RecordedFrame], output_directory: Path
 ) -> List[Dict[str, Any]]:
     """
-    ``scene.json``'s ``objects`` entries for every catalog object present in the first
-    recorded frame.
-
-    An object the catalog knows about but that never appears in the first tick (spawned
-    mid-recording) is skipped: an ``objects`` entry can only declare one static spawn
-    pose, the same convention the offline onboarding pipeline uses.
+    Declare each recorded catalog object at its first observed pose.
 
     :param bridge: The live bridge whose object catalog and bodies are read.
-    :param first_frame: The recording's first tick, whose ``objects`` poses double as
-        each entry's spawn pose.
+    :param frames: Recorded ticks supplying the first appearance of each object.
     :param output_directory: Directory a mesh-backed object's file is copied into.
     """
+    first_poses: Dict[str, List[float]] = {}
+    for frame in frames:
+        for key, pose in frame.objects.items():
+            first_poses.setdefault(key, pose)
     entries = []
     for entry in bridge.object_metadata:
-        spawn = first_frame.objects.get(entry.key)
+        spawn = first_poses.get(entry.key)
         body = bridge.object_body(entry.key)
         if spawn is None or body is None:
             continue
@@ -191,7 +210,7 @@ def _object_entry(
     :param entry: The object's geometry-catalog entry, for its id, colour and — for a
         shapeless body — its placeholder size.
     :param body: The world body the object is published from.
-    :param spawn: The object's pose in the recording's first frame.
+    :param spawn: The object's first recorded pose.
     :param output_directory: Directory a mesh file is written into.
     """
     payload: Dict[str, Any] = {
@@ -208,14 +227,18 @@ def _object_entry(
     if extent is not None:
         payload["height"] = round(extent.z, POSE_PRECISION)
     shapes = _body_shapes(body)
-    if len(shapes) == 1 and isinstance(shapes[0], Box):
+    if (
+        len(shapes) == 1
+        and isinstance(shapes[0], Box)
+        and np.array_equal(shapes[0].origin.to_np(), np.eye(4))
+    ):
         payload["box"] = rounded_scale(shapes[0].scale, POSE_PRECISION)
         return payload
     payload["mesh"] = _write_object_mesh(body, entry.key, shapes, output_directory)
     return payload
 
 
-def _body_shapes(body: Body) -> List[Any]:
+def _body_shapes(body: Body) -> List[Shape]:
     """
     The body's shapes to render from: its visual ones, else its collision ones.
 
@@ -228,14 +251,13 @@ def _body_shapes(body: Body) -> List[Any]:
 
 
 def _write_object_mesh(
-    body: Body, key: str, shapes: List[Any], output_directory: Path
+    body: Body, key: str, shapes: List[Shape], output_directory: Path
 ) -> str:
     """
     Write a loose object's geometry into the bundle and answer the path it is served at.
 
-    A single mesh shape backed by a real file is copied verbatim, with its side assets
-    (materials, textures); anything else is flattened into one OBJ exported from the
-    body's combined mesh.
+    An untransformed, unit-scale mesh is copied with its side assets. Other geometry is
+    combined in the body's frame, preserving each selected shape's origin and scale.
 
     :param body: The body whose geometry is written.
     :param key: The object's catalog key, used as the written file's basename.
@@ -244,7 +266,12 @@ def _write_object_mesh(
     """
     objects_directory = output_directory / "meshes" / "objects"
     objects_directory.mkdir(parents=True, exist_ok=True)
-    if len(shapes) == 1 and isinstance(shapes[0], Mesh):
+    if (
+        len(shapes) == 1
+        and isinstance(shapes[0], Mesh)
+        and np.array_equal(shapes[0].origin.to_np(), np.eye(4))
+        and shapes[0].scale == Scale()
+    ):
         source = shapes[0].filename
         if source and Path(source).is_file():
             destination = objects_directory / (key + Path(source).suffix)
@@ -253,5 +280,7 @@ def _write_object_mesh(
                 assets.copy_side_assets(source, str(destination))
                 return "meshes/objects/" + destination.name
     destination = objects_directory / (key + MeshFormat.OBJ.value)
-    body.combined_mesh.export(str(destination))
+    ShapeCollection(shapes=shapes, reference_frame=body).combined_mesh.export(
+        str(destination)
+    )
     return "meshes/objects/" + destination.name

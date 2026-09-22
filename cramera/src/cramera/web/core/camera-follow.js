@@ -24,9 +24,28 @@
     return on(storage);
   }
 
+  // %% orbit control ownership
+  class CameraController {
+    /** @param {THREE.OrbitControls} controls Camera controls owned by the scene. */
+    constructor(controls) {
+      this.controls = controls;
+    }
+
+    /** Follow a world point while camera input is enabled. */
+    follow(target, smoothing) {
+      if (this.controls.enabled) this.controls.target.lerp(target, smoothing);
+    }
+
+    /** Preserve the camera during object placement, including orbit damping. */
+    update() {
+      return this.controls.enabled ? this.controls.update() : false;
+    }
+  }
+
   global.CameraFollow = {
     KEY: KEY,
     on: on,
     set: set,
+    Controller: CameraController,
   };
 })(window);

@@ -17,12 +17,16 @@ from giskardpy.motion_statechart.goals.collision_avoidance import (
     ExternalCollisionAvoidance,
 )
 from giskardpy.motion_statechart.goals.templates import Sequence
-from giskardpy.motion_statechart.graph_node import EndMotion, Task
+from giskardpy.motion_statechart.graph_node import EndMotion, MotionStatechartNode
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.ros_executor import Ros2Executor
 from krrood.entity_query_language.factories import evaluate_condition
 from coraplex.datastructures.enums import ExecutionType, TaskStatus
+from coraplex.datastructures.manipulation_contacts import (
+    HasManipulationContactPolicy,
+    TemporaryCollisionScope,
+)
 from coraplex.exceptions import (
     MotionDidNotFinish,
     ConditionNotSatisfied,
@@ -74,7 +78,7 @@ class MotionLifeCycleTracker:
     The status a motion node ends in, per life cycle state its task reached.
     """
 
-    motion_mappings: Dict[MotionNode, Task]
+    motion_mappings: Dict[MotionNode, MotionStatechartNode]
     """
     The motion nodes and the giskard tasks realizing them.
     """
@@ -143,7 +147,12 @@ class GiskardExecutable(Executable):
     the motions, pre -and postconditions and the pause and interrupt calls.
     """
 
-    motion_mappings: Dict[MotionNode, Task] = field(kw_only=True)
+    maximum_ticks_per_stage: ClassVar[int] = 2000
+    """
+    Finite tick budget per motion goal or expanded sequence child.
+    """
+
+    motion_mappings: Dict[MotionNode, MotionStatechartNode] = field(kw_only=True)
     """
     Mapping from the motion nodes of the plan to their giskard tasks, in execution
     order.
@@ -221,7 +230,9 @@ class GiskardExecutable(Executable):
                 end_trigger = trinary_logic_or(end_trigger, *skip_end_conditions)
 
         if GiskardExecutable.collision_avoidance:
-            self._current_motion_state_chart.add_node(ExternalCollisionAvoidance())
+            self._current_motion_state_chart.add_node(
+                ExternalCollisionAvoidance(robot=self.context.robot)
+            )
 
         end_motion = EndMotion()
         end_motion.start_condition = end_trigger
@@ -229,7 +240,7 @@ class GiskardExecutable(Executable):
         return self._current_motion_state_chart
 
     def _add_condition_monitors(
-        self, first_task: Task, end_trigger: ObservationStateValues
+        self, first_task: MotionStatechartNode, end_trigger: ObservationStateValues
     ):
         """
         Adds the pre -and postcondition nodes to the Motion state chart and wires them
@@ -274,7 +285,9 @@ class GiskardExecutable(Executable):
             )
             self._current_motion_state_chart.add_node(post_cancel)
 
-    def _add_pause_interrupt(self, tasks: List[Task]) -> List[ObservationStateValues]:
+    def _add_pause_interrupt(
+        self, tasks: List[MotionStatechartNode]
+    ) -> List[ObservationStateValues]:
         """
         Wire the tasks as an interruptible/pausable sequence.
 
@@ -378,6 +391,92 @@ class GiskardExecutable(Executable):
 
     def _execute_simulation(self) -> None:
         """
+        Expand state-dependent motions only after preceding motions finish.
+        """
+        batches = self._simulation_batches()
+        if len(batches) == 1:
+            self._execute_simulation_batch()
+            return
+        for index, mappings in enumerate(batches):
+            if index > 0 and next(iter(mappings)).is_interrupted:
+                return
+            executable = GiskardExecutable(
+                motion_mappings=mappings,
+                context=self.context,
+                pre_condition_node=self.pre_condition_node if index == 0 else None,
+                post_condition_node=(
+                    self.post_condition_node if index == len(batches) - 1 else None
+                ),
+            )
+            executable._execute_simulation_batch()
+            self._current_motion_state_chart = executable._current_motion_state_chart
+            if any(
+                task.life_cycle_state == LifeCycleValues.NOT_STARTED
+                for task in mappings.values()
+            ):
+                return
+
+    def _simulation_batches(self) -> list[dict[MotionNode, MotionStatechartNode]]:
+        """
+        Separate motions requiring the latest world from ordinary motion groups.
+
+        :return: Ordered mappings preserving the original motion-node identities.
+        """
+        batches: list[dict[MotionNode, MotionStatechartNode]] = []
+        pending: dict[MotionNode, MotionStatechartNode] = {}
+        for motion_node, task in self.motion_mappings.items():
+            if pending and self._contact_provider(
+                next(iter(pending))
+            ) is not self._contact_provider(motion_node):
+                batches.append(pending)
+                pending = {}
+            if motion_node.motion.requires_individual_execution:
+                if pending:
+                    batches.append(pending)
+                    pending = {}
+                batches.append({motion_node: task})
+            else:
+                pending[motion_node] = task
+        if pending:
+            batches.append(pending)
+        return batches
+
+    @staticmethod
+    def _contact_provider(
+        motion_node: MotionNode,
+    ) -> HasManipulationContactPolicy | None:
+        """
+        Find the enclosing action responsible for intended contact.
+
+        :param motion_node: Motion whose closest manipulation action owns the policy.
+        """
+        from coraplex.plans.plan_node import ActionNode
+
+        return next(
+            (
+                node.designator
+                for node in motion_node.path
+                if isinstance(node, ActionNode)
+                and isinstance(node.designator, HasManipulationContactPolicy)
+            ),
+            None,
+        )
+
+    def _execute_simulation_batch(self) -> None:
+        """
+        Execute one motion group with its intended contact policy.
+        """
+        provider = self._contact_provider(next(iter(self.motion_mappings)))
+        scope = (
+            provider.manipulation_contact_policy.scope(self.context.world)
+            if provider is not None
+            else TemporaryCollisionScope(self.context.world)
+        )
+        with scope.activate():
+            self._execute_simulation_batch_with_contacts()
+
+    def _execute_simulation_batch_with_contacts(self) -> None:
+        """
         Compiles the motion state chart and ticks it in the world of the context until
         it is done.
         """
@@ -391,34 +490,36 @@ class GiskardExecutable(Executable):
             ros_node=self.context.ros_node,
         )
         motion_state_chart = self.motion_state_chart
-        executor.compile(motion_state_chart)
-
-        life_cycle_tracker = MotionLifeCycleTracker(
-            motion_mappings=self.motion_mappings
-        )
-        life_cycle_tracker.emit_transitions()
-
-        counter = 0
-        while counter < len(self.motion_mappings) * 2000:
-            # Interrupting and pausing are handled inside the motion state chart by
-            # per-task monitors (see motion_state_chart): an interrupt ends the
-            # motion via EndMotion, a pause holds the active task via its
-            # pause_condition. While paused we simply do not tick, so the pause does
-            # not consume the tick budget.
-            if self.is_paused:
-                time.sleep(0.01)
-                continue
-
-            executor.tick()
-            counter += 1
+        try:
+            executor.compile(motion_state_chart)
+            life_cycle_tracker = MotionLifeCycleTracker(
+                motion_mappings=self.motion_mappings
+            )
             life_cycle_tracker.emit_transitions()
-            self._notify_motion_tick(executor.motion_statechart)
-            if executor.motion_statechart.is_end_motion():
-                break
 
-        executor.set_velocity_acceleration_jerk_to_zero()
-        executor.motion_statechart.cleanup_nodes(context=executor.context)
-        executor.context.cleanup()
+            stages = sum(
+                max(1, len(task.nodes)) if isinstance(task, Sequence) else 1
+                for task in self.motion_mappings.values()
+            )
+            maximum_ticks = stages * self.maximum_ticks_per_stage
+            counter = 0
+            while counter < maximum_ticks:
+                # Paused motions do not advance or consume their tick budget.
+                if self.is_paused:
+                    time.sleep(0.01)
+                    continue
+                executor.tick()
+                counter += 1
+                life_cycle_tracker.emit_transitions()
+                self._notify_motion_tick(executor.motion_statechart)
+                if executor.motion_statechart.is_end_motion():
+                    break
+        finally:
+            try:
+                executor.set_velocity_acceleration_jerk_to_zero()
+                motion_state_chart.cleanup_nodes(context=executor.context)
+            finally:
+                executor.context.cleanup()
 
         if not executor.motion_statechart.is_end_motion():
             failed_nodes = [
@@ -552,11 +653,12 @@ class UnderspecifiedExecutable(Executable):
     def execute(self) -> None:
         from coraplex.plans.failures import PlanFailure, EmptyUnderspecified
 
-        while self.node.advance():
-            try:
-                self.node.current_candidate.parse().execute()
-                self.node.stop_grounding()
-                return
-            except PlanFailure:
-                continue
-        raise EmptyUnderspecified()
+        with self.node.execution_scope():
+            while self.node.advance():
+                try:
+                    self.node.current_candidate.execute()
+                    self.node.stop_grounding()
+                    return
+                except PlanFailure:
+                    continue
+            raise EmptyUnderspecified()

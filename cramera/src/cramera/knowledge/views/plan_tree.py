@@ -23,6 +23,7 @@ from typing_extensions import (
 )
 
 from cramera.knowledge.enums import EdgeKind, PlanNodeGroup
+from cramera.knowledge.detected_events import SceneField
 from cramera.knowledge.scene_bundle import SceneBundle
 
 if TYPE_CHECKING:
@@ -76,9 +77,6 @@ class PlanViewPayload(GraphPanelPayload):
             # to explain; the live payload the panel builds while the bridge is attached
             # switches it on for the statuses that bridge streams
             "statusLegend": False,
-            # marks the plan tab as live-capable, so the graph panel attaches it to the
-            # bridge's /plan when a demo is running (mirrors chart.py / transforms.py)
-            "live": "plan",
             "empty": self.empty_message,
         }
 
@@ -154,7 +152,7 @@ class PlanViewPayload(GraphPanelPayload):
         :param knowledge_base: Unused — the plan tree is read from the scene bundle.
         """
         scene = SceneBundle.of_scene(knowledge_base.scene_name).scene
-        trees = scene.get("planTrees") or []
+        trees = scene.get(SceneField.PLAN_TREES) or []
         view = SubgraphAccumulator()
         node_ids = itertools.count()
         for tree in trees:

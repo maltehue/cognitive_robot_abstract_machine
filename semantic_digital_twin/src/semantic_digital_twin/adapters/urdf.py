@@ -194,7 +194,7 @@ class URDFParser(WorldModelParser):
         return URDFParser(urdf=urdf, prefix=prefix)
 
     def parse(self) -> World:
-        prefix = self.parsed.name
+        prefix = self.prefix
         links = [
             self.parse_link(link, PrefixedName(link.name, prefix))
             for link in self.parsed.links

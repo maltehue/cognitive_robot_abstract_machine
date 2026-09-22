@@ -1088,6 +1088,12 @@ class RobotSpecification:
     If None, identity is used.
     """
 
+    prefix: str | None = None
+    """
+    Namespace for the robot's bodies, connections, degrees of freedom and localization
+    frame. None preserves the description's original namespace and a unique odom name.
+    """
+
     def spawn(self, world: World) -> AbstractRobot:
         """
         Parse the robot from its own description and merge it into ``world`` as
@@ -1109,12 +1115,12 @@ class RobotSpecification:
         is_active = issubclass(connection_type, ActiveConnection)
 
         robot_world = URDFParser.from_file(
-            self.semantic_annotation_type.get_ros_file_path()
+            self.semantic_annotation_type.get_ros_file_path(), prefix=self.prefix
         ).parse()
         robot_id = self.semantic_annotation_type.from_world(robot_world).id
 
         with world.modify_world():
-            odom_body = self._create_odom_body()
+            odom_body = self._create_odom_body(self.prefix)
             root_C_odom = Connection6DoF.create_with_dofs(
                 world=world, parent=cast(Body, world.root), child=odom_body
             )
@@ -1145,19 +1151,20 @@ class RobotSpecification:
         return cast("AbstractRobot", world.get_semantic_annotation_by_id(robot_id))
 
     @staticmethod
-    def _create_odom_body() -> Body:
+    def _create_odom_body(prefix: str | None = None) -> Body:
         """
         Create the localization body of a single robot.
 
-        Body names are not unique across a world, so the body's own identifier prefixes
-        its name. Identifiers are unique even across processes, which keeps the odom
-        bodies of several robots distinguishable.
+        Use the explicit instance namespace when supplied. Otherwise the body's own
+        identifier provides a namespace unique across processes.
 
+        :param prefix: Explicit instance namespace, or None for a generated one.
         :return: The created odom body.
         """
         identifier = uuid4()
         return Body(
-            name=PrefixedName(name="odom", prefix=str(identifier)), id=identifier
+            name=PrefixedName(name="odom", prefix=prefix or str(identifier)),
+            id=identifier,
         )
 
 

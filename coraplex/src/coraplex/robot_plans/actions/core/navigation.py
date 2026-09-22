@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 from typing_extensions import Optional, Any, Dict
@@ -36,9 +36,20 @@ class NavigateAction(ActionDescription):
     Keep the joint states of the robot the same during the navigation.
     """
 
+    face_travel_direction: bool = field(default=True, kw_only=True)
+    """
+    Turn toward travel where space permits, retaining the requested final orientation.
+    """
+
     @property
     def _action_plan(self) -> PlanNode:
-        return execute_single(MoveMotion(self.target_location, self.keep_joint_states))
+        return execute_single(
+            MoveMotion(
+                self.target_location,
+                self.keep_joint_states,
+                face_travel_direction=self.face_travel_direction,
+            )
+        )
 
     @staticmethod
     def pre_condition(

@@ -29,29 +29,144 @@
   const actsOnAnObject = window.PlanSteps.actsOnAnObject;
   const placesAnObject = window.PlanSteps.putsAnObjectDown;
   const placesAtASemanticTarget = window.PlanSteps.putsAnObjectDownAtASemanticTarget;
-  const ARMS = ['LEFT', 'RIGHT', 'BOTH'];
   const TORSO = ['HIGH', 'MID', 'LOW'];
-  // selectable robots -> the class + import to emit; RobotSpecification derives the drive
-  // from the robot's mobile base, so no drive type needs spelling out here.
-  const ROBOTS = {
-    PR2: { cls: 'PR2', module: 'pr2' },
-    Garmi: { cls: 'Garmi', module: 'garmi' },
-    HSRB: { cls: 'HSRB', module: 'hsrb' },
-    Tiago: { cls: 'Tiago', module: 'tiago' },
-    Stretch: { cls: 'Stretch', module: 'stretch' },
-    Armar7: { cls: 'Armar7', module: 'armar7' },
-    Justin: { cls: 'Justin', module: 'justin' },
-    ICub3: { cls: 'ICub3', module: 'icub3' },
-    MMPDresden: { cls: 'MMPDresden', module: 'mmp_dresden' },
-  };
-  Object.keys(ROBOTS).forEach(function (k) {
-    const r = ROBOTS[k]; r.import = 'from semantic_digital_twin.robots.' + r.module + ' import ' + r.cls;
-  });
-  // only robots whose description actually loads in this workspace are offered. Others
-  // crash on spawn — a model/URDF mismatch, not a Plan Builder bug. Add a name here once
-  // its description is verified to load.
-  const WORKING_ROBOTS = ['PR2', 'Garmi'];
-  function robotInfo() { const v = ($('pb-robot') && $('pb-robot').value) || 'PR2'; return ROBOTS[v] || ROBOTS.PR2; }
+  let builderState = new window.PlanBuilderState([]);
+  let lastSpawnRobot = '';
+  function showModelStatus() {
+    const robot = robotInfo();
+    $('pb-model-status').textContent = robot && builderState.failure(robot.name) || 'Robot model assets are checked when the scene starts.';
+  }
+  function reportSceneFailure(log) {
+    const message = builderState.recordFailure(lastSpawnRobot, log || '');
+    showModelStatus();
+    liveStatus(message, 'err'); showScaffoldLog(log);
+    toast(message, 'err');
+  }
+  function robotInfo() { const instance = builderState.activeRobot(); return builderState.robot(instance ? instance.model : $('pb-robot').value); }
+  function robotArms() { const robot = robotInfo(); return robot ? robot.arms : []; }
+  function loadCatalog() {
+    ['pb-generate', 'pb-run', 'pb-live-start', 'pb-download', 'pb-save'].forEach(function (id) { $(id).disabled = true; });
+    fetch('/api/plan/catalog').then(function (response) { return response.json(); }).then(function (catalog) {
+      if (!catalog.ok) throw new Error(catalog.error || 'Model catalog unavailable');
+      if (!catalog.robots.length || !catalog.environments.length) throw new Error('No robot or environment descriptions are installed.');
+      builderState = new window.PlanBuilderState(catalog.robots);
+      const robotSelect = $('pb-robot');
+      robotSelect.replaceChildren();
+      catalog.robots.forEach(function (robot) {
+        const option = document.createElement('option'); option.value = robot.name; option.textContent = robot.name;
+        robotSelect.appendChild(option);
+      });
+      const environmentSelect = $('pb-env');
+      environmentSelect.replaceChildren();
+      catalog.environments.forEach(function (environment) {
+        const option = document.createElement('option'); option.value = environment.path; option.textContent = environment.name;
+        environmentSelect.appendChild(option);
+        if (environment.path.endsWith('/apartment.urdf')) environmentSelect.value = environment.path;
+      });
+      builderState.addRobot(robotSelect.value, robotXY);
+      renderRobotInstances(); renderBlocks(); showModelStatus();
+      addStep('park_arms'); addStep('move_torso');
+      ['pb-generate', 'pb-run', 'pb-live-start', 'pb-download', 'pb-save'].forEach(function (id) { $(id).disabled = false; });
+    }).catch(function (error) { status('Cannot load CRAM models: ' + error.message, 'err'); });
+  }
+  function selectRobot() {
+    const count = steps.length;
+    const instance = builderState.activeRobot();
+    if (instance) {
+      instance.steps = steps;
+      builderState.updateRobot(instance.id, {model: $('pb-robot').value});
+    }
+    steps = builderState.adaptSteps(steps, $('pb-robot').value);
+    renderRobotInstances(); renderBlocks(); renderSteps(); reshowIfGenerated(); showModelStatus();
+    if (count !== steps.length) status('Removed ' + (count - steps.length) + ' steps unavailable for ' + robotInfo().name, 'ok');
+  }
+
+  /** Present each independently placed robot and the selected robot's plan. */
+  function renderRobotInstances() {
+    const instance = builderState.activeRobot();
+    if (!instance) return;
+    const selector = $('pb-robot-instance');
+    selector.replaceChildren();
+    builderState.instances.forEach(function (robot) {
+      const option = document.createElement('option');
+      option.value = robot.id; option.textContent = robot.label + ' · ' + robot.model;
+      selector.appendChild(option);
+    });
+    selector.value = instance.id;
+    $('pb-robot-label').value = instance.label;
+    $('pb-robot').value = instance.model;
+    $('pb-rx').value = instance.x; $('pb-ry').value = instance.y;
+    $('pb-ryaw').value = Math.round(instance.yaw * 180 / Math.PI * 100) / 100;
+    $('pb-remove-robot').disabled = builderState.instances.length <= 1;
+    $('pb-plan-robot').textContent = 'Plan for ' + instance.label;
+    robotXY = instance;
+  }
+
+  /** @param {string} identifier Stable instance selected by the author. */
+  async function selectRobotInstance(identifier) {
+    const previous = builderState.activeRobot();
+    if (_busyTimer) {
+      if (previous) $('pb-robot-instance').value = previous.id;
+      status('Wait until the scene has started before selecting another robot.', 'err');
+      return;
+    }
+    try {
+      if (liveOn) {
+        await synchronizeRobotPoses();
+        const response = await fetch(bridgeUrl() + '/robot', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({identifier: identifier})});
+        if (!response.ok) { const failure = await response.json(); throw new Error(failure.error || 'Robot selection unavailable while a plan runs'); }
+      }
+      const selected = builderState.selectInstance(identifier, steps);
+      steps = selected.steps;
+      renderRobotInstances(); renderBlocks(); renderSteps(); showModelStatus(); reshowIfGenerated();
+    } catch (error) {
+      if (previous) $('pb-robot-instance').value = previous.id;
+      status(error.message, 'err');
+    }
+  }
+
+  /** Add another independently placed instance of the selected installed model. */
+  function addRobotInstance() {
+    const previous = builderState.activeRobot();
+    if (previous) previous.steps = steps;
+    const position = window.PlanBuilderState.initialRobotPosition();
+    builderState.addRobot($('pb-robot').value, {x: position.x, y: position.y + builderState.instances.length * 1.5, yaw: 0});
+    steps = [];
+    renderRobotInstances(); renderBlocks(); renderSteps(); showModelStatus();
+    status('Robot added. Set its position, then start the live scene to apply scene changes.', 'ok');
+    reshowIfGenerated();
+  }
+
+  /** Remove the selected robot while keeping at least one available instance. */
+  function removeRobotInstance() {
+    const selected = builderState.removeRobot(builderState.activeIdentifier);
+    if (!selected) return;
+    steps = selected.steps;
+    renderRobotInstances(); renderBlocks(); renderSteps(); showModelStatus(); reshowIfGenerated();
+    status('Robot removed. Start the live scene to apply scene changes.', 'ok');
+  }
+
+  /** @returns {Array<string>} Imports for all distinct robot models in the scene. */
+  function robotImportLines() {
+    const names = builderState.instances.map((instance) => instance.model);
+    return Array.from(new Set((names.length ? names : [robotInfo().name]).map((name) => builderState.robot(name).import)));
+  }
+
+  /** @returns {Array<string>} Native shared-world configuration for authored instances. */
+  function robotSceneLines() {
+    if (!builderState.instances.length) return [];
+    const lines = ['ROBOT_SCENE = RobotScene(', '    instances=['];
+    builderState.instances.forEach(function (instance) {
+      lines.push('        RobotInstance(');
+      lines.push('            identifier=' + jsonStr(instance.id) + ', label=' + jsonStr(instance.label) + ',');
+      lines.push('            robot_type=' + builderState.robot(instance.model).cls + ',');
+      lines.push('            pose=HomogeneousTransformationMatrix.from_xyz_rpy(' + instance.x + ', ' + instance.y + ', 0.0, yaw=' + instance.yaw + '),');
+      if (Object.keys(instance.joint_positions).length) lines.push('            joint_positions=' + jsonPy(instance.joint_positions) + ',');
+      lines.push('        ),');
+    });
+    lines.push('    ],', '    active_identifier=' + jsonStr(builderState.activeIdentifier) + ',', ')', '');
+    return lines;
+  }
   // semantic place targets: supporting surfaces ("on") and case containers ("in").
   // Both expose HasSupportingSurface.sample_points_from_surface, so resolution is identical.
   const SEMANTIC_SURFACES = ['CounterTop', 'Table', 'ShelfLayer', 'Floor', 'Sofa'];
@@ -83,27 +198,30 @@
   let steps = [];       // [{type, params:{...}}]
   let objects = [];      // [{id, mesh, name, x, y, z, yaw, color}]
   let objSeq = 1, stepSeq = 1;
-  let robotXY = { x: 1.5, y: 2.5 };   // robot spawn (draggable in the scene)
+  let robotXY = window.PlanBuilderState.initialRobotPosition();   // robot spawn (draggable in the scene)
   let liveOn = false;                 // true while the scaffold scene is up (constraints can be pushed live)
 
   // scene mapping: origin offset so the typical apartment area sits centred
   const SCALE = 40, ORIGIN_X = 2.5, ORIGIN_Y = 2.0;
   const $ = function (id) { return document.getElementById(id); };
+  $('pb-rx').value = robotXY.x;
+  $('pb-ry').value = robotXY.y;
 
   // ---------- palette ----------
   function renderBlocks() {
     const el = $('pb-blocks'); el.innerHTML = '';
-    Object.keys(BLOCKS).forEach(function (k) {
+    const robot = robotInfo();
+    (robot ? robot.steps : []).forEach(function (k) {
       const b = BLOCKS[k];
-      const d = document.createElement('div');
+      const d = document.createElement('button');
+      d.type = 'button'; d.title = 'Add ' + b.name + ' to the plan';
+      d.addEventListener('click', function () { addStep(k); });
       d.className = 'pb-block'; d.draggable = true; d.dataset.block = k;
       d.innerHTML = '<span class="ic" style="background:' + b.color + '"></span>' + b.name;
       d.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', 'block:' + k); });
       el.appendChild(d);
     });
     const meshSel = $('pb-mesh'); meshSel.innerHTML = MESHES.map(function (m) { return '<option>' + m + '</option>'; }).join('');
-    const robotSel = $('pb-robot');
-    if (robotSel) robotSel.innerHTML = WORKING_ROBOTS.map(function (k) { return '<option value="' + k + '">' + k + '</option>'; }).join('');
   }
 
   // ---------- objects ----------
@@ -139,10 +257,11 @@
       const d = document.createElement('div'); d.className = 'pb-obj';
       d.innerHTML =
         '<div class="row1"><span class="pb-swatch" style="background:' + o.color + '"></span>' +
-        '<span class="oname" title="' + o.mesh + '">' + o.name + '</span>' +
-        '<span class="ocap" data-cap="' + o.id + '" title="drag the object to its start position in the 3D scene, then click to capture that as its start pose">⟳ capture</span>' +
-        '<span class="oreset" data-reset="' + o.id + '" title="move the object in the 3D scene back to these coordinates (undo a bad drag/snap)">⟲</span>' +
-        '<span class="odel" data-del="' + o.id + '">×</span></div>' +
+        '<span class="oname" title="' + o.mesh + '">' + o.name + '</span></div>' +
+        '<div class="pb-object-actions">' +
+        '<button type="button" class="ocap" data-cap="' + o.id + '" aria-label="Capture current pose of ' + o.name + '" title="Use the current live pose as this object’s start pose">Capture pose</button>' +
+        '<button type="button" class="oreset" data-reset="' + o.id + '" aria-label="Reset pose of ' + o.name + '" title="Move this object back to its authored coordinates">Reset</button>' +
+        '<button type="button" class="odel" data-del="' + o.id + '" aria-label="Remove ' + o.name + '" title="Remove this object from the authored scene">Remove</button></div>' +
         '<button class="pb-pose-toggle" data-posetoggle="' + o.id + '">' + (o.poseOpen ? '▾' : '▸') + ' pose (xyz · rpy)</button>' +
         '<div class="pb-pose"' + (o.poseOpen ? '' : ' style="display:none"') + '>' +
         '<div class="pb-pose-grp"><span class="pb-pose-h">position (m)</span>' +
@@ -189,6 +308,7 @@
     // tell the embedded 3D scene to move the mesh back (the idle sim won't apply a
     // queued /move, so a visual reset must go through the viewer itself)
     const q = rpyToQuat(o.roll, o.pitch, o.yaw);
+    builderState.authoredPosition(o.mesh, [o.x, o.y, o.z], q);
     const f = $('pb-3d');
     if (f && f.contentWindow) f.contentWindow.postMessage(
       { type: 'cramera-reset-object', key: o.mesh, position: [o.x, o.y, o.z], quaternion: q }, '*');
@@ -213,6 +333,7 @@
   let _lastPosePush = 0;
   function pushObjectPose(o) {
     const q = rpyToQuat(o.roll, o.pitch, o.yaw);
+    builderState.authoredPosition(o.mesh, [o.x, o.y, o.z], q);
     const f = $('pb-3d');
     if (f && f.contentWindow) f.contentWindow.postMessage(
       { type: 'cramera-reset-object', key: o.mesh, position: [o.x, o.y, o.z], quaternion: q }, '*');
@@ -264,9 +385,10 @@
     const d = ev && ev.data; if (!d) return;
     if (d.type === 'cramera-object-settled' && d.key && Array.isArray(d.position)) {
       const o = objects.find(function (x) { return x.mesh === d.key; }); if (!o) return;
-      o.x = Math.round(d.position[0] * 100) / 100;
-      o.y = Math.round(d.position[1] * 100) / 100;
-      o.z = Math.round(d.position[2] * 100) / 100;
+      builderState.authoredPosition(d.key, d.position);
+      o.x = d.position[0];
+      o.y = d.position[1];
+      o.z = d.position[2];
       renderObjects();
     } else if (d.type === 'cramera-navigate-moved' && d.id) {
       // a Navigate goal was dragged in the scene -> save into THAT step
@@ -428,8 +550,10 @@
 
   // ---------- plan steps ----------
   function addStep(type) {
-    const b = BLOCKS[type]; if (!b) return;
+    const b = BLOCKS[type], robot = robotInfo();
+    if (!b || !robot || robot.steps.indexOf(type) < 0) return;
     const params = Object.assign({}, b.params);
+    if (params.arm && robot.arms.indexOf(params.arm) < 0) params.arm = robot.arms[0];
     if (window.PlanSteps.actingOnAnObject().indexOf(type) >= 0 && !params.object && objects.length) params.object = objects[0].mesh;
     // a new Navigate starts as a copy of the last one (offset a bit), so its marker appears
     // next to the previous goal and can be dragged from there instead of jumping to a default
@@ -473,7 +597,7 @@
   }
   function row(html) { return '<div class="sparam-row">' + html + '</div>'; }
   function stepParams(s) {
-    if (s.type === 'park_arms') return row(sel(s, 'arm', ARMS));
+    if (s.type === 'park_arms') return row(sel(s, 'arm', robotArms()));
     if (s.type === 'move_torso') return row(sel(s, 'torso', TORSO));
     if (s.type === 'navigate') return row('<span class="pb-group-lbl">go to →</span>' + num(s, 'x') + num(s, 'y') + num(s, 'z') + num(s, 'yaw') +
       '<button class="pb-capbtn" data-capnav="' + s.id + '" title="drive/place the robot in the 3D scene, then capture its base pose as this navigate goal">◎ capture robot pose</button>');
@@ -483,14 +607,14 @@
         row('<span class="pb-group-lbl start">start (from) →</span>' + startCaptureButton(s)) +
         row('<span class="pb-group-lbl">target →</span>' + modeSel(s)) +
         dropOffRow(s) +
-        row(sel(s, 'arm', ARMS))
+        row(sel(s, 'arm', robotArms()))
       );
     }
     if (s.type === 'pick') {
       return (
         row(objSel(s)) +
         row('<span class="pb-group-lbl start">start (from) →</span>' + startCaptureButton(s)) +
-        row(sel(s, 'arm', ARMS)) +
+        row(sel(s, 'arm', robotArms())) +
         row('<span class="pb-hint3">the robot grasps from where it stands — put a Navigate step in front of this one</span>')
       );
     }
@@ -499,7 +623,7 @@
         row(objSel(s)) +
         row('<span class="pb-group-lbl">target →</span>' + modeSel(s)) +
         dropOffRow(s) +
-        row(sel(s, 'arm', ARMS)) +
+        row(sel(s, 'arm', robotArms())) +
         row('<span class="pb-hint3">places what this arm is holding — put a Pick step in front of this one</span>')
       );
     }
@@ -536,11 +660,11 @@
     return '<select class="pb-sel" data-sid="' + s.id + '" data-k="surfaceType">' +
       grp('on a surface', SEMANTIC_SURFACES) + grp('in a container', SEMANTIC_CONTAINERS) + '</select>';
   }
-  // instance dropdown: "first found" + any live-enumerated instances of the chosen type
+  // instance dropdown: automatic selection + live instances of the chosen type
   function surfaceInstanceSel(s) {
     const t = s.params.surfaceType || 'CounterTop';
     const inst = liveSurfaces.filter(function (x) { return x.type === t; });
-    const pairs = [['', 'first found']].concat(inst.map(function (x) { return [x.name, x.name]; }));
+    const pairs = [['', 'automatic (nearest first)']].concat(inst.map(function (x) { return [x.name, x.name]; }));
     return selPairs(s, 'surfaceName', pairs);
   }
   function objSel(s) {
@@ -624,50 +748,17 @@
     const set = {}; surfaceSteps(useSteps).forEach(function (s) { set[s.params.surfaceType || 'CounterTop'] = 1; });
     return Object.keys(set);
   }
-  // lines that resolve each surface-mode transport into a `_target_<id>` Pose, given `world`.
-  // Fails with a clear message (not a bare IndexError/StopIteration) when the surface is
-  // missing, so a mismatched environment is obvious.
+  // Candidate locations remain lazy until CRAM grounds each action at execution time.
   function surfaceResolveLines(useSteps, indent) {
-    const L = [];
-    useSteps.forEach(function (s, i) {
-      if (!placesAtASemanticTarget(s)) return;
-      const T = s.params.surfaceType || 'CounterTop';
-      const mesh = s.params.object || 'object';
-      const id = s.id;
-      const where = 'step ' + (i + 1) + ' (' + s.type + ' ' + mesh + ')';
-      L.push(indent + '# place "' + mesh + '" ' + prep(T) + ' a ' + T + ' — pose sampled by semantic_digital_twin');
-      if (s.params.surfaceName) {
-        L.push(indent + '_surface_' + id + ' = next(');
-        L.push(indent + '    (s for s in world.get_semantic_annotations_by_type(' + T + ')');
-        L.push(indent + '     if str(s.root.name) == ' + jsonStr(s.params.surfaceName) + '),');
-        L.push(indent + '    None,');
-        L.push(indent + ')');
-        L.push(indent + 'if _surface_' + id + ' is None:');
-        L.push(indent + '    raise RuntimeError(');
-        L.push(indent + '        "' + T + ' ' + jsonStr(s.params.surfaceName).slice(1, -1) +
-          ' not found in this world for ' + where + '. "');
-        L.push(indent + '        "See the Plan Builder\'s live /surfaces list for available surfaces."');
-        L.push(indent + '    )');
-      } else {
-        L.push(indent + '_surfaces_' + id + ' = world.get_semantic_annotations_by_type(' + T + ')');
-        L.push(indent + 'if not _surfaces_' + id + ':');
-        L.push(indent + '    raise RuntimeError(');
-        L.push(indent + '        "no ' + T + ' in this world for ' + where + '. "');
-        L.push(indent + '        "This environment may not carry that annotation — "');
-        L.push(indent + '        "see the Plan Builder\'s live /surfaces list for what is available."');
-        L.push(indent + '    )');
-        L.push(indent + '_surface_' + id + ' = _surfaces_' + id + '[0]');
-      }
-      L.push(indent + '_pts_' + id + ' = _surface_' + id + '.sample_points_from_surface(');
-      L.push(indent + '    body_to_sample_for=' + body(mesh) + ')');
-      L.push(indent + 'if not _pts_' + id + ':');
-      L.push(indent + '    raise RuntimeError(');
-      L.push(indent + '        "could not sample a free place pose ' + prep(T) + ' ' + T + ' for ' + where + ' "');
-      L.push(indent + '        "(surface full or too small for ' + mesh + ')."');
-      L.push(indent + '    )');
-      L.push(indent + '_target_' + id + ' = Pose(_pts_' + id + '[0], reference_frame=_pts_' + id + '[0].reference_frame)');
+    return surfaceSteps(useSteps).map(function (s) {
+      const type = s.params.surfaceType || 'CounterTop';
+      const name = s.params.surfaceName ? jsonStr(s.params.surfaceName) : 'None';
+      const provider = 'PlacementSurface(' +
+        'world=world, body=' + body(s.params.object || 'object') +
+        ', surface_type=' + type + ', surface_name=' + name + ')';
+      return indent + '_target_' + s.id + ' = ' +
+        (s.type === 'transport' ? provider : 'variable(Pose, domain=' + provider + ')');
     });
-    return L;
   }
   // objects to spawn: the placed ones, plus any object a transport step references but that
   // was never placed/captured — spawned at DEFAULT_START so the demo still runs.
@@ -706,7 +797,9 @@
   function surfaceImportLine(useSteps) {
     const types = surfaceTypesUsed(useSteps);
     if (!types.length) return null;
-    return 'from semantic_digital_twin.semantic_annotations.semantic_annotations import ' + types.sort().join(', ');
+    return 'from semantic_digital_twin.semantic_annotations.semantic_annotations import ' + types.sort().join(', ') + '\n' +
+      'from cramera.live.placement_surface import PlacementSurface\n' +
+      'from krrood.entity_query_language.factories import a, variable';
   }
   // every constraint attached anywhere in the plan
   function attachedConstraints(useSteps) {
@@ -757,15 +850,18 @@
     L.push('from coraplex.robot_plans.actions.core.robot_body import ParkArmsAction, MoveTorsoAction');
     L.push('from coraplex.view_manager import ViewManager');
     L.push('from semantic_digital_twin.adapters.mesh import DAEParser, OBJParser, STLParser');
-    L.push('from semantic_digital_twin.adapters.urdf import URDFParser');
+    L.push('from semantic_digital_twin.api import RobotSpecification, WorldSpecification');
     L.push('from semantic_digital_twin.datastructures.definitions import TorsoState');
     L.push('from semantic_digital_twin.reasoning.world_reasoner import WorldReasoner');
+    L.push('from cramera.live.placement_annotations import PlacementAnnotations');
     if (window.BaseControl.pinsTheSetting(baseControl())) {
       L.push('from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase');
     }
-    L.push(R.import);
+    robotImportLines().forEach((line) => L.push(line));
+    if (builderState.instances.length) L.push('from cramera.multi_robot import RobotInstance, RobotScene');
     L.push('from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix');
     L.push('from semantic_digital_twin.spatial_types.spatial_types import Pose');
+    L.push('from semantic_digital_twin.world import World');
     L.push('from semantic_digital_twin.world_description.geometry import Color');
     const _surfImp = surfaceImportLine(useSteps);
     if (_surfImp) L.push(_surfImp);
@@ -776,27 +872,36 @@
     L.push('_MESH_PARSERS = {".stl": STLParser, ".obj": OBJParser, ".dae": DAEParser}');
     L.push('');
     L.push('');
-    L.push('def _parse_mesh(mesh):');
-    L.push('    """Parse an object mesh into a world, picking the parser by file extension."""');
+    L.push('def _parse_mesh(mesh: str) -> World:');
+    L.push('    """Parse an object mesh into its own world.');
+    L.push('');
+    L.push('    :param mesh: Object filename in the installed mesh directory.');
+    L.push('    :return: World containing the parsed object.');
+    L.push('    """');
     L.push('    ext = os.path.splitext(mesh)[1].lower()');
     L.push('    return _MESH_PARSERS.get(ext, STLParser)(os.path.join(_OBJECTS, mesh)).parse()');
     L.push('');
     L.push('');
-    L.push('def build_world(env_file, robot_xy):');
-    L.push('    """Parse the chosen environment + ' + R.cls + ' and spawn the robot at robot_xy."""');
-    L.push('    robot_world = URDFParser.from_file(' + R.cls + '.get_ros_file_path()).parse()');
-    L.push('    world = URDFParser.from_file(os.path.join(_WORLDS, env_file)).parse()');
-    L.push('    with world.modify_world():');
-    L.push('        robot_root = robot_world.get_body_by_name(' + R.cls + '._get_root_body_name())');
-    L.push('        drive = ' + R.cls + '.get_drive_connection_type().create_with_dofs(');
-    L.push('            parent=world.root, child=robot_root, world=world)');
-    L.push('        world.merge_world(robot_world, drive)');
-    L.push('        drive.origin = HomogeneousTransformationMatrix.from_xyz_rpy(robot_xy[0], robot_xy[1], 0)');
-    L.push('    standing = max(0.0, -world.height_of_lowest_collision_point_of_branch(robot_root))');
-    L.push('    with world.modify_world():');
-    L.push('        drive.parent_T_connection_expression = HomogeneousTransformationMatrix.from_xyz_rpy(');
-    L.push('            z=standing, reference_frame=world.root)');
-    L.push('    return world');
+    robotSceneLines().forEach((line) => L.push(line));
+    L.push('def build_world(env_file: str, robot_xy: tuple[float, float]) -> World:');
+    L.push('    """Build the environment and spawn its annotated robot.');
+    L.push('');
+    L.push('    :param env_file: Environment URDF filename or absolute path.');
+    L.push('    :param robot_xy: Robot starting x and y position in metres.');
+    L.push('    :return: The assembled semantic world.');
+    L.push('    """');
+    if (builderState.instances.length) {
+      L.push('    return ROBOT_SCENE.build_world(os.path.join(_WORLDS, env_file))');
+    } else {
+      L.push('    return WorldSpecification.from_urdf(');
+      L.push('        os.path.join(_WORLDS, env_file),');
+      L.push('        robots=[RobotSpecification(');
+      L.push('            semantic_annotation_type=' + R.cls + ',');
+      L.push('            world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(');
+      L.push('                robot_xy[0], robot_xy[1], 0.0),');
+      L.push('        )],');
+      L.push('    ).to_domain_object()');
+    }
     L.push('');
     L.push('');
     baseControlConstant().forEach(function (ln) { L.push(ln); });
@@ -822,11 +927,12 @@
       });
       L.push('');
     }
-    L.push('robot = ' + R.cls + '.from_world(world)');
+    L.push(builderState.instances.length ? 'robot = ROBOT_SCENE.selected_robot(world)' : 'robot = world.get_semantic_annotations_by_type(' + R.cls + ')[0]');
     baseControlLines('').forEach(function (ln) { L.push(ln); });
     L.push('context = Context(world=world, robot=robot, _debug=False, ros_node=visualization.ros_node)');
     L.push('with world.modify_world():');
     L.push('    WorldReasoner(world).reason()');
+    L.push('    PlacementAnnotations(world, os.path.join(_WORLDS, ' + jsonStr(env) + ')).apply()');
     L.push('context.evaluate_conditions = False');
     L.push('');
     surfaceResolveLines(useSteps, '').forEach(function (ln) { L.push(ln); });
@@ -849,7 +955,8 @@
     if (s.type === 'move_torso') return 'MoveTorsoAction(TorsoState.' + p.torso + ')';
     if (s.type === 'navigate') return 'NavigateAction(' + pose(p) + ')';
     if (s.type === 'transport') {
-      const given = [body(p.object || 'object'), dropOffTarget(s), 'Arms.' + p.arm]
+      const given = ['object_designator=' + body(p.object || 'object'),
+        'target_location=' + dropOffTarget(s), 'arm=Arms.' + p.arm]
         .concat(PlanConstraints.stepArguments(s.constraints || []));
       return 'TransportAction(' + given.join(', ') + ')';
     }
@@ -857,7 +964,9 @@
       return 'PickUpAction(_pick_' + s.id + ', Arms.' + p.arm + ', _grasp_' + s.id + ')';
     }
     if (s.type === 'place') {
-      return 'PlaceAction(' + body(p.object || 'object') + ', ' + dropOffTarget(s) + ', Arms.' + p.arm + ')';
+      const action = placesAtASemanticTarget(s) ? 'a(PlaceAction)' : 'PlaceAction';
+      return action + '(object_designator=' + body(p.object || 'object') +
+        ', target_location=' + dropOffTarget(s) + ', arm=Arms.' + p.arm + ')';
     }
     return 'None';
   }
@@ -890,7 +999,7 @@
     L.push('from coraplex.datastructures.grasp import GraspDescription');
     L.push('from coraplex.demonstrations import RobotDemonstration');
     L.push('from coraplex.plans.factories import sequential');
-    L.push('from coraplex.plans.plan_node import PlanNode');
+    L.push('from coraplex.plans.plan import Plan');
     L.push('from coraplex.robot_plans.actions.composite.transporting import TransportAction');
     L.push('from coraplex.robot_plans.actions.core.navigation import NavigateAction');
     L.push('from coraplex.robot_plans.actions.core.pick_up import PickUpAction');
@@ -905,10 +1014,12 @@
     L.push(')');
     L.push('from semantic_digital_twin.datastructures.definitions import TorsoState');
     L.push('from semantic_digital_twin.reasoning.world_reasoner import WorldReasoner');
+    L.push('from cramera.live.placement_annotations import PlacementAnnotations');
     if (window.BaseControl.pinsTheSetting(baseControl())) {
       L.push('from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase');
     }
-    L.push(R.import);
+    robotImportLines().forEach((line) => L.push(line));
+    if (builderState.instances.length) L.push('from cramera.multi_robot import RobotInstance, RobotScene');
     L.push('from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix');
     L.push('from semantic_digital_twin.spatial_types.spatial_types import Pose');
     L.push('from semantic_digital_twin.world import World');
@@ -922,6 +1033,7 @@
     L.push('');
     L.push('ENV_FILE = "' + env + '"');
     L.push('ROBOT_XY = (' + py(robotXY.x) + ', ' + py(robotXY.y) + ')');
+    robotSceneLines().forEach((line) => L.push(line));
     baseControlConstant().forEach(function (ln) { L.push(ln); });
     L.push('');
     L.push('# objects placed in the Plan Builder: (mesh, x, y, z, roll, pitch, yaw, (r, g, b))');
@@ -941,26 +1053,38 @@
     L.push('    """A demonstration composed in the cramera Plan Builder."""');
     L.push('');
     L.push('    def build_simulated_world(self) -> World:');
-    L.push('        return WorldSpecification.from_urdf(');
-    L.push('            os.path.join(_WORLDS, ENV_FILE),');
-    L.push('            robots=[');
-    L.push('                RobotSpecification(');
-    L.push('                    semantic_annotation_type=self.used_robot,');
-    L.push('                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(');
-    L.push('                        ROBOT_XY[0], ROBOT_XY[1], 0.0),');
-    L.push('                ),');
-    L.push('            ],');
-    L.push('        ).to_domain_object()');
+    L.push('        """Build the selected environment with its annotated robot.');
+    L.push('');
+    L.push('        :return: The assembled semantic world.');
+    L.push('        """');
+    if (builderState.instances.length) {
+      L.push('        return ROBOT_SCENE.build_world(os.path.join(_WORLDS, ENV_FILE))');
+    } else {
+      L.push('        return WorldSpecification.from_urdf(');
+      L.push('            os.path.join(_WORLDS, ENV_FILE),');
+      L.push('            robots=[');
+      L.push('                RobotSpecification(');
+      L.push('                    semantic_annotation_type=self.used_robot,');
+      L.push('                    world_T_odom=HomogeneousTransformationMatrix.from_xyz_rpy(');
+      L.push('                        ROBOT_XY[0], ROBOT_XY[1], 0.0),');
+      L.push('                ),');
+      L.push('            ],');
+      L.push('        ).to_domain_object()');
+    }
     L.push('');
     L.push('    def is_scene_populated(self, world: World) -> bool:');
-    L.push('        for spec in OBJECTS:');
-    L.push('            try:');
-    L.push('                world.get_body_by_name(spec[0])');
-    L.push('            except Exception:');
-    L.push('                return False');
-    L.push('        return bool(OBJECTS)');
+    L.push('        """Check whether every authored object exists in the world.');
+    L.push('');
+    L.push('        :param world: World inspected for the authored objects.');
+    L.push('        :return: Whether the scene already contains the complete object set.');
+    L.push('        """');
+    L.push('        return bool(OBJECTS) and all(len(world.get_bodies_by_name(spec[0])) == 1 for spec in OBJECTS)');
     L.push('');
     L.push('    def populate_scene(self, world: World) -> None:');
+    L.push('        """Spawn the authored objects at their saved poses.');
+    L.push('');
+    L.push('        :param world: World receiving the movable object bodies.');
+    L.push('        """');
     L.push('        # each object is free to move (Connection6DoF), so the robot can transport it');
     L.push('        for mesh, x, y, z, roll, pitch, yaw, rgb in OBJECTS:');
     L.push('            BodySpecification.mesh(');
@@ -973,15 +1097,26 @@
     L.push('            ).spawn(world)');
     L.push('');
     L.push('    def build_context(self, world: World) -> Context:');
+    L.push('        """Reason about the world and configure robot execution.');
+    L.push('');
+    L.push('        :param world: Semantic world used for planning and execution.');
+    L.push('        :return: Context for the selected robot.');
+    L.push('        """');
     L.push('        with world.modify_world():');
     L.push('            WorldReasoner(world).reason()');
-    L.push('        robot = world.get_semantic_annotations_by_type(self.used_robot)[0]');
+    L.push('            PlacementAnnotations(world, os.path.join(_WORLDS, ENV_FILE)).apply()');
+    L.push(builderState.instances.length ? '        robot = ROBOT_SCENE.selected_robot(world)' : '        robot = world.get_semantic_annotations_by_type(self.used_robot)[0]');
     baseControlLines('        ').forEach(function (ln) { L.push(ln); });
     L.push('        context = Context(world=world, robot=robot, _debug=False, ros_node=self.ros_node)');
     L.push('        context.evaluate_conditions = False');
     L.push('        return context');
     L.push('');
-    L.push('    def build_plan(self, context: Context) -> PlanNode:');
+    L.push('    def build_plan(self, context: Context) -> Plan:');
+    L.push('        """Compose the authored action sequence against the current world.');
+    L.push('');
+    L.push('        :param context: Robot and world used to resolve the actions.');
+    L.push('        :return: Executable plan containing the authored action sequence.');
+    L.push('        """');
     L.push('        world = context.world  # bodies/poses below are resolved against it');
     surfaceResolveLines(useSteps, '        ').forEach(function (ln) { L.push(ln); });
     pickGraspLines(useSteps, '        ').forEach(function (ln) { L.push(ln); });
@@ -1042,7 +1177,8 @@
   }
   function generateSelected() { return outputStyle() === 'class' ? generateClass() : generate(); }
 
-  function showCode() {
+  async function showCode() {
+    try { await synchronizeObjects(); } catch (error) { status(error.message, 'err'); return; }
     const pre = $('pb-code');
     pre.textContent = generateSelected(); pre.style.display = 'block'; status('', '');
     // the preview is collapsed to keep the scene big, so reveal it and bring it into view
@@ -1062,13 +1198,15 @@
   }
   function fileName() { return (($('pb-name').value || 'my_demo').replace(/[^a-z0-9_\-]/gi, '_')) + '.py'; }
 
-  function download() {
+  async function download() {
+    try { await synchronizeObjects(); } catch (error) { status(error.message, 'err'); return; }
     const code = generateSelected();
     const blob = new Blob([code], { type: 'text/x-python' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileName(); a.click();
     URL.revokeObjectURL(a.href); status('downloaded ' + fileName(), 'ok'); toast('Downloaded ' + fileName(), 'ok');
   }
-  function save() {
+  async function save() {
+    try { await synchronizeObjects(); } catch (error) { status(error.message, 'err'); return; }
     const code = generateSelected();
     toast('Saving ' + fileName() + '…', '');
     fetch('/api/plan/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: fileName(), code: code }) })
@@ -1090,6 +1228,7 @@
   // clear the run is alive and how far in it is; endBusy() runs on any final liveStatus()
   let _busyTimer = 0, _busyStart = 0, _busyBase = '', _busyDetail = '';
   function beginBusy(base) {
+    setRobotEditingDisabled(true);
     _busyBase = base; _busyDetail = ''; _busyStart = Date.now();
     if (_busyTimer) clearInterval(_busyTimer);
     renderBusy(); _busyTimer = setInterval(renderBusy, 1000);
@@ -1103,7 +1242,12 @@
     el.className = 'pb-live-status';
     el.innerHTML = '<span class="cr-busy"><span class="cr-spinner"></span>' + esc(_busyBase) + detail + ' · ' + s + 's</span>';
   }
-  function endBusy() { if (_busyTimer) { clearInterval(_busyTimer); _busyTimer = 0; } }
+  function endBusy() { if (_busyTimer) { clearInterval(_busyTimer); _busyTimer = 0; } setRobotEditingDisabled(false); }
+  /** @param {boolean} disabled Keep the authored robot stable while its scene starts. */
+  function setRobotEditingDisabled(disabled) {
+    ['pb-robot-instance', 'pb-add-robot', 'pb-remove-robot', 'pb-robot', 'pb-robot-label', 'pb-rx', 'pb-ry', 'pb-ryaw'].forEach(function (identifier) { $(identifier).disabled = disabled; });
+    if (!disabled) $('pb-remove-robot').disabled = builderState.instances.length <= 1;
+  }
   // the last meaningful line of the demo's log, tidied, so the wait shows where it is
   function lastLogLine(text) {
     if (!text) return '';
@@ -1112,8 +1256,22 @@
     let line = lines[lines.length - 1].replace(/^(INFO|WARNING|DEBUG|ERROR):[^:]*:/, '').trim();
     return line.length > 72 ? line.slice(0, 71) + '…' : line;
   }
+  async function synchronizeObjects() {
+    if (!liveOn) return;
+    const [captured] = await Promise.all([fetchCaptured(), synchronizeRobotPoses()]);
+    builderState.capture(objects, captured);
+    renderObjects(); renderSteps();
+  }
+  /** Capture every robot's current base pose before changing the selected plan or scene. */
+  async function synchronizeRobotPoses() {
+    if (!liveOn || !builderState.instances.length) return;
+    const response = await fetch(bridgeUrl() + '/robots', {cache: 'no-store'});
+    if (!response.ok) throw new Error('Could not read robot poses from the live scene');
+    builderState.captureRobots(await response.json());
+    renderRobotInstances();
+  }
   function fetchCaptured() {
-    return fetch(bridgeUrl() + '/captured_objects').then(function (r) { return r.json(); }).then(function (d) { return (d && d.objects) || {}; });
+    return fetch(bridgeUrl() + '/captured_objects').then(function (r) { if (!r.ok) throw new Error('live scene is unavailable'); return r.json(); }).then(function (d) { return (d && d.objects) || {}; });
   }
   function quatToRpy(q) { // q = [qx,qy,qz,qw] -> [roll, pitch, yaw] (ROS convention)
     const x = q[0], y = q[1], z = q[2], w = q[3];
@@ -1166,28 +1324,60 @@
     }).catch(function () { status('capture failed — start the live scene first', 'err'); });
   }
   function hideScaffoldLog() { const el = $('pb-scaffold-log'); if (el) { el.style.display = 'none'; el.textContent = ''; } }
-  function startLive() {
-    const code = generate([{ type: 'park_arms', params: { arm: 'BOTH' } }]);   // scaffold: world + objects, idle
+  async function startLive() {
+    const my = ++_runMonitor;
+    beginBusy('Preparing scene — capturing robot poses');
+    try { await synchronizeRobotPoses(); }
+    catch (error) { if (my === _runMonitor) liveStatus(error.message, 'err'); return; }
+    if (my !== _runMonitor) return;
+    lastSpawnRobot = robotInfo().name;
+    const code = generate(builderState.adaptSteps([{ type: 'park_arms', params: { arm: 'BOTH' } }], robotInfo().name));   // scaffold: world + objects, idle
     beginBusy('Starting scene — parsing meshes'); hideScaffoldLog();
-    fetch('/api/plan/scaffold', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: code }) })
-      .then(function (r) { return r.json(); })
-      .then(function (j) { if (!j.ok) { liveStatus('failed: ' + (j.error || '?'), 'err'); return; } pollLive(0); monitorRun(); })
-      .catch(function (e) { liveStatus('failed: ' + e, 'err'); });
+    return launchRun(code, false, my);
   }
   // run the built plan itself (not the idle scaffold) and watch the robot perform it:
   // the full generated demo ends in `plan.perform()`, launched through the same endpoint
-  function runPlan() {
+  async function runPlan() {
     if (!steps.length) { liveStatus('add plan steps first', 'err'); return; }
+    const my = ++_runMonitor;
+    beginBusy('Preparing plan — capturing the live scene');
+    try { await synchronizeObjects(); }
+    catch (error) { if (my === _runMonitor) liveStatus('Could not read object poses: ' + error.message, 'err'); return; }
+    if (my !== _runMonitor) return;
     const code = generateSelected();   // full demo (matches the chosen output style), ends by performing the plan
+    lastSpawnRobot = robotInfo().name;
     beginBusy('Running plan — parsing meshes'); hideScaffoldLog();
-    fetch('/api/plan/scaffold', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: code }) })
+    return launchRun(code, true, my);
+  }
+  /**
+   * Replace the scene while retaining the previous plan's identity.
+   * @param {string} code Generated demo source.
+   * @param {boolean} isPlan Whether to display an authored plan's result.
+   * @param {number} my Generation invalidated by a stop or newer launch.
+   */
+  async function launchRun(code, isPlan, my) {
+    const authoredRobotPoses = builderState.snapshotRobotPoseEdits();
+    const previous = window.PlanBuilderState.planRoot(await fetchLivePlan());
+    if (my !== _runMonitor) return;
+    liveOn = false;
+    return fetch('/api/plan/scaffold', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: code }) })
       .then(function (r) { return r.json(); })
-      .then(function (j) { if (!j.ok) { liveStatus('failed: ' + (j.error || '?'), 'err'); return; } pollLive(0, '● running — watch the robot in the 3D view'); monitorRun(); })
-      .catch(function (e) { liveStatus('failed: ' + e, 'err'); });
+      .then(function (j) {
+        if (my !== _runMonitor) return;
+        if (!j.ok) { liveStatus('failed: ' + (j.error || '?'), 'err'); return; }
+        builderState.acknowledgeRobotPoseEdits(authoredRobotPoses);
+        pollLive(0, isPlan ? window.PlanBuilderState.RUN_PROGRESS.RUNNING.message : null, my);
+        monitorRun(my, previous && previous.id, isPlan);
+      })
+      .catch(function (e) { if (my === _runMonitor) liveStatus('failed: ' + e, 'err'); });
   }
   // ---- run log: surface the demo subprocess's stdout/stderr (tracebacks) ----
   function fetchScaffoldLog() {
     return fetch('/api/plan/scaffold/log').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  }
+  /** @returns {Promise<object|null>} Current authoritative tree, if the bridge is available. */
+  function fetchLivePlan() {
+    return fetch(bridgeUrl() + '/plan', {cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
   }
   function showScaffoldLog(text) {
     const el = $('pb-scaffold-log'); if (!el) return;
@@ -1197,40 +1387,62 @@
     if (el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
   let _runMonitor = 0;
-  // poll the log while a demo runs; if the process exits non-zero, show the traceback
-  function monitorRun() {
-    const my = ++_runMonitor;
+  /**
+   * Follow plan completion independently of the runner's serving lifetime.
+   * @param {number} my Current launch generation.
+   * @param {string|null} previousRoot Root replaced by this launch.
+   * @param {boolean} isPlan Whether this launch performs the authored plan.
+   */
+  function monitorRun(my, previousRoot, isPlan) {
+    let showingProgress = false;
     (function tick() {
       if (my !== _runMonitor) return;                      // superseded by a newer run/stop
-      fetchScaffoldLog().then(function (d) {
+      fetchScaffoldLog().then(async function (d) {
         if (my !== _runMonitor || !d) { if (my === _runMonitor) setTimeout(tick, 2500); return; }
         if (d.returncode !== null && d.returncode !== 0) {   // the demo crashed
           liveOn = false;
-          liveStatus('demo exited (code ' + d.returncode + ') — see the run log below', 'err');
-          toast('Demo crashed (exit ' + d.returncode + ') — run log opened', 'err');
-          showScaffoldLog(d.log);
+          stopRunMonitor();
+          reportSceneFailure(d.log);
           return;                                            // stop monitoring
+        }
+        if (isPlan && liveOn) {
+          const snapshot = await fetchLivePlan();
+          if (my !== _runMonitor) return;
+          const result = window.PlanBuilderState.planResult(snapshot, previousRoot);
+          if (result) { liveStatus(result.message, result.style); return; }
+          const root = window.PlanBuilderState.planRoot(snapshot);
+          if (root && root.id !== previousRoot && root.status === 'RUNNING') {
+            const progress = window.PlanBuilderState.planProgress(snapshot, previousRoot);
+            if (progress || showingProgress) {
+              const presentation = progress || window.PlanBuilderState.RUN_PROGRESS.RUNNING;
+              liveStatus(presentation.message, presentation.style);
+            }
+            showingProgress = !!progress;
+          }
         }
         setTimeout(tick, 2500);
       });
     })();
   }
   function stopRunMonitor() { _runMonitor++; }
-  function pollLive(n, okMsg) {
+  function pollLive(n, okMsg, my) {
+    if (my !== _runMonitor) return;
     fetch(bridgeUrl() + '/captured_objects').then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        if (d) { liveOn = true; liveStatus(okMsg || '● live — drag objects in the 3D view, then capture', 'ok'); const f=$('pb-3d'); if (f && f.src.indexOf('index.html')<0) f.src='index.html?scene'; fetchSurfaces(); return; }
+        if (my !== _runMonitor) return;
+        if (d) { liveOn = true; builderState.clearFailure(lastSpawnRobot); showModelStatus(); liveStatus(okMsg || '● live — drag objects into place, then Run plan', 'ok'); const f=$('pb-3d'); if (f && f.src.indexOf('index.html')<0) f.src='index.html?scene'; fetchSurfaces(); return; }
         // bridge not up yet — but if the demo process already died, show why now
         fetchScaffoldLog().then(function (lg) {
+          if (my !== _runMonitor) return;
           if (lg && lg.returncode !== null && lg.returncode !== 0) {
-            liveStatus('demo failed to start (exit ' + lg.returncode + ') — see the run log below', 'err');
-            toast('Demo failed to start — run log opened', 'err'); showScaffoldLog(lg.log); return;
+            stopRunMonitor();
+            reportSceneFailure(lg.log); return;
           }
-          if (n < 40) { busyDetail(lastLogLine(lg && lg.log)); setTimeout(function () { pollLive(n + 1, okMsg); }, 3000); }
+          if (n < 40) { busyDetail(lastLogLine(lg && lg.log)); setTimeout(function () { pollLive(n + 1, okMsg, my); }, 3000); }
           else { liveStatus('scene did not come up — see the run log below', 'err'); if (lg) showScaffoldLog(lg.log); }
         });
       })
-      .catch(function () { if (n < 40) setTimeout(function () { pollLive(n + 1, okMsg); }, 3000); else { liveStatus('scene did not come up', 'err'); fetchScaffoldLog().then(function (lg) { if (lg) showScaffoldLog(lg.log); }); } });
+      .catch(function () { if (my !== _runMonitor) return; if (n < 40) setTimeout(function () { pollLive(n + 1, okMsg, my); }, 3000); else { liveStatus('scene did not come up', 'err'); fetchScaffoldLog().then(function (lg) { if (my === _runMonitor && lg) showScaffoldLog(lg.log); }); } });
   }
   // enumerate placement surfaces from the live world (for the "on a surface" target mode)
   function fetchSurfaces() {
@@ -1281,11 +1493,31 @@
   }
   function stopLive() {
     liveOn = false; liveSurfaces = []; stopRunMonitor();
-    fetch('/api/plan/scaffold/stop', { method: 'POST' }).then(function () { liveStatus('stopped', ''); const f=$('pb-3d'); if (f) f.src='about:blank'; }).catch(function () {});
+    const my = _runMonitor;
+    fetch('/api/plan/scaffold/stop', { method: 'POST' }).then(function () { if (my !== _runMonitor) return; liveStatus('stopped', ''); const f=$('pb-3d'); if (f) f.src='about:blank'; }).catch(function () {});
+  }
+
+  /** Connect authoring controls to the selected robot's independent state. */
+  function wireRobotControls() {
+    for (const [identifier, coordinate] of [['pb-rx', 'x'], ['pb-ry', 'y'], ['pb-ryaw', 'yaw']]) {
+      $(identifier).addEventListener('input', function () {
+        const value = Number(this.value) * (coordinate === 'yaw' ? Math.PI / 180 : 1);
+        if (!Number.isFinite(value) || !builderState.activeRobot()) return;
+        builderState.updateRobot(builderState.activeIdentifier, {[coordinate]: value});
+        reshowIfGenerated();
+      });
+    }
+    $('pb-robot-instance').addEventListener('change', function () { selectRobotInstance(this.value); });
+    $('pb-add-robot').addEventListener('click', addRobotInstance);
+    $('pb-remove-robot').addEventListener('click', removeRobotInstance);
+    $('pb-robot-label').addEventListener('change', function () {
+      builderState.updateRobot(builderState.activeIdentifier, {label: this.value});
+      renderRobotInstances(); reshowIfGenerated();
+    });
   }
 
   // ---------- boot ----------
-  renderBlocks();
+  loadCatalog();
   renderConstraints();
   $('pb-add-obj').addEventListener('click', function () {
     const o = addObject($('pb-mesh').value);
@@ -1331,13 +1563,11 @@
   });
   // whenever the embedded scene (re)loads, (re)send the objects to flag with arrows
   $('pb-3d').addEventListener('load', function () { setTimeout(function () { highlightObjectsInScene(); sendNavigateTargets(); }, 400); });
-  $('pb-rx').addEventListener('input', function () { robotXY.x = parseFloat(this.value) || 0; });
-  $('pb-ry').addEventListener('input', function () { robotXY.y = parseFloat(this.value) || 0; });
+  wireRobotControls();
   addObject('milk.stl');   // staged above the robot (never inside furniture); drop/drag to place
   addObject('bowl.stl');
   renderSteps();
   // a friendly starter plan
-  addStep('park_arms'); addStep('move_torso');
   $('pb-generate').addEventListener('click', showCode);
   function reshowIfGenerated() {
     const pre = $('pb-code'); if (pre && pre.textContent && pre.textContent.indexOf('Click') !== 0) showCode();
@@ -1351,7 +1581,7 @@
   }).join('');
   $('pb-base').addEventListener('change', reshowIfGenerated);
   $('pb-style').addEventListener('change', reshowIfGenerated);
-  $('pb-robot').addEventListener('change', reshowIfGenerated);
+  $('pb-robot').addEventListener('change', selectRobot);
   $('pb-env').addEventListener('change', reshowIfGenerated);
   $('pb-download').addEventListener('click', download);
   $('pb-save').addEventListener('click', save);

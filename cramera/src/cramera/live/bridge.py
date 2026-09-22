@@ -64,6 +64,7 @@ from cramera.live.chart_structure import (
     ObservationName,
 )
 from cramera.knowledge.presets import Preset
+from cramera.world_objects import WorldObjects
 from cramera.knowledge.query_runner import EqlQueryRunner, RenderResult
 from cramera.knowledge.query_vocabulary import QueryVocabulary
 from cramera.knowledge.queryable_knowledge import (
@@ -74,14 +75,17 @@ from cramera.knowledge.queryable_knowledge import (
 from cramera.knowledge.question_matching import QuestionMatcher, QuestionMatchResult
 from cramera.knowledge.workspace_classes import WorkspaceClassIndex
 from cramera.live.query import LiveQuerySource, NoQuerySourceRegistered
+from cramera.live.world_query import WorldQuerySource
 from cramera.live.markers import MarkerEntry, MarkerStore
 from cramera.live.shape_catalog import ShapeEntry, served_mesh_file, shape_entry
 from cramera.live.transforms import TransformGraph, TransformSnapshot
-from cramera.mesh_format import MeshFormat
+from cramera.live.robot_models import RobotModels, RobotSelectionBusy
+from cramera.robot_fields import RobotField
 from cramera.palette import ObjectPalette
 from cramera.robot_parts import RobotPartAnnotation
 
 if TYPE_CHECKING:
+    from coraplex.datastructures.dataclasses import Context
     from coraplex.plans.plan import Plan
     from coraplex.plans.plan_node import MotionNode, PlanNode
     from giskardpy.motion_statechart.motion_statechart import MotionStatechart
@@ -89,6 +93,15 @@ if TYPE_CHECKING:
     from semantic_digital_twin.world_description.world_entity import Body, Connection
 
     from cramera.live.recording import Recording
+
+
+@runtime_checkable
+class PlanExecutionContext(Protocol):
+    """A plan exposing the context that decides whether conditions execute."""
+
+    context: Optional[Context]
+    """Execution settings of the observed plan."""
+
 
 logger = get_logger(__name__)
 
@@ -535,6 +548,13 @@ class PlanNodeEntry:
     """
 
 
+class PlanTreeField(StrEnum):
+    """Fields joining the nodes of a recorded plan hierarchy."""
+
+    CHILDREN = "children"
+    """Nested plan steps in their execution order."""
+
+
 @dataclass(frozen=True)
 class PlanSnapshot:
     """
@@ -562,6 +582,23 @@ class PlanSnapshot:
             for group in PlanNodeGroup.legend()
         ]
         return payload
+
+    def recorded_trees(self) -> List[Dict[str, Any]]:
+        """Reconstruct the recorded hierarchy from the published parent references.
+
+        :return: Plan roots containing their nested children and action metadata.
+        """
+        entries = {
+            node.id: {**asdict(node), PlanTreeField.CHILDREN: []} for node in self.nodes
+        }
+        roots = []
+        for node in self.nodes:
+            entry = entries[node.id]
+            if node.parent in entries:
+                entries[node.parent][PlanTreeField.CHILDREN].append(entry)
+            else:
+                roots.append(entry)
+        return roots
 
 
 @dataclass(frozen=True)
@@ -709,6 +746,9 @@ class Bridge:
     """
     The robot annotation of :attr:`world`, re-discovered on every bind.
     """
+
+    _robot_catalog: list[dict] = field(default_factory=list)
+    """Finished robot-instance metadata read by HTTP handlers."""
 
     sequence_number: int = 0
     """
@@ -938,7 +978,12 @@ class Bridge:
 
         :param world: The world the demo is executing in.
         """
+        if self.world is not world:
+            self._bodies = {}
+            self.robot = None
         self.world = world
+        if self.query_source is None or isinstance(self.query_source, WorldQuerySource):
+            self.query_source = WorldQuerySource(world, self.query_objects)
         self._model_revision += 1
         self.bind()
         self._refresh_bundle_signature()
@@ -999,6 +1044,10 @@ class Bridge:
 
         :param plan: The plan that started performing.
         """
+        if isinstance(plan, PlanExecutionContext) and plan.context is not None:
+            robot = plan.context.robot
+            if robot is not None and robot in RobotModels(self.world).robots():
+                self._select_robot(robot)
         self._plan = plan
         self._motion_nodes.clear()
         self._ever_running.clear()
@@ -1189,10 +1238,25 @@ class Bridge:
 
     def object_keys(self) -> List[str]:
         """
-        Mesh keys of the published loose objects, excluding the robot root.
+        Keys of independently published objects, excluding the robot root.
         """
         with self._lock:
             return [key for key in self._bodies if key != ROBOT_BASE_KEY]
+
+    def query_objects(self) -> List[Body]:
+        """Published loose bodies used for object-specific semantic questions."""
+        with self._lock:
+            published = [
+                body for key, body in self._bodies.items() if key != ROBOT_BASE_KEY
+            ]
+        if self.world is None:
+            return published
+        known_names = {str(body.name) for body in published}
+        return published + [
+            body
+            for body in WorldObjects(self.world, self.robot).free_floating()
+            if str(body.name) not in known_names
+        ]
 
     def mesh_path(self, key: str) -> Optional[str]:
         """
@@ -1217,7 +1281,7 @@ class Bridge:
         A digest of the bundled scene's content: the identity, parentage and connection
         type of every body the live bundle serializes, plus the robot's identity.
 
-        Deliberately excludes the overlay's mesh-named objects — a demo re-parenting a
+        Deliberately excludes the overlay's tracked objects — a demo re-parenting a
         grasped object changes the world model but not the bundled scene, and must not
         make the viewer reload it. State changes never touch it either.
         """
@@ -1230,12 +1294,15 @@ class Bridge:
         if self.world is None:
             self._bundle_signature = ""
             return
-        robot_name = type(self.robot).__name__.lower() if self.robot else None
+        robot_name = RobotModels.identifier(self.robot) if self.robot else None
+        overlay_bodies = {
+            body for key, body in self._bodies.items() if key != ROBOT_BASE_KEY
+        }
         entries: List[str] = []
         try:
             for body in self.world.bodies:
                 name = str(body.name)
-                if MeshFormat.of_path(name.split("/")[-1]) is not None:
+                if body in overlay_bodies:
                     continue
                 connection = body.parent_connection
                 entries.append(
@@ -1431,6 +1498,49 @@ class Bridge:
         )
 
     # %% viewer -> world (teleoperation)
+    def get_robots(self) -> dict[str, Any]:
+        """Return stable instance identities and the currently selected robot."""
+        with self._lock:
+            return {
+                RobotField.ROBOTS: list(self._robot_catalog),
+                RobotField.ACTIVE_IDENTIFIER: (
+                    RobotModels.identifier(self.robot)
+                    if self.robot is not None
+                    else None
+                ),
+            }
+
+    def select_robot(self, identifier: str) -> None:
+        """Select an idle world's robot without resetting any world state.
+
+        :param identifier: Native root namespace of the requested instance.
+        :raises RobotSelectionBusy: If a plan is running or paused.
+        :raises UnknownRobot: If the requested instance is absent.
+        """
+        if any(
+            node.parent is None
+            and node.status in (TaskStatusName.RUNNING, TaskStatusName.PAUSE)
+            for node in self.plan_state.nodes
+        ):
+            raise RobotSelectionBusy(
+                "Wait for the current plan to finish before selecting another robot"
+            )
+        self._select_robot(RobotModels(self.world, self.robot).named(identifier))
+
+    def _select_robot(self, robot: AbstractRobot) -> None:
+        """Publish a selected annotation and release any previous teleop driver.
+
+        :param robot: Native annotation owned by the attached world.
+        """
+        if robot is self.robot:
+            return
+        self.stop_teleop()
+        self._teleop = None
+        self.robot = robot
+        self._bodies[ROBOT_BASE_KEY] = robot.root
+        self._refresh_bundle_signature()
+        self.snapshot()
+
     def queue_teleop(self, request: "TeleopRequest") -> None:
         """
         Feed one streamed hand target to the teleop driver, starting it on first call.
@@ -1984,15 +2094,15 @@ class Bridge:
             return
         self._last_bind_time = time.time()
         robots = world.get_semantic_annotations_by_type(AbstractRobot)
-        self.robot = robots[0] if robots else None
+        if self.robot not in robots:
+            self.robot = robots[0] if robots else None
         self._kinematic_connections = list(world.connections)
         self._connections = self._actuated_connections(self._kinematic_connections)
         bodies: Dict[str, Body] = {}
         if self.robot is not None:
             bodies[ROBOT_BASE_KEY] = self.robot.root
         try:
-            bodies_by_name = {str(body.name): body for body in world.bodies}
-            bodies.update(self._discover_overlay_bodies(bodies_by_name))
+            bodies.update(self._discover_overlay_bodies())
         except Exception as error:
             # boundary guard: the world is mid-modification (a body is being spawned
             # or removed) and iterating it is not safe. Keep the previous catalog
@@ -2003,27 +2113,21 @@ class Bridge:
                 bodies.setdefault(key, body)
         self.publish_bodies(bodies)
 
-    def _discover_overlay_bodies(
-        self, bodies_by_name: Dict[str, Body]
-    ) -> Dict[str, Body]:
+    def _discover_overlay_bodies(self) -> Dict[str, Body]:
         """
         Every world body the overlay renders, keyed the way it is published.
 
-        Bodies named like mesh files are the demo's objects — they spawn, get carried
-        and disappear mid-run, so their poses stream through the overlay. Every other
-        body is part of the bundled scene the viewer loads once.
+        Free objects remain tracked after attachment to the robot or a support until
+        they leave the world. Mesh-named objects retain their existing publication.
 
-        :param bodies_by_name: Every world body by its full name.
+        :return: Present overlay bodies keyed by their local body name.
         """
-        robot_root = self.robot.root if self.robot is not None else None
-        bodies: Dict[str, Body] = {}
-        for full_name, body in bodies_by_name.items():
-            if body is robot_root:
-                continue
-            basename = full_name.split("/")[-1]
-            if MeshFormat.of_path(basename) is not None:
-                bodies[basename] = body
-        return bodies
+        return {
+            str(body.name).split("/")[-1]: body
+            for body in WorldObjects(self.world, self.robot).overlay_bodies(
+                self._bodies.values()
+            )
+        }
 
     @staticmethod
     def _body_shapes(body: Body) -> List[Any]:
@@ -2152,18 +2256,21 @@ class Bridge:
             else:
                 object_poses[name] = rounded_pose(body)
         self._refresh_marker_state()
+        robot_models = RobotModels(self.world, self.robot)
         transforms = self._transforms.observe(
             self._kinematic_connections, self.world, time.monotonic()
         )
         with self._lock:
             self.transform_state = transforms
             self.sequence_number += 1
+            self._robot_catalog = robot_models.catalog()
             self.state = WorldStateSnapshot(
                 sequence_number=self.sequence_number,
                 frames=frames,
                 base=base_pose,
                 objects=object_poses,
                 markers_version=self.marker_state["version"],
+                model_bases=robot_models.root_poses(),
             )
 
     def get_state(self) -> Dict[str, Any]:
@@ -2265,6 +2372,15 @@ class Bridge:
         child_best, children, done = "CREATED", 0, 0
         for child in node.children:
             child_status = self._serialize_plan_node(child, node_id, nodes, order)
+            if (
+                child_status == TaskStatusName.CREATED
+                and PlanNodeGroup.of_plan_node_kind(type(child).__name__)
+                == PlanNodeGroup.CONDITION
+                and isinstance(self._plan, PlanExecutionContext)
+                and self._plan.context is not None
+                and not self._plan.context.evaluate_conditions
+            ):
+                continue
             child_best = self._max_status(child_best, child_status)
             children += 1
             if child_status == "SUCCEEDED":

@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 
 try:
     import rclpy
-    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.executors import SingleThreadedExecutor, ExternalShutdownException
     from rclpy.qos import DurabilityPolicy, QoSProfile
     from visualization_msgs.msg import MarkerArray
 
@@ -116,8 +116,17 @@ class RosMarkerListener:
             self.subscribe(topic)
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
-        threading.Thread(target=self._executor.spin, daemon=True).start()
+        threading.Thread(target=self.spin_until_context_ends, daemon=True).start()
         logger.info("watching markers on %s", ", ".join(self.topics))
+
+    def spin_until_context_ends(self) -> None:
+        """
+        Deliver markers until the executor or its shared ROS context stops.
+        """
+        try:
+            self._executor.spin()
+        except ExternalShutdownException:
+            pass
 
     def subscribe(self, topic: str) -> None:
         """

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 from dataclasses import field, dataclass
+from datetime import datetime
 
 import rustworkx as rx
 import rustworkx.visualization
@@ -18,6 +19,7 @@ from typing_extensions import (
 )
 
 from coraplex.plans.plan_entity import PlanEntity
+from coraplex.datastructures.enums import TaskStatus
 from coraplex.plans.plan_node import (
     PlanNode,
     ActionNode,
@@ -269,6 +271,13 @@ class Plan:
 
         :param node: The node that started.
         """
+        for ancestor in reversed(node.path):
+            if ancestor.status == TaskStatus.CREATED:
+                ancestor.status = TaskStatus.RUNNING
+                ancestor.start_time = datetime.now()
+                ancestor.end_time = None
+                for callback in self.node_callbacks:
+                    callback.on_start(ancestor)
         for callback in self.node_callbacks:
             callback.on_start(node)
 
@@ -280,6 +289,32 @@ class Plan:
         """
         for callback in self.node_callbacks:
             callback.on_end(node)
+        self._complete_collapsed_ancestors(node)
+
+    def _complete_collapsed_ancestors(self, node: PlanNode) -> None:
+        """
+        Complete ancestors represented by their children's executables.
+
+        :param node: Child whose terminal lifecycle was just reported.
+        """
+        for ancestor in node.path:
+            if ancestor._execution_in_progress:
+                break
+            if ancestor.status not in (TaskStatus.CREATED, TaskStatus.RUNNING):
+                continue
+            status = ancestor.completed_children_status
+            if status is None:
+                continue
+            ancestor.status = status
+            ancestor.end_time = datetime.now()
+            if status == TaskStatus.FAILED:
+                ancestor.reason = next(
+                    child.reason
+                    for child in ancestor.execution_children
+                    if child.status == TaskStatus.FAILED
+                )
+            for callback in self.node_callbacks:
+                callback.on_end(ancestor)
 
     def notify_motion_tick(self, statechart: MotionStatechart) -> None:
         """

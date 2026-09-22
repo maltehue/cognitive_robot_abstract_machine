@@ -22,6 +22,10 @@ from coraplex.datastructures.enums import (
     MovementType,
 )
 from coraplex.datastructures.grasp import GraspDescription
+from coraplex.datastructures.manipulation_contacts import (
+    HasManipulationContactPolicy,
+    ManipulationContactPolicy,
+)
 from coraplex.plans.factories import sequential
 from coraplex.querying.predicates import GripperIsFree
 from coraplex.robot_plans.actions.base import ActionDescription
@@ -160,7 +164,10 @@ class ReachAction(ActionDescription, ReachTuningParameters, HasGraspDetectionThr
 
 @dataclass
 class PickUpAction(
-    ActionDescription, PickUpTuningParameters, HasGraspDetectionThreshold
+    ActionDescription,
+    PickUpTuningParameters,
+    HasGraspDetectionThreshold,
+    HasManipulationContactPolicy,
 ):
     """
     Let the robot pick up an object.
@@ -191,6 +198,19 @@ class PickUpAction(
     -- it crashes on Tracy's real-execution gripper, whose connections do not all have
     one.
     """
+
+    @property
+    def manipulation_contact_policy(self) -> ManipulationContactPolicy:
+        """
+        Permit grasp contact with the selected object at its support.
+        """
+        return ManipulationContactPolicy(
+            self.object_designator,
+            ViewManager.get_end_effector_view(
+                self.arm, self.robot
+            ).bodies_with_collision,
+            self.object_designator.global_pose,
+        )
 
     def _grasp_attempt_plan(self) -> PlanNode:
         """
@@ -237,7 +257,6 @@ class PickUpAction(
                 MoveToolCenterPointMotion(
                     lift_to_pose,
                     self.arm,
-                    allow_gripper_collision=True,
                     movement_type=MovementType.TRANSLATION,
                     max_linear_velocity=self.lift_linear_velocity,
                 ),

@@ -69,11 +69,28 @@
       .sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
   }
 
+  // %% initial selection
+  class SceneSelection {
+    /** @param {object} index Recordings advertised by the local scenes index. */
+    constructor(index) {
+      this.index = index;
+    }
+
+    /** Keep explicit URLs; otherwise resolve an available initial recording. */
+    resolve(requested) {
+      if (requested) return requested;
+      const scenes = this.index.scenes || [];
+      const preferred = scenes.find(scene => scene.name === this.index.default);
+      return preferred ? preferred.name : scenes.length ? scenes[0].name : null;
+    }
+  }
+
   window.ScenePicker = {
     robots: robots,
     environments: environments,
     sceneFor: sceneFor,
     describe: describe,
     options: options,
+    Selection: SceneSelection,
   };
 })();

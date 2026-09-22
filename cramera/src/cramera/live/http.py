@@ -76,6 +76,8 @@ from cramera.live.query import NoQuerySourceRegistered
 from cramera.live.frame_range import FrameRange, InvalidFrameRange
 from cramera.live.live_bundle import build_live_scene
 from cramera.live.recording import Recording, RecordingState
+from cramera.live.robot_models import RobotSelectionBusy, UnknownRobot
+from cramera.robot_fields import RobotField
 from cramera.live.recording_bundle import finalize_recording
 from cramera.live.recording_storage import (
     NoSavedRecording,
@@ -140,6 +142,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         """
         if self.path.startswith("/state"):
             return self._send_json(self.bridge.get_state())
+        if self.path == "/robots":
+            return self._send_json(self.bridge.get_robots())
         if self.path.startswith("/plan"):
             return self._send_json(self.bridge.get_plan())
         if self.path.startswith("/chart"):
@@ -295,6 +299,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         Entry point :class:`~http.server.BaseHTTPRequestHandler` dispatches a ``POST``
         request to, found by name as ``"do_" + self.command``.
         """
+        if self.path == "/robot":
+            return self.select_requested_robot()
         if self.path.startswith("/eql"):
             return self.answer_requested_query()
         if self.path.startswith("/question"):
@@ -316,6 +322,24 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/teleop"):
             return self.queue_requested_teleop()
         self.queue_requested_move()
+
+    def select_requested_robot(self) -> None:
+        """
+        Select an existing robot instance without replacing the live world.
+        """
+        payload = self._posted_payload()
+        identifier = payload.get(RobotField.IDENTIFIER) if payload else None
+        if not isinstance(identifier, str) or not identifier:
+            return self._send_json(
+                {"ok": False, "error": "A robot identifier is required"}, code=400
+            )
+        try:
+            self.bridge.select_robot(identifier)
+        except UnknownRobot as error:
+            return self._send_json({"ok": False, "error": str(error)}, code=400)
+        except (RobotSelectionBusy, TeleopUnavailable) as error:
+            return self._send_json({"ok": False, "error": str(error)}, code=409)
+        return self._send_json({"ok": True, **self.bridge.get_robots()})
 
     def _posted_payload(self) -> Optional[Dict[str, Any]]:
         """
@@ -504,7 +528,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         """
         Feed one streamed hand target to the live teleop driver.
 
-        Validated on the HTTP thread; the driver does the world writes on its own thread.
+        Validated on the HTTP thread; the driver does the world writes on its own
+        thread.
         """
         payload = self._posted_payload()
         if payload is None:
@@ -522,7 +547,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         return self._send_json({"ok": True})
 
     def _stop_teleop(self) -> None:
-        """Stop the live teleop driver; the arm holds its last pose."""
+        """
+        Stop the live teleop driver; the arm holds its last pose.
+        """
         self.bridge.stop_teleop()
         return self._send_json({"ok": True})
 

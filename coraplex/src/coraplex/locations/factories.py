@@ -8,6 +8,7 @@ from krrood.adapters.json_serializer import list_like_classes
 from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import Arms, ApproachDirection, VerticalAlignment
 from coraplex.datastructures.grasp import GraspDescription
+from coraplex.datastructures.manipulation_contacts import ManipulationContactPolicy
 from coraplex.locations.backends import GiskardLocationBackend
 from coraplex.locations.base import Location
 from coraplex.locations.costmaps import OccupancyCostmap, RingCostmap, VisibilityCostmap
@@ -89,8 +90,16 @@ def reachability_location(
     grasp_description = grasp_description or GraspDescription.robot_relative_default(
         man, target_pose, target_body
     )
+    held_body = _get_object_in_hand(context.robot, context.world, arm)
+    contact_body = target_body if target_body is not None else held_body
+    pose_sequence = (
+        grasp_description.place_pose_sequence(target_pose, held_body)
+        if isinstance(target, Pose) and held_body is not None
+        else grasp_description.pose_sequence(target_pose, target_body)
+    )
 
-    costmap = OccupancyCostmap.default_map(context, target_pose) & RingCostmap(
+    world_T_target = context.world.transform(target_pose, context.world.root)
+    costmap = OccupancyCostmap.default_map(context, world_T_target) & RingCostmap(
         resolution=0.02,
         width=200,
         height=200,
@@ -98,7 +107,7 @@ def reachability_location(
         distance=ViewManager.get_arm_view(arm, context.robot).approximate_length()
         * 0.66,  # That needs to be replaced with an estimate of the reachability space of the robot arms
         world=context.world,
-        origin=target_pose,
+        origin=world_T_target,
     )
     return Location(
         context,
@@ -106,16 +115,15 @@ def reachability_location(
         costmap,
         [
             AreReachableBy(
-                pose_sequence=grasp_description.pose_sequence(
-                    target_pose,
-                    _get_object_in_hand(context.robot, context.world, arm)
-                    or target_body,
-                ),
+                pose_sequence=pose_sequence,
                 tip_link=man.tool_frame,
-                context=Context(
-                    world=context.world,
-                    robot=context.robot,
-                    alternative_motion_mappings=context.alternative_motion_mappings,
+                context=context,
+                contact_policy=(
+                    ManipulationContactPolicy(
+                        contact_body, man.bodies_with_collision, target_pose
+                    )
+                    if contact_body is not None
+                    else None
                 ),
             )
         ],

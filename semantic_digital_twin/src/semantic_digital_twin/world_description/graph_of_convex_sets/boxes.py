@@ -22,6 +22,7 @@ from semantic_digital_twin.datastructures.variables import SpatialVariables
 from semantic_digital_twin.exceptions import PointOccupiedError
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     SemanticEnvironmentAnnotation,
+    Agent,
 )
 from semantic_digital_twin.spatial_types import (
     HomogeneousTransformationMatrix,
@@ -307,11 +308,11 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
         """
         Drop waypoints that a straight line can bypass without leaving free space.
 
-        Greedily extends the current anchor waypoint forward as far as a straight
-        line to it stays collision-free, then commits the farthest waypoint still
-        visible from it and continues from there (classic "string pulling"). Each
-        waypoint is tested against the current anchor at most once, so this is
-        linear in the number of waypoints rather than quadratic.
+        Greedily extends the current anchor waypoint forward as far as a straight line
+        to it stays collision-free, then commits the farthest waypoint still visible
+        from it and continues from there (classic "string pulling"). Each waypoint is
+        tested against the current anchor at most once, so this is linear in the number
+        of waypoints rather than quadratic.
 
         :param waypoints: The waypoints of a path, in the search space's reference
             frame.
@@ -416,9 +417,6 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
         :return: An event representing the obstacles in the search space, or None if no
             obstacles are found.
         """
-        if not keep_z:
-            search_space_event = search_space_event.marginal(SpatialVariables.xy)
-
         events = (
             bb.simple_event.as_composite_set() & search_space_event
             for bb in bounding_boxes
@@ -462,16 +460,20 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
         :param keep_z: If True, the z-axis is kept. Default is True.
         :return: The free space as a disjoint Event.
         """
-        if not keep_z:
-            search_space_event = search_space_event.marginal(SpatialVariables.xy)
-
-        free_space = search_space_event
+        free_space = (
+            search_space_event
+            if keep_z
+            else search_space_event.marginal(SpatialVariables.xy)
+        )
         for bounding_box in bounding_boxes:
-            obstacle = bounding_box.simple_event.as_composite_set()
-            if not keep_z:
-                obstacle = obstacle.marginal(SpatialVariables.xy)
-            obstacle_in_search = obstacle & search_space_event
+            obstacle_in_search = (
+                bounding_box.simple_event.as_composite_set() & search_space_event
+            )
             if not obstacle_in_search.is_empty():
+                if not keep_z:
+                    obstacle_in_search = obstacle_in_search.marginal(
+                        SpatialVariables.xy
+                    )
                 free_space = free_space.subtract_disjoint(obstacle_in_search)
             if free_space.is_empty():
                 break
@@ -602,6 +604,8 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
         tolerance=0.001,
         bloat_obstacles: float = 0.0,
         bloat_walls: float = 0.0,
+        vertical_inflation: float = 0.01,
+        excluded_agents: list[Agent] | None = None,
     ) -> Self:
         """
         Create a GCS from the free space in the belief state of the robot for
@@ -619,8 +623,10 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
             connectivity.
         :param bloat_obstacles: The amount to bloat the obstacles.
         :param bloat_walls: The amount to bloat the walls.
-        :return: The connectivity graph. If no obstacles are found, an empty graph is
-            returned.
+        :param vertical_inflation: Symmetric expansion of obstacle and wall heights.
+        :param excluded_agents: Agents excluded from obstacles; None excludes all
+            agents.
+        :return: The connectivity graph, including the full search space when empty.
         """
         nav_obstacles = cls._build_bloated_obstacle_collection(
             search_space,
@@ -628,22 +634,41 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
             semantic_wall_annotation,
             bloat_obstacles,
             bloat_walls,
+            vertical_inflation,
+            excluded_agents,
         )
 
-        if not nav_obstacles:
-            return cls(
-                world=search_space.reference_frame._world, search_space=search_space
-            )
+        return cls.navigation_map_from_bounding_boxes(
+            search_space, nav_obstacles, tolerance
+        )
 
+    @classmethod
+    def navigation_map_from_bounding_boxes(
+        cls,
+        search_space: BoundingBoxCollection,
+        nav_obstacles: BoundingBoxCollection,
+        tolerance: float = 0.001,
+    ) -> Self:
+        """
+        Construct planar connectivity from already expanded collision boxes.
+
+        :param search_space: Finite region in which the base may navigate.
+        :param nav_obstacles: Forbidden base positions, including footprint clearance.
+        :param tolerance: Tolerance used to locate adjacent free-space boxes.
+        :return: Existing GCS representation of the planar free space.
+        :raises ValueError: If search space and obstacles use different frames.
+        """
+        if nav_obstacles.reference_frame is not search_space.reference_frame:
+            raise ValueError(
+                "Search space and obstacles must use the same reference frame."
+            )
         # Remove the z-axis so free-space is computed on the 2-D floor plane.
         full_search_event = search_space.event
-        search_event = full_search_event.marginal(SpatialVariables.xy)
 
         free_space = cls.free_space_from_bounding_boxes(
             nav_obstacles, full_search_event, keep_z=False
         )
 
-        SimpleEvent.from_data({SpatialVariables.z.value: reals()})
         # create floor level
         z_event = SimpleEvent.from_data(
             {SpatialVariables.z.value: reals()}
@@ -673,6 +698,8 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
         tolerance=0.001,
         search_space: Optional[BoundingBoxCollection] = None,
         bloat_obstacles: float = 0.0,
+        vertical_inflation: float = 0.01,
+        excluded_agents: list[Agent] | None = None,
     ) -> Self:
         """
         Create a GCS from the free space in the belief state of the robot for
@@ -686,6 +713,9 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
         :param tolerance: The tolerance for the intersection when calculating the
             connectivity.
         :param bloat_obstacles: The amount to bloat the obstacles.
+        :param vertical_inflation: Symmetric expansion of obstacle heights.
+        :param excluded_agents: Agents excluded from obstacles; None excludes all
+            agents.
         :return: The connectivity graph.
         """
         semantic_annotation = SemanticEnvironmentAnnotation(
@@ -697,6 +727,8 @@ class GraphOfBoundingBoxes(GraphOfConvexSets):
             semantic_annotation,
             tolerance=tolerance,
             bloat_obstacles=bloat_obstacles,
+            vertical_inflation=vertical_inflation,
+            excluded_agents=excluded_agents,
         )
 
     @property

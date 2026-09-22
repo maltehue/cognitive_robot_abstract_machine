@@ -148,6 +148,31 @@ function loadPanel(responses, search) {
 }
 
 // %% live plan colour groups
+test('the plan tab connects live when a recorded payload has no live flag', async function () {
+  const panel = loadPanel({
+    '/api/knowledge': { ok: true, nodes: [], edges: [], details: {} },
+    '/api/knowledge/view?name=plan': { ok: true, nodes: [], edges: [], details: {} },
+    'http://bridge/plan': {
+      signature: 'running-plan',
+      nodes: [{ id: 'motion', kind: 'MotionNode', label: 'Move', status: 'RUNNING', group: 'motion' }],
+      legend: [],
+    },
+  });
+  const root = makeRoot();
+  const bus = makeBus();
+  const instance = panel.factory(root, bus);
+  try {
+    await flush();
+    root.buttons.find(function (button) { return button.dataset.view === 'plan'; }).click();
+    await flush();
+    bus.emit('live:changed', { on: true, url: 'http://bridge' });
+    await flush();
+    assert.deepStrictEqual(panel.lastBuild().nodes.map(function (node) { return node.id; }), ['motion']);
+  } finally {
+    instance.destroy();
+  }
+});
+
 // the bridge classifies plan nodes now (knowledge/enums.py's PlanNodeGroup); the panel
 // only has to pass the group through, legend included
 test('a live plan is drawn with the groups and legend the bridge sent', async function () {

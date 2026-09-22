@@ -101,6 +101,7 @@ class GraphOfConvexSets(ABC):
         cls,
         search_space: BoundingBoxCollection,
         semantic_obstacle_annotation: SemanticAnnotation,
+        excluded_agents: list[Agent] | None = None,
     ) -> List[Body]:
         """
         Collect the obstacle bodies to consider from a semantic annotation.
@@ -112,11 +113,17 @@ class GraphOfConvexSets(ABC):
             the owning world.
         :param semantic_obstacle_annotation: The annotation containing obstacle
             entities.
+        :param excluded_agents: Agents whose bodies are excluded. None excludes all
+            agents.
         :return: The obstacle bodies to consider.
         """
         world = search_space.reference_frame._world
 
-        agents = world.get_semantic_annotations_by_type(Agent)
+        agents = (
+            world.get_semantic_annotations_by_type(Agent)
+            if excluded_agents is None
+            else excluded_agents
+        )
         agent_entities = set()
         for agent in agents:
             agent_entities.update(agent.kinematic_structure_entities)
@@ -137,6 +144,8 @@ class GraphOfConvexSets(ABC):
         semantic_wall_annotation: Optional[SemanticAnnotation] = None,
         bloat_obstacles: float = 0.0,
         bloat_walls: float = 0.0,
+        vertical_inflation: float = 0.01,
+        excluded_agents: list[Agent] | None = None,
     ) -> BoundingBoxCollection:
         """
         Collect and bloat obstacle bounding boxes from semantic annotations.
@@ -153,13 +162,16 @@ class GraphOfConvexSets(ABC):
             symmetrically in x and y.
         :param bloat_walls: Amount to expand wall bounding boxes in their thinner
             dimension.
+        :param vertical_inflation: Symmetric expansion of obstacle and wall heights.
+        :param excluded_agents: Agents excluded from obstacles; None excludes all
+            agents.
         :return: A BoundingBoxCollection of the bloated obstacle and wall bounding
             boxes.
         """
         world_root = search_space.reference_frame
 
         entities_to_consider = cls._obstacle_entities(
-            search_space, semantic_obstacle_annotation
+            search_space, semantic_obstacle_annotation, excluded_agents
         )
 
         collections = [
@@ -177,7 +189,7 @@ class GraphOfConvexSets(ABC):
 
         bloated_obstacles = BoundingBoxCollection(
             [
-                bounding_box.bloat(bloat_obstacles, bloat_obstacles, 0.01)
+                bounding_box.bloat(bloat_obstacles, bloat_obstacles, vertical_inflation)
                 for bounding_box in obstacle_bounding_boxes
             ],
             world_root,
@@ -187,9 +199,9 @@ class GraphOfConvexSets(ABC):
             bloated_walls: BoundingBoxCollection = BoundingBoxCollection(
                 [
                     (
-                        bounding_box.bloat(bloat_walls, 0, 0.01)
+                        bounding_box.bloat(bloat_walls, 0, vertical_inflation)
                         if bounding_box.width > bounding_box.depth
-                        else bounding_box.bloat(0, bloat_walls, 0.01)
+                        else bounding_box.bloat(0, bloat_walls, vertical_inflation)
                     )
                     for bounding_box in semantic_wall_annotation.as_bounding_box_collection_at_origin(
                         HomogeneousTransformationMatrix(reference_frame=world_root)

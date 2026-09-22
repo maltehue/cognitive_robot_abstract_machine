@@ -22,7 +22,7 @@ from coraplex.alternative_motion_mapping import AlternativeMotion
 from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import ExecutionType, VisualizationBackend
 from coraplex.execution_environment import ExecutionEnvironment
-from coraplex.plans.plan_node import PlanNode
+from coraplex.plans.plan import Plan
 from coraplex.visualization import WorldVisualization
 from semantic_digital_twin.adapters.ros.world_fetcher import fetch_world_from_service
 from semantic_digital_twin.adapters.ros.world_synchronizer import WorldSynchronizer
@@ -226,9 +226,12 @@ class RobotDemonstration(ABC):
         """
 
     @abstractmethod
-    def build_plan(self, context: Context) -> PlanNode:
+    def build_plan(self, context: Context) -> Plan:
         """
         Build the plan this demonstration performs.
+
+        :param context: Robot and world used to resolve the authored actions.
+        :return: Executable plan including its callbacks and root action node.
         """
 
     @property

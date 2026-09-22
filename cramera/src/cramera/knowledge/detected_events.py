@@ -54,6 +54,10 @@ class SceneField(StrEnum):
     TASK = "task"
     ROBOT_NAME = "robotName"
     ENVIRONMENT_NAME = "environmentName"
+    PLAN_TREES = "planTrees"
+    """
+    Executed plan hierarchies available during recorded playback.
+    """
 
 
 class EventField(StrEnum):

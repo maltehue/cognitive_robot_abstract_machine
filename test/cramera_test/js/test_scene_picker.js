@@ -122,3 +122,28 @@ test('options() is empty without any scenes', function () {
   assert.deepStrictEqual(window.ScenePicker.options([]), []);
   assert.deepStrictEqual(window.ScenePicker.options(undefined), []);
 });
+
+// %% initial selection
+test('a removed default opens the first available recording', function () {
+  load();
+  const selection = new window.ScenePicker.Selection({default: 'removed', scenes: SCENES});
+  assert.strictEqual(selection.resolve(null), SCENES[0].name);
+});
+
+test('an explicit live or recording URL takes precedence over the index', function () {
+  load();
+  const selection = new window.ScenePicker.Selection({default: SCENES[0].name, scenes: SCENES});
+  assert.strictEqual(selection.resolve('__live__'), '__live__');
+});
+
+test('a valid default remains selected', function () {
+  load();
+  const selection = new window.ScenePicker.Selection({default: SCENES[1].name, scenes: SCENES});
+  assert.strictEqual(selection.resolve(null), SCENES[1].name);
+});
+
+test('an empty index has no initial scene', function () {
+  load();
+  const selection = new window.ScenePicker.Selection({});
+  assert.strictEqual(selection.resolve(null), null);
+});

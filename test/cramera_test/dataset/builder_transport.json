@@ -1,0 +1,17 @@
+{
+  "objects": [
+    {"id": "o3", "name": "milk.stl", "mesh": "milk.stl", "x": 2.37, "y": 2.0, "z": 1.05, "color": "#caa1ff"}
+  ],
+  "captured": {"milk.stl": [2.37, 2.1, 1.05, 0, 0, 0, 1]},
+  "robotXY": {"x": 1.0, "y": 2.5},
+  "selections": {
+    "pb-robot": "PR2",
+    "pb-env": "apartment.urdf",
+    "pb-name": "builder_transport_acceptance"
+  },
+  "steps": [
+    {"id": "s1", "type": "park_arms", "params": {"arm": "BOTH"}, "constraints": []},
+    {"id": "s2", "type": "move_torso", "params": {"torso": "HIGH"}, "constraints": []},
+    {"id": "s3", "type": "transport", "params": {"object": "milk.stl", "arm": "LEFT", "targetMode": "semantic", "surfaceType": "Table", "surfaceName": "apartment/table_area_main"}, "constraints": []}
+  ]
+}

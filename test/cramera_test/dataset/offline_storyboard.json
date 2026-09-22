@@ -1,0 +1,16 @@
+{
+  "title": "Recorded presentation",
+  "description": "A local recording with its plan.",
+  "chapters": [
+    {
+      "title": "Transport",
+      "narration": "Follow the recorded plan hierarchy.",
+      "scene": "fixture",
+      "view": "plan",
+      "query": null,
+      "playback": true,
+      "speed": 0.5,
+      "durationSeconds": 1
+    }
+  ]
+}

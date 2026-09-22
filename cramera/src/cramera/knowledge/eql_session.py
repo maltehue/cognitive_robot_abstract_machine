@@ -22,6 +22,7 @@ from cramera.knowledge.entities import (
 from cramera.knowledge.detected_events import EVENT_VARIABLE, DetectedEventRecord
 from cramera.knowledge.knowledge_base import EpisodeKnowledgeBase
 from cramera.knowledge.query_domain import QueryDomain
+from cramera.spatial_annotations import SpatialEntity
 from cramera.knowledge.query_runner import (
     DEFAULT_ROW_LIMIT,
     EqlQueryRunner,
@@ -64,6 +65,21 @@ class EqlSession:
         One ready-made query variable per entity type of the recorded episode.
         """
         return [
+            QueryDomain(
+                "annotation",
+                SpatialEntity,
+                self.knowledge_base.spatial_annotations.entities,
+            ),
+            QueryDomain(
+                "handle",
+                SpatialEntity,
+                self.knowledge_base.spatial_annotations.of_type("Handle"),
+            ),
+            QueryDomain(
+                "surface",
+                SpatialEntity,
+                self.knowledge_base.spatial_annotations.of_type("HasSupportingSurface"),
+            ),
             QueryDomain("scene_object", BenchObject, self.knowledge_base.objects),
             QueryDomain("episode", ActionEpisode, self.knowledge_base.episodes),
             QueryDomain("arm", Arm, self.knowledge_base.arms),
@@ -71,7 +87,7 @@ class EqlSession:
             QueryDomain(
                 EVENT_VARIABLE, DetectedEventRecord, self.knowledge_base.detected_events
             ),
-            QueryDomain("robot", Robot, [self.knowledge_base.robot]),
+            QueryDomain("robot", Robot, self.knowledge_base.robots),
             QueryDomain("package", Package, self.knowledge_base.packages),
             QueryDomain("subpackage", SubPackage, self.knowledge_base.subpackages),
             QueryDomain("python_class", PythonClass, self.knowledge_base.classes),
@@ -84,6 +100,7 @@ class EqlSession:
         return EqlQueryRunner(
             domains=self.domains(),
             extra_names={
+                "placement_region": self.knowledge_base.spatial_annotations.placement_region,
                 "Point3": Point3,
                 "Gripper": Gripper,
                 "objects": self.knowledge_base.objects,
@@ -92,7 +109,7 @@ class EqlSession:
                 "grippers": self.knowledge_base.grippers,
                 "joints": self.knowledge_base.joints,
                 "events": self.knowledge_base.detected_events,
-                "robots": [self.knowledge_base.robot],
+                "robots": self.knowledge_base.robots,
                 "packages": self.knowledge_base.packages,
                 "subpackages": self.knowledge_base.subpackages,
                 "classes": self.knowledge_base.classes,

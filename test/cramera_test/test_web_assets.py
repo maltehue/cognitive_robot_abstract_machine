@@ -292,12 +292,17 @@ class TestPlanBuilderExecutionChoice:
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 class TestJsUnits:
-    def run_node(self, name: str) -> None:
+    def run_node(self, name: str, test_name: str = "") -> None:
         """
         Run one node test file, failing with its output.
+
+        :param name: JavaScript test file to execute.
+        :param test_name: Optional test-name selection within the file.
         """
         result = subprocess.run(
-            ["node", "--test", str(JS_DIR / name)],
+            ["node", "--test"]
+            + (["--test-name-pattern", test_name] if test_name else [])
+            + [str(JS_DIR / name)],
             capture_output=True,
             text=True,
             timeout=120,
@@ -390,6 +395,12 @@ class TestJsUnits:
 
     def test_plan_constraints(self):
         self.run_node("test_plan_constraints.js")
+
+    def test_eql_panel(self) -> None:
+        """
+        Exercise question selection and spatial answer publication in the browser panel.
+        """
+        self.run_node("test_eql_panel.js", "query geometry")
 
 
 # %% replayed statecharts

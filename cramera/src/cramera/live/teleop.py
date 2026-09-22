@@ -36,7 +36,14 @@ from cramera.logging_setup import get_logger
 logger = get_logger(__name__)
 
 RATE_HZ = 30.0
-"""How often the driver servos the arm toward its target."""
+"""
+How often the driver servos the arm toward its target.
+"""
+
+STOP_TIMEOUT_SECONDS = 2.0
+"""
+Maximum time a pending servo tick may take to release its robot.
+"""
 
 MAX_STEP_METRES = 0.03
 """
@@ -47,7 +54,9 @@ solve converges every tick; at the rate above this still allows ~0.9 m/s of hand
 """
 
 IK_MAX_ITERATIONS = 60
-"""Iterations the per-tick solve is given -- a near step converges in far fewer."""
+"""
+Iterations the per-tick solve is given -- a near step converges in far fewer.
+"""
 
 # Where each arm's normalised [-1, 1] cube lands, as (centre, half-extent) in the arm's
 # root frame (the torso for a PR2), in metres. Sized to the comfortable reach measured on
@@ -59,25 +68,37 @@ WORKSPACE: Dict[str, Tuple[Tuple[float, float, float], Tuple[float, float, float
 
 
 class MalformedTeleopRequest(Exception):
-    """Raised when a teleop payload cannot be read."""
+    """
+    Raised when a teleop payload cannot be read.
+    """
 
 
 class TeleopUnavailable(Exception):
-    """Raised when teleop is requested before a live robot is bound."""
+    """
+    Raised when teleop is requested before a live robot is bound.
+    """
 
 
 @dataclass(frozen=True)
 class TeleopRequest:
-    """One hand target: which arm, and where in its normalised workspace it points."""
+    """
+    One hand target: which arm, and where in its normalised workspace it points.
+    """
 
     arm: str
-    """``"left"`` or ``"right"``."""
+    """
+    ``"left"`` or ``"right"``.
+    """
 
     position: List[float]
-    """Target ``[x, y, z]`` in ``[-1, 1]``, mapped onto the arm's workspace box."""
+    """
+    Target ``[x, y, z]`` in ``[-1, 1]``, mapped onto the arm's workspace box.
+    """
 
     gripper: Optional[float] = None
-    """How far the gripper is opened, ``0`` shut to ``1`` wide, or None to leave it be."""
+    """
+    How far the gripper is opened, ``0`` shut to ``1`` wide, or None to leave it be.
+    """
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> TeleopRequest:
@@ -108,21 +129,29 @@ class TeleopRequest:
 
 @dataclass
 class _ArmChain:
-    """The cached handles a servo tick needs for one arm."""
+    """
+    The cached handles a servo tick needs for one arm.
+    """
 
     root: Any
     tip: Any
     centre: np.ndarray
     half_extent: np.ndarray
     orientation: List[float]
-    """The end effector's start orientation ``[qx, qy, qz, qw]``, held fixed while
-    teleoperating so a client only has to command a position."""
+    """
+    The end effector's start orientation ``[qx, qy, qz, qw]``, held fixed while
+    teleoperating so a client only has to command a position.
+    """
 
     gripper_connections: List[Any] = None
     gripper_closed: List[float] = None
     gripper_open: List[float] = None
-    """The gripper's finger connections and their shut/wide target values, so a commanded
-    opening amount interpolates between them. Empty when the arm has no known gripper."""
+    """
+    The gripper's finger connections and their shut/wide target values, so a commanded
+    opening amount interpolates between them.
+
+    Empty when the arm has no known gripper.
+    """
 
 
 class TeleopController:
@@ -135,7 +164,9 @@ class TeleopController:
         the teleop driver can stand aside rather than fight it for the world.
     """
 
-    def __init__(self, world: World, robot: AbstractRobot, is_busy=lambda: False) -> None:
+    def __init__(
+        self, world: World, robot: AbstractRobot, is_busy=lambda: False
+    ) -> None:
         self._world = world
         self._robot = robot
         self._is_busy = is_busy
@@ -161,10 +192,19 @@ class TeleopController:
                 self._thread.start()
 
     def stop(self) -> None:
-        """Stop driving; the arm holds its last pose."""
+        """
+        Finish the current servo tick and release the robot.
+
+        :raises TeleopUnavailable: If a pending tick cannot stop within its time budget.
+        """
         with self._lock:
             self._active = False
             self._targets.clear()
+            worker = self._thread
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=STOP_TIMEOUT_SECONDS)
+            if worker.is_alive():
+                raise TeleopUnavailable("The previous hand control has not stopped yet")
 
     def _run(self) -> None:
         period = 1.0 / RATE_HZ
@@ -206,7 +246,10 @@ class TeleopController:
                 step = step / distance * MAX_STEP_METRES
             stepped = current + step
             target = HomogeneousTransformationMatrix.from_xyz_quaternion(
-                stepped[0], stepped[1], stepped[2], *chain.orientation,
+                stepped[0],
+                stepped[1],
+                stepped[2],
+                *chain.orientation,
                 reference_frame=chain.root,
             )
             try:
@@ -222,7 +265,9 @@ class TeleopController:
             self._world.notify_state_change(publish_changes=True)
 
     def _tip_in_root(self, chain: _ArmChain) -> List[float]:
-        """The end effector's pose in its root frame as ``[x, y, z, qx, qy, qz, qw]``."""
+        """
+        The end effector's pose in its root frame as ``[x, y, z, qx, qy, qz, qw]``.
+        """
         root_T_world = chain.root.global_pose.to_homogeneous_matrix().inverse()
         world_T_tip = chain.tip.global_pose.to_homogeneous_matrix()
         return (root_T_world @ world_T_tip).to_position_quaternion_list()
@@ -231,7 +276,7 @@ class TeleopController:
         """
         The cached chain for an arm, resolved and measured on first use.
 
-        :param name: ``"left"`` or ``"right"``.
+        :param name:``"left"`` or ``"right"``.
         """
         if name in self._chains:
             return self._chains[name]
@@ -244,9 +289,16 @@ class TeleopController:
         if arm is not None:
             centre, half = WORKSPACE[name]
             root, tip = arm.root, arm.end_effector.tool_frame
-            chain = _ArmChain(root=root, tip=tip, centre=np.asarray(centre),
-                              half_extent=np.asarray(half), orientation=[0, 0, 0, 1],
-                              gripper_connections=[], gripper_closed=[], gripper_open=[])
+            chain = _ArmChain(
+                root=root,
+                tip=tip,
+                centre=np.asarray(centre),
+                half_extent=np.asarray(half),
+                orientation=[0, 0, 0, 1],
+                gripper_connections=[],
+                gripper_closed=[],
+                gripper_open=[],
+            )
             chain.orientation = self._tip_in_root(chain)[3:]
             self._resolve_gripper(arm, chain)
         else:

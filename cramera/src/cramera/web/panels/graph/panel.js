@@ -531,6 +531,7 @@ Panels.define('graph', function (root, bus) {
   tabsEl.querySelectorAll('button').forEach(function (b) {
     b.addEventListener('click', function () { showTab(b.dataset.view); });
   });
+  bus.on('graph:view', function (payload) { showTab(payload.name); });
 
   // %% node click → describe in whatever panel listens
   function select(id) {
@@ -590,6 +591,7 @@ Panels.define('graph', function (root, bus) {
   let liveState = { on: false, url: '' };
 
   function liveSource() {
+    if (tab === 'plan') return 'plan';
     const p = shown[tab] || base[tab];
     return (p && p.live) || null;               // 'plan' | 'chart' | null
   }

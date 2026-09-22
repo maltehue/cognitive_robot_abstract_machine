@@ -1,11 +1,10 @@
-from __future__ import annotations
-
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import timedelta
 from typing import List
 
 from typing_extensions import Optional, Any
 
+from krrood.entity_query_language.query.match import Match
 from krrood.entity_query_language.factories import (
     a,
     an,
@@ -46,9 +45,9 @@ class TransportAction(ActionDescription):
     transported.
     """
 
-    target_location: Pose
+    target_location: Pose | Iterable[Pose]
     """
-    Target Location to which the object should be transported.
+    Destination pose or lazy alternatives tried after acquiring the object.
     """
 
     arm: Arms
@@ -86,7 +85,9 @@ class TransportAction(ActionDescription):
             return []
         return [LookAtAction(pose)]
 
-    def _make_open_container_actions(self, container: Body) -> List:
+    def _make_open_container_actions(
+        self, container: Body
+    ) -> list[Match[NavigateAction] | OpenAction]:
         """
         :param container: The container body in which the object is located.
         :return: The actions needed to open the given container, empty if the container is not a known drawer.
@@ -102,16 +103,69 @@ class TransportAction(ActionDescription):
         handle = drawer_annotation[0].handle.root
 
         return [
-            a(NavigateAction)(
-                target_location=variable(
-                    Pose,
-                    domain=reachability_location(
-                        handle.global_pose, self.context, self.arm
-                    ),
-                ),
-                keep_joint_states=True,
-            ),
+            *self._make_navigation_actions(handle.global_pose),
             OpenAction(handle, self.arm),
+        ]
+
+    def _make_navigation_actions(
+        self, target: Body | Pose, grasp_description: Optional[GraspDescription] = None
+    ) -> list[Match[NavigateAction]]:
+        """Approach a manipulation target when the robot has a drive.
+
+        :param target: Object or pose approached using the state at execution time.
+        :param grasp_description: Grasp used to validate reachable base positions.
+        :return: A navigation query, or an empty list for a stationary robot.
+        """
+        if self.robot.drive is None:
+            return []
+        location = DeferredLocation(
+            lambda: reachability_location(
+                target, self.context, self.arm, grasp_description
+            )
+        )
+        return [
+            a(NavigateAction)(
+                target_location=variable(Pose, domain=location),
+                keep_joint_states=True,
+            )
+        ]
+
+    def _make_torso_actions(self) -> list[MoveTorsoAction]:
+        """Raise the torso when one is specified by the robot annotation.
+
+        :return: The torso preparation action, or an empty list without a torso.
+        """
+        if self.robot.get_torso_if_specified() is None:
+            return []
+        return [MoveTorsoAction(TorsoState.HIGH)]
+
+    def _make_placement_actions(self) -> list[Match | LookAtAction]:
+        """Ground alternative destinations within the carrying phase.
+
+        :return: Navigation and placement for a pose, or a destination query.
+        """
+        if isinstance(self.target_location, Pose):
+            return [
+                *self._make_navigation_actions(
+                    self.target_location, self.grasp_description
+                ),
+                *self._make_look_at_actions(self.target_location),
+                a(PlaceAction)(
+                    object_designator=self.object_designator,
+                    target_location=self.target_location,
+                    arm=self.arm,
+                ),
+            ]
+        return [
+            a(MoveAndPlaceAction)(
+                standing_position=None,
+                object_designator=self.object_designator,
+                target_location=variable(Pose, domain=self.target_location),
+                arm=self.arm,
+                keep_joint_states=True,
+                grasp_description=self.grasp_description,
+                look_at_operation_site=self.look_at_operation_site,
+            )
         ]
 
     @property
@@ -134,20 +188,8 @@ class TransportAction(ActionDescription):
         children.extend(
             [
                 ParkArmsAction(Arms.BOTH),
-                # Tries to find a pick-up position for the robot that uses the given arm
-                a(NavigateAction)(
-                    target_location=variable(
-                        Pose,
-                        domain=DeferredLocation(
-                            lambda: reachability_location(
-                                self.object_designator,
-                                self.context,
-                                self.arm,
-                                self.grasp_description,
-                            )
-                        ),
-                    ),
-                    keep_joint_states=True,
+                *self._make_navigation_actions(
+                    self.object_designator, self.grasp_description
                 ),
                 *self._make_look_at_actions(self.object_designator.global_pose),
                 a(PickUpAction)(
@@ -156,34 +198,13 @@ class TransportAction(ActionDescription):
                     grasp_description=self.grasp_description,
                 ),
                 ParkArmsAction(Arms.BOTH),
-                MoveTorsoAction(TorsoState.HIGH),
-                self._make_navigate_action_for_placing(self.grasp_description),
-                *self._make_look_at_actions(self.target_location),
-                a(PlaceAction)(
-                    object_designator=self.object_designator,
-                    target_location=self.target_location,
-                    arm=self.arm,
-                ),
+                *self._make_torso_actions(),
+                *self._make_placement_actions(),
                 ParkArmsAction(Arms.BOTH),
             ]
         )
 
         return sequential(children)
-
-    def _make_navigate_action_for_placing(self, grasp_description: GraspDescription):
-        """
-        :param grasp_description: The grasp description that should be used for placing the object.
-        :return: The navigate action that will be used to place the object.
-        """
-        return a(NavigateAction)(
-            target_location=variable(
-                Pose,
-                domain=reachability_location(
-                    self.target_location, self.context, self.arm, grasp_description
-                ),
-            ),
-            keep_joint_states=True,
-        )
 
 
 @dataclass
@@ -233,17 +254,16 @@ class PickAndPlaceAction(ActionDescription):
 @dataclass
 class MoveAndPlaceAction(ActionDescription):
     """
-    Navigate to `standing_position`, then turn towards the target and place the
-    object.
+    Approach a placement from an explicit or reachable standing position.
     """
 
-    standing_position: Pose
+    standing_position: Pose | None
     """
-    The pose to stand before trying to pick up the object.
+    Explicit base pose, or None to ground an approach with the current held object.
     """
     object_designator: Body
     """
-    The object to pick up.
+    The object to place.
     """
     target_location: Pose
     """
@@ -259,12 +279,46 @@ class MoveAndPlaceAction(ActionDescription):
     Keep the joint states of the robot the same during the navigation.
     """
 
+    grasp_description: GraspDescription | None = field(default=None, kw_only=True)
+    """Grasp used to validate automatically sampled standing positions."""
+
+    look_at_operation_site: bool = field(default=False, kw_only=True)
+    """Aim the camera at the target after an automatically grounded approach."""
+
+    def _make_approach_actions(
+        self,
+    ) -> list[NavigateAction | FaceAtAction | Match | LookAtAction]:
+        """Retain explicit facing or ground a reachable base pose at execution.
+
+        :return: Base and optional camera actions for this placement attempt.
+        """
+        if self.standing_position is not None:
+            return [
+                NavigateAction(self.standing_position, self.keep_joint_states),
+                FaceAtAction(self.target_location, self.keep_joint_states),
+            ]
+        actions = []
+        if self.robot.drive is not None:
+            location = DeferredLocation(
+                lambda: reachability_location(
+                    self.target_location, self.context, self.arm, self.grasp_description
+                )
+            )
+            actions.append(
+                a(NavigateAction)(
+                    target_location=variable(Pose, domain=location),
+                    keep_joint_states=self.keep_joint_states,
+                )
+            )
+        if self.look_at_operation_site:
+            actions.append(LookAtAction(self.target_location))
+        return actions
+
     @property
     def _action_plan(self) -> PlanNode:
         return sequential(
             [
-                NavigateAction(self.standing_position, self.keep_joint_states),
-                FaceAtAction(self.target_location, self.keep_joint_states),
+                *self._make_approach_actions(),
                 PlaceAction(self.object_designator, self.target_location, self.arm),
             ]
         )

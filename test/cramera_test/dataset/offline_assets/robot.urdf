@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<robot name="offline"><link name="body"><visual><geometry><mesh filename="meshes/part.dae"/></geometry><material name="paint"><texture filename="textures/paint%20coat.svg"/></material></visual></link></robot>

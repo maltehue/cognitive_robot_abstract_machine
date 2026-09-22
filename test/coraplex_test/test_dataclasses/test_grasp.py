@@ -378,29 +378,25 @@ def test_grasp_sequence_reverse(immutable_simple_pr2_holding_world):
         man,
     )
 
-    sequence = grasp_desc.place_pose_sequence(
-        Pose.from_xyz_quaternion(reference_frame=world.get_body_by_name("milk.stl"))
-    )
+    body = world.get_body_by_name("milk.stl")
+    target = Pose.from_xyz_quaternion(reference_frame=body)
+    sequence = grasp_desc.place_pose_sequence(target)
+    tool_T_object = world.compute_forward_kinematics(man.tool_frame, body)
 
-    assert sequence[2].to_quaternion().to_list() == pytest.approx(
-        [0, 0, 0, 1], abs=0.001
+    np.testing.assert_allclose(
+        (sequence[1].to_homogeneous_matrix() @ tool_T_object).to_np(),
+        target.to_np(),
+        atol=1e-12,
+        rtol=0,
     )
-    assert sequence[1].to_quaternion().to_list() == pytest.approx(
-        [0, 0, 0, 1], abs=0.001
-    )
-    assert sequence[0].to_quaternion().to_list() == pytest.approx(
-        [0, 0, 0, 1], abs=0.001
-    )
-
-    assert sequence[2].to_position().to_list() == pytest.approx(
-        [-0.082, 0, 0, 1], abs=0.01
-    )
-    assert sequence[1].to_position().to_list() == pytest.approx(
-        [0, 0, 0.0, 1], abs=0.01
-    )
-    assert sequence[0].to_position().to_list() == pytest.approx(
-        [0, 0.0, 0.05, 1], abs=0.01
-    )
+    nominal_sequence = grasp_desc.pose_sequence(target, body, reverse=True)
+    for index in (0, 2):
+        np.testing.assert_allclose(
+            sequence[index].to_np()[:3, 3] - sequence[1].to_np()[:3, 3],
+            nominal_sequence[index].to_np()[:3, 3] - nominal_sequence[1].to_np()[:3, 3],
+            atol=1e-12,
+            rtol=0,
+        )
 
 
 def test_grasp_sequence_front_tracy(tracy_milk_world):

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing_extensions import Optional
 
 from cramera import paths
+from cramera.robot_fields import RobotField
 from cramera.knowledge.detected_events import SceneField
 from cramera.generated_json import write_json_atomically
 from cramera.live.frame_range import FrameRange, InvalidFrameRange
@@ -183,6 +184,8 @@ def trim_recording_bundle(frame_range: FrameRange) -> None:
     kept = slice(frame_range.first, frame_range.last + 1)
     for track in ("frames", "base", "objects"):
         trajectory[track] = trajectory[track][kept]
+    if RobotField.MODEL_BASES in trajectory:
+        trajectory[RobotField.MODEL_BASES] = trajectory[RobotField.MODEL_BASES][kept]
     scene = json.loads(scene_path.read_text(encoding="utf-8"))
     scene["segments"] = clip_segment_payloads(scene["segments"], frame_range)
     for entry in scene["objects"]:

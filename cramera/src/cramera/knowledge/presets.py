@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import Tuple
 
 from typing_extensions import TYPE_CHECKING, List, Optional
@@ -29,6 +30,16 @@ WORD_START = re.compile(r"(?<!^)(?=[A-Z])")
 Where a word begins inside a camel-case class name, which is where a space belongs when
 that name is said out loud.
 """
+
+
+# %% shared robot questions
+class RobotQuestion(StrEnum):
+    """Questions that explicitly include multiple robot instances and their parts."""
+
+    ROBOTS = "which robots are in this scene?"
+    """List every robot instance present in the scene."""
+    ARMS = "which arms belong to each robot?"
+    """List each arm together with its owning robot instance."""
 
 
 @dataclass
@@ -83,14 +94,45 @@ class Preset:
         """
         The ready-made queries the EQL panel offers, worded by the scene's runner.
 
-        The pair is the same for every scene: it asks about the robot the recording
-        carries, which any onboarded bundle can answer. A demo's own questions range
+        Robot questions include every recorded instance. A demo's own questions range
         over variables only that demo offers and reach the panel from the live bridge.
 
         :param scene: Name of the scene whose runner words them, or None for the active
             one.
         """
-        return cls._worded_by_scene(list(SCENE_PRESETS), scene)
+        session = EqlSession.of_scene(scene)
+        annotations = session.knowledge_base.spatial_annotations
+        presets = cls.for_robots(len(session.knowledge_base.robots))
+        if annotations.entities:
+            presets.extend(
+                cls(question, f"an(entity({variable}))")
+                for question, variable in (
+                    ("show all handles", "handle"),
+                    ("show all semantic annotations", "annotation"),
+                    ("show all supporting surfaces", "surface"),
+                )
+            )
+        presets.extend(
+            DirectAnswerPreset(
+                answer.question_for(answer.object_name, answer.surface_name),
+                answer.code_for(answer.object_name, answer.surface_name),
+            )
+            for answer in annotations.placements
+        )
+        return cls._worded_by_scene(presets, scene)
+
+    @classmethod
+    def for_robots(cls, robot_count: int) -> List[Preset]:
+        """Offer robot questions suited to the number of instances in a scene.
+
+        :param robot_count: Number of robot instances available to the query runner.
+        """
+        if robot_count <= 1:
+            return list(SCENE_PRESETS)
+        return [
+            cls(RobotQuestion.ROBOTS, "an(entity(robot))"),
+            cls(RobotQuestion.ARMS, "an(entity(arm))"),
+        ]
 
     @classmethod
     def _worded_by_scene(
@@ -109,6 +151,18 @@ class Preset:
         """
         runner = EqlSession.of_scene(scene).runner()
         return [preset.worded(runner) for preset in presets]
+
+
+@dataclass
+class DirectAnswerPreset(Preset):
+    """A named callable whose evaluation must wait until the user asks it."""
+
+    def worded(self, runner: EqlQueryRunner) -> Preset:
+        """Retain the explicit question without executing its geometry query.
+
+        :param runner: Query runner used only after this preset is selected.
+        """
+        return self
 
 
 @dataclass(frozen=True)
@@ -228,5 +282,5 @@ SCENE_PRESETS: Tuple[Preset, ...] = (
     Preset("which arm does it have?", "an(entity(arm))"),
 )
 """
-The questions the EQL panel offers for every scene.
+The robot questions offered for a scene with one robot.
 """

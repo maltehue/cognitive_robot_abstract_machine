@@ -17,6 +17,7 @@
  *   emits    entity:highlight {ids, focus?}   results / described entity
  *   emits    voice:transcript {text}     a spoken question, as recognized text
  *   listens  voice:transcript {text}     match the question to a preset and run it
+ *   listens  query:ask {text}            ask a written presentation question
  *   listens  scene:part-clicked {id}     describe the clicked part
  *   listens  scene:step {step}           describe the running episode
  *   listens  entity:select {id, detail, relations}   node clicked in a graph
@@ -63,6 +64,7 @@ Panels.define('eql', function (root, bus) {
   questionEl.innerHTML = QuestionDisplay.hint(ASK_HINT);
 
   let knowledge = null;   // /api/knowledge overview (presets + entity details)
+  let pendingQuestion = null;
   let source = QuerySource.of(null);   // where queries and presets are answered from
   let vocabulary = [];                 // every name the answering source offers
   let recordedStatus = '';             // what the recorded scene calls itself
@@ -73,12 +75,14 @@ Panels.define('eql', function (root, bus) {
   fetch(SceneContext.withScene('/api/knowledge')).then(ResponseUtil.parseJson).then(boot).catch(function (err) {
     knowledgeStatus.textContent = 'EQL unavailable';
     answerEl.innerHTML = '<div class="qerr">EQL unavailable: ' + esc(errorText(err)) + '</div>';
+    bus.emit('knowledge:error', {message: errorText(err)});
   });
 
   function boot(payload) {
     if (!payload.ok) {
       knowledgeStatus.textContent = 'EQL unavailable';
       answerEl.innerHTML = '<div class="qerr">' + esc(payload.error || 'unknown error') + '</div>';
+      bus.emit('knowledge:error', {message: payload.error || 'Die gespeicherte Wissensbasis fehlt.'});
       return;
     }
     knowledge = payload;
@@ -87,6 +91,10 @@ Panels.define('eql', function (root, bus) {
     if (!source.live) showSource(recordedStatus, payload.presets || []);
     answerEl.innerHTML = '';       // the loading note goes once the base is there
     bus.emit('knowledge:ready', { payload: payload });
+    if (pendingQuestion !== null) {
+      const question = pendingQuestion; pendingQuestion = null;
+      askSpokenQuestion(question);
+    }
   }
 
   // %% which source answers
@@ -257,17 +265,25 @@ Panels.define('eql', function (root, bus) {
       showAnswer('<div class="qerr">voice input failed: ' + esc(message) + '</div>');
     },
   });
-  if (!voice.supported) {
+  if (SceneContext.offline()) {
+    voiceButton.disabled = true;
+    voiceButton.title = 'Offline: Fragen eingeben oder eine gespeicherte Frage wählen.';
+  } else if (!voice.supported) {
     voiceButton.disabled = true;
     voiceButton.title = 'speech recognition is not available in this browser';
   }
   voiceButton.addEventListener('click', function () {
+    if (SceneContext.offline()) return;
     if (voice.listening) voice.stop(); else voice.start();
   });
 
   // the default consumer: recognize the spoken question as one of the presets on
   // offer and run it as if its button had been clicked — or say it can't be answered
   bus.on('voice:transcript', function (p) { askSpokenQuestion(p.text); });
+  bus.on('query:ask', function (payload) {
+    if (knowledge) askSpokenQuestion(payload.text);
+    else pendingQuestion = payload.text;
+  });
 
   async function askSpokenQuestion(text) {
     text = (text || '').trim(); if (!text) return;
@@ -335,7 +351,7 @@ Panels.define('eql', function (root, bus) {
       (res.more ? ' (truncated)' : '') + '.</p>' + answerTable(res.rows, res.replay);
     showAnswer(html);
     wireReplayButtons();
-    bus.emit('entity:highlight', { ids: res.highlight || [] });
+    bus.emit('entity:highlight', { ids: res.highlight || [], spatial: res.spatial || [] });
   }
 
   // %% replaying an answered moment

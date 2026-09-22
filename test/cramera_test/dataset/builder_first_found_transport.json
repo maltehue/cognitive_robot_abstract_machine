@@ -1,0 +1,74 @@
+{
+  "objects": [
+    {
+      "id": "o1",
+      "name": "milk.stl",
+      "mesh": "milk.stl",
+      "x": 2.438,
+      "y": 2.208,
+      "z": 1.032,
+      "color": "#99a1ad",
+      "roll": 0,
+      "pitch": 0,
+      "yaw": 0
+    },
+    {
+      "id": "o2",
+      "name": "bowl.stl",
+      "mesh": "bowl.stl",
+      "x": 2.458,
+      "y": 2.754,
+      "z": 0.977,
+      "color": "#8fd6c7",
+      "roll": 0,
+      "pitch": 0,
+      "yaw": 0
+    }
+  ],
+  "captured": {},
+  "instances": [
+    {
+      "model": "PR2",
+      "label": "PR2 1",
+      "x": 1.04855,
+      "y": 2.48407,
+      "yaw": 0.010840103892335706
+    }
+  ],
+  "activeIdentifier": "robot_1",
+  "selections": {
+    "pb-robot": "PR2",
+    "pb-env": "apartment.urdf",
+    "pb-name": "builder_first_found_transport"
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "type": "park_arms",
+      "params": {
+        "arm": "BOTH"
+      },
+      "constraints": []
+    },
+    {
+      "id": "s2",
+      "type": "move_torso",
+      "params": {
+        "torso": "HIGH"
+      },
+      "constraints": []
+    },
+    {
+      "id": "s3",
+      "type": "transport",
+      "params": {
+        "object": "milk.stl",
+        "arm": "LEFT",
+        "targetMode": "semantic",
+        "surfaceType": "Table",
+        "surfaceName": ""
+      },
+      "constraints": []
+    }
+  ]
+}

@@ -42,6 +42,7 @@ import sys
 import threading
 import traceback
 import webbrowser
+from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
 from typing_extensions import Any, Callable, ClassVar, Dict, List, Optional
@@ -75,9 +76,11 @@ DEFAULT_PORT = 8711
 try:
     import krrood  # noqa: F401  (the EQL engine)
 
+    from cramera.model_catalog import ModelCatalog
     from cramera.knowledge.eql_session import EqlSession
     from cramera.knowledge.knowledge_base import EpisodeKnowledgeBase
     from cramera.knowledge.presets import Preset
+    from cramera.knowledge.scene_bundle import SceneBundle
     from cramera.knowledge.question_matching import QuestionMatcher
     from cramera.knowledge.views.dispatcher import GraphPanelViews
 
@@ -133,8 +136,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """
         Route the per-request access log through logging.
 
-        The page polls for the live scene while no demo runs; those misses would
-        flood the console every second and are not news, so they stay out of the log.
+        The page polls for the live scene while no demo runs; those misses would flood
+        the console every second and are not news, so they stay out of the log.
 
         :param format:``printf``-style log message format.
         :param args: Values to interpolate into ``format``.
@@ -172,13 +175,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _requested_scene(self) -> Optional[str]:
         """
-        The scene the request targets, or None to let the server pick the active one.
+        The requested scene, or the active recording available in the viewer's index.
 
         The frontend switches scenes by reloading with a ``?scene=`` parameter, so every
         API route has to honour it or the panels would disagree about what is on screen.
         """
         requested = self._query_parameters().get("scene")
-        return requested[0] if requested else None
+        return (
+            requested[0] if requested else SceneBundle.active_name(merged_scene_index())
+        )
 
     def _guarded(self, handler: Callable[[], Any]) -> None:
         """
@@ -243,7 +248,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         route = self.path.split("?")[0]
         if route.startswith("/scenes/"):
             return self._serve_scene_file(route)
-        scene = self._requested_scene()
+        scene = (
+            self._requested_scene()
+            if EQL_AVAILABLE and route.startswith(("/api/knowledge", "/api/eql"))
+            else None
+        )
         if route == "/api/knowledge":
             return self._guarded(
                 lambda: GraphPanelViews.of_scene(scene).for_tab("knowledge")
@@ -274,6 +283,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send_json(
                 {"state": "finalized" if has_saveable_recording() else "idle"}
             )
+        if route == "/api/plan/catalog":
+            return self._guarded(lambda: ModelCatalog.installed())
         if route == "/api/plan/scaffold/log":
             return self._scaffold_log()
         return super().do_GET()
@@ -315,8 +326,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _generated_demos_directory(self):
         """
-        Where the Plan Builder writes generated demos: ``coraplex/demos/coraplex_generated``
-        (overridable via ``CRAMERA_GENERATED_DEMOS``). Sits two levels under ``coraplex/`` so
+        Where the Plan Builder writes generated demos:
+        ``coraplex/demos/coraplex_generated`` (overridable via
+        ``CRAMERA_GENERATED_DEMOS``).
+
+        Sits two levels under ``coraplex/`` so
         the generated ``os.path.dirname(__file__)/../../resources/objects`` mesh paths resolve.
         """
         import os
@@ -330,7 +344,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             candidate = parent / "coraplex" / "demos"
             if candidate.is_dir():
                 return candidate / "coraplex_generated"
-        return here.parent / "generated_demos"  # fallback: never resolves meshes, but writes
+        return (
+            here.parent / "generated_demos"
+        )  # fallback: never resolves meshes, but writes
 
     _scaffold_proc = None  # class-level: the running Plan-Builder scaffold demo, if any
     _scaffold_log_path = None  # where that process's stdout+stderr are captured
@@ -338,8 +354,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _launch_scaffold(self) -> None:
         """
         Write a Plan-Builder scaffold demo (environment + objects, idle) and run it with
-        cramera-live so its live world comes up on the bridge (:8765). The user drags
-        objects in the Scene view; the builder captures their poses via /captured_objects.
+        cramera-live so its live world comes up on the bridge (:8765).
+
+        The user drags objects in the Scene view; the builder captures their poses via
+        /captured_objects.
         """
         import os
         import subprocess
@@ -354,7 +372,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             out_dir.mkdir(parents=True, exist_ok=True)
             path = out_dir / "_builder_scaffold.py"
             path.write_text(code)
-            repo = out_dir.parent.parent.parent  # coraplex_generated -> demos -> coraplex -> repo
+            repo = (
+                out_dir.parent.parent.parent
+            )  # coraplex_generated -> demos -> coraplex -> repo
             self._stop_scaffold(reply=False)
             env = dict(os.environ, CORAPLEX_VISUALIZATION="cramera")
             # capture stdout+stderr so the Plan Builder can show a traceback if the demo
@@ -368,8 +388,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # module behind the `cramera-live` console script.
             type(self)._scaffold_proc = subprocess.Popen(
                 [sys.executable, "-m", "cramera.live.runner", str(path)],
-                cwd=str(repo), env=env,
-                stdout=log_file, stderr=subprocess.STDOUT,
+                cwd=str(repo),
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
                 start_new_session=True,  # own process group, so stop can kill children too
             )
         except (OSError, ValueError) as error:
@@ -394,12 +416,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 text = Path(log_path).read_text(errors="replace")[-8000:]
             except OSError:
                 text = ""
-        self._send_json({
-            "ok": True,
-            "alive": proc is not None and returncode is None,
-            "returncode": returncode,
-            "log": text,
-        })
+        self._send_json(
+            {
+                "ok": True,
+                "alive": proc is not None and returncode is None,
+                "returncode": returncode,
+                "log": text,
+            }
+        )
 
     def _stop_scaffold(self, reply: bool = True) -> None:
         """
@@ -456,9 +480,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _save_recording(self) -> None:
         """
-        Promote the on-disk ``__recording__`` bundle to a permanent, locally saved
-        scene — independent of whether the demo process that made it is still running
-        (see :mod:`cramera.live.recording_storage`).
+        Promote the on-disk ``__recording__`` bundle to a permanent, locally saved scene
+        — independent of whether the demo process that made it is still running (see
+        :mod:`cramera.live.recording_storage`).
 
         An optional ``firstFrame``/``lastFrame`` pair cuts the run down to that
         inclusive range before it is saved.
@@ -624,6 +648,11 @@ class ServerOptions:
     What the ``cramera`` command line asks for.
     """
 
+    MAX_PORT: ClassVar[int] = 65535
+    """
+    Largest TCP port accepted by the server.
+    """
+
     port: int = DEFAULT_PORT
     """
     Port the server listens on.
@@ -634,6 +663,35 @@ class ServerOptions:
     Whether the viewer page is opened in the default browser on start.
     """
 
+    @classmethod
+    def parse(cls, arguments: list[str]) -> ServerOptions:
+        """
+        Read viewer options and report invalid input with command-line usage.
+
+        :param arguments: Arguments without the executable name.
+        :return: Validated viewer options.
+        """
+        parser = ArgumentParser(
+            description="Serve the CRAMERA viewer and local recordings."
+        )
+        parser.add_argument(
+            "port",
+            nargs="?",
+            type=int,
+            default=DEFAULT_PORT,
+            help=f"HTTP port (default: {DEFAULT_PORT})",
+        )
+        parser.add_argument(
+            NO_BROWSER_FLAG,
+            dest="open_browser",
+            action="store_false",
+            help="Start without opening the browser",
+        )
+        options = parser.parse_args(arguments)
+        if not 0 <= options.port <= cls.MAX_PORT:
+            parser.error("port must be between 0 and 65535")
+        return cls(port=options.port, open_browser=options.open_browser)
+
 
 def parse_arguments(arguments: List[str]) -> ServerOptions:
     """
@@ -641,19 +699,16 @@ def parse_arguments(arguments: List[str]) -> ServerOptions:
 
     :param arguments: The command-line arguments, without the program name.
     """
-    open_browser = NO_BROWSER_FLAG not in arguments
-    ports = [argument for argument in arguments if argument != NO_BROWSER_FLAG]
-    port = int(ports[0]) if ports else DEFAULT_PORT
-    return ServerOptions(port=port, open_browser=open_browser)
+    return ServerOptions.parse(arguments)
 
 
 def main(arguments: Optional[List[str]] = None) -> None:
     """
     ``cramera`` — serve the viewer, the scenes and the JSON API.
 
-    Opens the viewer page in the default browser once the server is up; demos only
-    ever connect to it, so this is the one deliberate moment a page appears. Pass
-    ``--no-browser`` to skip it (a headless or remote server).
+    Opens the viewer page in the default browser once the server is up; demos only ever
+    connect to it, so this is the one deliberate moment a page appears. Pass ``--no-
+    browser`` to skip it (a headless or remote server).
 
     :param arguments: Command-line arguments, or None to use ``sys.argv``.
     """
@@ -663,8 +718,10 @@ def main(arguments: Optional[List[str]] = None) -> None:
     options = parse_arguments(sys.argv[1:] if arguments is None else arguments)
     port = options.port
     if EQL_AVAILABLE:  # build the knowledge base once, before the first query
-        EpisodeKnowledgeBase.of_active_scene()
+        EpisodeKnowledgeBase.of_scene(SceneBundle.active_name(merged_scene_index()))
     with make_server(port) as server:
+        if port == 0:
+            port = server.server_address[1]
         eql = "EQL ready (krrood)" if EQL_AVAILABLE else "EQL unavailable — static only"
         scenes = paths.scenes_directory()
         logger.info("cramera running at http://localhost:%d/ (%s)", port, eql)

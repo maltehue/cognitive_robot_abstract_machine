@@ -21,6 +21,10 @@ from coraplex.datastructures.enums import (
     VerticalAlignment,
 )
 from coraplex.datastructures.grasp import GraspDescription
+from coraplex.datastructures.manipulation_contacts import (
+    HasManipulationContactPolicy,
+    ManipulationContactPolicy,
+)
 from coraplex.plans.factories import sequential
 from coraplex.querying.predicates import GripperIsFree
 from coraplex.robot_plans.actions.base import ActionDescription
@@ -33,6 +37,11 @@ from coraplex.robot_plans.motions.gripper import (
     MoveGripperMotion,
     MoveToolCenterPointMotion,
 )
+from coraplex.robot_plans.motions.placement import (
+    MovePlacementMotion,
+    PlacementPoseSequence,
+    PlacementStage,
+)
 from coraplex.view_manager import ViewManager
 from semantic_digital_twin.datastructures.definitions import GripperState
 from semantic_digital_twin.reasoning.predicates import allclose
@@ -42,7 +51,12 @@ from semantic_digital_twin.world_description.world_entity import Body
 
 
 @dataclass
-class PlaceAction(ActionDescription, PlaceTuningParameters, HasGraspDetectionThreshold):
+class PlaceAction(
+    ActionDescription,
+    PlaceTuningParameters,
+    HasGraspDetectionThreshold,
+    HasManipulationContactPolicy,
+):
     """
     Places an Object at a position using an arm.
     """
@@ -68,17 +82,33 @@ class PlaceAction(ActionDescription, PlaceTuningParameters, HasGraspDetectionThr
     :func:`~semantic_digital_twin.reasoning.robot_predicates.is_body_gripped`).
     """
 
-    def _retract_plan(self, retract_pose: Pose) -> PlanNode:
+    @property
+    def manipulation_contact_policy(self) -> ManipulationContactPolicy:
         """
+        Permit release contact with the selected object's destination support.
+        """
+        return ManipulationContactPolicy(
+            self.object_designator,
+            ViewManager.get_end_effector_view(
+                self.arm, self.robot
+            ).bodies_with_collision,
+            self.target_location,
+        )
+
+    def _retract_plan(self, placement: PlacementPoseSequence) -> PlanNode:
+        """
+        :param placement: Tool poses retained from the measured attachment.
         :return: The plan that re-parents the placed object back to the world and
             retracts the end effector away from it.
         """
         return sequential(
             [
                 DetachNode(body=self.object_designator, new_parent=self.world.root),
-                MoveToolCenterPointMotion(
-                    retract_pose,
+                MovePlacementMotion(
+                    placement.resolve(PlacementStage.RETRACT),
                     self.arm,
+                    placement=placement,
+                    stage=PlacementStage.RETRACT,
                     max_linear_velocity=self.retract_linear_velocity,
                 ),
             ],
@@ -97,23 +127,25 @@ class PlaceAction(ActionDescription, PlaceTuningParameters, HasGraspDetectionThr
                 ApproachDirection.FRONT, VerticalAlignment.NoAlignment, end_effector
             )
         )
-        transport_pose, placing_pose, retract_pose = (
-            previous_grasp_description.pose_sequence(
-                self.target_location, self.object_designator, reverse=True
-            )
+        placement = PlacementPoseSequence(
+            previous_grasp_description, self.object_designator, self.target_location
         )
 
         return sequential(
             [
-                MoveToolCenterPointMotion(
-                    transport_pose,
+                MovePlacementMotion(
+                    placement.resolve(PlacementStage.APPROACH),
                     self.arm,
+                    placement=placement,
+                    stage=PlacementStage.APPROACH,
                     allow_gripper_collision=False,
                     max_linear_velocity=self.transport_linear_velocity,
                 ),
-                MoveToolCenterPointMotion(
-                    placing_pose,
+                MovePlacementMotion(
+                    placement.resolve(PlacementStage.RELEASE),
                     self.arm,
+                    placement=placement,
+                    stage=PlacementStage.RELEASE,
                     allow_gripper_collision=False,
                     max_linear_velocity=self.placing_linear_velocity,
                 ),
@@ -122,7 +154,7 @@ class PlaceAction(ActionDescription, PlaceTuningParameters, HasGraspDetectionThr
                     self.arm,
                     finger_velocity=self.release_opening_velocity,
                 ),
-                self._retract_plan(retract_pose),
+                self._retract_plan(placement),
             ],
             self.context,
         )

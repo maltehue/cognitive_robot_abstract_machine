@@ -159,17 +159,29 @@ class GraspDescription:
         """
         return self.pose_sequence(Pose(reference_frame=body), body)
 
-    def place_pose_sequence(self, pose: Pose) -> List[Pose]:
+    def place_pose_sequence(self, pose: Pose, body: Body | None = None) -> List[Pose]:
         """
-        Calculates the pose sequence to place a body at the given pose.
-
-        Assumes that the end_effector is holding a body which is being placed.
+        Place a held body using its measured attachment and the grasp clearances.
 
         :param pose: The pose at which the body in the end_effector should be placed
+        :param body: Held body; inferred when the tool frame has exactly one child.
         :return: The pose sequence.
+        :raises ValueError: If no body is given and the tool has no unique child.
         """
-        body = self.end_effector.tool_frame.child_kinematic_structure_entities[0]
-        return self.pose_sequence(pose, body, reverse=True)
+        tool_frame = self.end_effector.tool_frame
+        if body is None:
+            (body,) = tool_frame.child_kinematic_structure_entities
+        sequence = self.pose_sequence(pose, body, reverse=True)
+        object_T_tool = self.end_effector._world.compute_forward_kinematics(
+            body, tool_frame
+        )
+        reference_T_tool_goal = pose.to_homogeneous_matrix() @ object_T_tool
+        reference_T_nominal_tool = sequence[1].to_homogeneous_matrix()
+        nominal_tool_T_tool = reference_T_nominal_tool.inverse() @ reference_T_tool_goal
+        return [
+            (step.to_homogeneous_matrix() @ nominal_tool_T_tool).to_pose()
+            for step in sequence
+        ]
 
     def manipulation_axis(self) -> List[float]:
         """

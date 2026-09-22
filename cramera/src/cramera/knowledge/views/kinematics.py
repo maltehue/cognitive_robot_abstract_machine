@@ -10,7 +10,7 @@ from coraplex.datastructures.enums import JointType
 from typing_extensions import Any, ClassVar, Dict, List, Optional, TYPE_CHECKING
 
 from cramera.knowledge.enums import EdgeKind, KinematicChainGroup
-from cramera.knowledge.scene_bundle import ParsedUrdf, SceneBundle
+from cramera.knowledge.scene_bundle import ParsedUrdf
 from cramera.knowledge.subgraph import (
     DetailEntry,
     GraphEdge,
@@ -65,13 +65,16 @@ class UrdfViewPayload(GraphPanelPayload):
         parsed_urdf = ParsedUrdf.of_scene(knowledge_base.scene_name)
         links, joints = parsed_urdf.links, parsed_urdf.joints
         view = SubgraphAccumulator()
+        robot_names = ", ".join(robot.name for robot in knowledge_base.robots)
         if not links:
-            return cls(breadcrumb=knowledge_base.robot.name + " · URDF (not found)")
+            return cls(breadcrumb=robot_names + " · URDF (not found)")
 
-        scene = SceneBundle.of_scene(knowledge_base.scene_name).scene
-        parts = (scene.get("robot") or {}).get("parts") or {}
         link_to_part = {
-            link: part for part, part_links in parts.items() for link in part_links
+            qualified: part
+            for robot in knowledge_base.robot_descriptions
+            for part, part_links in robot.parts.items()
+            for link in part_links
+            for qualified in (link, robot.prefix + "/" + link)
         }
 
         # which joint drives each link (child link → its parent joint), for tooltips
@@ -115,7 +118,7 @@ class UrdfViewPayload(GraphPanelPayload):
         # force-directed, not hierarchical: the chains read better when the arms and
         # the sensor head spread out around the base than as one wide LR tree
         return cls(
-            breadcrumb=knowledge_base.robot.name + " · URDF",
+            breadcrumb=robot_names + " · URDF",
             nodes=view.nodes,
             edges=view.edges,
             details=view.details,

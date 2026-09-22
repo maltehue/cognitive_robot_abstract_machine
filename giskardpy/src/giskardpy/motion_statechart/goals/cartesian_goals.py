@@ -47,6 +47,13 @@ class DifferentialDriveBaseGoal(Sequence):
     Pose to reach.
     """
 
+    start_pose: Pose | None = field(kw_only=True, default=None)
+    """
+    Planned start of this segment.
+
+    If omitted, use the current drive pose.
+    """
+
     weight: float = field(
         default=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE, kw_only=True
     )
@@ -83,7 +90,11 @@ class DifferentialDriveBaseGoal(Sequence):
         tip = self.diff_drive_connection.child
 
         root_T_goal = context.world.transform(self.goal_pose, map)
-        root_T_current = tip.global_transform
+        root_T_current = (
+            tip.global_transform
+            if self.start_pose is None
+            else context.world.transform(self.start_pose, map)
+        )
         root_V_current_to_goal = (
             root_T_goal.to_position() - root_T_current.to_position()
         )

@@ -24,7 +24,10 @@ from cramera.knowledge.entities import (
 )
 from cramera.knowledge.enums import JointRegion
 from cramera.knowledge.scene_bundle import SceneBundle
+from cramera.knowledge.recorded_robots import RecordedRobot
+from cramera.robot_fields import RobotField
 from cramera.robot_parts import ArmSide, RobotPartAnnotation, RobotPartRole
+from cramera.spatial_annotations import SpatialAnnotations
 
 
 class EpisodeKnowledgeBase:
@@ -104,6 +107,18 @@ class EpisodeKnowledgeBase:
     """
     What the run's detectors saw, or nothing for a scene recorded without them.
     """
+    spatial_annotations: SpatialAnnotations
+    """
+    Frozen semantic geometry queried without access to the original world.
+    """
+    robots: List[Robot]
+    """
+    Every recorded robot instance available to ordinary scene queries.
+    """
+    robot_descriptions: List[RecordedRobot]
+    """
+    Recorded native namespaces and part ownership for those instances.
+    """
 
     def __init__(self, scene_name: Optional[str] = None) -> None:
         """
@@ -117,26 +132,18 @@ class EpisodeKnowledgeBase:
         self.bundle_signature = self._bundle_signature(scene_name)
         bundle = SceneBundle.of_scene(scene_name)
         scene, trajectory = bundle.scene, bundle.trajectory
+        self.spatial_annotations = SpatialAnnotations.of_scene(scene)
         frames_per_second = scene.get("framesPerSecond", 30)
-        parts = (scene.get("robot") or {}).get("parts") or {}
-        robot_name = (scene.get("robot") or {}).get("name", "robot")
-        robot_prefix = (scene.get("robot") or {}).get("prefix", "")
 
         self.objects = self._build_objects(scene)
         objects_by_id = {entity.name: entity for entity in self.objects}
         place_area = objects_by_id.get("place_area")
 
-        part_annotations = [
-            RobotPartAnnotation.from_payload(payload)
-            for payload in (scene.get("robot") or {}).get("partAnnotations") or []
-        ]
-
-        self.grippers, self.arms = self._build_arms(parts, part_annotations, robot_name)
-        self.robot = Robot(robot_name, arm_count=len(self.arms))
+        self._build_robot_instances(scene)
         self.episodes = self._build_episodes(
             scene, frames_per_second, objects_by_id, place_area
         )
-        self.joints = self._build_joint_motions(trajectory, parts, robot_prefix)
+        self.joints = self._build_instance_joint_motions(trajectory)
         self.detected_events = DetectedEventRecord.of_scene(scene)
 
         architecture_scan = ArchitectureScanner.of_configured_root().load()
@@ -144,6 +151,76 @@ class EpisodeKnowledgeBase:
         self.classes = architecture_scan.classes
         self.package_dependencies = architecture_scan.dependency_edges
         self.subpackages = self._build_subpackages(self.classes)
+
+    def _build_robot_instances(self, scene: dict[str, Any]) -> None:
+        """
+        Build every robot's parts while retaining the selected-robot shortcut.
+
+        :param scene: Recorded robot identities and native annotations.
+        """
+        self.robot_descriptions = RecordedRobot.of_scene(scene)
+        self.robots, self.arms, self.grippers = [], [], []
+        for description in self.robot_descriptions:
+            grippers, arms = self._build_arms(
+                description.parts, description.annotations, description.name
+            )
+            self.robots.append(Robot(description.name, arm_count=len(arms)))
+            self.arms.extend(arms)
+            self.grippers.extend(grippers)
+        selected = scene.get(RobotField.ACTIVE_ROBOT) or (
+            scene.get(RobotField.ROBOT) or {}
+        ).get(RobotField.IDENTIFIER)
+        self.robot = next(
+            (
+                robot
+                for description, robot in zip(self.robot_descriptions, self.robots)
+                if description.identifier == selected
+            ),
+            self.robots[0],
+        )
+
+    def _build_instance_joint_motions(
+        self, trajectory: dict[str, Any]
+    ) -> list[JointMotion]:
+        """
+        Keep native joint names and robot ownership in scenes with several robots.
+
+        :param trajectory: Recorded joint frames.
+        :return: Motion statistics across every robot and the environment.
+        """
+        first = self.robot_descriptions[0]
+        if len(self.robot_descriptions) == 1:
+            return self._build_joint_motions(trajectory, first.parts, first.prefix)
+        prefixes = {description.prefix for description in self.robot_descriptions}
+        result = []
+        for prefix in sorted(
+            prefixes
+            | {
+                name.partition("/")[0]
+                for frame in trajectory.get("frames") or []
+                for name in frame
+            }
+        ):
+            description = next(
+                (entry for entry in self.robot_descriptions if entry.prefix == prefix),
+                None,
+            )
+            frames = [
+                {
+                    name: value
+                    for name, value in frame.items()
+                    if name.partition("/")[0] == prefix
+                }
+                for frame in trajectory.get("frames") or []
+            ]
+            motions = self._build_joint_motions(
+                {"frames": frames},
+                description.parts if description else {},
+                prefix if description else first.prefix,
+                retain_prefix=True,
+            )
+            result.extend(motions)
+        return result
 
     @staticmethod
     def _build_objects(scene: Dict[str, Any]) -> List[BenchObject]:
@@ -312,10 +389,11 @@ class EpisodeKnowledgeBase:
         :param segment: The recorded plan segment to match an arm to.
         """
         hint = (segment.get("arm") or "").lower()
-        for arm in self.arms:
+        arms = [arm for arm in self.arms if arm.robot == self.robot.name]
+        for arm in arms:
             if arm.side is not None and arm.side.name.lower() in hint:
                 return arm
-        return self.arms[0] if self.arms and segment.get("picks") else None
+        return arms[0] if arms and segment.get("picks") else None
 
     @classmethod
     def _region_of_joint(
@@ -347,7 +425,11 @@ class EpisodeKnowledgeBase:
 
     @classmethod
     def _build_joint_motions(
-        cls, trajectory: Dict[str, Any], parts: Dict[str, Any], robot_prefix: str
+        cls,
+        trajectory: Dict[str, Any],
+        parts: Dict[str, Any],
+        robot_prefix: str,
+        retain_prefix: bool = False,
     ) -> List[JointMotion]:
         """
         Per-joint motion statistics over the whole recorded trajectory.
@@ -356,6 +438,8 @@ class EpisodeKnowledgeBase:
         :param parts: Robot part names to link names, from the recorded robot
             annotation.
         :param robot_prefix: World-name prefix of the recorded robot's own joints.
+        :param retain_prefix: Keep full connection identities when several robots share
+            a scene.
         """
         minimum: Dict[str, float] = {}
         maximum: Dict[str, float] = {}
@@ -370,7 +454,7 @@ class EpisodeKnowledgeBase:
 
         return [
             JointMotion(
-                name=key.partition("/")[2] or key,
+                name=key if retain_prefix else key.partition("/")[2] or key,
                 region=cls._region_of_joint(key, robot_prefix, link_to_part),
                 minimum_radians=round(minimum[key], 3),
                 maximum_radians=round(maximum[key], 3),

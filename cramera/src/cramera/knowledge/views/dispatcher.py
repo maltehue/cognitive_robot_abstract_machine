@@ -98,7 +98,7 @@ class GraphPanelViews:
 
         :param node_id: Id of the double-clicked node.
         """
-        if node_id == self.knowledge_base.robot.name:  # → full URDF kinematic tree
+        if any(robot.name == node_id for robot in self.knowledge_base.robots):
             return UrdfViewPayload.of_tab(self.knowledge_base)
         if node_id == PlanViewPayload.TAB:  # → the executed plan tree
             return PlanViewPayload.of_tab(self.knowledge_base)

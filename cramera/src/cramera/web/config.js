@@ -17,6 +17,9 @@ if (_sceneOnly) {
 if (SceneContext.poppedOut()) {
   document.documentElement.classList.add(SceneContext.POPPED_OUT_CLASS);
 }
+if (SceneContext.tour()) {
+  document.documentElement.classList.add(SceneContext.TOUR_CLASS);
+}
 window.CRAMERA_CONFIG = {
   layout: _sceneOnly
     ? { left: ['robot-scene'] }

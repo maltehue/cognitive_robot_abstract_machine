@@ -18,12 +18,12 @@ function load() {
   return global.window.ExecutionEnvironments;
 }
 
-test('both environments are offered, without collision avoidance first', function () {
+test('every offered environment enables collision avoidance', function () {
   const offered = load().all();
 
   assert.deepStrictEqual(
     offered.map(function (e) { return [e.name, e.collisionAvoidance]; }),
-    [['simulated_robot', false], ['simulated_robot_advanced', true]],
+    [['simulated_robot_advanced', true]],
   );
 });
 
@@ -37,7 +37,7 @@ test('byName finds the environment of that name', function () {
   const environments = load();
 
   assert.strictEqual(environments.byName('simulated_robot_advanced').collisionAvoidance, true);
-  assert.strictEqual(environments.byName('simulated_robot').collisionAvoidance, false);
+  assert.strictEqual(environments.byName('simulated_robot').collisionAvoidance, true);
 });
 
 test('an unknown name falls back to the first environment offered', function () {
@@ -45,7 +45,7 @@ test('an unknown name falls back to the first environment offered', function () 
 
   assert.deepStrictEqual(environments.byName(''), environments.all()[0]);
   assert.deepStrictEqual(environments.byName(null), environments.all()[0]);
-  assert.strictEqual(environments.byName('real_robot').collisionAvoidance, false);
+  assert.strictEqual(environments.byName('real_robot').collisionAvoidance, true);
 });
 
 test('the offered environments are not the module\'s own list', function () {
@@ -54,5 +54,5 @@ test('the offered environments are not the module\'s own list', function () {
 
   environments.all().pop();
 
-  assert.strictEqual(environments.all().length, 2);
+  assert.strictEqual(environments.all().length, 1);
 });

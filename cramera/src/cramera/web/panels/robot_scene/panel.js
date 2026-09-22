@@ -16,7 +16,9 @@
  *
  * window.RobotView stays exported for the console and split-resize.
  * ==========================================================================*/
-Panels.define('robot-scene', function (root, bus) {
+Panels.define('robot-scene', function mountRobotScene(root, bus) {
+  const offlineMode = SceneContext.offline();
+  if (offlineMode) root.classList.add('offline-view');
   root.innerHTML =
     '<div class="panel-head">' +
     '  <h2>Semantic Digital Twin Scene</h2>' +
@@ -107,7 +109,41 @@ Panels.define('robot-scene', function (root, bus) {
   const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 200);
   camera.position.set(3, 2.4, 4);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  } catch (error) {
+    // Three.js reports unsupported or exhausted GPU contexts at this boundary.
+    if (!(error instanceof Error) ||
+        !/^Error creating WebGL context(?: with your selected attributes)?\.?$/.test(error.message)) {
+      throw error;
+    }
+    console.warn('[cramera] 3D renderer unavailable:', error);
+    root.innerHTML =
+      '<div class="panel-head"><h2>Semantic Digital Twin Scene</h2></div>' +
+      '<div class="panel-error">' +
+      '  <div role="alert"><h3>3D view unavailable</h3>' +
+      '    <p>This browser could not create a WebGL context.</p>' +
+      '    <p>Close other 3D tabs and retry, or copy the scene link below into a browser with WebGL support.</p>' +
+      '    <p>Your Builder plan and object settings are kept.</p>' +
+      '  </div>' +
+      '  <button id="scene-retry" class="play-btn" type="button">Retry scene</button> ' +
+      '  <a id="scene-open-browser" class="play-btn" target="_blank" rel="noopener noreferrer">Open scene separately</a>' +
+      '</div>';
+    $('scene-open-browser').href = window.location.href;
+    const retryButton = $('scene-retry');
+    let retriedPanel = null;
+    function retryScene() {
+      retriedPanel = mountRobotScene(root, bus);
+    }
+    retryButton.addEventListener('click', retryScene);
+    return {
+      destroy: function () {
+        retryButton.removeEventListener('click', retryScene);
+        if (retriedPanel) retriedPanel.destroy();
+      },
+    };
+  }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -204,6 +240,7 @@ Panels.define('robot-scene', function (root, bus) {
   scene3.add(ground);
 
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  const cameraController = new CameraFollow.Controller(controls);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1;
@@ -214,6 +251,8 @@ Panels.define('robot-scene', function (root, bus) {
   const worldRoot = new THREE.Group();
   const markerRoot = new THREE.Group();   // the CRAM debug-marker overlay (/markers)
   worldRoot.add(markerRoot);
+  const queryMarkerRoot = new THREE.Group();
+  worldRoot.add(queryMarkerRoot);
   const navTargetsRoot = new THREE.Group();   // Plan Builder Navigate goals (ground arrows)
   worldRoot.add(navTargetsRoot);
   worldRoot.rotation.x = -Math.PI / 2;
@@ -446,7 +485,6 @@ Panels.define('robot-scene', function (root, bus) {
     spr.scale.set(cv.width * s, cv.height * s, 1);
     return spr;
   }
-  let linkToPart = {};           // link name -> part name (from robot.parts)
   const readyCbs = [];
   let finalized = false;
 
@@ -497,7 +535,7 @@ Panels.define('robot-scene', function (root, bus) {
     .then(function (r) { return r.ok ? r.json() : { default: null, scenes: [] }; })
     .catch(function () { return { default: null, scenes: [] }; })
     .then(function (index) {
-      const name = SceneContext.name() || index.default;
+      const name = new ScenePicker.Selection(index).resolve(SceneContext.name());
       wireScenePickers(index.scenes || [], name);
       if (!name) {
         if (statusEl) statusEl.textContent = 'No scene found — run cramera-onboard first.';
@@ -508,6 +546,7 @@ Panels.define('robot-scene', function (root, bus) {
     })
     .catch(function (e) {
       if (statusEl) statusEl.textContent = 'Scene failed to load: ' + e;
+      bus.emit('scene:error', {message: 'Szene konnte nicht geladen werden: ' + e.message});
     });
 
   // header dropdowns: a robot and an environment jointly resolve to the one
@@ -558,7 +597,7 @@ Panels.define('robot-scene', function (root, bus) {
     const robots = ScenePicker.robots(scenes);
     if (robots.length < 2 && ScenePicker.environments(scenes, robots[0]).length < 2) return;
     const active = ScenePicker.describe(scenes, activeName) || {};
-    let robot = active.robot || robots[0];
+    let robot = active.robot ?? robots[0];
 
     function navigateTo(environment) {
       const target = ScenePicker.sceneFor(scenes, robot, environment || null);
@@ -582,16 +621,12 @@ Panels.define('robot-scene', function (root, bus) {
     SCENE = sc;
     playbackSpeedMultiplier = 1;
     if (statusEl) statusEl.textContent = 'Loading ' + sc.name + '…';
-    // robot part lookup (link -> part name)
-    linkToPart = {};
-    const parts = (sc.robot && sc.robot.parts) || {};
-    for (const part in parts) parts[part].forEach(function (l) { linkToPart[l] = part; });
-
     sc.models.forEach(function (m) {
       makeUrdfLoader().load(sceneBase + m.urdf, function (obj) {
-        const entry = { name: m.name, prefix: m.prefix || '', robot: !!m.robot, obj: obj };
+        const entry = { name: m.name, prefix: m.prefix || '', identifier: m.identifier, robot: !!m.robot, obj: obj };
         models.push(entry);
-        if (m.robot) robotModel = entry;
+        robotModel = ModelPoses.primary(models, sc.robot);
+        if (m.pose) setPose(obj, m.pose, m.pose, 0);
         worldRoot.add(obj);
         refreshFrameAxes();          // every link of the model is a frame
         refreshJointControls();
@@ -630,6 +665,9 @@ Panels.define('robot-scene', function (root, bus) {
     fetch(sceneBase + (SCENE.trajectory || 'trajectory.json'))
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
+        if (offlineMode && (!d || !Array.isArray(d.frames) || !d.frames.length)) {
+          throw new Error('Die Aufnahme enthält keine abspielbaren Frames.');
+        }
         traj = d;
         setupTransports();
         if (traj) applyFrame(0);
@@ -638,7 +676,12 @@ Panels.define('robot-scene', function (root, bus) {
         if (statusEl) statusEl.classList.add('hidden');
         readyCbs.forEach(function (cb) { cb(); });
         needsRender = true;
-      }).catch(function () {
+      }).catch(function (error) {
+        if (offlineMode) {
+          if (statusEl) { statusEl.textContent = error.message; statusEl.classList.remove('hidden'); }
+          bus.emit('scene:error', {message: error.message});
+          return;
+        }
         frameCamera();
         if (statusEl) statusEl.classList.add('hidden');
         readyCbs.forEach(function (cb) { cb(); });
@@ -747,6 +790,7 @@ Panels.define('robot-scene', function (root, bus) {
       const bo = baseOffsetAt(f);
       robotModel.obj.position.x += bo.x; robotModel.obj.position.y += bo.y;
     }
+    if (traj.modelBases) ModelPoses.apply(models, traj.modelBases[i0], traj.modelBases[i1], t, setPose);
     if (traj.objects) {
       const o0 = traj.objects[i0], o1 = traj.objects[i1];
       for (const name in objectMeshes) {
@@ -1100,7 +1144,7 @@ Panels.define('robot-scene', function (root, bus) {
     // horizontal drag plane through the grabbed thing (world y-up)
     _dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), dragStartWorld);
     e.preventDefault();
-  });
+  }, { capture: true });
   renderer.domElement.addEventListener('pointermove', function (e) {
     if (!dragging) {
       if (!playing && e.buttons === 0)
@@ -1197,13 +1241,15 @@ Panels.define('robot-scene', function (root, bus) {
       if (o.userData.simMarker) return 'place_area';
       return objectIdByKey[o.userData.simObj] || null;
     }
-    if (robotModel) {
-      hits = dragRay.intersectObject(robotModel.obj, true);
+    const robotModels = models.filter(function (model) { return model.robot; });
+    if (robotModels.length) {
+      hits = dragRay.intersectObjects(robotModels.map(function (model) { return model.obj; }), true);
       for (let i = 0; i < hits.length; i++) {
         let o = hits[i].object;
         while (o && o !== scene3) {
           if (o.isURDFLink && o.name) {
-            return linkToPart[String(o.name)] || (SCENE.robot && SCENE.robot.name) || null;
+            const model = robotModels.find(function (entry) { return entry.obj.links && entry.obj.links[o.name] === o; });
+            if (model) return ModelPoses.partFor(SCENE, model, String(o.name)) || model.identifier || model.name;
           }
           o = o.parent;
         }
@@ -1273,7 +1319,7 @@ Panels.define('robot-scene', function (root, bus) {
     (ids || []).forEach(function (id) {
       id = String(id);
       if (id.indexOf('urdf:') === 0) linkSet[id.slice(5)] = 1;
-      const j = robotModel && robotModel.obj.joints && robotModel.obj.joints[id];
+      const j = JointRouting.jointFor(models, id);
       if (j) {
         for (let i = 0; i < j.children.length; i++) {
           if (j.children[i].isURDFLink) { linkSet[j.children[i].name] = 1; break; }
@@ -1282,14 +1328,11 @@ Panels.define('robot-scene', function (root, bus) {
     });
     // robot: glow meshes by part (scene.robot.parts, e.g. PR2LeftArm), by link,
     // or the whole robot when its own id is selected
-    if (robotModel) {
-      const robotName = SCENE && SCENE.robot && SCENE.robot.name;
-      const wholeRobot = !!(robotName && set[robotName]);
-      robotModel.obj.traverse(function (c) {
+    models.filter(function (model) { return model.robot; }).forEach(function (model) {
+      model.obj.traverse(function (c) {
         if (!c.isMesh) return;
         const link = linkNameOf(c);
-        const part = linkToPart[link];
-        const on = wholeRobot || !!(part && set[part]) || !!linkSet[link];
+        const on = ModelPoses.highlighted(SCENE, model, link, set) || !!linkSet[link];
         const mats = Array.isArray(c.material) ? c.material : [c.material];
         mats.forEach(function (m) {
           if (m && m.emissive) {
@@ -1298,7 +1341,7 @@ Panels.define('robot-scene', function (root, bus) {
           }
         });
       });
-    }
+    });
     // the place area: brighten the blue corner marker
     if (PLACE0) {
       const on = !!set['place_area'];
@@ -1346,6 +1389,9 @@ Panels.define('robot-scene', function (root, bus) {
       method: 'POST',
       body: JSON.stringify({ object: key, position: [round3(x), round3(y), round3(z)], final: !!final }),
     }).catch(function () {});
+    if (final && window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'cramera-object-settled', key: key, position: [round3(x), round3(y), round3(z)] }, '*');
+    }
   }
   function round3(v) { return Math.round(v * 1000) / 1000; }
 
@@ -1513,6 +1559,7 @@ Panels.define('robot-scene', function (root, bus) {
     return 'http://' + (m ? m[1] : (window.location.hostname + ':8765'));
   }
   function probeLive() {
+    if (offlineMode) return;
     fetch(liveUrl() + '/info').then(function (r) { return r.json(); })
       .then(function (info) {
         if (liveBtn && !liveOn) liveBtn.style.display = info ? '' : 'none';
@@ -1589,10 +1636,10 @@ Panels.define('robot-scene', function (root, bus) {
     });
     needsRender = true;
   }
-  function clearMarkers() {
-    while (markerRoot.children.length) {
-      const child = markerRoot.children[0];
-      markerRoot.remove(child);
+  function clearMarkers(root = markerRoot) {
+    while (root.children.length) {
+      const child = root.children[0];
+      root.remove(child);
       child.traverse(function (c) {
         if (c.geometry) c.geometry.dispose();
         if (c.material) { c.material.map && c.material.map.dispose(); c.material.dispose(); }
@@ -1735,12 +1782,7 @@ Panels.define('robot-scene', function (root, bus) {
     if (robotModel && st.base) setPose(robotModel.obj, st.base, st.base, 0);
     // every bundled model root the bridge streams: a second robot drives, a moved
     // environment model follows (the primary robot's entry re-applies st.base)
-    const modelBases = st.modelBases || {};
-    for (const prefix in modelBases) {
-      models.forEach(function (m) {
-        if (m.prefix === prefix) setPose(m.obj, modelBases[prefix], modelBases[prefix], 0);
-      });
-    }
+    ModelPoses.apply(models, st.modelBases, null, 0, setPose);
     if (typeof st.markersVersion === 'number' && st.markersVersion !== lastMarkersVersion) {
       lastMarkersVersion = st.markersVersion;
       refreshMarkers();
@@ -1758,7 +1800,7 @@ Panels.define('robot-scene', function (root, bus) {
       } else unknown = true;                   // an object the demo spawned mid-run
     }
     if (unknown) syncLiveObjects();            // fetch the catalog & spawn the newcomers
-    if (follow && robotCenter(_target)) controls.target.lerp(_target, 0.08);
+    if (follow && robotCenter(_target)) cameraController.follow(_target, 0.08);
     needsRender = true;
   }
   let livePolls = 0;
@@ -1817,6 +1859,7 @@ Panels.define('robot-scene', function (root, bus) {
   // already there, toggles the plain pose overlay below exactly like any scene.
   var LIVE_SCENE_RETRY_MS = 1000;
   function goLiveOrAttach() {
+    if (offlineMode) return;
     if (LiveMode.actionFor(SceneContext.name()) === LiveMode.TOGGLE) {
       // detaching by hand must stick even with auto-live on — until this demo goes
       // away, after which the next run is fair game again
@@ -1890,8 +1933,8 @@ Panels.define('robot-scene', function (root, bus) {
     needsRender = true;
   }
   if (liveBtn) liveBtn.addEventListener('click', goLiveOrAttach);
-  const probeTimer = setInterval(probeLive, LIVE_PROBE_INTERVAL_MS);
-  probeLive();
+  const probeTimer = offlineMode ? null : setInterval(probeLive, LIVE_PROBE_INTERVAL_MS);
+  if (!offlineMode) probeLive();
 
   // %% SSAO
   let composer = null, ssaoPass = null;
@@ -1938,13 +1981,13 @@ Panels.define('robot-scene', function (root, bus) {
       });
       needsRender = true;
     }
-    const moved = controls.update();
+    const moved = cameraController.update();
     if (playing && traj && !liveOn) {
       playhead += ((traj.framesPerSecond || 30) / 60) * 1.6 * playbackSpeedMultiplier;
       if (playhead >= traj.frames.length - 1) { playhead = traj.frames.length - 1; playing = false; stepCb('__done__'); }
       applyFrame(playhead);
       playheadCbs.forEach(function (cb) { cb(playhead); });
-      if (follow && robotCenter(_target)) controls.target.lerp(_target, 0.06);
+      if (follow && robotCenter(_target)) cameraController.follow(_target, 0.06);
       needsRender = true;
     }
     if (!needsRender && !moved && !controls.autoRotate) return;
@@ -2039,7 +2082,15 @@ Panels.define('robot-scene', function (root, bus) {
   RobotView.onLiveChange(function (on) { bus.emit('live:changed', { on: on, url: liveUrl() }); });
 
   // %% bus: inbound
-  bus.on('entity:highlight', function (p) { highlightObjects((p && p.ids) || []); });
+  bus.on('entity:highlight', function (p) {
+    highlightObjects((p && p.ids) || []);
+    clearMarkers(queryMarkerRoot);
+    ((p && p.spatial) || []).forEach(function (marker) {
+      const built = buildMarker(marker);
+      if (built) queryMarkerRoot.add(built);
+    });
+    needsRender = true;
+  });
 
   // %% play button
   const playBtn = $('play-btn');
@@ -2211,6 +2262,7 @@ Panels.define('robot-scene', function (root, bus) {
   let recordedFrameRate = 0;
 
   function updateRecordingButtons() {
+    if (offlineMode) { recordBtn.style.display = 'none'; closeSavePanel(); return; }
     recordBtn.style.display =
       RecordingMode.controlsVisible({ state: recordingState }) ? '' : 'none';
     recordBtn.textContent = RecordingMode.controlLabel(recordingState);
@@ -2297,6 +2349,7 @@ Panels.define('robot-scene', function (root, bus) {
   }
 
   function pollRecordingStatus() {
+    if (offlineMode) return;
     fetch(liveUrl() + '/recording').then(function (r) { return r.json(); })
       .then(applyRecordingStatus)
       .catch(function () {
@@ -2306,8 +2359,8 @@ Panels.define('robot-scene', function (root, bus) {
       });
   }
   updateRecordingButtons();
-  const recordingProbeTimer = setInterval(pollRecordingStatus, LIVE_PROBE_INTERVAL_MS);
-  pollRecordingStatus();
+  const recordingProbeTimer = offlineMode ? null : setInterval(pollRecordingStatus, LIVE_PROBE_INTERVAL_MS);
+  if (!offlineMode) pollRecordingStatus();
 
   recordBtn.addEventListener('click', function () {
     if (RecordingMode.controlAction(recordingState) === RecordingMode.SAVE) {
@@ -2405,7 +2458,7 @@ Panels.define('robot-scene', function (root, bus) {
   const LAYERS_SECTION = 'layers';
   const layersPanelEl = $('layers-panel');
   const layersFoldEl = $('layers-fold');
-  let layersFolded = Folding.folded(window.localStorage, LAYERS_SECTION);
+  let layersFolded = SceneContext.tour() || Folding.folded(window.localStorage, LAYERS_SECTION);
 
   function showFold() {
     const face = Folding.button(layersFolded, 'the layers');
@@ -2417,7 +2470,7 @@ Panels.define('robot-scene', function (root, bus) {
   layersFoldEl.addEventListener('click', function (event) {
     event.preventDefault();
     layersFolded = !layersFolded;
-    Folding.remember(window.localStorage, LAYERS_SECTION, layersFolded);
+    if (!SceneContext.tour()) Folding.remember(window.localStorage, LAYERS_SECTION, layersFolded);
     showFold();
   });
 
@@ -2443,6 +2496,7 @@ Panels.define('robot-scene', function (root, bus) {
   });
 
   function renderMarkerSettings() {
+    if (offlineMode) return;
     fetch(liveUrl() + '/marker_topics').then(function (r) { return r.json(); })
       .then(function (settings) {
         markerSettingsEl.innerHTML = '';

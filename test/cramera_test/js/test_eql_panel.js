@@ -486,3 +486,16 @@ test('folding one group leaves the others open', async function () {
   assert.ok(!rowOf(found[0]).classList.contains('folded'));
   assert.ok(rowOf(found[1]).classList.contains('folded'));
 });
+
+// %% semantic geometry accompanies answer highlighting
+test('query geometry reaches the scene independently of graph ids', async function () {
+  const spatial = [{ ns: 'semantic_query', kind: 'cube', position: [1, 2, 3] }];
+  const panel = mountPanel({ '/api/eql': Object.assign({}, ANSWER, { spatial: spatial }) });
+  await flush(); await flush();
+  presetButtons(panel.root.part('#presets'))[0].click();
+  await flush(); await flush();
+  const highlight = panel.bus.emitted.filter(function (entry) {
+    return entry.event === 'entity:highlight';
+  }).pop();
+  assert.deepStrictEqual(highlight.payload.spatial, spatial);
+});

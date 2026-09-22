@@ -14,6 +14,7 @@ from typing_extensions import (
     List,
     Union,
     Type,
+    ClassVar,
 )
 
 from giskardpy.motion_statechart.goals.templates import Sequence, Parallel
@@ -243,6 +244,10 @@ class TryInOrderNode(ExecutesSequentially):
     """
 
     motion_state_chart_template = TryInOrder
+    succeeds_with_any_child: ClassVar[bool] = True
+    """
+    One successful alternative is sufficient, while failed alternatives remain failed.
+    """
 
     def notify(self):
         for child in self.children:
@@ -264,6 +269,10 @@ class TryAllNode(ExecutesInParallel):
     """
 
     motion_state_chart_template = TryAll
+    succeeds_with_any_child: ClassVar[bool] = True
+    """
+    One successful alternative is sufficient, while failed alternatives remain failed.
+    """
 
     def notify(self):
         self._perform_parallel(self.children)

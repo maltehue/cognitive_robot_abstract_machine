@@ -17,6 +17,9 @@
  *   entity:select        {id, detail, relations}        graph → eql
  *   knowledge:ready             {payload}                      eql → anyone
  *   voice:transcript     {text}                         eql → eql, anyone
+ *   query:ask            {text}                         tour → eql
+ *   graph:view           {name}                         tour → graph
+ *   scene:error          {message}                      robot-scene → tour
  *
  * A new panel is free to define further events; document them in its header.
  * ==========================================================================*/

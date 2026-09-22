@@ -3,9 +3,20 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod, ABC
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Any, List, Dict, Type, TYPE_CHECKING, Iterable, Iterator
+from typing import (
+    Optional,
+    Any,
+    List,
+    Dict,
+    Type,
+    TYPE_CHECKING,
+    Iterable,
+    Iterator,
+    ClassVar,
+)
 
 from typing_extensions import Union
 
@@ -45,6 +56,11 @@ class PlanNode(PlanEntity):
     A node in the plan.
     """
 
+    succeeds_with_any_child: ClassVar[bool] = False
+    """
+    Whether completed alternatives succeed when at least one child succeeded.
+    """
+
     status: TaskStatus = TaskStatus.CREATED
     """
     The status of the node from the TaskStatus enum.
@@ -68,6 +84,11 @@ class PlanNode(PlanEntity):
     result: Optional[Any] = None
     """
     Result from the execution of this node.
+    """
+
+    _execution_in_progress: bool = field(default=False, init=False, repr=False)
+    """
+    Whether an execution scope owns this node's lifecycle instead of its children.
     """
 
     index: Optional[int] = field(default=None, init=False, repr=False)
@@ -105,6 +126,32 @@ class PlanNode(PlanEntity):
         """
         children = self.plan.plan_graph.successors(self.index)
         return list(sort_by_layer_index(children))
+
+    @property
+    def execution_children(self) -> List[PlanNode]:
+        """
+        :return: Children contributing to the outcome of this execution.
+        """
+        return self.children
+
+    @property
+    def completed_children_status(self) -> Optional[TaskStatus]:
+        """
+        :return: The terminal outcome established by children, or None while pending.
+        """
+        statuses = {child.status for child in self.execution_children}
+        if self.succeeds_with_any_child:
+            if statuses & {TaskStatus.CREATED, TaskStatus.RUNNING, TaskStatus.PAUSE}:
+                return None
+            if TaskStatus.SUCCEEDED in statuses:
+                return TaskStatus.SUCCEEDED
+        if TaskStatus.FAILED in statuses:
+            return TaskStatus.FAILED
+        if TaskStatus.INTERRUPTED in statuses:
+            return TaskStatus.INTERRUPTED
+        if statuses == {TaskStatus.SUCCEEDED}:
+            return TaskStatus.SUCCEEDED
+        return None
 
     @property
     def descendants(self) -> List[PlanNode]:
@@ -266,7 +313,7 @@ class PlanNode(PlanEntity):
     def is_paused(self) -> bool:
         return any(parent.status == TaskStatus.PAUSE for parent in [self] + self.path)
 
-    def perform(self):
+    def perform(self) -> Any:
         """
         Perform the node and update the fields of this node.
         """
@@ -275,17 +322,41 @@ class PlanNode(PlanEntity):
                 self.status = TaskStatus.INTERRUPTED
                 return
 
-        self.status = TaskStatus.RUNNING
-        self.plan.notify_node_started(self)
-        try:
+        with self.execution_scope():
             self.notify()
             self.result = self.parse().execute()
-            self.status = TaskStatus.SUCCEEDED
+
+        return self.result
+
+    @contextmanager
+    def execution_scope(self) -> Iterator[None]:
+        """
+        Report one execution without overwriting an interruption or nested lifecycle.
+
+        Executables that bypass :meth:`perform` use the same scope. Ancestors collapsed
+        into their children's motion chart receive status updates from the plan, while
+        this node completes only after its own executable returns.
+        """
+        if self._execution_in_progress:
+            yield
+            return
+        self._execution_in_progress = True
+        if self.status != TaskStatus.INTERRUPTED:
+            self.status = TaskStatus.RUNNING
+        self.start_time = datetime.now()
+        self.end_time = None
+        self.reason = None
+        self.plan.notify_node_started(self)
+        try:
+            yield
+            if self.status == TaskStatus.RUNNING:
+                self.status = TaskStatus.SUCCEEDED
         except PlanFailure as e:
             self.status = TaskStatus.FAILED
             self.reason = e
             raise e
         finally:
+            self._execution_in_progress = False
             self.end_time = datetime.now()
             self.plan.notify_node_ended(self)
 
@@ -435,6 +506,13 @@ class UnderspecifiedNode(ExecutionBoundaryNode):
     def designator_type(self) -> Type:
         return self.underspecified_action.type
 
+    @property
+    def execution_children(self) -> List[PlanNode]:
+        """
+        :return: The current candidate; earlier failed attempts retain their outcomes.
+        """
+        return [self.current_candidate] if self.current_candidate is not None else []
+
     def _next_candidate(self) -> Optional[ActionNode]:
         """
         Pull the next grounded action from the iterator and make it the current
@@ -544,9 +622,19 @@ class DesignatorNode(PlanNode, ABC):
 
     def __node_info__(self):
         parent_infos = super().__node_info__()
-        designator_field = [f"{field.name}: {getattr(self.designator, field.name)}" for field in self.designator.fields]
-        parent_infos.append("---------------- Designator Parameter --------------------")
-        parent_infos.extend([f"Designator Type: {self.designator.__class__.__name__}", *designator_field])
+        designator_field = [
+            f"{field.name}: {getattr(self.designator, field.name)}"
+            for field in self.designator.fields
+        ]
+        parent_infos.append(
+            "---------------- Designator Parameter --------------------"
+        )
+        parent_infos.extend(
+            [
+                f"Designator Type: {self.designator.__class__.__name__}",
+                *designator_field,
+            ]
+        )
         return parent_infos
 
     def __node_label__(self):
@@ -574,6 +662,23 @@ class ActionNode(DesignatorNode):
     @property
     def action(self) -> ActionDescription:
         return self.designator
+
+    @property
+    def execution_children(self) -> List[PlanNode]:
+        """
+        :return: The action body and conditions that actually ran.
+
+        Condition nodes that were not evaluated retain CREATED and do not determine
+        whether the executed action body completed.
+        """
+        from coraplex.plans.condition_nodes import ConditionNode
+
+        return [
+            child
+            for child in self.children
+            if not isinstance(child, ConditionNode)
+            or child.status != TaskStatus.CREATED
+        ]
 
     def create_execution_data_pre_perform(self):
         """
@@ -652,12 +757,17 @@ class ActionNode(DesignatorNode):
             for executable in child_execs[0].execution_list
             if isinstance(executable, GiskardExecutable)
         ]
-        giskard_child_execs[0].pre_condition_node = pre_condition_node
-        giskard_child_execs[-1].post_condition_node = post_condition_node
+        if giskard_child_execs:
+            giskard_child_execs[0].pre_condition_node = pre_condition_node
+            giskard_child_execs[-1].post_condition_node = post_condition_node
         return child_execs[0]
 
-    def execute(self):
-        self.parse().execute()
+    def execute(self) -> None:
+        """
+        Execute the expanded action while retaining its native lifecycle.
+        """
+        with self.execution_scope():
+            self.parse().execute()
 
 
 @dataclass(eq=False, repr=False)

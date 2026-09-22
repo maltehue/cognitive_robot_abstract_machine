@@ -22,6 +22,7 @@ from semantic_digital_twin.callbacks.callback import (
     StateChangeCallback,
 )
 from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.mesh_file_storage import MeshFileStorage
 
 from cramera.live.bridge import BRIDGE, Bridge
 from cramera.live.http import DEFAULT_PORT, serve
@@ -180,6 +181,9 @@ class LiveVisualization:
         self.bridge.attach(self.world)
         self.bridge.recording = Recording()
         self.bridge.recording.start()
+        # Exit callbacks run in reverse order. Semantic queries during bundling
+        # may export meshes, so their storage must outlive the recording callback.
+        MeshFileStorage()
         atexit.register(_finalize_recording_at_exit, self.bridge)
         self.bridge.snapshot()
         self.state_sync = WorldStateSync(_world=self.world, bridge=self.bridge)

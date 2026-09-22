@@ -100,6 +100,8 @@ from cramera.onboard.bundle_world import BundledWorld
 from cramera.onboard.scene_index import write_scene_index
 from cramera.onboard.world_to_urdf import UrdfDocument
 from cramera.palette import ObjectPalette
+from cramera.spatial_annotations import SpatialAnnotations
+from cramera.world_objects import WorldObjects
 
 if TYPE_CHECKING:
     from coraplex.plans.executables import Executable
@@ -602,18 +604,7 @@ class Recorder:
         world lets frames move as well as things -- a mobile robot's ``odom`` is free and
         has no shape -- and a frame gives a viewer nothing to draw.
         """
-        robot_body_names = (
-            {str(body.name) for body in self.robot.bodies}
-            if self.robot is not None
-            else set()
-        )
-        return [
-            body
-            for body in self.world.bodies
-            if isinstance(body.parent_connection, Connection6DoF)
-            and str(body.name) not in robot_body_names
-            and (body.visual.shapes or body.collision.shapes)
-        ]
+        return WorldObjects(self.world, self.robot).free_floating()
 
     def bind_to_executor(self, executor: Executor) -> None:
         """
@@ -1598,6 +1589,9 @@ class SceneBuilder:
             "missingAssets": sorted(set(missing)),
             SceneField.TASK.value: self.task([entry["step"] for entry in segments]),
             SceneField.DETECTED_EVENTS.value: self.detected_events(),
+            **SpatialAnnotations.of_world(
+                self.recorder.world, list(self.recorder.recorded_objects().values())
+            ).scene_fields(),
         }
         self.write_statecharts(scene)
         write_json_atomically(

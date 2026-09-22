@@ -1,28 +1,42 @@
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from typing_extensions import List
 
 from giskardpy.executor import Executor
 from giskardpy.motion_statechart.context import MotionStatechartContext
+from giskardpy.motion_statechart.exceptions import (
+    CollisionViolatedError,
+    NoProgressError,
+)
+from giskardpy.motion_statechart.goals.collision_avoidance import (
+    ExternalCollisionAvoidance,
+)
 from giskardpy.motion_statechart.goals.templates import Sequence
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
+from giskardpy.motion_statechart.monitors.progress_monitors import ProgressStalled
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from giskardpy.qp.exceptions import InfeasibleException
+from coraplex.plans.executables import GiskardExecutable
 from coraplex.plans.plan_node import ActionNode, MotionNode
 from coraplex.alternative_motion_mapping import AlternativeMotion
 from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import Arms, ApproachDirection, VerticalAlignment
 from coraplex.datastructures.grasp import GraspDescription
+from coraplex.datastructures.manipulation_contacts import (
+    ManipulationContactPolicy,
+    TemporaryCollisionScope,
+)
 from coraplex.exceptions import TipLinkDoesNotMatchAnyArm
 from coraplex.locations.base import PoseValidator
 from coraplex.plans.plan import Plan
 from coraplex.plans.plan_node import PlanNode
 from coraplex.robot_plans import MoveToolCenterPointMotion
+from coraplex.robot_plans.mixins import HasTcpGoalThresholds
 from coraplex.view_manager import ViewManager
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase
@@ -148,11 +162,13 @@ class IsReachableBy(PoseValidator):
 
 
 @dataclass
-class AreReachableBy(PoseValidator):
+class AreReachableBy(PoseValidator, HasTcpGoalThresholds):
     """
     Validator that checks if a sequence of poses is reachable with the given robot link.
 
-    Poses are addressed in the order they are given.
+    Poses are addressed in the order they are given. The active execution environment
+    determines collision avoidance, and goal tolerances are resolved through the same
+    configuration as native TCP motions.
     """
 
     pose_sequence: List[Pose]
@@ -168,6 +184,11 @@ class AreReachableBy(PoseValidator):
     grasp_description: GraspDescription = field(default=None)
     """
     The grasp description that should be used for validation.
+    """
+
+    contact_policy: ManipulationContactPolicy | None = field(default=None, kw_only=True)
+    """
+    Intended object contacts preserved during candidate validation.
     """
 
     def create_msc(self) -> MotionStatechart:
@@ -201,16 +222,12 @@ class AreReachableBy(PoseValidator):
                     pose,
                     correct_arm,
                     True,
+                    position_threshold=self.resolved_position_threshold(),
+                    orientation_threshold=self.resolved_orientation_threshold(),
                 )
                 node = MotionNode(designator=motion)
                 # Imagine a plan for the motion node
-                plan = Plan(
-                    Context(
-                        self.world,
-                        self.robot,
-                        alternative_motion_mappings=self.alternative_motion_mappings,
-                    )
-                )
+                plan = Plan(replace(self.context, plan=None))
                 plan.add_node(node)
                 motion.plan_node = node
                 sequence.append(motion._motion_chart)
@@ -236,12 +253,22 @@ class AreReachableBy(PoseValidator):
             )
 
             sequence = [
-                CartesianPose(root_link=root, tip_link=self.tip_link, goal_pose=pose)
+                CartesianPose(
+                    root_link=root,
+                    tip_link=self.tip_link,
+                    goal_pose=pose,
+                    translation_threshold=self.resolved_position_threshold(),
+                    orientation_threshold=self.resolved_orientation_threshold(),
+                )
                 for pose in sequence
             ]
 
         msc = MotionStatechart()
         msc.add_node(sequence_node := Sequence(sequence))
+        msc.add_node(progress := ProgressStalled(monitored_node=sequence_node))
+        msc.add_node(progress.cancel_motion())
+        if GiskardExecutable.collision_avoidance:
+            msc.add_node(ExternalCollisionAvoidance(robot=self.robot))
         msc.add_node(EndMotion.when_true(sequence_node))
 
         return msc
@@ -251,7 +278,12 @@ class AreReachableBy(PoseValidator):
             f"Hash of input for pose_sequence_reachability_validator: {hash((*self.pose_sequence, self.tip_link, self.robot))}"
         )
 
-        with self.world.reset_state_context():
+        scope = (
+            self.contact_policy.scope(self.world)
+            if self.contact_policy is not None
+            else TemporaryCollisionScope(self.world)
+        )
+        with self.world.reset_state_context(), scope.activate():
 
             msc = self.create_msc()
 
@@ -263,17 +295,23 @@ class AreReachableBy(PoseValidator):
                     ),
                 ),
             )
-            executor.compile(msc)
-
             try:
-                # TimeoutError from tick_until_end is an expected outcome (planner
-                # cannot find a path), not an illegal state — no non-raising API exists.
+                executor.compile(msc)
+                # These failures mean this candidate cannot execute the requested
+                # sequence under the configured collision constraints.
                 executor.tick_until_end(timeout=1500)
-            except TimeoutError:
-                logger.debug(
-                    f"Timeout while executing pose sequence: {self.pose_sequence}"
-                )
+            except (
+                TimeoutError,
+                CollisionViolatedError,
+                InfeasibleException,
+                NoProgressError,
+            ):
+                logger.debug(f"Infeasible pose sequence: {self.pose_sequence}")
                 return False
+            finally:
+                # tick_until_end cleans up its execution; compilation can fail
+                # before entering it and must release collision consumers as well.
+                executor.context.cleanup()
             return True
 
 
@@ -328,17 +366,12 @@ class IsObjectReachableBy(PoseValidator):
     """
 
     def __call__(self, *args, **kwargs) -> bool:
-        world = deepcopy(self.world)
-        robot = world.get_semantic_annotation_by_id(self.robot.id)
-        end_effector = ViewManager.get_end_effector_view(self.arm, robot)
+        context = self.copy_context_for_validation(self.context)
+        end_effector = ViewManager.get_end_effector_view(self.arm, context.robot)
 
         if self.as_single_grasp:
             return IsReachableBy(
-                context=Context(
-                    world=world,
-                    robot=robot,
-                    alternative_motion_mappings=self.alternative_motion_mappings,
-                ),
+                context=context,
                 pose=self.object_designator.global_pose,
                 tip_link=end_effector.tool_frame,
                 grasp_description=GraspDescription(
@@ -358,11 +391,16 @@ class IsObjectReachableBy(PoseValidator):
             )
 
         return AreReachableBy(
-            context=Context(
-                world=world,
-                robot=robot,
-                alternative_motion_mappings=self.alternative_motion_mappings,
-            ),
+            context=context,
             pose_sequence=pose_sequence,
             tip_link=end_effector.tool_frame,
+            contact_policy=ManipulationContactPolicy(
+                self.object_designator,
+                end_effector.bodies_with_collision,
+                (
+                    self.target_pose
+                    if self.target_pose is not None
+                    else self.object_designator.global_pose
+                ),
+            ),
         ).__call__()
