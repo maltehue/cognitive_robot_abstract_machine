@@ -216,6 +216,15 @@ class UrdfDocument:
                 and cls.supports(connection)
             ):
                 document.add_joint(connection)
+            elif identity_root is not None:
+                # The viewer puts the robot's live pose on the whole model, so a part
+                # grafted at its world pose would carry that pose twice.
+                document.graft_onto_root(
+                    body,
+                    pose=identity_root._world.compute_forward_kinematics(
+                        identity_root, body
+                    ),
+                )
             else:
                 document.graft_onto_root(body)
         return document.write(name, bodies)

@@ -1389,6 +1389,51 @@ class TestUnsupportedConnections:
         graft_name = "%s_to_%s" % (UrdfDocument.SYNTHESIZED_ROOT_LINK, "pr2/base_link")
         assert graft_name in urdf
 
+    def test_a_grafted_body_of_a_robot_keeps_its_place_relative_to_the_robot_root(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        A robot model is written with its root at the origin and the viewer puts the
+        robot's live pose on top of the whole model.
+
+        A part behind a connection the document cannot express has to be grafted where
+        it sits relative to that root, or the robot's pose is applied to it twice and it
+        lands away from the robot.
+        """
+        world, root, base = self.drive_world()
+        segment = Body(name=PrefixedName("segment", prefix="pr2"))
+        with world.modify_world():
+            world.add_connection(
+                OmniDrive.create_with_dofs(parent=base, child=segment, world=world)
+            )
+            world.state[base.parent_connection.x.id].position = 3.0
+            world.state[base.parent_connection.y.id].position = -2.0
+            world.state[segment.parent_connection.x.id].position = 0.5
+            world.state[segment.parent_connection.yaw.id].position = 0.7
+        world.notify_state_change()
+        connection_types = dict(UrdfDocument.CONNECTION_JOINT_TYPES)
+        del connection_types[OmniDrive]
+        monkeypatch.setattr(UrdfDocument, "CONNECTION_JOINT_TYPES", connection_types)
+
+        report = UrdfDocument.of_bodies(
+            bodies=[base, segment],
+            name="robot",
+            output_directory=str(tmp_path / "bundle"),
+            mesh_subdirectory="robot",
+            identity_root=base,
+        )
+
+        urdf = ElementTree.fromstring(Path(report.urdf).read_text())
+        [graft] = [
+            joint
+            for joint in urdf.findall("joint")
+            if joint.find("child").attrib["link"] == "pr2/segment"
+        ]
+        base_T_segment = world.compute_forward_kinematics(base, segment).to_np()
+        assert [
+            float(value) for value in graft.find("origin").attrib["xyz"].split()
+        ] == pytest.approx(list(base_T_segment[:3, 3]))
+
 
 # %% detections a run recorded
 
