@@ -351,11 +351,11 @@ keep_plane = AlignPlanes(
     goal_normal=Vector3.X(reference_frame=world.root),
     tip_normal=Vector3.Z(reference_frame=left_tool_frame),
 )
-motion = Parallel([no_spill, keep_above, keep_plane])
-msc_transfer = MotionStatechart()
-msc_transfer.add_node(motion)
-msc_transfer.add_node(EndMotion.when_true(motion))
-giskard.execute(msc_transfer)
+# motion = Parallel([no_spill, keep_above, keep_plane])
+# msc_transfer = MotionStatechart()
+# msc_transfer.add_node(motion)
+# msc_transfer.add_node(EndMotion.when_true(motion))
+# giskard.execute(msc_transfer)
 
 extended_motion = Parallel([transfer_task, no_spill, keep_above, keep_plane])
 msc = MotionStatechart()
