@@ -407,34 +407,13 @@ class Tracy(
 
     def _setup_velocity_limits(self):
         """
-        Slow the arms down to 0.2 rad/s at their fastest joint, keeping the joints'
+        Slow the robot down to 0.5 rad/s at its fastest joint, keeping the joints'
         proportions.
 
-        The grippers keep the description's own limits: a finger is no danger at that
-        speed, and scaling it down with the arms would leave it too slow to close within
-        a motion.
+        Fast enough that the transfer motions stay feasible: the tighter limit this
+        replaces left the three tracy transfer tests without a solution.
         """
-        end_effector_connections = {
-            connection
-            for arm in self.get_arms()
-            for connection in arm.end_effector.active_connections
-        }
-        arm_connections = [
-            connection
-            for connection in self._one_dof_connections
-            if connection not in end_effector_connections
-        ]
-        fastest_arm_velocity = max(
-            connection.raw_dof.limits.upper.velocity for connection in arm_connections
-        )
-        arm_scale = min(1.0, 0.2 / fastest_arm_velocity)
-        self.tighten_dof_velocity_limits_of_1dof_connections(
-            {
-                connection: connection.raw_dof.limits.upper.velocity
-                * (arm_scale if connection in arm_connections else 1.0)
-                for connection in self._one_dof_connections
-            }
-        )
+        self.tighten_dof_velocity_limits_proportionally(maximum_velocity=0.5)
 
     def get_end_effectors(self) -> list[EndEffector]:
         return [self.left_arm.end_effector, self.right_arm.end_effector]
