@@ -1,28 +1,13 @@
 from __future__ import annotations
 
 import logging
-import threading
-import time
+from contextlib import ExitStack, nullcontext
+from datetime import datetime
 from dataclasses import dataclass, field
-from datetime import timedelta
 
 from typing_extensions import List, Dict, ClassVar, Optional, TYPE_CHECKING
 
-from giskardpy.motion_statechart.context import MotionStatechartContext
-from giskardpy.motion_statechart.data_types import (
-    LifeCycleValues,
-    ObservationStateValues,
-)
-from giskardpy.motion_statechart.goals.collision_avoidance import (
-    ExternalCollisionAvoidance,
-)
-from giskardpy.motion_statechart.goals.templates import Sequence
-from giskardpy.motion_statechart.graph_node import EndMotion, MotionStatechartNode
-from giskardpy.motion_statechart.motion_statechart import MotionStatechart
-from giskardpy.qp.qp_controller_config import QPControllerConfig
-from giskardpy.ros_executor import Ros2Executor
-from krrood.entity_query_language.factories import evaluate_condition
-from coraplex.datastructures.enums import ExecutionType, TaskStatus
+from coraplex.datastructures.enums import ExecutionType
 from coraplex.datastructures.manipulation_contacts import (
     HasManipulationContactPolicy,
     TemporaryCollisionScope,
@@ -32,88 +17,140 @@ from coraplex.exceptions import (
     ConditionNotSatisfied,
     UnknownExecutionType,
 )
-from semantic_digital_twin.world_description.connections import (
-    Connection6DoF,
-    FixedConnection,
+from giskardpy.motion_statechart.context import MotionStatechartContext
+from giskardpy.motion_statechart.data_types import LifeCycleValues
+from giskardpy.motion_statechart.goals.collision_avoidance import (
+    ExternalCollisionAvoidance,
+    SelfCollisionAvoidance,
 )
+from giskardpy.motion_statechart.graph_node import CancelMotion
+from giskardpy.motion_statechart.graph_node import (
+    EndMotion,
+    Goal,
+    Task,
+    MotionStatechartNode,
+)
+from giskardpy.motion_statechart.goals.templates import NodeListGoal
+from giskardpy.motion_statechart.motion_statechart import (
+    MotionStatechart,
+    StateHistoryObserver,
+)
+from giskardpy.qp.qp_controller_config import QPControllerConfig
+from giskardpy.ros_executor import Ros2Executor
+from krrood.entity_query_language.factories import evaluate_condition
+from krrood.symbolic_math.symbolic_math import Scalar, trinary_logic_not
 from semantic_digital_twin.world_description.world_entity import Body
 
-from giskardpy.motion_statechart.graph_node import CancelMotion
-from krrood.symbolic_math.symbolic_math import (
-    trinary_logic_and,
-    trinary_logic_not,
-    trinary_logic_or,
-)
-
 if TYPE_CHECKING:
-    from giskardpy.middleware.ros2.python_interface import GiskardWrapper
+    from giskardpy.motion_statechart.motion_statechart import StateHistory
     from coraplex.robot_plans.actions.base import ActionDescription
 
     from coraplex.plans.condition_nodes import ConditionNode
-    from coraplex.plans.attachment_nodes import ModelChangeNode
-    from coraplex.plans.plan_node import MotionNode, UnderspecifiedNode, ActionNode
+    from coraplex.plans.plan_node import MotionNode, PlanNode
+    from coraplex.plans.underspecified import UnderspecifiedNode
     from coraplex.datastructures.dataclasses import Context
 
 logger = logging.getLogger(__name__)
 
 
+# %% native motion history
+
+
 @dataclass
-class MotionLifeCycleTracker:
+class MotionPlanHistory(StateHistoryObserver):
     """
-    Keeps motion nodes' statuses on their giskard tasks' life cycle, and emits the
-    plan's node callbacks as those change during simulated execution.
-
-    A motion node is realized by a statechart task rather than performed on its own, so
-    nothing else ever sets its status: without this it stays
-    :attr:`~coraplex.datastructures.enums.TaskStatus.CREATED` for the whole run, and
-    anything reading the plan tree afterwards -- the viewer, a recording -- shows a
-    finished plan as untouched.
+    Project native motion history onto the corresponding plan nodes.
     """
 
-    STATUS_OF_TERMINAL_STATE: ClassVar[Dict[LifeCycleValues, TaskStatus]] = {
-        LifeCycleValues.DONE: TaskStatus.SUCCEEDED,
-        LifeCycleValues.FAILED: TaskStatus.FAILED,
-    }
+    statechart: MotionStatechart
     """
-    The status a motion node ends in, per life cycle state its task reached.
+    The chart whose recorded transitions drive plan progress.
     """
 
-    motion_mappings: Dict[MotionNode, MotionStatechartNode]
+    motion_mappings: dict[MotionNode, MotionStatechartNode]
     """
-    The motion nodes and the giskard tasks realizing them.
-    """
-
-    _last_states: Dict[MotionNode, LifeCycleValues] = field(init=False)
-    """
-    The life cycle state each task had when it was last inspected.
+    Plan motions and the native tasks realizing them.
     """
 
-    def __post_init__(self):
-        self._last_states = {
-            motion_node: LifeCycleValues.NOT_STARTED
-            for motion_node in self.motion_mappings
-        }
-
-    def emit_transitions(self) -> None:
+    def __post_init__(self) -> None:
         """
-        Notify the plan of every motion node whose task started or finished since the
-        last inspection.
-
-        A task that reaches a terminal state without ever being seen running still emits
-        its start first, so every ended motion node was also started.
+        Bind plan motions before observing compilation and execution.
         """
-        for motion_node, task in self.motion_mappings.items():
-            last_state = self._last_states[motion_node]
-            current_state = task.life_cycle_state
-            if current_state == last_state:
+        for node in self.motion_mappings:
+            node.motion_statechart = self.statechart
+        self.statechart.history.add_observer(self)
+
+    def on_state_change(self, history: StateHistory) -> None:
+        """
+        Publish the transitions recorded in the newest native snapshot.
+
+        :param history: The updated native state history.
+        """
+        current = history.history[-1].life_cycle_state
+        previous = history.history[-2].life_cycle_state if len(history) > 1 else None
+        for node, task in self.motion_mappings.items():
+            current_state = LifeCycleValues(int(current[task]))
+            previous_state = (
+                LifeCycleValues(int(previous[task]))
+                if previous is not None
+                else LifeCycleValues.NOT_STARTED
+            )
+            if current_state == previous_state:
                 continue
-            self._last_states[motion_node] = current_state
-            if last_state == LifeCycleValues.NOT_STARTED:
-                motion_node.status = TaskStatus.RUNNING
-                motion_node.plan.notify_node_started(motion_node)
-            if current_state in self.STATUS_OF_TERMINAL_STATE:
-                motion_node.status = self.STATUS_OF_TERMINAL_STATE[current_state]
-                motion_node.plan.notify_node_ended(motion_node)
+            if current_state == LifeCycleValues.NOT_STARTED:
+                if previous_state in (LifeCycleValues.RUNNING, LifeCycleValues.PAUSED):
+                    self._end_motion(node, LifeCycleValues.INTERRUPTED)
+                node.status = current_state
+                node.start_time = None
+                node.end_time = None
+                node.plan.notify_node_reset(node)
+                continue
+            if previous_state == LifeCycleValues.NOT_STARTED:
+                node.status = LifeCycleValues.RUNNING
+                node.start_time = datetime.now()
+                node.end_time = None
+                node.plan.notify_node_started(node)
+            node.status = current_state
+            if current_state.is_terminal:
+                self._end_motion(node, current_state)
+
+    def end_active_motions(self, outcome: LifeCycleValues | None = None) -> None:
+        """
+        Report executor termination for plan motions still in progress.
+
+        :param outcome: The executor's failure outcome, or None to use native task
+            verdicts.
+        """
+        for node, task in self.motion_mappings.items():
+            if node.status not in (LifeCycleValues.RUNNING, LifeCycleValues.PAUSED):
+                continue
+            self._end_motion(
+                node,
+                (
+                    outcome
+                    if outcome is not None
+                    else LifeCycleValues.verdict_for(
+                        self.statechart.observation_state[task]
+                    )
+                ),
+            )
+
+    def _end_motion(self, node: MotionNode, outcome: LifeCycleValues) -> None:
+        """
+        Publish the terminal boundary of one native motion attempt.
+
+        :param node: The motion whose attempt ended.
+        :param outcome: The native terminal state to publish.
+        """
+        node.status = outcome
+        node.end_time = datetime.now()
+        node.plan.notify_node_ended(node)
+
+    def stop(self) -> None:
+        """
+        Release the native history subscription.
+        """
+        self.statechart.history.remove_observer(self)
 
 
 @dataclass
@@ -132,6 +169,17 @@ class Executable:
     Coraplex context which should be used to execute this executable.
     """
 
+    @property
+    def giskard_executables(self) -> List[GiskardExecutable]:
+        """
+        :return: The giskard executables this unit is made of, in execution order.
+        """
+        return [
+            giskard_executable
+            for executable in self.execution_list
+            for giskard_executable in executable.giskard_executables
+        ]
+
     def execute(self) -> None:
         """
         Executes the unit.
@@ -143,16 +191,29 @@ class Executable:
 @dataclass
 class GiskardExecutable(Executable):
     """
-    Executable for everything that can be added to a Motion state chart, this includes
-    the motions, pre -and postconditions and the pause and interrupt calls.
+    Executable for everything that can be added to a motion state chart, this includes
+    the motions and the pre- and postconditions.
     """
 
-    maximum_ticks_per_stage: ClassVar[int] = 2000
+    root_node: Goal = field(kw_only=True)
     """
-    Finite tick budget per motion goal or expanded sequence child.
+    The goal below which every motion of this executable lives.
     """
 
-    motion_mappings: Dict[MotionNode, MotionStatechartNode] = field(kw_only=True)
+    motion_state_chart: MotionStatechart = field(
+        default_factory=MotionStatechart, kw_only=True
+    )
+    """
+    Giskard's motion state chart for this executable.
+
+    It is created once and only ever extended, because a compiled chart can no longer
+    grow: :meth:`~giskardpy.motion_statechart.motion_statechart.MotionStatechart.compile`
+    binds its updaters to the state arrays that adding a node would replace.
+    """
+
+    motion_mappings: Dict[MotionNode, MotionStatechartNode] = field(
+        default_factory=dict, kw_only=True
+    )
     """
     Mapping from the motion nodes of the plan to their giskard tasks, in execution
     order.
@@ -162,16 +223,16 @@ class GiskardExecutable(Executable):
     """
     Optional pre-condition of the action this executable belongs to.
 
-    If set, the motion only starts once the condition is observed to hold and the motion
-    is aborted (with :class:`ConditionNotSatisfied`) if it does not.
+    Carried on the executable but not evaluated during execution at present, see
+    :meth:`_add_condition_monitors`.
     """
 
     post_condition_node: Optional[ConditionNode] = field(default=None, kw_only=True)
     """
     Optional post-condition of the action this executable belongs to.
 
-    If set, it is evaluated after the motion finished; the motion only ends successfully
-    if the condition is observed to hold, otherwise it is aborted.
+    Carried on the executable but not evaluated during execution at present, see
+    :meth:`_add_condition_monitors`.
     """
 
     execution_type: ClassVar[Optional[ExecutionType]] = None
@@ -182,79 +243,67 @@ class GiskardExecutable(Executable):
 
     collision_avoidance: ClassVar[bool] = False
     """
-    Whether an :class:`~giskardpy.motion_statechart.goals.collision_avoidance.ExternalCo
-    llisionAvoidance` is added to the motion state chart, managed by
+    Whether the robot avoids colliding with its surroundings and with itself, managed by
     :py:class:`pycram.motion_executor.ExecutionEnvironment`.
-    """
 
-    _current_motion_state_chart: MotionStatechart = field(init=False, default=None)
-    """
-    Currently build motion state chart, internal only for managing the building the msc.
+    Adds an
+    :class:`~giskardpy.motion_statechart.goals.collision_avoidance.ExternalCollisionAvoidance`
+    and a
+    :class:`~giskardpy.motion_statechart.goals.collision_avoidance.SelfCollisionAvoidance`
+    to the motion state chart.
     """
 
     @property
-    def motion_state_chart(self) -> MotionStatechart:
+    def giskard_executables(self) -> List[GiskardExecutable]:
         """
-        Giskard's motion state chart constructed from the motions of this executable.
-
-        If a pre- and/or post-condition is set, it is added as a
-        :class:`~giskardpy.motion_statechart.monitors.payload_monitors.ThreadedPredicateMonitor`
-        and wired into the chart:
-
-        - the pre-condition gates the start of the motion sequence,
-        - the post-condition gates the successful end of the motion,
-        - a :class:`~giskardpy.motion_statechart.graph_node.CancelMotion` aborts
-          the motion if either condition is observed to be false.
+        :return: This executable, which is the only giskard executable it is made of.
         """
-        self._current_motion_state_chart = MotionStatechart()
-        if self.execution_type == ExecutionType.REAL:
-            self._current_motion_state_chart.add_node(
-                seq := Sequence(list(self.motion_mappings.values()))
-            )
-            self._current_motion_state_chart.add_node(EndMotion.when_true(seq))
-            return self._current_motion_state_chart
+        return [self]
 
-        tasks = list(self.motion_mappings.values())
-        for task in tasks:
-            self._current_motion_state_chart.add_node(task)
-        first_task = tasks[0]
+    def prepare_for_execution(self) -> None:
+        """
+        Extend the motion state chart with the nodes that terminate it.
 
-        end_trigger = tasks[-1].observation_variable
-
-        if self.execution_type == ExecutionType.SIMULATED:
-            skip_end_conditions = self._add_pause_interrupt(tasks)
-
-            # The motion is done when the last task finished or the first skipped
-            # (interrupted) task is reached.
-            if skip_end_conditions:
-                end_trigger = trinary_logic_or(end_trigger, *skip_end_conditions)
-
+        This runs just before compilation rather than during parsing, because the
+        execution type is only known once an
+        :py:class:`~coraplex.execution_environment.ExecutionEnvironment` is entered.
+        """
+        end_trigger = self.root_node.goal_reached
         if GiskardExecutable.collision_avoidance:
-            self._current_motion_state_chart.add_node(
+            self.motion_state_chart.add_node(
                 ExternalCollisionAvoidance(robot=self.context.robot)
+            )
+            self.motion_state_chart.add_node(
+                SelfCollisionAvoidance(robot=self.context.robot)
             )
 
         end_motion = EndMotion()
         end_motion.start_condition = end_trigger
-        self._current_motion_state_chart.add_node(end_motion)
-        return self._current_motion_state_chart
+        self.motion_state_chart.add_node(end_motion)
 
-    def _add_condition_monitors(
-        self, first_task: MotionStatechartNode, end_trigger: ObservationStateValues
-    ):
+    def _add_condition_monitors(self, end_trigger: Scalar) -> Scalar:
         """
-        Adds the pre -and postcondition nodes to the Motion state chart and wires them
-        to the first task and the end trigger of the motion state chart.
+        Add the pre- and post-condition nodes to the motion state chart and wire them to
+        the root node and the end trigger of the motion state chart.
+
+        The pre-condition gates the start of the motions, the post-condition gates the
+        successful end of the motion, and a
+        :class:`~giskardpy.motion_statechart.graph_node.CancelMotion` aborts the motion if
+        either is observed to be false.
+
+        .. note:: Currently unused. Conditions are kept out of the chart while evaluating
+            them inside it is being reworked; this stays so they can be wired back in.
 
         :param end_trigger: The trigger which ends the motion state chart.
+        :return: The end trigger, gated by the post-condition when there is one.
         """
         from coraplex.plans.condition_nodes import condition_monitor
 
         if self.pre_condition_node is not None and self.context.evaluate_conditions:
             pre_monitor = condition_monitor(self.pre_condition_node)
-            self._current_motion_state_chart.add_node(pre_monitor)
+            self.motion_state_chart.add_node(pre_monitor)
             # only start the motion once the pre-condition holds
-            first_task.start_condition = pre_monitor.observation_variable
+            self.root_node.start_condition = pre_monitor.observation_variable
             # abort if the pre-condition is observed to be false
             pre_cancel = CancelMotion(
                 exception=self._condition_not_satisfied(
@@ -265,13 +314,13 @@ class GiskardExecutable(Executable):
             pre_cancel.start_condition = trinary_logic_not(
                 pre_monitor.observation_variable
             )
-            self._current_motion_state_chart.add_node(pre_cancel)
+            self.motion_state_chart.add_node(pre_cancel)
 
         if self.post_condition_node is not None and self.context.evaluate_conditions:
             post_monitor = condition_monitor(self.post_condition_node)
             # only evaluate the post-condition once the motion is done
             post_monitor.start_condition = end_trigger
-            self._current_motion_state_chart.add_node(post_monitor)
+            self.motion_state_chart.add_node(post_monitor)
             end_trigger = post_monitor.observation_variable
             # abort if the post-condition is observed to be false
             post_cancel = CancelMotion(
@@ -283,61 +332,8 @@ class GiskardExecutable(Executable):
             post_cancel.start_condition = trinary_logic_not(
                 post_monitor.observation_variable
             )
-            self._current_motion_state_chart.add_node(post_cancel)
-
-    def _add_pause_interrupt(
-        self, tasks: List[MotionStatechartNode]
-    ) -> List[ObservationStateValues]:
-        """
-        Wire the tasks as an interruptible/pausable sequence.
-
-        Each task carries two monitors bound to its originating plan node:
-
-        - a pause monitor feeding the task's pause_condition, so the *active*
-          motion is held (and later resumed) when its plan node is paused;
-        - an interrupt monitor gating the *next* task's start. An interrupt lets
-          the currently active motion finish but prevents the subsequent ones
-          from starting ("finish active, skip rest"). When a not-yet-started task
-          is reached while interrupted, the motion ends there.
-
-        :param tasks: The list of tasks that are were added to the motion state chart
-        :returns: List of skip conditions for the case if a task is interrupted
-        """
-        from coraplex.plans.condition_nodes import PlanNodeStatusMonitor
-
-        skip_end_conditions = []
-        plan_nodes = list(self.motion_mappings.keys())
-        for index, (plan_node, task) in enumerate(zip(plan_nodes, tasks)):
-            # a task is done once its own goal is observed (as giskard's Sequence does)
-            task.end_condition = task.observation_variable
-
-            pause_monitor = PlanNodeStatusMonitor(
-                predicate=lambda node=plan_node: node.is_paused,
-                name=f"paused#{index}",
-            )
-            self._current_motion_state_chart.add_node(pause_monitor)
-            task.pause_condition = pause_monitor.observation_variable
-
-            interrupt_monitor = PlanNodeStatusMonitor(
-                predicate=lambda node=plan_node: node.is_interrupted,
-                name=f"interrupted#{index}",
-            )
-            self._current_motion_state_chart.add_node(interrupt_monitor)
-            if index > 0:
-                previous_done = tasks[index - 1].observation_variable
-                # start only once the previous motion finished and this one is not
-                # interrupted ...
-                task.start_condition = trinary_logic_and(
-                    previous_done,
-                    trinary_logic_not(interrupt_monitor.observation_variable),
-                )
-                # ... otherwise, if we reach it while interrupted, the sequence ends.
-                skip_end_conditions.append(
-                    trinary_logic_and(
-                        previous_done, interrupt_monitor.observation_variable
-                    )
-                )
-        return skip_end_conditions
+            self.motion_state_chart.add_node(post_cancel)
+        return end_trigger
 
     @staticmethod
     def _condition_not_satisfied(
@@ -350,135 +346,63 @@ class GiskardExecutable(Executable):
             condition=condition_node.condition,
         )
 
-    @property
-    def is_interrupted(self) -> bool:
-        return any(node.is_interrupted for node in self.motion_mappings)
-
-    @property
-    def is_paused(self) -> bool:
-        return any(node.is_paused for node in self.motion_mappings)
-
     def execute(self) -> None:
         """
-        Builds the motion state chart from the motions and executes it according to the
-        execution type.
+        Completes the motion state chart and executes it according to the execution
+        type.
         """
         if len(self.motion_mappings) == 0:
             return
+        if any(node.is_interrupted for node in self.motion_mappings):
+            return
+        if GiskardExecutable.execution_type == ExecutionType.NO_EXECUTION:
+            return
+        self.prepare_for_execution()
 
         match GiskardExecutable.execution_type:
             case ExecutionType.SIMULATED:
                 self._execute_simulation()
             case ExecutionType.REAL:
                 self._execute_real()
-            case ExecutionType.NO_EXECUTION:
-                return
             case _:
                 raise UnknownExecutionType(GiskardExecutable.execution_type)
 
-    def _notify_motion_tick(self, statechart: MotionStatechart) -> None:
+    def _contact_scope(self) -> TemporaryCollisionScope:
         """
-        Notify every plan whose motions this executable realizes of one executor tick.
-
-        :param statechart: The statechart the executor is ticking.
-        """
-        plans_by_identity = {
-            id(motion_node.plan): motion_node.plan
-            for motion_node in self.motion_mappings or {}
-        }
-        for plan in plans_by_identity.values():
-            plan.notify_motion_tick(statechart)
-
-    def _execute_simulation(self) -> None:
-        """
-        Expand state-dependent motions only after preceding motions finish.
-        """
-        batches = self._simulation_batches()
-        if len(batches) == 1:
-            self._execute_simulation_batch()
-            return
-        for index, mappings in enumerate(batches):
-            if index > 0 and next(iter(mappings)).is_interrupted:
-                return
-            executable = GiskardExecutable(
-                motion_mappings=mappings,
-                context=self.context,
-                pre_condition_node=self.pre_condition_node if index == 0 else None,
-                post_condition_node=(
-                    self.post_condition_node if index == len(batches) - 1 else None
-                ),
-            )
-            executable._execute_simulation_batch()
-            self._current_motion_state_chart = executable._current_motion_state_chart
-            if any(
-                task.life_cycle_state == LifeCycleValues.NOT_STARTED
-                for task in mappings.values()
-            ):
-                return
-
-    def _simulation_batches(self) -> list[dict[MotionNode, MotionStatechartNode]]:
-        """
-        Separate motions requiring the latest world from ordinary motion groups.
-
-        :return: Ordered mappings preserving the original motion-node identities.
-        """
-        batches: list[dict[MotionNode, MotionStatechartNode]] = []
-        pending: dict[MotionNode, MotionStatechartNode] = {}
-        for motion_node, task in self.motion_mappings.items():
-            if pending and self._contact_provider(
-                next(iter(pending))
-            ) is not self._contact_provider(motion_node):
-                batches.append(pending)
-                pending = {}
-            if motion_node.motion.requires_individual_execution:
-                if pending:
-                    batches.append(pending)
-                    pending = {}
-                batches.append({motion_node: task})
-            else:
-                pending[motion_node] = task
-        if pending:
-            batches.append(pending)
-        return batches
-
-    @staticmethod
-    def _contact_provider(
-        motion_node: MotionNode,
-    ) -> HasManipulationContactPolicy | None:
-        """
-        Find the enclosing action responsible for intended contact.
-
-        :param motion_node: Motion whose closest manipulation action owns the policy.
+        Resolve the intended contacts of this motion group's enclosing action.
         """
         from coraplex.plans.plan_node import ActionNode
 
-        return next(
+        motion = next(iter(self.motion_mappings))
+        provider = next(
             (
-                node.designator
-                for node in motion_node.path
+                node.action
+                for node in motion.path
                 if isinstance(node, ActionNode)
-                and isinstance(node.designator, HasManipulationContactPolicy)
+                and isinstance(node.action, HasManipulationContactPolicy)
             ),
             None,
         )
-
-    def _execute_simulation_batch(self) -> None:
-        """
-        Execute one motion group with its intended contact policy.
-        """
-        provider = self._contact_provider(next(iter(self.motion_mappings)))
+        policy = provider.manipulation_contact_policy if provider is not None else None
         scope = (
-            provider.manipulation_contact_policy.scope(self.context.world)
-            if provider is not None
+            policy.scope(self.context.world)
+            if policy is not None
             else TemporaryCollisionScope(self.context.world)
         )
-        with scope.activate():
-            self._execute_simulation_batch_with_contacts()
+        for node in self.motion_mappings:
+            scope.rules.extend(node.motion.collision_rules)
+        return scope
 
-    def _execute_simulation_batch_with_contacts(self) -> None:
+    def _execute_simulation(self) -> None:
         """
-        Compiles the motion state chart and ticks it in the world of the context until
-        it is done.
+        Execute one native motion group with its intended contact policy.
+        """
+        with self._contact_scope().activate():
+            self._execute_simulation_with_contacts()
+
+    def _execute_simulation_with_contacts(self) -> None:
+        """
+        Execute the native chart while projecting its recorded motion states.
         """
         executor = Ros2Executor(
             context=MotionStatechartContext(
@@ -489,47 +413,43 @@ class GiskardExecutable(Executable):
             ),
             ros_node=self.context.ros_node,
         )
-        motion_state_chart = self.motion_state_chart
-        try:
-            executor.compile(motion_state_chart)
-            life_cycle_tracker = MotionLifeCycleTracker(
-                motion_mappings=self.motion_mappings
+        with ExitStack() as cleanup:
+            history = MotionPlanHistory(self.motion_state_chart, self.motion_mappings)
+            cleanup.callback(history.stop)
+            cleanup.callback(executor.context.cleanup)
+            cleanup.callback(
+                self.motion_state_chart.cleanup_nodes, context=executor.context
             )
-            life_cycle_tracker.emit_transitions()
-
-            stages = sum(
-                max(1, len(task.nodes)) if isinstance(task, Sequence) else 1
-                for task in self.motion_mappings.values()
-            )
-            maximum_ticks = stages * self.maximum_ticks_per_stage
-            counter = 0
-            while counter < maximum_ticks:
-                # Paused motions do not advance or consume their tick budget.
-                if self.is_paused:
-                    time.sleep(0.01)
-                    continue
-                executor.tick()
-                counter += 1
-                life_cycle_tracker.emit_transitions()
-                self._notify_motion_tick(executor.motion_statechart)
-                if executor.motion_statechart.is_end_motion():
-                    break
-        finally:
+            cleanup.callback(executor.set_velocity_acceleration_jerk_to_zero)
             try:
-                executor.set_velocity_acceleration_jerk_to_zero()
-                motion_state_chart.cleanup_nodes(context=executor.context)
-            finally:
-                executor.context.cleanup()
-
-        if not executor.motion_statechart.is_end_motion():
-            failed_nodes = [
-                node
-                for node in motion_state_chart.nodes
-                if node.life_cycle_state
-                not in [LifeCycleValues.DONE, LifeCycleValues.NOT_STARTED]
-            ]
-            logger.error(f"Failed Nodes: {failed_nodes}")
-            raise MotionDidNotFinish(failed_nodes)
+                executor.compile(self.motion_state_chart)
+                stages = sum(
+                    max(1, len(task.nodes)) if isinstance(task, NodeListGoal) else 1
+                    for task in self.motion_mappings.values()
+                )
+                for _ in range(stages * self.context.ticks_per_motion):
+                    executor.tick()
+                    for plan in {
+                        id(node.plan): node.plan for node in self.motion_mappings
+                    }.values():
+                        plan.notify_motion_tick(self.motion_state_chart)
+                    if executor.motion_statechart.is_end_motion():
+                        history.end_active_motions()
+                        return
+                unfinished_nodes = [
+                    node
+                    for node in self.motion_state_chart.nodes
+                    if node.life_cycle_state
+                    not in [LifeCycleValues.SUCCEEDED, LifeCycleValues.NOT_STARTED]
+                ]
+                raise MotionDidNotFinish(unfinished_nodes)
+            except BaseException as error:
+                history.end_active_motions(
+                    LifeCycleValues.FAILED
+                    if isinstance(error, Exception)
+                    else LifeCycleValues.INTERRUPTED
+                )
+                raise
 
     def _execute_real(self) -> None:
         """
@@ -564,70 +484,34 @@ class ConditionExecutable(Executable):
 
 
 @dataclass
-class ModelChangeExecutable(Executable):
+class MoveBranchExecutable(Executable):
     """
-    Executable that re-attaches a body to a new parent in the world model while keeping
-    its current global pose.
+    Executable that moves a body under a new parent, keeping the body's own connection
+    so an actively driven body stays drivable afterwards.
     """
 
     body: Body = field(kw_only=True)
     """
-    The body that is re-attached.
+    The root of the branch in the kinematic structure that is moved.
     """
 
     new_parent: Body = field(kw_only=True)
     """
-    The body the moved body is attached to afterwards.
+    The new parent to which the branch is moved.
     """
 
-    node: ModelChangeNode = field(kw_only=True)
+    node: Optional[PlanNode] = field(default=None, kw_only=True)
     """
-    The plan node this executable realizes, whose status follows the re-attachment.
-
-    Like a motion node, a model change is never performed on its own, so nothing else
-    would ever move its status off
-    :attr:`~coraplex.datastructures.enums.TaskStatus.CREATED`.
-    """
-
-    giskard_idle_settle_delta: timedelta = field(
-        default=timedelta(seconds=0.3), kw_only=True
-    )
-    """
-    Time to wait after publishing the model change on the real robot.
-
-    Giskard only applies buffered world updates, and only republishes tf, while its
-    behavior tree is idle between goals (tree tick period is 50ms); this delay gives it
-    a few idle ticks to catch up before the next motion goal is sent, instead of relying
-    on however much idle time happens to fall out of the surrounding plan's timing.
+    The plan node whose execution boundary includes this model change.
     """
 
     def execute(self) -> None:
         """
-        Re-parent the body to ``new_parent`` while preserving its global pose.
+        Move the branch and report the attached node's execution outcome.
         """
-        self.node.status = TaskStatus.RUNNING
-        self.node.plan.notify_node_started(self.node)
-        obj_transform = self.context.world.compute_forward_kinematics(
-            self.new_parent, self.body
-        )
-        with self.context.world.modify_world():
-            self.context.world.remove_connection(self.body.parent_connection)
-            # TODO: this shouldn't be fixed but 6DOF
-            connection = FixedConnection(
-                parent=self.new_parent,
-                child=self.body,
-                parent_T_connection_expression=obj_transform,
-            )
-
-            # connection = Connection6DoF.create_with_dofs(
-            #     parent=self.new_parent, child=self.body, world=self.context.world, parent_T_connection_expression=obj_transform
-            # )
-            self.context.world.add_connection(connection)
-            # connection.origin = obj_transform
-        if GiskardExecutable.execution_type == ExecutionType.REAL:
-            time.sleep(self.giskard_idle_settle_delta.total_seconds())
-        self.node.status = TaskStatus.SUCCEEDED
-        self.node.plan.notify_node_ended(self.node)
+        scope = self.node.execution_scope() if self.node is not None else nullcontext()
+        with scope:
+            self.context.world.move_branch(self.body, self.new_parent)
 
 
 @dataclass

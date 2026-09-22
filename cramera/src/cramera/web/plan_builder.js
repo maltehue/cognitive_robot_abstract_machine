@@ -799,6 +799,7 @@
     if (!types.length) return null;
     return 'from semantic_digital_twin.semantic_annotations.semantic_annotations import ' + types.sort().join(', ') + '\n' +
       'from cramera.live.placement_surface import PlacementSurface\n' +
+      'from semantic_digital_twin.semantic_annotations.mixins import HasRootBody\n' +
       'from krrood.entity_query_language.factories import a, variable';
   }
   // every constraint attached anywhere in the plan
@@ -853,6 +854,7 @@
     L.push('from semantic_digital_twin.api import RobotSpecification, WorldSpecification');
     L.push('from semantic_digital_twin.datastructures.definitions import TorsoState');
     L.push('from semantic_digital_twin.reasoning.world_reasoner import WorldReasoner');
+    if (!surfaceSteps(useSteps).length) L.push('from semantic_digital_twin.semantic_annotations.mixins import HasRootBody');
     L.push('from cramera.live.placement_annotations import PlacementAnnotations');
     if (window.BaseControl.pinsTheSetting(baseControl())) {
       L.push('from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase');
@@ -955,13 +957,13 @@
     if (s.type === 'move_torso') return 'MoveTorsoAction(TorsoState.' + p.torso + ')';
     if (s.type === 'navigate') return 'NavigateAction(' + pose(p) + ')';
     if (s.type === 'transport') {
-      const given = ['object_designator=' + body(p.object || 'object'),
+      const given = ['object_designator=HasRootBody(root=' + body(p.object || 'object') + ')',
         'target_location=' + dropOffTarget(s), 'arm=Arms.' + p.arm]
         .concat(PlanConstraints.stepArguments(s.constraints || []));
       return 'TransportAction(' + given.join(', ') + ')';
     }
     if (s.type === 'pick') {
-      return 'PickUpAction(_pick_' + s.id + ', Arms.' + p.arm + ', _grasp_' + s.id + ')';
+      return 'PickUpAction(HasRootBody(root=_pick_' + s.id + '), Arms.' + p.arm + ', _grasp_' + s.id + ')';
     }
     if (s.type === 'place') {
       const action = placesAtASemanticTarget(s) ? 'a(PlaceAction)' : 'PlaceAction';
@@ -1014,6 +1016,7 @@
     L.push(')');
     L.push('from semantic_digital_twin.datastructures.definitions import TorsoState');
     L.push('from semantic_digital_twin.reasoning.world_reasoner import WorldReasoner');
+    if (!surfaceSteps(useSteps).length) L.push('from semantic_digital_twin.semantic_annotations.mixins import HasRootBody');
     L.push('from cramera.live.placement_annotations import PlacementAnnotations');
     if (window.BaseControl.pinsTheSetting(baseControl())) {
       L.push('from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase');

@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from coraplex.datastructures.enums import TaskStatus
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.demonstrations import RobotDemonstration
 from coraplex.execution_environment import simulated_robot_advanced
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
@@ -12,7 +12,7 @@ from coraplex.robot_plans.actions.core.placing import PlaceAction
 from cramera.live.placement_surface import PlacementSurface
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Table
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
-from semantic_digital_twin.world_description.geometry import BoundingBox
+from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 
 from .test_builder_transport import builder_transport_demo, builder_transport_scenario
 from .test_mobile_transport_demo import CarryTrajectory
@@ -34,18 +34,20 @@ def test_builder_finishes_transport_without_a_named_table(
     provider = transport.designator.target_location
     assert isinstance(provider, PlacementSurface)
     assert provider.surface_name is None
-    body = transport.designator.object_designator
+    body = transport.designator.object_designator.root
     trajectory = CarryTrajectory(robot=context.robot, body=body)
     plan.node_callbacks.append(trajectory)
 
     with simulated_robot_advanced:
         plan.perform()
 
-    assert transport.status is TaskStatus.SUCCEEDED
+    assert transport.status is LifeCycleValues.SUCCEEDED
     [pickup] = plan.get_nodes_by_designator_type(PickUpAction)
-    assert pickup.status is TaskStatus.SUCCEEDED
+    assert pickup.status is LifeCycleValues.SUCCEEDED
     placements = plan.get_nodes_by_designator_type(PlaceAction)
-    [placement] = [node for node in placements if node.status is TaskStatus.SUCCEEDED]
+    [placement] = [
+        node for node in placements if node.status is LifeCycleValues.SUCCEEDED
+    ]
     assert body.parent_connection.parent is world.root
     assert min(trajectory.avoidance_counts) > 0
     assert len(trajectory.carried_positions) > 1
@@ -61,7 +63,7 @@ def test_builder_finishes_transport_without_a_named_table(
         if annotation.supporting_surface
         is placement.designator.target_location.reference_frame
     ]
-    bounds = BoundingBox.from_mesh(
+    bounds = VolumetricBoundingBox.from_mesh(
         body.combined_mesh, HomogeneousTransformationMatrix(reference_frame=body)
     )
     final_pose = world.transform(body.global_pose, surface.root)

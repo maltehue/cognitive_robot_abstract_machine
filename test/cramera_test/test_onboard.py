@@ -37,7 +37,11 @@ from semantic_digital_twin.world_description.connections import (
     OmniDrive,
     PrismaticConnection,
 )
-from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
+from semantic_digital_twin.world_description.degree_of_freedom import (
+    DegreeOfFreedom,
+    DegreeOfFreedomLimits,
+)
+from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 from typing_extensions import Any, Dict, List, Optional
@@ -525,7 +529,13 @@ class TestSerializeUnclaimedBodies:
             name=PrefixedName("drawer"),
             visual=ShapeCollection(shapes=[Box(scale=Scale(0.3, 0.3, 0.2))]),
         )
-        drawer_dof = DegreeOfFreedom(name=PrefixedName("drawer_dof"))
+        drawer_dof = DegreeOfFreedom(
+            name=PrefixedName("drawer_dof"),
+            limits=DegreeOfFreedomLimits(
+                lower=DerivativeMap(position=0.0, velocity=-0.5),
+                upper=DerivativeMap(position=0.5, velocity=0.5),
+            ),
+        )
         with world.modify_world():
             world.add_kinematic_structure_entity(floor)
             world.add_kinematic_structure_entity(table)
@@ -1827,7 +1837,9 @@ class TestObjectsThatWereCarried:
 class TestTheStatechartsARunTicked:
     """
     A motion statechart exists only while it is executed, so a recording that wants to
-    replay one has to keep a snapshot per tick. The viewer has always been able to show
+    replay one has to keep a snapshot per tick.
+
+    The viewer has always been able to show
     them -- a live recording writes them -- and an onboarded one did not.
     """
 

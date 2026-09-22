@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from coraplex.locations.navigation import NavigationPath, NavigationPathUnavailable
+from coraplex.locations.navigation import RobotNavigationPath, NavigationPathUnavailable
 from coraplex.datastructures.dataclasses import Context
 from coraplex.execution_environment import simulated_robot
 from coraplex.plans.factories import execute_single
@@ -62,7 +62,7 @@ def test_close_endpoint_connects_without_rotating_beside_wall(
         robot.drive.origin = target.to_homogeneous_matrix()
         target = Pose.from_xyz_rpy(reference_frame=world.root)
     start = robot.root.global_pose.to_np().copy()
-    path = NavigationPath(
+    path = RobotNavigationPath(
         world, robot, target, keep_joint_states=True, face_travel_direction=True
     )
     poses = path.plan()
@@ -89,7 +89,7 @@ def test_endpoint_connector_rejects_an_actually_occupied_pose(
     robot.drive.origin = HomogeneousTransformationMatrix.from_xyz_rpy(-2, yaw=np.pi / 2)
     target = Pose.from_xyz_rpy(0.35, reference_frame=world.root)
     with pytest.raises(NavigationPathUnavailable):
-        NavigationPath(world, robot, target, keep_joint_states=True).plan()
+        RobotNavigationPath(world, robot, target, keep_joint_states=True).plan()
 
 
 def test_tight_pure_turn_departs_and_returns_through_the_same_portal(
@@ -103,7 +103,7 @@ def test_tight_pure_turn_departs_and_returns_through_the_same_portal(
     world = close_wall_robot_world
     robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
     target = Pose.from_xyz_rpy(yaw=np.pi, reference_frame=world.root)
-    route = NavigationPath(
+    route = RobotNavigationPath(
         world, robot, target, keep_joint_states=True, face_travel_direction=True
     ).plan_route()
     assert min(float(pose.x) for pose in route.poses) < -0.4

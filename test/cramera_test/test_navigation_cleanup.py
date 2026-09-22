@@ -18,6 +18,7 @@ from coraplex.plans.factories import execute_single
 from coraplex.robot_plans.motions.navigation import MoveMotion
 from giskardpy.executor import Executor
 from giskardpy.motion_statechart.context import MotionStatechartContext
+from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from giskardpy.qp.exceptions import InfeasibleException
 from giskardpy.qp.qp_controller import QPController
@@ -117,7 +118,14 @@ def test_simulation_cleans_resources_after_failure(
     task = CleanupTrackedPose(
         root_link=world.root, tip_link=context.robot.root, goal_pose=target
     )
-    executable = GiskardExecutable(motion_mappings={motion_node: task}, context=context)
+    chart = MotionStatechart()
+    chart.add_node(task)
+    executable = GiskardExecutable(
+        root_node=task,
+        motion_state_chart=chart,
+        motion_mappings={motion_node: task},
+        context=context,
+    )
     failure = InfeasibleException(solver_status="cleanup regression")
     probe = SimulationFailureProbe(world, failure)
     if failure_stage == "compile":

@@ -112,10 +112,15 @@ def test_reached_position_advances_with_heading_unfinished(
     position = sequence.motion_statechart.get_nodes_by_type(CartesianPosition)[0]
     orientation = sequence.motion_statechart.get_nodes_by_type(CartesianOrientation)[0]
 
-    assert position.observation_state == ObservationStateValues.TRUE
-    assert orientation.observation_state == ObservationStateValues.FALSE
-    assert waypoint.observation_state == ObservationStateValues.TRUE
-    assert waypoint.life_cycle_state == LifeCycleValues.DONE
-    assert position.life_cycle_state == LifeCycleValues.DONE
-    assert orientation.life_cycle_state == LifeCycleValues.DONE
+    arrival = next(
+        snapshot
+        for snapshot in reversed(sequence.motion_statechart.history.history)
+        if snapshot.observation_state[waypoint] == ObservationStateValues.TRUE
+    )
+    assert arrival.observation_state[position] == ObservationStateValues.TRUE
+    assert arrival.observation_state[orientation] == ObservationStateValues.FALSE
+    assert arrival.observation_state[waypoint] == ObservationStateValues.TRUE
+    assert waypoint.life_cycle_state == LifeCycleValues.SUCCEEDED
+    assert position.life_cycle_state == LifeCycleValues.SUCCEEDED
+    assert orientation.life_cycle_state == LifeCycleValues.FAILED
     assert sequence.nodes[-1].life_cycle_state == LifeCycleValues.RUNNING

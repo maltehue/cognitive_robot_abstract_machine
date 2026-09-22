@@ -17,6 +17,7 @@ from pathlib import Path
 
 from typing_extensions import ClassVar, TYPE_CHECKING
 
+from coraplex.visualization import VisualizationSession
 from cramera.live.http import DEFAULT_PORT
 from cramera.logging_setup import get_logger
 from cramera.server import DEFAULT_PORT as VIEWER_DEFAULT_PORT, ServerOptions
@@ -155,20 +156,23 @@ def main(arguments: list[str] | None = None) -> None:
     sys.path.insert(0, str(demo.parent))
     viewer = ViewerProcess(port=options.viewer_port) if options.viewer else None
     original_arguments = sys.argv
-    try:
-        if viewer is not None:
-            viewer.start()
-        logger.info("running demo: %s", demo)
-        sys.argv = [str(demo)]
-        runpy.run_path(str(demo), run_name="__main__")
-        logger.info("demo finished — bridge stays up for inspection (Ctrl-C to quit)")
-        signal.pause()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        sys.argv = original_arguments
-        if viewer is not None:
-            viewer.stop()
+    with VisualizationSession():
+        try:
+            if viewer is not None:
+                viewer.start()
+            logger.info("running demo: %s", demo)
+            sys.argv = [str(demo)]
+            runpy.run_path(str(demo), run_name="__main__")
+            logger.info(
+                "demo finished — bridge stays up for inspection (Ctrl-C to quit)"
+            )
+            signal.pause()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            sys.argv = original_arguments
+            if viewer is not None:
+                viewer.stop()
 
 
 if __name__ == "__main__":

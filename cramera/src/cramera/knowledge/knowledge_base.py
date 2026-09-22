@@ -137,11 +137,19 @@ class EpisodeKnowledgeBase:
 
         self.objects = self._build_objects(scene)
         objects_by_id = {entity.name: entity for entity in self.objects}
+        objects_by_reference = {
+            **objects_by_id,
+            **{
+                entry["key"]: objects_by_id[entry["id"]]
+                for entry in scene.get("objects") or []
+                if entry.get("key")
+            },
+        }
         place_area = objects_by_id.get("place_area")
 
         self._build_robot_instances(scene)
         self.episodes = self._build_episodes(
-            scene, frames_per_second, objects_by_id, place_area
+            scene, frames_per_second, objects_by_reference, place_area
         )
         self.joints = self._build_instance_joint_motions(trajectory)
         self.detected_events = DetectedEventRecord.of_scene(scene)

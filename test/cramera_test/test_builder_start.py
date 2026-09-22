@@ -14,7 +14,8 @@ from lxml import html
 import pytest
 
 from coraplex.datastructures.dataclasses import Context
-from coraplex.datastructures.enums import Arms, TaskStatus
+from coraplex.datastructures.enums import Arms
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.execution_environment import simulated_robot_advanced
 from coraplex.plans.factories import execute_single
 from coraplex.robot_plans.actions.core.robot_body import ParkArmsAction
@@ -144,4 +145,4 @@ def test_default_apartment_spawn_allows_parking(
     with simulated_robot_advanced:
         plan.perform()
     [park] = plan.get_nodes_by_designator_type(ParkArmsAction)
-    assert park.status is TaskStatus.SUCCEEDED
+    assert park.status is LifeCycleValues.SUCCEEDED

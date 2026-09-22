@@ -11,7 +11,7 @@ import pytest
 
 from coraplex.datastructures.dataclasses import Context
 from coraplex.execution_environment import simulated_robot
-from coraplex.locations.navigation import NavigationPath, NavigationPathUnavailable
+from coraplex.locations.navigation import RobotNavigationPath, NavigationPathUnavailable
 from coraplex.plans.factories import execute_single
 from coraplex.robot_plans.actions.core.navigation import NavigateAction
 from coraplex.robot_plans.motions.navigation import MoveMotion
@@ -136,7 +136,7 @@ def test_travel_facing_retains_short_route_segments(cylinder_bot_world: World) -
     robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
     corner = Pose.from_xyz_rpy(0.004, reference_frame=world.root)
     target = Pose.from_xyz_rpy(0.004, 1, reference_frame=world.root)
-    path = NavigationPath(world, robot, target, face_travel_direction=True)
+    path = RobotNavigationPath(world, robot, target, face_travel_direction=True)
     poses = path.face_waypoints(robot.root.global_pose, [corner, target])
     np.testing.assert_allclose(
         poses[0].to_position().to_np(), corner.to_position().to_np()
@@ -153,7 +153,7 @@ def test_travel_facing_preserves_a_tilted_base_plane(cylinder_bot_world: World) 
     robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
     start = Pose.from_xyz_rpy(roll=0.1, reference_frame=world.root)
     target = Pose.from_xyz_rpy(0, -1, roll=0.1, reference_frame=world.root)
-    path = NavigationPath(world, robot, target, face_travel_direction=True)
+    path = RobotNavigationPath(world, robot, target, face_travel_direction=True)
     poses = path.face_waypoints(start, [target])
     for pose in poses:
         np.testing.assert_allclose(pose.to_np()[:3, 2], start.to_np()[:3, 2])
@@ -168,7 +168,7 @@ def test_route_faces_travel_before_final_orientation(cylinder_bot_world: World) 
     world = cylinder_bot_world
     robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
     target = Pose.from_xyz_rpy(0, -2, reference_frame=world.root)
-    poses = NavigationPath(world, robot, target, face_travel_direction=True).plan()
+    poses = RobotNavigationPath(world, robot, target, face_travel_direction=True).plan()
     expected_arrival = Pose.from_xyz_rpy(
         0, -2, yaw=-np.pi / 2, reference_frame=world.root
     )
@@ -195,7 +195,7 @@ def test_narrow_route_only_falls_back_with_a_fixed_footprint(
     for arm in (robot.left_arm, robot.right_arm):
         arm.get_joint_state_by_type(StaticJointState.PARK).apply_to(world)
     target = Pose.from_xyz_rpy(1.1, 2, yaw=yaw, reference_frame=world.root)
-    path = NavigationPath(
+    path = RobotNavigationPath(
         world,
         robot,
         target,

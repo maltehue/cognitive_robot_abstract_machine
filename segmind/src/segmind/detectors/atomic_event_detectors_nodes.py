@@ -230,12 +230,12 @@ class MotionDetector(AbstractDetector):
         :param poses: The pose window of the body, oldest first.
         :return: True if the object is rotating, False otherwise.
         """
-        rotational_error = float(
+        rotational_distance = float(
             poses[0]
             .to_rotation_matrix()
-            .rotational_error(poses[-1].to_rotation_matrix())
+            .rotational_distance(poses[-1].to_rotation_matrix())
         )
-        return rotational_error > self.rotation_threshold
+        return rotational_distance > self.rotation_threshold
 
 
 @dataclass(eq=False, repr=False)

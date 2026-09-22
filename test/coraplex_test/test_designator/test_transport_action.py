@@ -8,7 +8,9 @@ import pytest
 
 from coraplex.datastructures.enums import Arms
 from coraplex.plans.factories import execute_single
-from coraplex.plans.plan_node import ActionNode, PlanNode, UnderspecifiedNode
+from coraplex.plans.plan_node import ActionNode, PlanNode
+from coraplex.plans.underspecified import UnderspecifiedNode
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
 from coraplex.robot_plans.actions.core.navigation import LookAtAction
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
@@ -26,7 +28,7 @@ def performed_actions(plan: PlanNode) -> List[Type]:
     performed = []
     for child in plan.children:
         if isinstance(child, UnderspecifiedNode):
-            performed.append(child.underspecified_action.type_)
+            performed.append(child.designator_type)
         else:
             performed.append(type(child.designator))
     return performed
@@ -37,7 +39,7 @@ def transport_plan(world, context, look_at_operation_site: bool) -> PlanNode:
     The plan of a transport carrying the milk to a fixed pose.
     """
     action = TransportAction(
-        world.get_body_by_name("milk.stl"),
+        Milk(root=world.get_body_by_name("milk.stl")),
         Pose(Point3.from_iterable([1, 1, 1]), reference_frame=world.root),
         Arms.LEFT,
         look_at_operation_site=look_at_operation_site,

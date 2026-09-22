@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from coraplex.locations.navigation import (
-    NavigationPath,
+    RobotNavigationPath,
     NavigationPathUnavailable,
     NavigationFailureReason,
 )
@@ -38,7 +38,7 @@ def test_route_preserves_base_height_and_goal_orientation(
         Scale(0.4, 0.8, 1),
         parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(-1),
     ).spawn(world)
-    path = NavigationPath(world=world, robot=robot, target=target)
+    path = RobotNavigationPath(world=world, robot=robot, target=target)
     poses = path.plan()
     assert len(poses) > 1
     assert all(pose.z == robot.root.global_pose.z for pose in poses)
@@ -63,7 +63,7 @@ def test_obstacles_outside_robot_height_allow_a_direct_route(
         parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(z=height),
     ).spawn(world)
     target = Pose.from_xyz_rpy(-1, reference_frame=world.root)
-    poses = NavigationPath(world, robot, target).plan()
+    poses = RobotNavigationPath(world, robot, target).plan()
     assert len(poses) == 1
     np.testing.assert_allclose(poses[0].to_np(), target.to_np())
 
@@ -84,7 +84,7 @@ def test_blocked_route_fails_without_moving_the_robot(
         Scale(0.4, 10, 1),
         parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(-1),
     ).spawn(world)
-    path = NavigationPath(
+    path = RobotNavigationPath(
         world, robot, Pose.from_xyz_rpy(-2, reference_frame=world.root)
     )
     with pytest.raises(NavigationPathUnavailable):
@@ -101,7 +101,7 @@ def test_relative_goal_is_resolved_in_the_world(cylinder_bot_world: World) -> No
     world = cylinder_bot_world
     robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
     target = Pose.from_xyz_rpy(-1, reference_frame=robot.root)
-    poses = NavigationPath(world, robot, target).plan()
+    poses = RobotNavigationPath(world, robot, target).plan()
     assert poses[-1].reference_frame is world.root
     np.testing.assert_allclose(
         poses[-1].to_np(), world.transform(target, world.root).to_np()
@@ -132,7 +132,7 @@ def test_support_contact_does_not_hide_low_obstacles(
             z=lower - 0.05 + protrusion
         ),
     ).spawn(world)
-    path = NavigationPath(
+    path = RobotNavigationPath(
         world,
         robot,
         Pose.from_xyz_rpy(-1, reference_frame=world.root),
@@ -153,7 +153,7 @@ def test_nonplanar_orientation_is_rejected(cylinder_bot_world: World) -> None:
     """
     world = cylinder_bot_world
     robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
-    path = NavigationPath(
+    path = RobotNavigationPath(
         world, robot, Pose.from_xyz_rpy(-1, roll=0.2, reference_frame=world.root)
     )
     with pytest.raises(NavigationPathUnavailable):
@@ -175,7 +175,7 @@ def test_other_agents_remain_obstacles(cylinder_bot_world: World) -> None:
     ).spawn(world)
     with world.modify_world():
         world.add_semantic_annotation(Agent(root=obstacle))
-    path = NavigationPath(
+    path = RobotNavigationPath(
         world, robot, Pose.from_xyz_rpy(-2, reference_frame=world.root)
     )
     assert len(path.plan()) > 1
@@ -203,7 +203,7 @@ def test_attached_payload_closes_a_previously_free_corridor(
     target = Pose.from_xyz_rpy(-2.0, reference_frame=world.root)
     assert (
         len(
-            NavigationPath(
+            RobotNavigationPath(
                 world, robot, target, keep_joint_states=keep_joint_states
             ).plan()
         )
@@ -220,7 +220,9 @@ def test_attached_payload_closes_a_previously_free_corridor(
         )
     assert payload in robot.bodies_with_collision
     with pytest.raises(NavigationPathUnavailable) as failure:
-        NavigationPath(world, robot, target, keep_joint_states=keep_joint_states).plan()
+        RobotNavigationPath(
+            world, robot, target, keep_joint_states=keep_joint_states
+        ).plan()
     assert failure.value.reason is NavigationFailureReason.DISCONNECTED
 
 
@@ -239,7 +241,7 @@ def test_translation_route_keeps_nonzero_heading(cylinder_bot_world: World) -> N
         Scale(0.4, 0.8, 1),
         parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(0, 2),
     ).spawn(world)
-    poses = NavigationPath(world, robot, target, keep_joint_states=True).plan()
+    poses = RobotNavigationPath(world, robot, target, keep_joint_states=True).plan()
     assert len(poses) > 1
     for pose in poses:
         np.testing.assert_allclose(pose.to_np()[:3, :3], target.to_np()[:3, :3])

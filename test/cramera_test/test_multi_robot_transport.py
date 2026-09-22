@@ -14,7 +14,7 @@ from types import ModuleType
 import numpy as np
 import pytest
 
-from coraplex.datastructures.enums import TaskStatus
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.demonstrations import RobotDemonstration
 from coraplex.execution_environment import simulated_robot_advanced
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
@@ -25,7 +25,7 @@ from cramera.paths import WEB_ROOT
 from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Table
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
-from semantic_digital_twin.world_description.geometry import BoundingBox
+from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 
 from ..coraplex_test.test_multi_robot_motion import RobotIsolationTrajectory
 from .test_mobile_transport_demo import CarryTrajectory
@@ -102,10 +102,10 @@ def test_selected_second_robot_carries_and_places_while_first_stays_fixed(
     with simulated_robot_advanced:
         plan.perform()
     [transport] = plan.get_nodes_by_designator_type(TransportAction)
-    assert transport.status is TaskStatus.SUCCEEDED
+    assert transport.status is LifeCycleValues.SUCCEEDED
     navigation = plan.get_nodes_by_designator_type(MoveMotion)
     assert len(navigation) == 2
-    assert all(node.status is TaskStatus.SUCCEEDED for node in navigation)
+    assert all(node.status is LifeCycleValues.SUCCEEDED for node in navigation)
     carried = np.asarray(carrying.carried_positions)
     assert np.linalg.norm(carried[-1] - carried[0]) > 1.0
     positions = np.asarray(carrying.positions)
@@ -118,7 +118,7 @@ def test_selected_second_robot_carries_and_places_while_first_stays_fixed(
         world, body, Table, surface_name="apartment/table_area_main"
     )
     [annotation] = surface.matching_surfaces()
-    bounds = BoundingBox.from_mesh(
+    bounds = VolumetricBoundingBox.from_mesh(
         body.combined_mesh, HomogeneousTransformationMatrix(reference_frame=body)
     )
     final_pose = world.transform(body.global_pose, annotation.root)

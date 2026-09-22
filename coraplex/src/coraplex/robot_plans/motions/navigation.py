@@ -3,7 +3,7 @@ from math import hypot, atan2
 from typing_extensions import ClassVar
 
 from coraplex.datastructures.enums import ExecutionType
-from coraplex.locations.navigation import NavigationPath
+from coraplex.locations.navigation import RobotNavigationPath
 from coraplex.plans.executables import GiskardExecutable
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.data_types import DefaultWeights
@@ -21,6 +21,7 @@ from giskardpy.motion_statechart.tasks.cartesian_tasks import (
 from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList
 from krrood.symbolic_math.symbolic_math import trinary_logic_and
 from semantic_digital_twin.datastructures.joint_state import JointState
+from semantic_digital_twin.collision_checking.collision_matrix import CollisionRule
 from coraplex.robot_plans.motions.base import BaseMotion
 from semantic_digital_twin.world_description.connections import (
     DifferentialDrive,
@@ -56,7 +57,7 @@ class CollisionAvoidingNavigation(Sequence):
     Follow planned base waypoints while continuously avoiding external collisions.
     """
 
-    path: NavigationPath = field(kw_only=True)
+    path: RobotNavigationPath = field(kw_only=True)
     """
     World geometry, robot footprint and requested destination for this navigation.
     """
@@ -102,14 +103,16 @@ class CollisionAvoidingNavigation(Sequence):
             )
             if len(goal_state) > 0:
                 self._joint_hold = JointPositionList(goal_state=goal_state)
-                self.add_node(self._joint_hold)
+                self._add_child_to_motion_statechart(self._joint_hold)
         if not any(
             node.parent_node is None
             for node in self.motion_statechart.get_nodes_by_type(
                 ExternalCollisionAvoidance
             )
         ):
-            self.add_node(ExternalCollisionAvoidance(robot=self.path.robot))
+            self._add_child_to_motion_statechart(
+                ExternalCollisionAvoidance(robot=self.path.robot)
+            )
 
     def create_segment(
         self,
@@ -178,11 +181,9 @@ class CollisionAvoidingNavigation(Sequence):
         :param context: Context used to build the controller's observation.
         :return: Observation of the final driving stage.
         """
-        observation = self._completion_node.observation_variable
+        observation = self._completion_node.goal_reached
         if self._joint_hold is not None:
-            observation = trinary_logic_and(
-                observation, self._joint_hold.observation_variable
-            )
+            observation = trinary_logic_and(observation, self._joint_hold.goal_reached)
         return NodeArtifacts(observation=observation)
 
 
@@ -224,6 +225,15 @@ class MoveMotion(BaseMotion):
     """
 
     @property
+    def collision_rules(self) -> list[CollisionRule]:
+        """
+        Retain physical contact checks at the supporting floor during base motion.
+        """
+        return RobotNavigationPath(
+            self.world, self.robot, self.target, clearance=self.obstacle_clearance
+        ).support_contact_rules()
+
+    @property
     def _motion_chart(self) -> CartesianPose | CollisionAvoidingNavigation:
         """
         Plan a simulated base route or delegate real execution to its controller.
@@ -232,7 +242,7 @@ class MoveMotion(BaseMotion):
         """
         if GiskardExecutable.execution_type != ExecutionType.REAL:
             return CollisionAvoidingNavigation(
-                path=NavigationPath(
+                path=RobotNavigationPath(
                     self.world,
                     self.robot,
                     self.target,

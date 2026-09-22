@@ -8,16 +8,16 @@ from dataclasses import dataclass, field
 
 from typing_extensions import List, Tuple
 
-from coraplex.datastructures.enums import TaskStatus
 from coraplex.execution_environment import simulated_robot
-from coraplex.plans.attachment_nodes import ModelChangeNode
-from coraplex.plans.executables import MotionLifeCycleTracker
+from coraplex.plans.attachment_nodes import ReAttachNode
+from coraplex.plans.executables import MotionPlanHistory
 from coraplex.plans.factories import sequential
 from coraplex.plans.plan_callbacks import PlanCallback
 from coraplex.plans.plan_node import MotionNode, PlanNode
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
 from giskardpy.motion_statechart.graph_node import LifeCycleValues
 from semantic_digital_twin.datastructures.definitions import TorsoState
+from .test_execution_observers import RecordedMotion
 
 # %% recording callback
 
@@ -121,27 +121,18 @@ def test_simulated_execution_notifies_every_motion_tick(immutable_model_world):
 
 
 @dataclass
-class ReportedLifeCycle:
-    """
-    A giskard task, as the tracker reads its life cycle state.
-    """
-
-    life_cycle_state: LifeCycleValues
-    """
-    The state the task reports right now.
-    """
-
-
-@dataclass
 class NotifiedPlan:
     """
     The plan a tracked node notifies, recording the status each notification carried.
     """
 
-    events: List[Tuple[str, TaskStatus]] = field(default_factory=list)
+    events: List[Tuple[str, LifeCycleValues]] = field(default_factory=list)
     """
     The recorded (event, status) pairs in notification order.
     """
+
+    def notify_motion_tick(self, statechart) -> None:
+        """Accept native snapshots while this test records boundaries only."""
 
     def notify_node_started(self, node) -> None:
         self.events.append(("start", node.status))
@@ -163,7 +154,7 @@ class TrackedMotionNode:
     The plan told about this node's transitions.
     """
 
-    status: TaskStatus = TaskStatus.CREATED
+    status: LifeCycleValues = LifeCycleValues.NOT_STARTED
     """
     The status the tracker keeps on the node.
     """
@@ -174,22 +165,22 @@ def test_a_motion_node_runs_and_succeeds_with_its_task():
     Nothing else sets a motion node's status -- it is realized by a statechart task
     rather than performed -- so the tracker has to, or a finished plan reads as untouched.
     """
-    task = ReportedLifeCycle(LifeCycleValues.NOT_STARTED)
+    motion = RecordedMotion()
     node = TrackedMotionNode()
-    tracker = MotionLifeCycleTracker(motion_mappings={node: task})
+    tracker = MotionPlanHistory(
+        statechart=motion.chart, motion_mappings={node: motion.task}
+    )
 
-    task.life_cycle_state = LifeCycleValues.RUNNING
-    tracker.emit_transitions()
+    motion.record(LifeCycleValues.RUNNING)
     running = node.status
 
-    task.life_cycle_state = LifeCycleValues.DONE
-    tracker.emit_transitions()
+    motion.record(LifeCycleValues.SUCCEEDED)
 
-    assert running is TaskStatus.RUNNING
-    assert node.status is TaskStatus.SUCCEEDED
+    assert running is LifeCycleValues.RUNNING
+    assert node.status is LifeCycleValues.SUCCEEDED
     assert node.plan.events == [
-        ("start", TaskStatus.RUNNING),
-        ("end", TaskStatus.SUCCEEDED),
+        ("start", LifeCycleValues.RUNNING),
+        ("end", LifeCycleValues.SUCCEEDED),
     ]
 
 
@@ -197,17 +188,18 @@ def test_a_motion_node_whose_task_failed_ends_failed():
     """
     A failed motion must not read as a successful one, however the plan carried on.
     """
-    task = ReportedLifeCycle(LifeCycleValues.NOT_STARTED)
+    motion = RecordedMotion()
     node = TrackedMotionNode()
-    tracker = MotionLifeCycleTracker(motion_mappings={node: task})
+    tracker = MotionPlanHistory(
+        statechart=motion.chart, motion_mappings={node: motion.task}
+    )
 
-    task.life_cycle_state = LifeCycleValues.FAILED
-    tracker.emit_transitions()
+    motion.record(LifeCycleValues.FAILED)
 
-    assert node.status is TaskStatus.FAILED
+    assert node.status is LifeCycleValues.FAILED
     assert node.plan.events == [
-        ("start", TaskStatus.RUNNING),
-        ("end", TaskStatus.FAILED),
+        ("start", LifeCycleValues.RUNNING),
+        ("end", LifeCycleValues.FAILED),
     ]
 
 
@@ -226,7 +218,7 @@ def test_every_executed_motion_of_a_performed_plan_reports_it_succeeded(
 
     motion_nodes = [node for node in plan.all_nodes if isinstance(node, MotionNode)]
     assert motion_nodes
-    assert {node.status for node in motion_nodes} == {TaskStatus.SUCCEEDED}
+    assert {node.status for node in motion_nodes} == {LifeCycleValues.SUCCEEDED}
 
 
 def test_a_performed_model_change_reports_it_succeeded(mutable_model_world):
@@ -236,7 +228,7 @@ def test_a_performed_model_change_reports_it_succeeded(mutable_model_world):
     the attach that ended it is not.
     """
     world, robot_view, context = mutable_model_world
-    attach = ModelChangeNode(
+    attach = ReAttachNode(
         body=world.get_body_by_name("milk.stl"), new_parent=world.root
     )
     plan = sequential([attach], context=context).plan
@@ -244,4 +236,4 @@ def test_a_performed_model_change_reports_it_succeeded(mutable_model_world):
     with simulated_robot:
         plan.perform()
 
-    assert attach.status is TaskStatus.SUCCEEDED
+    assert attach.status is LifeCycleValues.SUCCEEDED

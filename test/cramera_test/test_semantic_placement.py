@@ -120,6 +120,6 @@ class TestGeneratedSemanticPlacement:
         exec(generated["setup"], namespace)
         action = eval(generated["action"], namespace)
         assert isinstance(action, TransportAction)
-        assert action.object_designator is placement_scene.object.root
+        assert action.object_designator.root is placement_scene.object.root
         assert isinstance(action.target_location, PlacementSurface)
         assert isinstance(next(iter(action.target_location)), Pose)

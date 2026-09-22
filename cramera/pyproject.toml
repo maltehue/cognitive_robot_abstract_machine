@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,14 +9,19 @@ authors = [
 ]
 description = "Browser-based visualization for the CRAM architecture: 3D scene, EQL knowledge panel and execution graphs as swappable panels."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
 ]
 keywords = ["robotics", "visualization"]
-dynamic = ["version", "dependencies"]
+dynamic = ["version"]
+dependencies = [
+    "coraplex", "giskardpy", "semantic_digital_twin", "krrood", "segmind",
+    "random-events", "probabilistic-model",
+    "numpy", "scipy", "rapidfuzz>=3.0", "typing_extensions", "urdf-parser-py",
+]
 license = { text = "GPL-3.0-only" }
 
 [project.urls]
@@ -26,6 +31,9 @@ license = { text = "GPL-3.0-only" }
 cramera = "cramera.server:main"
 cramera-live = "cramera.live.runner:main"
 cramera-onboard = "cramera.onboard.demo:main"
+
+[project.entry-points."coraplex.visualizations"]
+cramera = "cramera.live.visualization:LiveVisualization"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -37,7 +45,6 @@ cramera = ["web/**/*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "cramera._version.__version__" }
-dependencies = { file = "requirements.txt" }
 
 [project.optional-dependencies]
 dev = [

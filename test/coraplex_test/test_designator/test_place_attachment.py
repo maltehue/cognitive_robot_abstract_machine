@@ -9,6 +9,7 @@ import pytest
 
 from coraplex.datastructures.enums import ApproachDirection, Arms, VerticalAlignment
 from coraplex.datastructures.grasp import GraspDescription
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
 from coraplex.locations.factories import reachability_location
 from coraplex.plans.factories import sequential
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
@@ -66,7 +67,9 @@ def test_place_reaches_the_object_goal_with_its_actual_grasp(
     )
     target = Pose.from_xyz_rpy(1.2, 0.4, 0.9, yaw=-0.7, reference_frame=world.root)
     place = PlaceAction(body, target, Arms.LEFT)
-    sequential([PickUpAction(body, Arms.LEFT, grasp), place], context=context)
+    sequential(
+        [PickUpAction(Milk(root=body), Arms.LEFT, grasp), place], context=context
+    )
 
     placing_motion = place._action_plan.children[1].designator
     world_T_tool_goal = world.transform(

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from typing_extensions import Any, Dict
+from typing_extensions import Any, Dict, TYPE_CHECKING
 
-from coraplex.plans.attachment_nodes import DetachNode
+from coraplex.plans.attachment_nodes import ReAttachNode
 from coraplex.plans.plan_node import PlanNode
 from krrood.entity_query_language.core.variable import Variable
 from krrood.entity_query_language.factories import (
@@ -21,6 +21,7 @@ from coraplex.datastructures.enums import (
     VerticalAlignment,
 )
 from coraplex.datastructures.grasp import GraspDescription
+from coraplex.exceptions import BodyIsNotHeld
 from coraplex.datastructures.manipulation_contacts import (
     HasManipulationContactPolicy,
     ManipulationContactPolicy,
@@ -32,6 +33,7 @@ from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.robot_plans.mixins import (
     HasGraspDetectionThreshold,
     PlaceTuningParameters,
+    HasTcpGoalThresholds,
 )
 from coraplex.robot_plans.motions.gripper import (
     MoveGripperMotion,
@@ -49,11 +51,15 @@ from semantic_digital_twin.reasoning.robot_predicates import is_body_gripped
 from semantic_digital_twin.spatial_types.spatial_types import Pose
 from semantic_digital_twin.world_description.world_entity import Body
 
+if TYPE_CHECKING:
+    from semantic_digital_twin.robots.robot_parts import EndEffector
+
 
 @dataclass
 class PlaceAction(
     ActionDescription,
     PlaceTuningParameters,
+    HasTcpGoalThresholds,
     HasGraspDetectionThreshold,
     HasManipulationContactPolicy,
 ):
@@ -103,30 +109,51 @@ class PlaceAction(
         """
         return sequential(
             [
-                DetachNode(body=self.object_designator, new_parent=self.world.root),
+                ReAttachNode(body=self.object_designator, new_parent=self.world.root),
                 MovePlacementMotion(
                     placement.resolve(PlacementStage.RETRACT),
                     self.arm,
                     placement=placement,
                     stage=PlacementStage.RETRACT,
                     max_linear_velocity=self.retract_linear_velocity,
+                    position_threshold=self.position_threshold,
+                    orientation_threshold=self.orientation_threshold,
                 ),
             ],
         )
 
-    @property
-    def _action_plan(self) -> PlanNode:
-        end_effector = ViewManager.get_arm_view(self.arm, self.robot).end_effector
+    def _grasp_description(self, end_effector: EndEffector) -> GraspDescription:
+        """
+        Describe how the object to place is held.
+
+        Read from the world whenever the object is really in the gripper, which is the
+        ground truth and needs no earlier action to have recorded it. A plan is built
+        before it runs, though, so an action plan built ahead of the pick-up that fills
+        the gripper has nothing to measure yet; the grasp that pick-up intends is used
+        then.
+
+        :param end_effector: The end effector holding the object.
+        :return: The grasp the object is held in.
+        """
+        if (
+            self.object_designator
+            in end_effector.tool_frame.child_kinematic_structure_entities
+        ):
+            return GraspDescription.from_attachment(
+                end_effector, self.object_designator
+            )
+
         previous_pick = self.plan_node.get_previous_node_by_designator_type(
             PickUpAction
         )
-        previous_grasp_description = (
-            previous_pick.designator.grasp_description
-            if previous_pick
-            else GraspDescription(
-                ApproachDirection.FRONT, VerticalAlignment.NoAlignment, end_effector
-            )
-        )
+        if previous_pick is None:
+            raise BodyIsNotHeld(self.object_designator, end_effector)
+        return previous_pick.designator.grasp_description
+
+    @property
+    def _action_plan(self) -> PlanNode:
+        end_effector = ViewManager.get_arm_view(self.arm, self.robot).end_effector
+        previous_grasp_description = self._grasp_description(end_effector)
         placement = PlacementPoseSequence(
             previous_grasp_description, self.object_designator, self.target_location
         )
@@ -140,6 +167,8 @@ class PlaceAction(
                     stage=PlacementStage.APPROACH,
                     allow_gripper_collision=False,
                     max_linear_velocity=self.transport_linear_velocity,
+                    position_threshold=self.position_threshold,
+                    orientation_threshold=self.orientation_threshold,
                 ),
                 MovePlacementMotion(
                     placement.resolve(PlacementStage.RELEASE),
@@ -148,6 +177,8 @@ class PlaceAction(
                     stage=PlacementStage.RELEASE,
                     allow_gripper_collision=False,
                     max_linear_velocity=self.placing_linear_velocity,
+                    position_threshold=self.position_threshold,
+                    orientation_threshold=self.orientation_threshold,
                 ),
                 MoveGripperMotion(
                     GripperState.OPEN,

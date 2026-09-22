@@ -13,6 +13,7 @@ import pytest
 from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import Arms
 from coraplex.datastructures.grasp import GraspDescription
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
 from coraplex.datastructures.manipulation_contacts import (
     ManipulationContactPolicy,
     TemporaryCollisionScope,
@@ -22,7 +23,7 @@ from coraplex.locations.base import PoseValidator
 from coraplex.locations.factories import reachability_location
 from coraplex.locations.pose_validator import AreReachableBy
 from coraplex.plans.factories import execute_single, sequential
-from coraplex.plans.attachment_nodes import AttachNode
+from coraplex.plans.attachment_nodes import ReAttachNode
 from coraplex.plans.plan_callbacks import PlanCallback
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.robot_plans.actions.core.placing import PlaceAction
@@ -325,6 +326,13 @@ def test_remote_placement_serializes_only_native_controller_goals(
     The remote controller receives a native goal independent of client plan state.
     """
     scene = supported_manipulation
+    execute_single(
+        ReAttachNode(
+            body=scene.body,
+            new_parent=scene.context.robot.left_arm.end_effector.tool_frame,
+        ),
+        context=scene.context,
+    ).perform()
     action = execute_single(
         PlaceAction(scene.body, scene.body.global_pose, Arms.LEFT),
         context=scene.context,
@@ -348,7 +356,7 @@ def test_held_object_keeps_support_contact_distinct_from_gripper_clearance(
     scene = supported_manipulation
     end_effector = scene.context.robot.left_arm.end_effector
     execute_single(
-        AttachNode(body=scene.body, new_parent=end_effector.tool_frame),
+        ReAttachNode(body=scene.body, new_parent=end_effector.tool_frame),
         context=scene.context,
     ).perform()
     policy = ManipulationContactPolicy(
@@ -372,7 +380,10 @@ def test_pickup_and_park_preserve_intended_contact(
     scene = supported_manipulation
     initial_height = float(scene.body.global_pose.z)
     plan = sequential(
-        [PickUpAction(scene.body, Arms.LEFT, scene.grasp), ParkArmsAction(Arms.BOTH)],
+        [
+            PickUpAction(Milk(root=scene.body), Arms.LEFT, scene.grasp),
+            ParkArmsAction(Arms.BOTH),
+        ],
         context=scene.context,
     ).plan
     trace = ContactScopeTrace(scene)
@@ -402,7 +413,7 @@ def test_place_reaches_supported_pose_and_retracts(
     )
     plan = sequential(
         [
-            PickUpAction(scene.body, Arms.LEFT, scene.grasp),
+            PickUpAction(Milk(root=scene.body), Arms.LEFT, scene.grasp),
             PlaceAction(scene.body, target, Arms.LEFT),
             ParkArmsAction(Arms.BOTH),
         ],
@@ -437,7 +448,7 @@ def test_repeated_placement_refreshes_the_measured_attachment(
     initial = sequence.resolve(PlacementStage.RELEASE).to_np()
     end_effector = scene.context.robot.left_arm.end_effector
     execute_single(
-        AttachNode(body=scene.body, new_parent=end_effector.tool_frame),
+        ReAttachNode(body=scene.body, new_parent=end_effector.tool_frame),
         context=scene.context,
     ).perform()
     with scene.context.world.modify_world():

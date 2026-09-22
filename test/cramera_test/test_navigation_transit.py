@@ -9,7 +9,7 @@ import pytest
 
 from coraplex.datastructures.dataclasses import Context
 from coraplex.execution_environment import simulated_robot_advanced
-from coraplex.locations.navigation import NavigationPath, NavigationPathUnavailable
+from coraplex.locations.navigation import RobotNavigationPath, NavigationPathUnavailable
 from coraplex.plans.factories import execute_single
 from coraplex.robot_plans.actions.core.navigation import NavigateAction
 from semantic_digital_twin.api import BodySpecification
@@ -65,7 +65,7 @@ def test_transit_turns_in_free_rooms_before_entering_the_passage(
     robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
     start = robot.root.global_pose.to_np().copy()
     target = Pose.from_xyz_rpy(4, reference_frame=world.root)
-    route = NavigationPath(
+    route = RobotNavigationPath(
         world,
         robot,
         target,
@@ -101,7 +101,7 @@ def test_transit_rejects_an_attachment_too_wide_at_every_heading(
     with world.modify_world():
         world.move_branch_with_fixed_connection(payload, robot.root)
     with pytest.raises(NavigationPathUnavailable):
-        NavigationPath(
+        RobotNavigationPath(
             world,
             robot,
             Pose.from_xyz_rpy(4, reference_frame=world.root),

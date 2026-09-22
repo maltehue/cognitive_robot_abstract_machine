@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pytest
 
@@ -9,6 +11,7 @@ from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.data_types import (
     ObservationStateValues,
     DefaultWeights,
+    LifeCycleValues,
 )
 from giskardpy.motion_statechart.goals.cartesian_goals import (
     DifferentialDriveBaseGoal,
@@ -18,6 +21,7 @@ from giskardpy.motion_statechart.goals.templates import Sequence, Parallel
 from giskardpy.motion_statechart.graph_node import (
     EndMotion,
     CancelMotion,
+    MotionStatechartNode,
 )
 from giskardpy.motion_statechart.monitors.overwrite_state_monitors import (
     SetSeedConfiguration,
@@ -36,10 +40,7 @@ from giskardpy.motion_statechart.tasks.cartesian_tasks import (
     CartesianPositionTrajectory,
 )
 from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList, JointState
-from krrood.symbolic_math.symbolic_math import (
-    trinary_logic_and,
-    trinary_logic_not,
-)
+from krrood.symbolic_math.symbolic_math import trinary_logic_not
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.robot_parts import EndEffector
 from semantic_digital_twin.robots.hsrb import HSRB
@@ -74,6 +75,80 @@ from test.giskardpy_test.test_motion_statechart.debug_expression_helpers import 
     debug_expression_by_name,
 )
 from semantic_digital_twin.robots.pr2 import PR2Joint
+
+# %% straight line paths
+
+STRAIGHT_LINE_TOLERANCE = 0.02
+"""
+How far the tip may stray from the line it is supposed to travel along, in meters.
+
+Some deviation is unavoidable: the controller has to accelerate out of the pose the
+motion starts at, and it can only correct a lateral offset on the tick after it appeared.
+"""
+
+
+@dataclass
+class StraightLine:
+    """
+    The line a straight Cartesian motion is supposed to travel along.
+    """
+
+    start: np.ndarray
+    """Position the motion starts at."""
+
+    end: np.ndarray
+    """Position the motion ends at."""
+
+    def distance_from(self, position: np.ndarray) -> float:
+        """
+        :return: Distance between `position` and this line.
+        """
+        direction = self.end - self.start
+        direction = direction / np.linalg.norm(direction)
+        offset = position - self.start
+        return float(np.linalg.norm(offset - np.dot(offset, direction) * direction))
+
+    def maximum_distance_from(self, positions: list[np.ndarray]) -> float:
+        """
+        :return: Distance of the position that strayed furthest from this line.
+        """
+        return max(self.distance_from(position) for position in positions)
+
+
+def record_tip_path(
+    executor: Executor,
+    task: MotionStatechartNode,
+    root_link: KinematicStructureEntity,
+    tip_link: KinematicStructureEntity,
+    maximum_ticks: int = 2000,
+) -> list[np.ndarray]:
+    """
+    Tick until the motion ends and collect where the tip was while `task` was running.
+
+    The first entry is the position the tip had when `task` started, which is where a
+    straight motion is supposed to begin.
+
+    :raises TimeoutError: if the motion does not end within `maximum_ticks`.
+    """
+    world = executor.context.world
+    life_cycle_state = executor.motion_statechart.life_cycle_state
+
+    def tip_position() -> np.ndarray:
+        return world.compute_forward_kinematics_np(root_link, tip_link)[:3, 3].copy()
+
+    path = []
+    if life_cycle_state[task] == LifeCycleValues.RUNNING:
+        path.append(tip_position())
+    for _ in range(maximum_ticks):
+        position_before_tick = tip_position()
+        executor.tick()
+        if not path and life_cycle_state[task] == LifeCycleValues.RUNNING:
+            path.append(position_before_tick)
+        if path:
+            path.append(tip_position())
+        if executor.motion_statechart.is_end_motion():
+            return path
+    raise TimeoutError(f"{task.name} did not finish within {maximum_ticks} ticks")
 
 
 class TestCartesianPositionTrajectory:
@@ -226,6 +301,45 @@ class TestCartesianPositionTrajectory:
             executor.trajectory_plotter.world_state_trajectory,
             cartesian_trajectory.root_link,
             cartesian_trajectory.tip_link,
+        )
+
+    def test_trajectory_follows_a_goal_frame_that_moved_before_it_started(
+        self, cylinder_bot_world: World
+    ):
+        """
+        A trajectory bound on start must track its goal frame where that frame is when the
+        trajectory starts, even if a task built after the trajectory moved the frame
+        first.
+        """
+        root = cylinder_bot_world.root
+        tip = cylinder_bot_world.get_kinematic_structure_entity_by_name("bot")
+        points = [Point3(0, y, 0, reference_frame=tip) for y in np.linspace(0, 0.2, 21)]
+
+        motion_statechart = MotionStatechart()
+        cartesian_trajectory = CartesianPositionTrajectory(
+            root_link=root, tip_link=tip, goal_points=points
+        )
+        motion_statechart.add_node(cartesian_trajectory)
+        move_away = CartesianPosition(
+            root_link=root,
+            tip_link=tip,
+            goal_point=Point3(-0.5, 0, 0, reference_frame=root),
+        )
+        motion_statechart.add_node(move_away)
+        move_away.end_condition = move_away.observation_variable
+        cartesian_trajectory.start_condition = move_away.is_succeeded
+        motion_statechart.add_node(EndMotion.when_true(cartesian_trajectory))
+
+        executor = Executor(MotionStatechartContext(world=cylinder_bot_world))
+        executor.compile(motion_statechart=motion_statechart)
+        executor.tick_until_end()
+
+        root_P_tip_start = move_away.goal_point.to_np()[:3]
+        tip_start_P_last_point = points[-1].to_np()[:3]
+        assert np.allclose(
+            cylinder_bot_world.compute_forward_kinematics_np(root, tip)[:3, 3],
+            root_P_tip_start + tip_start_P_last_point,
+            atol=move_away.threshold + cartesian_trajectory.threshold,
         )
 
     def test_cartesian_position_trajectory_spiral_pr2(
@@ -601,13 +715,9 @@ class TestCartesianTasks:
         motion_statechart.add_node(cart_goal2)
 
         cart_goal1.end_condition = cart_goal1.observation_variable
-        cart_goal2.start_condition = cart_goal1.observation_variable
+        cart_goal2.start_condition = cart_goal1.is_succeeded
 
-        end = EndMotion()
-        motion_statechart.add_node(end)
-        end.start_condition = trinary_logic_and(
-            cart_goal1.observation_variable, cart_goal2.observation_variable
-        )
+        motion_statechart.add_node(EndMotion.when_all_true([cart_goal1, cart_goal2]))
 
         executor = Executor(
             MotionStatechartContext(
@@ -655,13 +765,9 @@ class TestCartesianTasks:
         motion_statechart.add_node(cart_goal2)
 
         cart_goal1.end_condition = cart_goal1.observation_variable
-        cart_goal2.start_condition = cart_goal1.observation_variable
+        cart_goal2.start_condition = cart_goal1.is_succeeded
 
-        end = EndMotion()
-        motion_statechart.add_node(end)
-        end.start_condition = trinary_logic_and(
-            cart_goal1.observation_variable, cart_goal2.observation_variable
-        )
+        motion_statechart.add_node(EndMotion.when_all_true([cart_goal1, cart_goal2]))
 
         executor = Executor(
             MotionStatechartContext(
@@ -750,13 +856,9 @@ class TestCartesianTasks:
         motion_statechart.add_node(cart_goal2)
 
         cart_goal1.end_condition = cart_goal1.observation_variable
-        cart_goal2.start_condition = cart_goal1.observation_variable
+        cart_goal2.start_condition = cart_goal1.is_succeeded
 
-        end = EndMotion()
-        motion_statechart.add_node(end)
-        end.start_condition = trinary_logic_and(
-            cart_goal1.observation_variable, cart_goal2.observation_variable
-        )
+        motion_statechart.add_node(EndMotion.when_all_true([cart_goal1, cart_goal2]))
 
         executor = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         executor.compile(motion_statechart=motion_statechart)
@@ -805,13 +907,9 @@ class TestCartesianTasks:
         motion_statechart.add_node(cart_goal2)
 
         cart_goal1.end_condition = cart_goal1.observation_variable
-        cart_goal2.start_condition = cart_goal1.observation_variable
+        cart_goal2.start_condition = cart_goal1.is_succeeded
 
-        end = EndMotion()
-        motion_statechart.add_node(end)
-        end.start_condition = trinary_logic_and(
-            cart_goal1.observation_variable, cart_goal2.observation_variable
-        )
+        motion_statechart.add_node(EndMotion.when_all_true([cart_goal1, cart_goal2]))
 
         executor = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         executor.compile(motion_statechart=motion_statechart)
@@ -909,13 +1007,9 @@ class TestCartesianTasks:
         motion_statechart.add_node(cart_goal2)
 
         cart_goal1.end_condition = cart_goal1.observation_variable
-        cart_goal2.start_condition = cart_goal1.observation_variable
+        cart_goal2.start_condition = cart_goal1.is_succeeded
 
-        end = EndMotion()
-        motion_statechart.add_node(end)
-        end.start_condition = trinary_logic_and(
-            cart_goal1.observation_variable, cart_goal2.observation_variable
-        )
+        motion_statechart.add_node(EndMotion.when_all_true([cart_goal1, cart_goal2]))
 
         executor = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         executor.compile(motion_statechart=motion_statechart)
@@ -967,13 +1061,9 @@ class TestCartesianTasks:
         motion_statechart.add_node(cart_goal2)
 
         cart_goal1.end_condition = cart_goal1.observation_variable
-        cart_goal2.start_condition = cart_goal1.observation_variable
+        cart_goal2.start_condition = cart_goal1.is_succeeded
 
-        end = EndMotion()
-        motion_statechart.add_node(end)
-        end.start_condition = trinary_logic_and(
-            cart_goal1.observation_variable, cart_goal2.observation_variable
-        )
+        motion_statechart.add_node(EndMotion.when_all_true([cart_goal1, cart_goal2]))
 
         executor = Executor(MotionStatechartContext(world=pr2_world_state_reset))
         executor.compile(motion_statechart=motion_statechart)
@@ -1054,6 +1144,93 @@ class TestCartesianTasks:
         assert np.allclose(
             cart_straight.goal_pose.to_np(), goal_pose.to_np(), atol=0.015
         )
+
+    def test_straight_path_while_the_orientation_changes(
+        self, pr2_world_state_reset: World
+    ):
+        """
+        The tip must stay on the line to the goal while the very same goal rotates it.
+
+        The orientation half of :class:`CartesianPoseStraight` runs in parallel with the
+        position half, so a goal that also reorients the tip turns the tip frame while
+        the straight line motion is under way.
+        """
+        tip = pr2_world_state_reset.get_kinematic_structure_entity_by_name(
+            "r_gripper_tool_frame"
+        )
+        root = pr2_world_state_reset.get_kinematic_structure_entity_by_name(
+            "odom_combined"
+        )
+        start = pr2_world_state_reset.compute_forward_kinematics_np(root, tip)[:3, 3]
+        goal_pose = Pose.from_xyz_rpy(
+            x=start[0] + 0.3,
+            y=start[1],
+            z=start[2],
+            pitch=np.pi / 2,
+            reference_frame=root,
+        )
+
+        motion_statechart = MotionStatechart()
+        goal = CartesianPoseStraight(
+            root_link=root,
+            tip_link=tip,
+            goal_pose=goal_pose,
+        )
+        motion_statechart.add_node(goal)
+        motion_statechart.add_node(EndMotion.when_true(goal))
+
+        executor = Executor(MotionStatechartContext(world=pr2_world_state_reset))
+        executor.compile(motion_statechart=motion_statechart)
+        straight = next(
+            node for node in goal.nodes if isinstance(node, CartesianPositionStraight)
+        )
+        path = record_tip_path(executor, straight, root, tip)
+
+        line = StraightLine(start=path[0], end=goal_pose.to_np()[:3, 3])
+        assert line.maximum_distance_from(path) <= STRAIGHT_LINE_TOLERANCE
+
+    def test_straight_line_starts_where_the_task_starts(
+        self, pr2_world_state_reset: World
+    ):
+        """
+        The line must start at the pose the tip has when the task starts running, not at
+        the pose it had when the statechart was compiled.
+
+        Every node is built during compilation, while a task that waits for another one
+        starts after that motion has moved the tip somewhere else.
+        """
+        tip = pr2_world_state_reset.get_kinematic_structure_entity_by_name(
+            "r_gripper_tool_frame"
+        )
+        root = pr2_world_state_reset.get_kinematic_structure_entity_by_name(
+            "odom_combined"
+        )
+        start = pr2_world_state_reset.compute_forward_kinematics_np(root, tip)[:3, 3]
+        goal_point = Point3(start[0] + 0.2, start[1], start[2], reference_frame=root)
+
+        motion_statechart = MotionStatechart()
+        wrist_goal = JointPositionList(
+            goal_state=JointState.from_str_dict(
+                {PR2Joint.RIGHT_WRIST_FLEX: -np.pi / 2},
+                world=pr2_world_state_reset,
+            )
+        )
+        straight = CartesianPositionStraight(
+            root_link=root,
+            tip_link=tip,
+            goal_point=goal_point,
+        )
+        motion_statechart.add_nodes([wrist_goal, straight])
+        wrist_goal.end_condition = wrist_goal.observation_variable
+        straight.start_condition = wrist_goal.observation_variable
+        motion_statechart.add_node(EndMotion.when_true(straight))
+
+        executor = Executor(MotionStatechartContext(world=pr2_world_state_reset))
+        executor.compile(motion_statechart=motion_statechart)
+        path = record_tip_path(executor, straight, root, tip)
+
+        line = StraightLine(start=path[0], end=goal_point.to_np()[:3])
+        assert line.maximum_distance_from(path) <= STRAIGHT_LINE_TOLERANCE
 
     def test_soft_trunk_cartesian_position(self):
         """
@@ -1173,6 +1350,48 @@ class TestDiffDriveBaseGoal:
         for step in goal.nodes[1:]:
             assert step.translation_threshold == 0.3
             assert step.orientation_threshold == 0.3
+
+    def test_second_goal_drives_from_where_the_first_one_ended(
+        self, cylinder_bot_diff_world
+    ):
+        """
+        Every goal in a statechart is expanded before any of them runs, so a goal that
+        reads the base pose while expanding reads where the base started rather than
+        where its own leg begins.
+
+        The two legs turn a corner, so the direction the second leg has to drive in
+        differs from the direction it would have had from the start pose -- a heading
+        taken at expansion time asks a differential drive to translate sideways, which
+        it cannot do.
+        """
+        first_goal_pose = Pose.from_xyz_rpy(
+            x=1, y=0, reference_frame=cylinder_bot_diff_world.root
+        )
+        second_goal_pose = Pose.from_xyz_rpy(
+            x=1, y=1, reference_frame=cylinder_bot_diff_world.root
+        )
+        motion_statechart = MotionStatechart()
+        motion_statechart.add_node(
+            first_leg := DifferentialDriveBaseGoal(goal_pose=first_goal_pose)
+        )
+        motion_statechart.add_node(
+            second_leg := DifferentialDriveBaseGoal(goal_pose=second_goal_pose)
+        )
+        second_leg.start_condition = first_leg.observation_variable
+        motion_statechart.add_node(EndMotion.when_true(second_leg))
+
+        executor = Executor(MotionStatechartContext(world=cylinder_bot_diff_world))
+        executor.compile(motion_statechart=motion_statechart)
+        executor.tick_until_end()
+
+        assert np.allclose(
+            cylinder_bot_diff_world.compute_forward_kinematics(
+                cylinder_bot_diff_world.root,
+                cylinder_bot_diff_world.get_body_by_name("bot"),
+            ),
+            second_goal_pose,
+            atol=1e-2,
+        )
 
 
 class TestVelocityTasks:

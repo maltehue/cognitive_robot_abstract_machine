@@ -9,7 +9,7 @@ import pytest
 
 from coraplex.locations.navigation import (
     NavigationFailureReason,
-    NavigationPath,
+    RobotNavigationPath,
     NavigationPathUnavailable,
 )
 from semantic_digital_twin.api import BodySpecification
@@ -61,7 +61,7 @@ def test_heading_change_respects_each_parts_height(
     elevated_robot_world: World, obstacle_height: float
 ) -> None:
     """
-    A wide upper body can rotate above low barriers but not through high ones.
+    Low barriers permit direct travel; high barriers require a safe narrow heading.
 
     :param elevated_robot_world: Mobile robot with narrow lower and wide upper parts.
     :param obstacle_height: Height of the corridor barriers relative to the base.
@@ -77,15 +77,32 @@ def test_heading_change_respects_each_parts_height(
             ),
         ).spawn(world)
     target = Pose.from_xyz_rpy(-2, yaw=0.4, reference_frame=world.root)
-    path = NavigationPath(world, robot, target, keep_joint_states=True)
-    if obstacle_height:
-        with pytest.raises(NavigationPathUnavailable) as failure:
-            path.plan()
-        assert failure.value.reason is NavigationFailureReason.DISCONNECTED
-        return
+    path = RobotNavigationPath(world, robot, target, keep_joint_states=True)
     poses = path.plan()
-    assert len(poses) == 1
-    np.testing.assert_allclose(poses[0].to_np(), target.to_np())
+    if not obstacle_height:
+        assert len(poses) == 1
+        np.testing.assert_allclose(poses[0].to_np(), target.to_np())
+        return
+    assert len(poses) > 1
+    previous = robot.root.global_pose
+    for pose in poses:
+        origin = previous.to_np()[:3, 3].copy()
+        direction = pose.to_np()[:3, 3] - origin
+        translating = np.linalg.norm(direction[:2]) > path.geometry_tolerance
+        robot_bounds = path.bounds_at_pose(previous)
+        obstacles = (
+            path.translation_obstacles(previous, robot_bounds)
+            if translating
+            else path.rotation_obstacles(previous, robot_bounds)
+        )
+        if translating:
+            np.testing.assert_allclose(pose.to_np()[:3, :3], previous.to_np()[:3, :3])
+            assert abs(float(pose.to_np()[0, 0])) < path.geometry_tolerance
+        for obstacle in obstacles:
+            origin[2] = (obstacle.min_z + obstacle.max_z) / 2
+            assert obstacle.to_array_bounds().clip_segment(origin, direction) is None
+        previous = pose
+    np.testing.assert_allclose(poses[-1].to_np(), target.to_np())
 
 
 def test_lower_attachment_closes_rotational_clearance(
@@ -107,7 +124,7 @@ def test_lower_attachment_closes_rotational_clearance(
             ),
         ).spawn(world)
     target = Pose.from_xyz_rpy(-2, yaw=0.4, reference_frame=world.root)
-    assert len(NavigationPath(world, robot, target).plan()) == 1
+    assert len(RobotNavigationPath(world, robot, target).plan()) == 1
     payload = BodySpecification.box("carried_payload", Scale(0.1, 0.5, 0.1)).spawn(
         world
     )
@@ -117,5 +134,5 @@ def test_lower_attachment_closes_rotational_clearance(
         )
     assert payload in robot.bodies_with_collision
     with pytest.raises(NavigationPathUnavailable) as failure:
-        NavigationPath(world, robot, target).plan()
+        RobotNavigationPath(world, robot, target).plan()
     assert failure.value.reason is NavigationFailureReason.DISCONNECTED

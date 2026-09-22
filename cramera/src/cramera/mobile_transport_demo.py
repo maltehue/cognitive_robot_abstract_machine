@@ -11,10 +11,10 @@ from coraplex.datastructures.enums import Arms, VisualizationBackend
 from coraplex.demonstrations import RobotDemonstration
 from coraplex.plans.factories import sequential
 from coraplex.plans.plan import Plan
+from semantic_digital_twin.semantic_annotations.mixins import HasRootBody
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
 from cramera.live.placement_surface import PlacementSurface
-from krrood.entity_query_language.factories import a, variable
 from semantic_digital_twin.api import (
     BodySpecification,
     Connection6DoFSpecification,
@@ -28,7 +28,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
 from semantic_digital_twin.datastructures.definitions import TorsoState
 from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Table
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Pose
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.geometry import Color, Scale
 
@@ -175,9 +175,9 @@ class MobileTransportDemo(RobotDemonstration):
         return sequential(
             [
                 MoveTorsoAction(TorsoState.HIGH),
-                a(TransportAction)(
-                    object_designator=body,
-                    target_location=variable(Pose, domain=destination),
+                TransportAction(
+                    object_designator=HasRootBody(root=body),
+                    target_location=destination,
                     arm=Arms.LEFT,
                     look_at_operation_site=False,
                 ),

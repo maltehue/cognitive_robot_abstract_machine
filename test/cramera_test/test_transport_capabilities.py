@@ -18,8 +18,8 @@ import pytest
 from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import Arms
 from coraplex.locations.factories import _get_object_in_hand
-from coraplex.plans.factories import execute_single
-from coraplex.plans.plan_node import UnderspecifiedNode
+from coraplex.plans.factories import execute_single, sequential
+from coraplex.plans.underspecified import UnderspecifiedNode
 from coraplex.robot_plans.actions.composite import transporting
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
 from coraplex.robot_plans.actions.core.navigation import NavigateAction
@@ -70,7 +70,7 @@ def transport_action(
             ),
         )
     action = ContainerFreeTransport(
-        object.root,
+        object,
         Pose.from_xyz_rpy(3, 3.2, 0.5, reference_frame=world.root),
         Arms.LEFT,
     )
@@ -120,7 +120,7 @@ def test_navigation_search_is_skipped_without_a_drive(
     search = Mock(return_value=[])
     monkeypatch.setattr(transporting, "reachability_location", search)
     pickup = transport_action._make_navigation_actions(
-        transport_action.object_designator
+        transport_action.object_designator.root
     )
     search.assert_not_called()
     placing = transport_action._make_navigation_actions(
@@ -149,7 +149,9 @@ def test_navigation_search_observes_the_attachment_and_base_at_grounding(
     :param monkeypatch: Fixture replacing sampling with a current-state observer.
     """
     action = transport_action
-    target = action.object_designator if target_type is Body else action.target_location
+    target = (
+        action.object_designator.root if target_type is Body else action.target_location
+    )
     end_effector = ViewManager.get_end_effector_view(action.arm, action.robot)
 
     def current_base_location(
@@ -168,7 +170,7 @@ def test_navigation_search_observes_the_attachment_and_base_at_grounding(
         """
         assert (
             _get_object_in_hand(context.robot, context.world, arm)
-            is action.object_designator
+            is action.object_designator.root
         )
         return [context.robot.root.global_pose]
 
@@ -179,7 +181,7 @@ def test_navigation_search_observes_the_attachment_and_base_at_grounding(
 
     with action.world.modify_world():
         action.world.move_branch_with_fixed_connection(
-            branch_root=action.object_designator,
+            branch_root=action.object_designator.root,
             new_parent=end_effector.tool_frame,
         )
     current_base = Pose.from_xyz_rpy(
@@ -217,7 +219,7 @@ def test_container_opening_approaches_only_with_a_drive(
     assert len(actions) == (2 if transport_action.robot.drive is not None else 1)
     assert (
         transport_action._make_open_container_actions(
-            transport_action.object_designator
+            transport_action.object_designator.root
         )
         == []
     )
@@ -233,7 +235,7 @@ def test_pick_and_place_keep_the_selected_stationary_or_mobile_arm(
     :param transport_action: Transport bound to an existing annotated robot.
     :param arm: Requested semantic arm.
     """
-    from coraplex.plans.attachment_nodes import AttachNode, DetachNode
+    from coraplex.plans.attachment_nodes import ReAttachNode
     from coraplex.view_manager import ViewManager
 
     transport_action.arm = arm
@@ -244,16 +246,18 @@ def test_pick_and_place_keep_the_selected_stationary_or_mobile_arm(
     )
     execute_single(pick, context=transport_action.context)
     attach = next(
-        node for node in pick._action_plan.descendants if isinstance(node, AttachNode)
+        node for node in pick._action_plan.descendants if isinstance(node, ReAttachNode)
     )
-    assert isinstance(attach, AttachNode)
+    assert isinstance(attach, ReAttachNode)
     assert attach.new_parent is end_effector.tool_frame
     place = PlaceAction(
-        transport_action.object_designator, transport_action.target_location, arm
+        transport_action.object_designator.root, transport_action.target_location, arm
     )
-    execute_single(place, context=transport_action.context)
+    sequential([pick, place], context=transport_action.context)
     release = next(
-        node for node in place._action_plan.descendants if isinstance(node, DetachNode)
+        node
+        for node in place._action_plan.descendants
+        if isinstance(node, ReAttachNode)
     )
-    assert isinstance(release, DetachNode)
+    assert isinstance(release, ReAttachNode)
     assert release.new_parent is transport_action.world.root

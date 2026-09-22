@@ -26,7 +26,11 @@ from giskardpy.motion_statechart.goals.cartesian_goals import DifferentialDriveB
 from semantic_digital_twin.world_description.connections import ActiveConnection1DOF
 from coraplex.plans.factories import execute_single, sequential
 from coraplex.robot_plans.motions.navigation import MoveMotion
-from coraplex.robot_plans.actions.core.navigation import NavigateAction
+from coraplex.robot_plans.actions.core.navigation import (
+    NavigateAction,
+    PathPlanningNavigateAction,
+)
+from coraplex.plans.plan_node import MotionNode
 from semantic_digital_twin.datastructures.definitions import StaticJointState
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from semantic_digital_twin.robots.pr2 import PR2
@@ -38,6 +42,23 @@ from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from giskardpy.motion_statechart.goals.templates import Sequence
 
 # %% controller selection
+
+
+def test_path_planning_action_preserves_the_final_target(
+    cylinder_bot_world: World,
+) -> None:
+    """
+    Plan the complete footprint route once, without coarse intermediate goals.
+    """
+    target = Pose.from_xyz_rpy(5, 1, 0, reference_frame=cylinder_bot_world.root)
+    action = PathPlanningNavigateAction(target)
+
+    node = action._action_plan
+
+    assert isinstance(node, MotionNode)
+    assert isinstance(node.motion, MoveMotion)
+    assert node.motion.target is target
+    assert node.motion.keep_joint_states is True
 
 
 @pytest.mark.parametrize("execution_environment", [simulated_robot, real_robot])

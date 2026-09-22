@@ -18,9 +18,9 @@ from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Table,
 )
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
-from semantic_digital_twin.world_description.geometry import BoundingBox
+from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 from semantic_digital_twin.world_description.graph_of_convex_sets.boxes import (
-    GraphOfBoundingBoxes,
+    PlanarGraphOfBoundingBoxes,
 )
 from semantic_digital_twin.world_description.shape_collection import (
     BoundingBoxCollection,
@@ -95,7 +95,7 @@ class FreePlacementRegions:
         top = self._physical_top(surface)
         if top is None:
             return []
-        object_bounds = BoundingBox.from_mesh(
+        object_bounds = VolumetricBoundingBox.from_mesh(
             mesh, HomogeneousTransformationMatrix(reference_frame=body)
         )
         support = self._supported_centers(surface, top, object_bounds)
@@ -104,12 +104,14 @@ class FreePlacementRegions:
         obstacles = self._obstacles(body, surface, top.max_z, object_bounds)
         # Obstacle heights were filtered against the resting object's full height;
         # the support itself is only the plane on which centers may be placed.
-        available = GraphOfBoundingBoxes.free_space_from_bounding_boxes(
-            obstacles, support.event.marginal(SpatialVariables.xy), keep_z=False
+        available = PlanarGraphOfBoundingBoxes.free_space_from_bounding_boxes(
+            obstacles, support.event.marginal(SpatialVariables.xy)
         )
         return self._draw(available, surface, top.max_z, world_T_surface)
 
-    def _physical_top(self, surface: HasSupportingSurface) -> BoundingBox | None:
+    def _physical_top(
+        self, surface: HasSupportingSurface
+    ) -> VolumetricBoundingBox | None:
         """Locate a complete rectangular top patch on the physical root mesh.
 
         :param surface: Tabletop whose mesh determines the true supporting height.
@@ -132,7 +134,7 @@ class FreePlacementRegions:
             rtol=self.tolerance,
         ):
             return None
-        return BoundingBox(
+        return VolumetricBoundingBox(
             float(minimum[0]),
             float(minimum[1]),
             top,
@@ -145,8 +147,8 @@ class FreePlacementRegions:
     def _supported_centers(
         self,
         surface: HasSupportingSurface,
-        top: BoundingBox,
-        object_bounds: BoundingBox,
+        top: VolumetricBoundingBox,
+        object_bounds: VolumetricBoundingBox,
     ) -> BoundingBoxCollection:
         """Intersect semantic support with the mesh top and remove footprint overhang.
 
@@ -167,7 +169,7 @@ class FreePlacementRegions:
             if lower_x >= upper_x or lower_y >= upper_y:
                 continue
             boxes.append(
-                BoundingBox(
+                VolumetricBoundingBox(
                     lower_x,
                     lower_y,
                     top.max_z,
@@ -184,7 +186,7 @@ class FreePlacementRegions:
         body: Body,
         surface: HasSupportingSurface,
         top: float,
-        object_bounds: BoundingBox,
+        object_bounds: VolumetricBoundingBox,
     ) -> BoundingBoxCollection:
         """Collect clearance-expanded obstacles intersecting the object's resting height.
 

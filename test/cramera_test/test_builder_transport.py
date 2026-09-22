@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from typing_extensions import Any
 
-from coraplex.datastructures.enums import TaskStatus
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.demonstrations import RobotDemonstration
 from coraplex.execution_environment import simulated_robot_advanced
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
@@ -26,7 +26,7 @@ from cramera.paths import WEB_ROOT
 from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Table
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
-from semantic_digital_twin.world_description.geometry import BoundingBox
+from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 
 from .test_mobile_transport_demo import CarryTrajectory
 
@@ -109,10 +109,10 @@ def test_builder_transports_the_captured_object_to_its_semantic_surface(
         plan.perform()
 
     [transport] = plan.get_nodes_by_designator_type(TransportAction)
-    assert transport.status is TaskStatus.SUCCEEDED
+    assert transport.status is LifeCycleValues.SUCCEEDED
     navigations = plan.get_nodes_by_designator_type(MoveMotion)
     assert len(navigations) == 2
-    assert all(node.status is TaskStatus.SUCCEEDED for node in navigations)
+    assert all(node.status is LifeCycleValues.SUCCEEDED for node in navigations)
     positions = np.asarray(trajectory.positions)
     carried = np.asarray(trajectory.carried_positions)
     assert len(carried) > 1
@@ -126,7 +126,7 @@ def test_builder_transports_the_captured_object_to_its_semantic_surface(
     target = scenario["steps"][-1]["params"]["surfaceName"]
     surface = PlacementSurface(world, body, Table, surface_name=target)
     [annotation] = surface.matching_surfaces()
-    bounds = BoundingBox.from_mesh(
+    bounds = VolumetricBoundingBox.from_mesh(
         body.combined_mesh, HomogeneousTransformationMatrix(reference_frame=body)
     )
     final_pose = world.transform(body.global_pose, annotation.root)

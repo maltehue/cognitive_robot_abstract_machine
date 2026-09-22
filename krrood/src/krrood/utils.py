@@ -3,15 +3,12 @@ from __future__ import annotations
 import ast
 import builtins
 import importlib
-import inspect
 import os
-import subprocess
 import sys
 import types
-from copy import deepcopy
 from dataclasses import Field
 from dataclasses import fields, MISSING
-from functools import lru_cache, wraps
+from functools import lru_cache
 from importlib.util import resolve_name
 from inspect import isclass
 from os import PathLike
@@ -21,6 +18,11 @@ from typing import Tuple, Generic, Hashable
 from typing import Union, Any
 
 from typing_extensions import (
+    Dict,
+    get_origin,
+    get_args,
+)
+from typing_extensions import (
     TypeVar,
     Type,
     List,
@@ -29,12 +31,6 @@ from typing_extensions import (
     TypeVarTuple,
     _SpecialForm,
 )
-from typing_extensions import (
-    Iterable,
-    Dict,
-    get_origin,
-    get_args,
-)
 
 from krrood import logger
 from krrood.exceptions import (
@@ -42,7 +38,6 @@ from krrood.exceptions import (
     NoDefaultValueFound,
     PackageNameNotFoundError,
     PathMissingRequiredPartsError,
-    SubprocessExecutionError,
     SourceDataNotProvided,
 )
 
@@ -87,6 +82,20 @@ def get_module_of_type(type_: Union[Type, _SpecialForm]) -> str:
     return type_.__module__
 
 
+def resolve_class_from_full_name(fully_qualified_class_name: str) -> Type:
+    """
+    Import and return the class named by a fully qualified name of the form
+    ``"module.submodule.ClassName"``, as written by :func:`get_full_class_name` or
+    :func:`module_and_class_name`.
+
+    :param fully_qualified_class_name: The fully qualified class name.
+    :return: The resolved class.
+    """
+    module_name, class_name = fully_qualified_class_name.rsplit(".", 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
+
+
 def get_default_value(dataclass_type, field_name):
     """
     Return the default value for a given field in a dataclass.
@@ -109,8 +118,9 @@ def get_default_value(dataclass_type, field_name):
 
 def get_default_values_for_dataclass(dataclass_type):
     """
-    Return a dict mapping field names to their default values. Only includes fields that
-    actually define a default.
+    Return a dict mapping field names to their default values.
+
+    Only includes fields that actually define a default.
 
     :param dataclass_type: The dataclass type to get the default values for.
     :return: A dict mapping field names to their default values.
@@ -159,29 +169,49 @@ def is_builtin_type(type_object: Any):
     )
 
 
+def get_import_root_from_path(path: Path) -> Path:
+    """
+    Find the directory an import of a path is resolved against.
+
+    :param path: The file system path to find the import root of.
+    :return: The nearest ancestor of the path that is not itself a package.
+    """
+    root = Path(path).resolve()
+    while (root / "__init__.py").exists():
+        parent = root.parent
+        if parent == root:
+            break
+        root = parent
+    return root
+
+
 def get_import_path_from_path(path: str) -> Optional[str]:
     """
     Convert a file system path to a Python import path.
 
     :param path: The file system path to convert.
-    :return: The Python import path.
+    :return: The Python import path, or None if the path is not inside a package.
     """
-    package_name = os.path.abspath(path)
-    packages = package_name.split(os.path.sep)
-    parent_package_idx = 0
-    for i in range(len(packages)):
-        if i == 0:
-            current_path = package_name
-        else:
-            current_path = "/" + "/".join(packages[:-i])
-        if os.path.exists(os.path.join(current_path, "__init__.py")):
-            parent_package_idx -= 1
-        else:
-            break
-    package_name = (
-        ".".join(packages[parent_package_idx:]) if parent_package_idx < 0 else None
-    )
-    return package_name
+    absolute_path = Path(path).resolve()
+    root = get_import_root_from_path(absolute_path)
+    if root == absolute_path:
+        return None
+    return str(absolute_path.relative_to(root)).replace(os.path.sep, ".")
+
+
+def make_path_importable(path: Path) -> None:
+    """
+    Put the directory an import of a path is resolved against on the search path.
+
+    ..note:: Generated code is written wherever its caller chose, which need not be a
+        directory Python already searches, so importing it back requires saying where
+        to look for it.
+
+    :param path: The file system path that is about to be imported.
+    """
+    root = str(get_import_root_from_path(path))
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 
 def get_function_import_data(func: Callable) -> Tuple[str, str]:
@@ -508,33 +538,6 @@ def get_and_import_module(
         return importlib.import_module(full_name)
 
 
-def _import_module_tolerating_absence(
-    module_name: str,
-    package_name: Optional[str],
-    file_path: Optional[str],
-) -> Optional[types.ModuleType]:
-    """
-    Import *module_name* for import-scope extraction, returning ``None`` when it cannot
-    be imported.
-
-    The names a from-import introduces cannot be added to the scope without the module,
-    so an un-importable module (for example a generated interface that is itself being
-    generated) leaves them out of the scope and resolution falls back to another module
-    in the hierarchy.
-
-    :param module_name: The module to import.
-    :param package_name: The package to import it relative to, or ``None`` for an
-        absolute import.
-    :param file_path: The file whose imports are being extracted, used only for logging.
-    :return: The imported module, or ``None`` if it cannot be imported.
-    """
-    try:
-        return get_and_import_module(module_name, package_name)
-    except ModuleNotFoundError as error:
-        _warn_about_unimportable_module_once(module_name, file_path, str(error))
-        return None
-
-
 def get_module_object(
     module_name: str, package_name: Optional[str] = None
 ) -> Optional[types.ModuleType]:
@@ -617,7 +620,7 @@ def _handle_import_node(
 
 
 @lru_cache(maxsize=None)
-def _warn_about_unresolvable_type_checking_import_once(
+def _log_unresolvable_import_once(
     resolved_module_name: Optional[str],
     name: str,
     file_path: Optional[str],
@@ -631,43 +634,17 @@ def _warn_about_unresolvable_type_checking_import_once(
     A dataclass field annotated under ``if TYPE_CHECKING:`` with a name from a module
     involved in a circular import can be re-resolved many times while that module is
     still initializing (once per class needing it, and once per lookup attempt). Every
-    attempt raises the exact same, already self-diagnosing ``AttributeError`` and is
-    otherwise harmless, so repeating the warning for each attempt only floods the log
-    without adding information; the ``lru_cache`` collapses repeats of the identical
-    triple to a single log line.
+    attempt fails identically and is otherwise harmless, so repeating the warning for
+    each attempt only floods the log without adding information; the ``lru_cache``
+    collapses repeats of the identical triple to a single log line.
 
     :param resolved_module_name: The module the failed import targeted.
-    :param name: The attribute name that could not be found on the module.
+    :param name: The name that could not be bound from that module.
     :param file_path: The path of the file whose imports were being extracted.
-    :param error_message: The message of the ``AttributeError`` that was raised.
+    :param error_message: The message of the error that was raised.
     """
     logger.debug(
         f"Could not import {resolved_module_name}: {error_message} while extracting imports from {file_path}"
-    )
-
-
-@lru_cache(maxsize=None)
-def _warn_about_unimportable_module_once(
-    module_name: str,
-    file_path: Optional[str],
-    error_message: str,
-) -> None:
-    """
-    Log, at most once per process for a given ``(module_name, file_path)`` pair, that a
-    module could not be imported while extracting a file's imports.
-
-    One un-importable module (for example a generated interface while it is being
-    generated) is met again for every class defined in the file and for every retried
-    lookup. Each attempt raises the same ``ModuleNotFoundError`` and is otherwise
-    harmless, so repeating the warning for each attempt only floods the log; the
-    ``lru_cache`` collapses repeats of the identical pair to a single log line.
-
-    :param module_name: The module the failed import targeted.
-    :param file_path: The path of the file whose imports were being extracted.
-    :param error_message: The message of the ``ModuleNotFoundError`` that was raised.
-    """
-    logger.debug(
-        f"Could not import module {module_name}: {error_message} while extracting imports from {file_path}"
     )
 
 
@@ -680,7 +657,13 @@ def _handle_import_from_node(
     """
     Process a from-import node and update the provided scope mapping.
 
-    A from-import whose module cannot be imported contributes no names to the scope.
+    A statement whose module cannot be imported contributes no names and is skipped,
+    just as a name missing from an imported module is: the scope is built for
+    best-effort name resolution, so one statement that cannot be bound must not cost
+    the caller every other name in the file.
+
+    ..note:: A module a generator is about to write, such as an ORM interface, is
+        absent for exactly as long as that generator runs.
 
     :param node: The from-import node to process.
     :param scope: The scope mapping to update.
@@ -701,19 +684,21 @@ def _handle_import_from_node(
     # Mimic original behavior: allow package_name to be overwritten for subsequent iterations
     package_name = resolved_package_name
 
-    module = None
-    if resolved_module_name is not None:
-        module = _import_module_tolerating_absence(
-            resolved_module_name, package_name, file_path
-        )
+    try:
+        module = None
+        if resolved_module_name is not None:
+            module = get_and_import_module(resolved_module_name, package_name)
 
-    if module is None and resolved_package_name and resolved_module_name:
-        # Retry as an absolute package-qualified import
-        module = _import_module_tolerating_absence(
-            f"{resolved_package_name}.{resolved_module_name}", None, file_path
-        )
-
-    if module is None:
+        if module is None and resolved_package_name and resolved_module_name:
+            # Fallback already attempted in _import_module_safely; keep for parity
+            module = get_and_import_module(
+                f"{resolved_package_name}.{resolved_module_name}", None
+            )
+    except ModuleNotFoundError as error:
+        for alias in node.names:
+            _log_unresolvable_import_once(
+                resolved_module_name, alias.name, file_path, str(error)
+            )
         return package_name
 
     for alias in node.names:
@@ -725,67 +710,9 @@ def _handle_import_from_node(
             else:
                 scope[asname] = getattr(module, name)
         except AttributeError as e:
-            _warn_about_unresolvable_type_checking_import_once(
-                resolved_module_name, name, file_path, str(e)
-            )
+            _log_unresolvable_import_once(resolved_module_name, name, file_path, str(e))
 
     return package_name
-
-
-TCallable = TypeVar("TCallable", bound=Callable[..., Any])
-
-
-def memoize(function: TCallable) -> TCallable:
-    """
-    Caches the return value of a function call at the instance level.
-    """
-
-    @wraps(function)
-    def wrapper(self, *args: Any, **kwargs: Any) -> Any:
-        if not hasattr(self, "__memo__"):
-            self.__memo__ = {}
-        memo = self.__memo__
-
-        key = (function, self, args, frozenset(kwargs.items()))
-        try:
-            return memo[key]
-        except KeyError:
-            rv = function(self, *args, **kwargs)
-            memo[key] = rv
-            return rv
-
-    return wrapper  # type: ignore
-
-
-def copy_memoize(function: TCallable) -> TCallable:
-    """
-    Caches the return value of a function call at the instance level but returns a
-    deepcopy of the value.
-    """
-
-    @wraps(function)
-    def wrapper(self, *args, **kwargs):
-        if not hasattr(self, "__memo__"):
-            self.__memo__ = {}
-        memo = self.__memo__
-
-        key = (function, self, args, frozenset(kwargs.items()))
-        try:
-            return deepcopy(memo[key])
-        except KeyError:
-            rv = function(self, *args, **kwargs)
-            memo[key] = rv
-            return deepcopy(rv)
-
-    return wrapper
-
-
-def clear_memoization_cache(instance):
-    """
-    Clears the memoization cache of an instance.
-    """
-    if hasattr(instance, "__memo__"):
-        instance.__memo__.clear()
 
 
 def is_dynamic_class(cls: Type) -> bool:

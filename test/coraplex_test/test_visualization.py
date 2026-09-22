@@ -11,9 +11,7 @@ from coraplex.execution_environment import simulated_robot
 from coraplex.plans.factories import sequential
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
 from coraplex.visualization import (
-    RERUN_MODE_VARIABLE,
-    RERUN_TARGET_VARIABLE,
-    VISUALIZATION_BACKEND_VARIABLE,
+    VisualizationOption,
     WorldVisualization,
 )
 from semantic_digital_twin.adapters.rerun import RerunAdapter, RerunMode
@@ -27,9 +25,9 @@ def test_from_environment_selects_backend(monkeypatch) -> None:
     """
     The environment variables select the backend, the Rerun mode, and the Rerun target.
     """
-    monkeypatch.setenv(VISUALIZATION_BACKEND_VARIABLE, "rerun")
-    monkeypatch.setenv(RERUN_MODE_VARIABLE, "save")
-    monkeypatch.setenv(RERUN_TARGET_VARIABLE, "/some/recording.rrd")
+    monkeypatch.setenv(VisualizationOption.BACKEND, "rerun")
+    monkeypatch.setenv(VisualizationOption.RERUN_MODE, "save")
+    monkeypatch.setenv(VisualizationOption.RERUN_TARGET, "/some/recording.rrd")
 
     visualization = WorldVisualization.from_environment(World())
 
@@ -43,9 +41,9 @@ def test_from_environment_uses_defaults_without_variables(monkeypatch) -> None:
     Without any environment variables set, the given default backend is used with a
     spawned viewer and no target.
     """
-    monkeypatch.delenv(VISUALIZATION_BACKEND_VARIABLE, raising=False)
-    monkeypatch.delenv(RERUN_MODE_VARIABLE, raising=False)
-    monkeypatch.delenv(RERUN_TARGET_VARIABLE, raising=False)
+    monkeypatch.delenv(VisualizationOption.BACKEND, raising=False)
+    monkeypatch.delenv(VisualizationOption.RERUN_MODE, raising=False)
+    monkeypatch.delenv(VisualizationOption.RERUN_TARGET, raising=False)
 
     visualization = WorldVisualization.from_environment(
         World(), default_backend=VisualizationBackend.RERUN
@@ -60,7 +58,7 @@ def test_from_environment_rejects_unknown_backend(monkeypatch) -> None:
     """
     A value that names no backend raises an exception listing the valid values.
     """
-    monkeypatch.setenv(VISUALIZATION_BACKEND_VARIABLE, "hologram")
+    monkeypatch.setenv(VisualizationOption.BACKEND, "hologram")
 
     with pytest.raises(UnknownVisualizationOption):
         WorldVisualization.from_environment(World())
@@ -119,7 +117,7 @@ def test_rerun_save_records_plan_events(immutable_model_world, tmp_path) -> None
 
 
 def test_from_environment_selects_the_cramera_backend(monkeypatch) -> None:
-    monkeypatch.setenv(VISUALIZATION_BACKEND_VARIABLE, "cramera")
+    monkeypatch.setenv(VisualizationOption.BACKEND, "cramera")
 
     visualization = WorldVisualization.from_environment(World())
 
@@ -163,6 +161,9 @@ class _ShutdownRecorder:
     """
 
     def shutdown(self) -> None:
+        pass
+
+    def server_close(self) -> None:
         pass
 
 

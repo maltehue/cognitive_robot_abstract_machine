@@ -2,8 +2,9 @@
 Module holding all enums of CoraPlex.
 """
 
-from enum import Enum, auto, IntEnum
-from functools import cached_property
+from __future__ import annotations
+
+from enum import Enum, auto, IntEnum, StrEnum
 
 
 class VisualizationLayout(Enum):
@@ -85,27 +86,17 @@ class ExecutionType(Enum):
     NO_EXECUTION = auto()
 
 
-class VisualizationBackend(Enum):
-    """
-    Enum for the renderer a world is visualized with.
-    """
+class VisualizationBackend(StrEnum):
+    """The renderer selected for a simulated world."""
 
-    NONE = auto()
-    """
-    No visualization.
-    """
-    RERUN = auto()
-    """
-    The Rerun viewer; needs no ROS.
-    """
-    RVIZ = auto()
-    """
-    RViz2 marker publishing; needs a ROS 2 environment.
-    """
-    CRAMERA = auto()
-    """
-    The cramera browser viewer; serves the world over HTTP, needs no ROS.
-    """
+    NONE = "none"
+    """Run without a renderer."""
+    RVIZ = "rviz"
+    """Publish native ROS visualization markers."""
+    RERUN = "rerun"
+    """Use the native Rerun adapter."""
+    CRAMERA = "cramera"
+    """Use an installed browser visualization provider."""
 
 
 class Arms(IntEnum):
@@ -125,33 +116,6 @@ class Arms(IntEnum):
 
     def __repr__(self):
         return self.name
-
-
-class TaskStatus(int, Enum):
-    """
-    Enum for readable descriptions of a tasks' status.
-    """
-
-    CREATED = 0
-    RUNNING = 1
-    SUCCEEDED = 2
-    FAILED = 3
-    INTERRUPTED = 4
-    PAUSE = 5
-
-    @cached_property
-    def color(self) -> str:
-        """
-        :return: The color used to render this status in visualizations.
-        """
-        return {
-            TaskStatus.CREATED: "blue",
-            TaskStatus.RUNNING: "light-green",
-            TaskStatus.SUCCEEDED: "green",
-            TaskStatus.FAILED: "red",
-            TaskStatus.INTERRUPTED: "orange",
-            TaskStatus.PAUSE: "yellow",
-        }[self]
 
 
 class JointType(Enum):
@@ -325,27 +289,6 @@ class FilterConfig(Enum):
     """
 
     butterworth = 1
-
-
-class MonitorBehavior(Enum):
-    """
-    Enum for the different monitor behaviors.
-    """
-
-    INTERRUPT = auto()
-    """
-    Interrupt the task when the condition is met.
-    """
-
-    PAUSE = auto()
-    """
-    Pause the task when the condition is met.
-    """
-
-    RESUME = auto()
-    """
-    Resume the task when the condition is met.
-    """
 
 
 class CuttingTechnique(Enum):

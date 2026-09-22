@@ -9,11 +9,13 @@ from dataclasses import dataclass, field
 import numpy as np
 import pytest
 
-from coraplex.datastructures.enums import Arms, TaskStatus
+from coraplex.datastructures.enums import Arms
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.datastructures.grasp import GraspDescription
 from coraplex.plans.factories import execute_single
 from coraplex.execution_environment import simulated_robot_advanced
 from coraplex.plans.plan_callbacks import PlanCallback
+from semantic_digital_twin.semantic_annotations.mixins import HasRootBody
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.robot_plans.motions.navigation import MoveMotion
@@ -97,7 +99,9 @@ def test_mobile_demo_grasps_from_a_reachable_stance() -> None:
     grasp = GraspDescription.robot_relative_default(
         robot.left_arm.end_effector, body.global_pose, body
     )
-    plan = execute_single(PickUpAction(body, Arms.LEFT, grasp), context=context).plan
+    plan = execute_single(
+        PickUpAction(HasRootBody(root=body), Arms.LEFT, grasp), context=context
+    ).plan
 
     with simulated_robot_advanced:
         plan.perform()
@@ -126,10 +130,10 @@ def test_mobile_demo_carries_and_places_on_the_semantic_table() -> None:
         plan.perform()
 
     [transport] = plan.get_nodes_by_designator_type(TransportAction)
-    assert transport.status is TaskStatus.SUCCEEDED
+    assert transport.status is LifeCycleValues.SUCCEEDED
     navigations = plan.get_nodes_by_designator_type(MoveMotion)
     assert len(navigations) == 2
-    assert all(node.status is TaskStatus.SUCCEEDED for node in navigations)
+    assert all(node.status is LifeCycleValues.SUCCEEDED for node in navigations)
     positions = np.asarray(trajectory.positions)
     carried = np.asarray(trajectory.carried_positions)
     assert np.linalg.norm(carried[-1] - carried[0]) > demonstration.table_distance / 2

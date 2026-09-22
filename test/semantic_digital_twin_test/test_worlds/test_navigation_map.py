@@ -7,11 +7,11 @@ from __future__ import annotations
 import pytest
 
 from semantic_digital_twin.datastructures.variables import SpatialVariables
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Point3
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Point2
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.geometry import BoundingBox
+from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 from semantic_digital_twin.world_description.graph_of_convex_sets.boxes import (
-    GraphOfBoundingBoxes,
+    PlanarGraphOfBoundingBoxes,
 )
 from semantic_digital_twin.world_description.shape_collection import (
     BoundingBoxCollection,
@@ -28,7 +28,7 @@ def navigation_space() -> BoundingBoxCollection:
     world = World.create_with_root_body()
     return BoundingBoxCollection(
         [
-            BoundingBox(
+            VolumetricBoundingBox(
                 min_x=-2.0,
                 min_y=-2.0,
                 min_z=0.5,
@@ -51,9 +51,9 @@ def test_empty_world_has_a_direct_navigation_path(
     :param navigation_space: Finite search space in an empty world.
     """
     root = navigation_space.reference_frame
-    start = Point3(-1.0, -1.0, 1.0, reference_frame=root)
-    goal = Point3(1.0, 1.0, 1.0, reference_frame=root)
-    graph = GraphOfBoundingBoxes.navigation_map_from_world(
+    start = Point2(-1.0, -1.0, reference_frame=root)
+    goal = Point2(1.0, 1.0, reference_frame=root)
+    graph = PlanarGraphOfBoundingBoxes.navigation_map_from_world(
         root._world, search_space=navigation_space
     )
     assert graph.path_from_to(start, goal) == [start, goal]
@@ -70,7 +70,7 @@ def test_navigation_rejects_mismatched_frames(
     other_world = World.create_with_root_body()
     obstacles = BoundingBoxCollection([], reference_frame=other_world.root)
     with pytest.raises(ValueError, match="same reference frame"):
-        GraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
+        PlanarGraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
             navigation_space, obstacles
         )
 
@@ -103,7 +103,7 @@ def test_planar_obstacles_respect_the_search_height(
     root = navigation_space.reference_frame
     obstacles = BoundingBoxCollection(
         [
-            BoundingBox(
+            VolumetricBoundingBox(
                 -0.5,
                 -0.5,
                 minimum_z,
@@ -118,15 +118,13 @@ def test_planar_obstacles_respect_the_search_height(
     search = navigation_space.event
     search_xy = search.marginal(SpatialVariables.xy)
     footprint = obstacles.event.marginal(SpatialVariables.xy)
-    free_space = GraphOfBoundingBoxes.free_space_from_bounding_boxes(
-        obstacles, search, keep_z=False
+    free_space = PlanarGraphOfBoundingBoxes.free_space_from_bounding_boxes(
+        obstacles, search
     )
-    occupied_space = GraphOfBoundingBoxes.obstacles_from_bounding_boxes(
-        obstacles, search, keep_z=False
-    )
+    occupied_space = search_xy - free_space
     if overlapping:
         assert free_space == search_xy - footprint
         assert occupied_space == footprint
     else:
         assert free_space == search_xy
-        assert occupied_space is None
+        assert occupied_space.is_empty()

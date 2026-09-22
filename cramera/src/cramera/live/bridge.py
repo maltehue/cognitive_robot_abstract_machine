@@ -48,6 +48,7 @@ from semantic_digital_twin.spatial_types import (
     Quaternion,
     RotationMatrix,
 )
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from cramera.logging_setup import get_logger
 from cramera.body_geometry import POSE_PRECISION, rounded_pose
 from semantic_digital_twin.world_description.connections import (
@@ -121,6 +122,19 @@ class TaskStatusName(StrEnum):
     FAILED = "FAILED"
     INTERRUPTED = "INTERRUPTED"
     PAUSE = "PAUSE"
+
+    @classmethod
+    def of_native_name(cls, name: str) -> TaskStatusName:
+        """Translate a native lifecycle name into the recorded plan vocabulary.
+
+        :param name: A native lifecycle or recorded status name.
+        :return: Its viewer status.
+        """
+        if name == LifeCycleValues.NOT_STARTED.name:
+            return cls.CREATED
+        if name == LifeCycleValues.PAUSED.name:
+            return cls.PAUSE
+        return cls(name)
 
     @classmethod
     def _precedence(cls) -> Tuple[TaskStatusName, ...]:
@@ -903,23 +917,7 @@ class Bridge:
     """
 
     _tick_count: int = 0
-    """
-    Tick counter used to throttle the plan snapshot.
-    """
-
     _last_tick_time: float = 0.0
-    """
-    Monotonic time of the last motion tick. Used to tell when the sim is idle, so the
-    world snapshot can reflect queued viewer moves that no tick will apply.
-    """
-
-    plan_snapshot_tick_interval: int = 5
-    """
-    How many simulation ticks pass between plan-tree snapshots.
-
-    Walking the plan tree is the expensive part of a tick, and the tree changes far
-    more slowly than the world pose does.
-    """
 
     _model_revision: int = 0
     """
@@ -930,6 +928,9 @@ class Bridge:
     """
     The ROS debug markers per subscribed topic (see :mod:`cramera.live.ros_markers`).
     """
+
+    _marker_lock: threading.Lock = field(default_factory=threading.Lock)
+    _marker_revision: int = 0
 
     marker_listener: Optional[Any] = None
     """
@@ -995,7 +996,7 @@ class Bridge:
 
     def observe_motion_tick(self, chart: MotionStatechart) -> None:
         """
-        Publish everything one motion executor tick makes available.
+        Apply queued viewer controls on the motion executor's thread.
 
         Applies queued viewer moves first, because the executor tick runs on the only
         thread allowed to write to the world; the world snapshot itself follows from
@@ -1005,11 +1006,8 @@ class Bridge:
         """
         self.apply_moves()
         self.apply_constraints(chart)
-        self.observe_chart(chart)
         self._last_tick_time = time.monotonic()
         self._tick_count += 1
-        if self._tick_count % self.plan_snapshot_tick_interval == 0:
-            self.snapshot_plan()
 
     def observe_motion_started(self, node: MotionNode) -> None:
         """
@@ -1031,7 +1029,7 @@ class Bridge:
         :param node: The node whose motion ended.
         """
         self._motion_nodes[id(node)] = MotionNodeProgress(
-            node=node, status=TaskStatusName(node.status.name)
+            node=node, status=TaskStatusName.of_native_name(node.status.name)
         )
         self.snapshot_plan()
 
@@ -1071,14 +1069,10 @@ class Bridge:
         :param topic: The topic the array arrived on.
         :param markers: The array's markers.
         """
-        store = self._marker_stores.setdefault(topic, MarkerStore())
-        store.observe(markers)
-
-    def _marker_revision(self) -> int:
-        """
-        The aggregate revision over every topic's marker store.
-        """
-        return sum(store.revision for store in self._marker_stores.values())
+        with self._marker_lock:
+            store = self._marker_stores.setdefault(topic, MarkerStore())
+            if store.observe(markers):
+                self._marker_revision += 1
 
     def _refresh_marker_state(self) -> None:
         """
@@ -1089,17 +1083,22 @@ class Bridge:
         world entity are the robot/environment geometry the scene already renders,
         and stay out of the overlay.
         """
-        revision = self._marker_revision()
-        if revision == self._published_marker_revision:
-            return
+        with self._marker_lock:
+            revision = self._marker_revision
+            if revision == self._published_marker_revision:
+                return
+            marker_entries = {
+                topic: tuple(store.entries.values())
+                for topic, store in self._marker_stores.items()
+            }
         world_entity_names = set()
         if self.world is not None:
             world_entity_names = {str(body.name) for body in self.world.bodies} | {
                 str(region.name) for region in self.world.regions
             }
         markers = []
-        for topic in sorted(self._marker_stores):
-            for entry in self._marker_stores[topic].entries.values():
+        for topic in sorted(marker_entries):
+            for entry in marker_entries[topic]:
                 if entry.ns in world_entity_names:
                     continue
                 markers.append(self._marker_payload(topic, entry))
@@ -1213,10 +1212,10 @@ class Bridge:
             self.marker_listener.subscribe(topic)
         else:
             self.marker_listener.unsubscribe(topic)
-            store = self._marker_stores.pop(topic, None)
-            if store is not None and store.entries:
-                # force the next snapshot to rebuild without this topic
-                self._published_marker_revision = -1
+            with self._marker_lock:
+                store = self._marker_stores.pop(topic, None)
+                if store is not None and store.entries:
+                    self._marker_revision += 1
         return self.marker_topics_payload()
 
     def publish_bodies(self, bodies: Dict[str, Body]) -> None:
@@ -2351,7 +2350,8 @@ class Bridge:
         """
         node_id = "plan_node_%d" % id(node)
         designator = node.designator if isinstance(node, DescribesAnAction) else None
-        own_status = node.status.name
+        native_lifecycle = isinstance(node.status, LifeCycleValues)
+        own_status = TaskStatusName.of_native_name(node.status.name)
         entry = PlanNodeEntry(
             id=node_id,
             parent=parent_id,
@@ -2376,9 +2376,14 @@ class Bridge:
                 child_status == TaskStatusName.CREATED
                 and PlanNodeGroup.of_plan_node_kind(type(child).__name__)
                 == PlanNodeGroup.CONDITION
-                and isinstance(self._plan, PlanExecutionContext)
-                and self._plan.context is not None
-                and not self._plan.context.evaluate_conditions
+                and (
+                    native_lifecycle
+                    or (
+                        isinstance(self._plan, PlanExecutionContext)
+                        and self._plan.context is not None
+                        and not self._plan.context.evaluate_conditions
+                    )
+                )
             ):
                 continue
             child_best = self._max_status(child_best, child_status)
@@ -2388,12 +2393,13 @@ class Bridge:
         if own_status == "CREATED":
             if child_best == "SUCCEEDED" and done < children:
                 child_best = "RUNNING"
-            derived = self._live_motion_status(node) or (
-                child_best if child_best != "CREATED" else None
-            )
+            motion_status = None if native_lifecycle else self._live_motion_status(node)
+            derived = motion_status or (child_best if child_best != "CREATED" else None)
             if derived:
                 entry.status = derived
                 entry.derived = True
+        if native_lifecycle:
+            return entry.status
         # sticky completion: once a node has run and is idle again (not running/failed),
         # keep it SUCCEEDED so the plan view shows a monotonic done-progression.
         if entry.status == "RUNNING":

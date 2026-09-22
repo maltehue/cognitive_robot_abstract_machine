@@ -14,7 +14,7 @@ from coraplex.demonstrations import RobotDemonstration
 from coraplex.execution_environment import simulated_robot_advanced
 from coraplex.locations.navigation import (
     NavigationDeparture,
-    NavigationPath,
+    RobotNavigationPath,
     NavigationPathUnavailable,
 )
 from coraplex.plans.factories import execute_single, sequential
@@ -25,15 +25,18 @@ from semantic_digital_twin.datastructures.definitions import TorsoState
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Pose
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.geometry import BoundingBox, Scale
+from semantic_digital_twin.world_description.geometry import (
+    VolumetricBoundingBox,
+    Scale,
+)
 from semantic_digital_twin.world_description.graph_of_convex_sets.boxes import (
-    GraphOfBoundingBoxes,
+    PlanarGraphOfBoundingBoxes,
 )
 from semantic_digital_twin.world_description.shape_collection import (
     BoundingBoxCollection,
 )
 
-from .test_builder_transport import builder_transport_demo
+from .test_builder_transport import builder_transport_demo, builder_transport_scenario
 from .test_navigation_connectors import close_wall_robot_world
 from .test_navigation_rotation_height import elevated_robot_world
 from .test_navigation_motion import NavigationTrajectory
@@ -58,7 +61,7 @@ def test_authored_apartment_start_can_depart_its_clearance_buffer(
         ).perform()
     start = context.robot.root.global_pose.to_np().copy()
     goal = Pose.from_xyz_rpy(1.75, 2.22, yaw=-0.19118, reference_frame=world.root)
-    route = NavigationPath(
+    route = RobotNavigationPath(
         world,
         context.robot,
         goal,
@@ -102,7 +105,7 @@ def test_departure_increases_wall_clearance_before_turning(
     goal = Pose.from_xyz_rpy(
         -2, yaw=np.pi / 2 if heading_changes else 0, reference_frame=world.root
     )
-    path = NavigationPath(
+    path = RobotNavigationPath(
         world,
         robot,
         goal,
@@ -139,7 +142,7 @@ def test_departure_rejects_physical_or_tolerance_intersection(
     robot.set_root_pose(Pose.from_xyz_rpy(start_x, reference_frame=world.root))
     goal = Pose.from_xyz_rpy(-2, yaw=np.pi / 2, reference_frame=world.root)
     with pytest.raises(NavigationPathUnavailable):
-        NavigationPath(
+        RobotNavigationPath(
             world, robot, goal, keep_joint_states=True, face_travel_direction=True
         ).plan()
 
@@ -158,7 +161,7 @@ def test_departure_cannot_move_deeper_into_another_clearance_buffer(
     ).spawn(world)
     goal = Pose.from_xyz_rpy(-2, yaw=np.pi / 2, reference_frame=world.root)
     with pytest.raises(NavigationPathUnavailable):
-        NavigationPath(
+        RobotNavigationPath(
             world, robot, goal, keep_joint_states=True, face_travel_direction=True
         ).plan()
 
@@ -176,7 +179,7 @@ def test_departure_rejects_a_gap_smaller_than_waypoint_tolerance(
     robot.set_root_pose(Pose.from_xyz_rpy(0.197, reference_frame=world.root))
     goal = Pose.from_xyz_rpy(-2, reference_frame=world.root)
     with pytest.raises(NavigationPathUnavailable):
-        NavigationPath(world, robot, goal, keep_joint_states=True).plan()
+        RobotNavigationPath(world, robot, goal, keep_joint_states=True).plan()
 
 
 def test_departure_requires_a_held_joint_posture(close_wall_robot_world: World) -> None:
@@ -190,7 +193,7 @@ def test_departure_requires_a_held_joint_posture(close_wall_robot_world: World) 
     robot.set_root_pose(Pose.from_xyz_rpy(0.15, reference_frame=world.root))
     goal = Pose.from_xyz_rpy(-2, reference_frame=world.root)
     with pytest.raises(NavigationPathUnavailable):
-        NavigationPath(world, robot, goal, keep_joint_states=False).plan()
+        RobotNavigationPath(world, robot, goal, keep_joint_states=False).plan()
 
 
 # %% complete segment clearance
@@ -204,13 +207,15 @@ def departure_collision_space() -> NavigationDeparture:
     world = World.create_with_root_body()
     origin = HomogeneousTransformationMatrix(reference_frame=world.root)
     search = BoundingBoxCollection(
-        [BoundingBox(-2, -2, -1, 2, 2, 1, origin)], reference_frame=world.root
+        [VolumetricBoundingBox(-2, -2, -1, 2, 2, 1, origin)], reference_frame=world.root
     )
     obstacles = BoundingBoxCollection(
-        [BoundingBox(-0.105, -0.105, -1, 1.105, 1.105, 1, origin)],
+        [VolumetricBoundingBox(-0.105, -0.105, -1, 1.105, 1.105, 1, origin)],
         reference_frame=world.root,
     )
-    graph = GraphOfBoundingBoxes.navigation_map_from_bounding_boxes(search, obstacles)
+    graph = PlanarGraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
+        search, obstacles
+    )
     return NavigationDeparture(graph, obstacles, clearance=0.1, tolerance=1e-6)
 
 
@@ -248,7 +253,7 @@ def test_departure_checks_the_entire_segment(
     :param allowed: Whether the whole segment preserves the departure constraints.
     """
     buffer = next(iter(departure_collision_space.obstacles)).to_array_bounds()
-    occupied = BoundingBox(
+    occupied = VolumetricBoundingBox(
         -0.005,
         -0.005,
         -1,

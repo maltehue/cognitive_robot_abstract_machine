@@ -21,7 +21,7 @@ from semantic_digital_twin.semantic_annotations.mixins import (
 )
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Point3
 from semantic_digital_twin.spatial_types.spatial_types import Pose
-from semantic_digital_twin.world_description.geometry import BoundingBox
+from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 from semantic_digital_twin.world_description.shape_collection import (
     BoundingBoxCollection,
 )
@@ -154,7 +154,7 @@ class PlacementSurface(PoseGeneratorBackend):
         mesh = self.body.combined_mesh
         if mesh is None or mesh.is_empty:
             raise PlacementGeometryMissing(self.body)
-        bounds = BoundingBox.from_mesh(
+        bounds = VolumetricBoundingBox.from_mesh(
             mesh, HomogeneousTransformationMatrix(reference_frame=self.body)
         )
         object_annotation = HasRootBody(root=self.body)
@@ -208,7 +208,7 @@ class PlacementSurface(PoseGeneratorBackend):
             raise PlacementSurfaceMissing(self.surface_type, self.surface_name)
         return surfaces
 
-    def placement_pose(self, point: Point3, bounds: BoundingBox) -> Pose:
+    def placement_pose(self, point: Point3, bounds: VolumetricBoundingBox) -> Pose:
         """
         Convert a sampled object-center point to the object's origin pose.
 
@@ -224,7 +224,7 @@ class PlacementSurface(PoseGeneratorBackend):
         )
 
     def supports_pose(
-        self, surface: HasSupportingSurface, pose: Pose, bounds: BoundingBox
+        self, surface: HasSupportingSurface, pose: Pose, bounds: VolumetricBoundingBox
     ) -> bool:
         """
         Require the object's complete footprint to lie within the surface region.
@@ -243,7 +243,7 @@ class PlacementSurface(PoseGeneratorBackend):
         return (footprint - area.event.marginal(SpatialVariables.xy)).is_empty()
 
     def supported_pose(
-        self, surface: HasSupportingSurface, pose: Pose, bounds: BoundingBox
+        self, surface: HasSupportingSurface, pose: Pose, bounds: VolumetricBoundingBox
     ) -> Pose | None:
         """
         Project an object's bottom onto a level patch of the actual surface mesh.

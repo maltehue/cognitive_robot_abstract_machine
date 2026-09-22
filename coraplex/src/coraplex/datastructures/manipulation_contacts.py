@@ -19,7 +19,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Pose
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.geometry import BoundingBox
+from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 from semantic_digital_twin.world_description.world_entity import Body
 
 
@@ -105,7 +105,7 @@ class ManipulationContactPolicy:
             return []
         pose = self.body._world.transform(self.support_pose, self.body._world.root)
         origin = HomogeneousTransformationMatrix(reference_frame=self.body._world.root)
-        bounds = BoundingBox.from_mesh(
+        bounds = VolumetricBoundingBox.from_mesh(
             mesh, pose.to_homogeneous_matrix()
         ).transform_to_origin(origin)
         root_point = np.array(
@@ -200,8 +200,8 @@ class HasManipulationContactPolicy(ABC):
 
     @property
     @abstractmethod
-    def manipulation_contact_policy(self) -> ManipulationContactPolicy:
+    def manipulation_contact_policy(self) -> ManipulationContactPolicy | None:
         """
-        Return the selected object, end effector and support contact pose.
+        Return intended object contacts, or None for a target without an object.
         """
         ...

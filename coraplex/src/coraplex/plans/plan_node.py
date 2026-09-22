@@ -6,35 +6,30 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import (
-    Optional,
-    Any,
-    List,
-    Dict,
-    Type,
-    TYPE_CHECKING,
-    Iterable,
-    Iterator,
-    ClassVar,
-)
+from typing import Optional, Any, List, Type, TYPE_CHECKING, Iterable, ClassVar
 
-from typing_extensions import Union
+from typing_extensions import Union, Iterator
 
 from coraplex.plans.designator import Designator
+from coraplex.datastructures.manipulation_contacts import HasManipulationContactPolicy
+from coraplex.plans.failures import PlanFailure
+from giskardpy.motion_statechart.goals.templates import NodeListGoal
+from giskardpy.motion_statechart.graph_node import Goal
 from krrood.entity_query_language.query.match import Match
-from coraplex.datastructures.enums import TaskStatus
+from krrood.patterns.field_metadata import JSONMetadata
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.datastructures.execution_data import ExecutionData
 from coraplex.plans.executables import (
     Executable,
     GiskardExecutable,
-    UnderspecifiedExecutable,
 )
-from coraplex.plans.failures import PlanFailure
+from coraplex.plans.motion_state_chart_building import BuildsMotionStateChart
 from coraplex.plans.plan_entity import PlanEntity
-from coraplex.utils import split_list_by_type
 
 if TYPE_CHECKING:
+    from giskardpy.motion_statechart.motion_statechart import MotionStatechart
     from giskardpy.motion_statechart.graph_node import Task
+    from coraplex.datastructures.dataclasses import Context
     from coraplex.robot_plans.actions.base import ActionDescription
     from coraplex.robot_plans.motions.base import BaseMotion
 
@@ -58,12 +53,12 @@ class PlanNode(PlanEntity):
 
     succeeds_with_any_child: ClassVar[bool] = False
     """
-    Whether completed alternatives succeed when at least one child succeeded.
+    Whether any successful completed alternative establishes success.
     """
 
-    status: TaskStatus = TaskStatus.CREATED
+    status: LifeCycleValues = LifeCycleValues.NOT_STARTED
     """
-    The status of the node from the TaskStatus enum.
+    Where this node is in its execution.
     """
 
     start_time: Optional[datetime] = field(default_factory=datetime.now)
@@ -76,9 +71,20 @@ class PlanNode(PlanEntity):
     The ending time of the function, optional.
     """
 
-    reason: Optional[PlanFailure] = None
+    reason: PlanFailure | None = None
     """
-    The reason of failure if the action failed.
+    The structured plan failure retained in persisted execution records.
+    """
+
+    execution_error: BaseException | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+        metadata=JSONMetadata(serialize=False).as_dict(),
+    )
+    """
+    The original runtime exception, excluded from persistent execution records.
     """
 
     result: Optional[Any] = None
@@ -86,9 +92,11 @@ class PlanNode(PlanEntity):
     Result from the execution of this node.
     """
 
-    _execution_in_progress: bool = field(default=False, init=False, repr=False)
+    _execution_in_progress: bool = field(
+        default=False, init=False, repr=False, compare=False
+    )
     """
-    Whether an execution scope owns this node's lifecycle instead of its children.
+    Whether a call is already executing this node.
     """
 
     index: Optional[int] = field(default=None, init=False, repr=False)
@@ -103,6 +111,13 @@ class PlanNode(PlanEntity):
     The children of a node are interpreted as a list of nodes that have order. rustworkx
     doesn't have order in the children, hence this attribute makes it possible.
     """
+
+    @property
+    def context(self) -> Context:
+        """
+        :return: The context of the plan this node belongs to.
+        """
+        return self.plan.context
 
     @property
     def parent(self) -> Optional[PlanNode]:
@@ -135,22 +150,26 @@ class PlanNode(PlanEntity):
         return self.children
 
     @property
-    def completed_children_status(self) -> Optional[TaskStatus]:
+    def completed_children_status(self) -> Optional[LifeCycleValues]:
         """
         :return: The terminal outcome established by children, or None while pending.
         """
         statuses = {child.status for child in self.execution_children}
         if self.succeeds_with_any_child:
-            if statuses & {TaskStatus.CREATED, TaskStatus.RUNNING, TaskStatus.PAUSE}:
+            if statuses & {
+                LifeCycleValues.NOT_STARTED,
+                LifeCycleValues.RUNNING,
+                LifeCycleValues.PAUSED,
+            }:
                 return None
-            if TaskStatus.SUCCEEDED in statuses:
-                return TaskStatus.SUCCEEDED
-        if TaskStatus.FAILED in statuses:
-            return TaskStatus.FAILED
-        if TaskStatus.INTERRUPTED in statuses:
-            return TaskStatus.INTERRUPTED
-        if statuses == {TaskStatus.SUCCEEDED}:
-            return TaskStatus.SUCCEEDED
+            if LifeCycleValues.SUCCEEDED in statuses:
+                return LifeCycleValues.SUCCEEDED
+        if LifeCycleValues.FAILED in statuses:
+            return LifeCycleValues.FAILED
+        if LifeCycleValues.INTERRUPTED in statuses:
+            return LifeCycleValues.INTERRUPTED
+        if statuses == {LifeCycleValues.SUCCEEDED}:
+            return LifeCycleValues.SUCCEEDED
         return None
 
     @property
@@ -284,7 +303,7 @@ class PlanNode(PlanEntity):
         """
         Interrupts the execution of this node and all nodes below.
         """
-        self.status = TaskStatus.INTERRUPTED
+        self.status = LifeCycleValues.INTERRUPTED
         logger.info(f"Interrupted node: {str(self)}")
         # TODO: cancel giskard execution
 
@@ -292,13 +311,13 @@ class PlanNode(PlanEntity):
         """
         Resumes the execution of this node and all nodes below.
         """
-        self.status = TaskStatus.RUNNING
+        self.status = LifeCycleValues.RUNNING
 
     def pause(self):
         """
         Suspends the execution of this node and all nodes below.
         """
-        self.status = TaskStatus.PAUSE
+        self.status = LifeCycleValues.PAUSED
 
     def add_child(self, child: PlanNode):
         self.plan.add_edge(self, child)
@@ -306,59 +325,79 @@ class PlanNode(PlanEntity):
     @property
     def is_interrupted(self) -> bool:
         return any(
-            parent.status == TaskStatus.INTERRUPTED for parent in [self] + self.path
+            parent.status == LifeCycleValues.INTERRUPTED
+            for parent in [self] + self.path
         )
 
     @property
     def is_paused(self) -> bool:
-        return any(parent.status == TaskStatus.PAUSE for parent in [self] + self.path)
+        return any(
+            parent.status == LifeCycleValues.PAUSED for parent in [self] + self.path
+        )
 
-    def perform(self) -> Any:
+    def perform(self):
         """
         Perform the node and update the fields of this node.
         """
         for parent in self.path:
-            if parent.status == TaskStatus.INTERRUPTED:
-                self.status = TaskStatus.INTERRUPTED
+            if parent.status == LifeCycleValues.INTERRUPTED:
+                self.status = LifeCycleValues.INTERRUPTED
                 return
 
         with self.execution_scope():
             self.notify()
             self.result = self.parse().execute()
-
         return self.result
+
+    @property
+    def reports_execution_boundaries(self) -> bool:
+        """
+        Return whether the call scope publishes this node's start and end events.
+        """
+        return True
 
     @contextmanager
     def execution_scope(self) -> Iterator[None]:
         """
-        Report one execution without overwriting an interruption or nested lifecycle.
-
-        Executables that bypass :meth:`perform` use the same scope. Ancestors collapsed
-        into their children's motion chart receive status updates from the plan, while
-        this node completes only after its own executable returns.
+        Track execution and publish boundaries owned by the call scope.
         """
         if self._execution_in_progress:
             yield
             return
         self._execution_in_progress = True
-        if self.status != TaskStatus.INTERRUPTED:
-            self.status = TaskStatus.RUNNING
-        self.start_time = datetime.now()
-        self.end_time = None
+        if self.reports_execution_boundaries:
+            self.status = LifeCycleValues.RUNNING
+            self.start_time = datetime.now()
+            self.end_time = None
         self.reason = None
-        self.plan.notify_node_started(self)
+        self.execution_error = None
         try:
+            if self.reports_execution_boundaries:
+                self.plan.notify_node_started(self)
             yield
-            if self.status == TaskStatus.RUNNING:
-                self.status = TaskStatus.SUCCEEDED
-        except PlanFailure as e:
-            self.status = TaskStatus.FAILED
-            self.reason = e
-            raise e
+            if (
+                self.reports_execution_boundaries
+                and self.status == LifeCycleValues.RUNNING
+            ):
+                self.status = LifeCycleValues.SUCCEEDED
+        except BaseException as error:
+            self.execution_error = error
+            self.reason = error if isinstance(error, PlanFailure) else None
+            self.status = (
+                LifeCycleValues.FAILED
+                if isinstance(error, Exception)
+                else LifeCycleValues.INTERRUPTED
+            )
+            raise
         finally:
             self._execution_in_progress = False
-            self.end_time = datetime.now()
-            self.plan.notify_node_ended(self)
+            try:
+                if self.reports_execution_boundaries:
+                    self.end_time = datetime.now()
+                    self.plan.notify_node_ended(self)
+            finally:
+                if self.execution_error is not None:
+                    raise self.execution_error
 
     def mount_subplan(self, root: PlanNode):
         """
@@ -416,36 +455,24 @@ class PlanNode(PlanEntity):
 
     def parse(self) -> Executable: ...
 
-    def merge_motion_executables(
-        self, executables: List[Executable]
-    ) -> List[Executable]:
+    @property
+    def has_motions(self) -> bool:
         """
-        Merge consecutive giskard executables into a single one while leaving the other
-        executables untouched and in their original order.
-        """
-        result = []
-        for group in split_list_by_type(executables, GiskardExecutable):
-            if not isinstance(group[0], GiskardExecutable):
-                result.extend(group)
-                continue
-            result.append(
-                GiskardExecutable(
-                    motion_mappings=self.merge_motion_mappings(group),
-                    context=self.plan.context,
-                )
-            )
-        return result
+        Whether this subtree contributes any node to a motion state chart.
 
-    def merge_motion_mappings(
-        self, motions: List[GiskardExecutable]
-    ) -> Dict[MotionNode, Task]:
+        Used to skip nodes that would otherwise produce an empty goal.
         """
-        Combine the motion mappings of several giskard executables into one mapping.
+        return any(child.has_motions for child in self.children)
+
+    @property
+    def contains_execution_boundary(self) -> bool:
         """
-        new_mappings = {}
-        for motion in motions:
-            new_mappings.update(motion.motion_mappings)
-        return new_mappings
+        Whether this node or any of its descendants splits the plan into separate motion
+        state charts.
+        """
+        return isinstance(self, ExecutionBoundaryNode) or any(
+            child.contains_execution_boundary for child in self.children
+        )
 
     def __node_info__(self):
         return [
@@ -453,7 +480,7 @@ class PlanNode(PlanEntity):
             f"start: {self.start_time}",
             f"end: {self.end_time}",
             f"result: {self.result}",
-            f"reason: {self.reason}",
+            f"reason: {self.execution_error or self.reason}",
         ]
 
     def __node_label__(self):
@@ -465,122 +492,6 @@ class ExecutionBoundaryNode(ABC, PlanNode):
     """
     A PlanNode that interrupts the merging of surrounding motions into one chart.
     """
-
-
-@dataclass(eq=False, repr=False)
-class UnderspecifiedNode(ExecutionBoundaryNode):
-    """
-    An action or language expression that is described by an underspecified `an(...)`
-    match statement.
-
-    This node is used to generate fully specified actions  or language expressions.
-    The semantics are: try until it succeeds or fails if the underspecified action is exhausted.
-    If you want to limit the number of attempts, add a limit clause to the underspecified action.
-    """
-
-    underspecified_action: Match = field(kw_only=True)
-    """
-    The underspecified statement that can be used to generate actions.
-    """
-
-    _action_iterator: Optional[Iterator[ActionDescription]] = field(
-        default=None, kw_only=True
-    )
-    """
-    The iterator that is used to generate the actions.
-
-    Only available after the first call to notify.
-    """
-
-    current_candidate: Optional[ActionNode] = field(
-        default=None, init=False, repr=False
-    )
-    """
-    The action candidate this node currently resolves to, set by `advance` at execution
-    time.
-
-    On failure, `advance` replaces it with the next candidate.
-    """
-
-    @property
-    def designator_type(self) -> Type:
-        return self.underspecified_action.type
-
-    @property
-    def execution_children(self) -> List[PlanNode]:
-        """
-        :return: The current candidate; earlier failed attempts retain their outcomes.
-        """
-        return [self.current_candidate] if self.current_candidate is not None else []
-
-    def _next_candidate(self) -> Optional[ActionNode]:
-        """
-        Pull the next grounded action from the iterator and make it the current
-        candidate.
-
-        :return: The new candidate node, or None if the iterator is exhausted.
-        """
-        if self._action_iterator is None:
-            self._action_iterator = self.plan.context.query_backend.evaluate(
-                self.underspecified_action
-            )
-
-        grounded_action = next(self._action_iterator, None)
-        if grounded_action is None:
-            self._action_iterator = None
-            return None
-
-        candidate = ActionNode(designator=grounded_action)
-        self.add_child(candidate)
-        self.current_candidate = candidate
-        return candidate
-
-    def stop_grounding(self) -> None:
-        """
-        Release the action iterator once no further candidate will be requested from it.
-
-        Between candidates the iterator is left suspended (rather than exhausted) so a
-        later retry can resume the search instead of restarting it; a suspended
-        generator keeps every value its frame holds alive, including resources a
-        candidate generator only builds to validate against (for example a location's
-        deep-copied test world). Once a candidate is accepted and no retry will happen,
-        closing the iterator here releases those resources immediately instead of
-        retaining them for this node's whole lifetime.
-        """
-        if self._action_iterator is not None:
-            self._action_iterator.close()
-            self._action_iterator = None
-
-    def notify(self):
-        # Resolution is deferred to execution time: the underspecified statement can
-        # only be grounded once the preceding actions have run and mutated the world
-        # (e.g. the torso is raised, the object is in the gripper). The grounding
-        # happens in UnderspecifiedExecutable, so expansion does nothing here.
-        pass
-
-    def advance(self) -> bool:
-        """
-        Resolve the next candidate and expand it against the current world state.
-
-        Driven by :class:`~pycram.plans.executables.UnderspecifiedExecutable` to ground the
-        action at execution time, and reused by failure handling to retry with a freshly
-        generated action.
-
-        :return: True if a new candidate was generated, False if the iterator is
-            exhausted.
-        """
-        if self._next_candidate() is None:
-            return False
-        self.current_candidate.notify()
-        return True
-
-    def parse(self) -> Executable:
-        # Defer resolution to execution: the returned executable grounds the action
-        # when it is reached, against the world state produced by the preceding nodes.
-        return UnderspecifiedExecutable(node=self, context=self.plan.context)
-
-    def __repr__(self):
-        return f"{self.designator_type.__name__}"
 
 
 @dataclass(eq=True, repr=False)
@@ -642,7 +553,7 @@ class DesignatorNode(PlanNode, ABC):
 
 
 @dataclass(eq=False, repr=False)
-class ActionNode(DesignatorNode):
+class ActionNode(DesignatorNode, BuildsMotionStateChart):
     """
     A node representing a fully specified action.
     """
@@ -677,13 +588,26 @@ class ActionNode(DesignatorNode):
             child
             for child in self.children
             if not isinstance(child, ConditionNode)
-            or child.status != TaskStatus.CREATED
+            or child.status != LifeCycleValues.NOT_STARTED
         ]
+
+    @property
+    def contains_execution_boundary(self) -> bool:
+        """
+        Separate intended-contact actions from surrounding motion groups.
+        """
+        return (
+            isinstance(self.action, HasManipulationContactPolicy)
+            or super().contains_execution_boundary
+        )
 
     def create_execution_data_pre_perform(self):
         """
         Create the ExecutionData and logs additional information about the execution of
         this node.
+
+        .. note: With the current implementation, the exact recording of execution data is not possible. So this is
+        not called at the moment.
         """
         robot_pose = self.plan.robot.root.global_pose
         exec_data = ExecutionData(robot_pose, self.plan.world.state._data)
@@ -718,9 +642,6 @@ class ActionNode(DesignatorNode):
         return None
 
     def notify(self):
-
-        self.create_execution_data_pre_perform()
-
         if not self.children:
             self.action.expand()
 
@@ -728,50 +649,56 @@ class ActionNode(DesignatorNode):
         for child in self.children:
             child.notify()
 
-        # TODO: This can't stay here
-        self.update_execution_data_post_perform()
+    @property
+    def body_children(self) -> List[PlanNode]:
+        """
+        :return: The children forming the action body, without its pre- and
+            post-condition.
+        """
+        return self.children[1:-1]
+
+    def add_to_motion_state_chart(
+        self, parent_goal: NodeListGoal, executable: GiskardExecutable
+    ) -> Goal:
+        """
+        Add this action's body as its own goal below `parent_goal`.
+
+        .. note:: A nested action's conditions are not evaluated inside the surrounding
+            motion state chart; only the conditions of the action a chart is built for
+            are, see :meth:`parse`.
+        """
+        goal = self.create_goal()
+        parent_goal.add_node(goal)
+        self.add_children_to_motion_state_chart(goal, self.body_children, executable)
+        return goal
 
     def parse(self) -> Executable:
+        """
+        Parse the action body into an executable, gating it with the action's
+        conditions.
+
+        The pre-condition gates the first motion state chart of the body and the post-
+        condition the last one.
+        """
         children = self.children
-        pre_condition_node = children.pop(0)
-        post_condition_node = children.pop(-1)
+        pre_condition_node = children[0]
+        post_condition_node = children[-1]
 
-        child_execs = [child.parse() for child in children]
-        merged = self.merge_motion_executables(child_execs)
+        executable = self.parse_children(self.body_children)
+        giskard_executables = executable.giskard_executables
+        if not giskard_executables:
+            return executable
+        giskard_executables[0].pre_condition_node = pre_condition_node
+        giskard_executables[-1].post_condition_node = post_condition_node
+        return executable
 
-        motion_execs = [
-            executable
-            for executable in merged
-            if isinstance(executable, GiskardExecutable)
-        ]
-        if len(motion_execs) == 1:
-            # The action body is a single motion state chart, so the conditions
-            # can be evaluated inside it (gating start/end, aborting on failure).
-            motion_exec = motion_execs[0]
-            motion_exec.pre_condition_node = pre_condition_node
-            motion_exec.post_condition_node = post_condition_node
-            return motion_exec
-
-        giskard_child_execs = [
-            executable
-            for executable in child_execs[0].execution_list
-            if isinstance(executable, GiskardExecutable)
-        ]
-        if giskard_child_execs:
-            giskard_child_execs[0].pre_condition_node = pre_condition_node
-            giskard_child_execs[-1].post_condition_node = post_condition_node
-        return child_execs[0]
-
-    def execute(self) -> None:
-        """
-        Execute the expanded action while retaining its native lifecycle.
-        """
+    def execute(self):
         with self.execution_scope():
             self.parse().execute()
 
 
 @dataclass(eq=False, repr=False)
-class MotionNode(DesignatorNode):
+class MotionNode(DesignatorNode, BuildsMotionStateChart):
     """
     A node in the plan representing a fully specified motion.
 
@@ -783,6 +710,20 @@ class MotionNode(DesignatorNode):
     """
     Reference to the motion designator which is linked to this node.
     """
+
+    motion_statechart: MotionStatechart | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    """
+    The native chart bound to this motion for its current execution.
+    """
+
+    @property
+    def reports_execution_boundaries(self) -> bool:
+        """
+        Leave motion boundaries to the native task history.
+        """
+        return False
 
     @property
     def motion(self) -> BaseMotion:
@@ -810,12 +751,31 @@ class MotionNode(DesignatorNode):
                 return node
         return None
 
-    def parse(self) -> Executable:
-        task = self.motion.motion_chart
+    @property
+    def contains_execution_boundary(self) -> bool:
+        """
+        Defer state-dependent motion expansion until earlier groups execute.
+        """
+        return self.motion.requires_individual_execution
 
-        return GiskardExecutable(
-            motion_mappings={self: task}, context=self.plan.context
-        )
+    @property
+    def has_motions(self) -> bool:
+        return True
+
+    def add_to_motion_state_chart(
+        self, parent_goal: NodeListGoal, executable: GiskardExecutable
+    ) -> Task:
+        """
+        Add this motion's giskard task below `parent_goal` and record it on
+        `executable`.
+        """
+        task = self.motion.motion_chart
+        parent_goal.add_node(task)
+        executable.motion_mappings[self] = task
+        return task
+
+    def parse(self) -> Executable:
+        return self.create_giskard_executable([self])
 
 
 ActionLike = Union[Match, Designator, PlanNode]

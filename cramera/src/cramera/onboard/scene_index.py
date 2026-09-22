@@ -1,33 +1,29 @@
 """
-The scenes index (``index.json``) the viewer's pickers read.
-
-Kept free of the heavy onboarding imports (URDF/Gazebo/MJCF parsers, ``runpy``, the
-monkey-patched :class:`~cramera.onboard.demo.Recorder`) so the always-on static file
-server (:mod:`cramera.server`) and the live bridge's recording finalizer
-(:mod:`cramera.live.recording_bundle`) can register a scene without pulling in the
-offline onboarding pipeline.
+Discover and index locally saved and shared scene bundles.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from typing_extensions import Any, Dict, List, Optional
 
 from cramera import paths
-from cramera.knowledge.detected_events import SceneField
+from cramera.recording_fields import SceneField
 from cramera.generated_json import GeneratedJson, write_json_atomically
+from cramera.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 RESERVED_SCENE_NAMES = (paths.LIVE_SCENE_NAME, paths.RECORDING_SCENE_NAME)
 """
-Throwaway bundle names that are never something a user onboarded or saved, and must
-never show up as a robot/environment choice in the real picker.
+Throwaway bundle names that are never something a user recorded or saved, and must never
+show up as a robot/environment choice in the real picker.
 """
 
-SCENE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+SCENE_NAME_PATTERN = paths.SCENE_NAME_PATTERN
 """
 What a user-given scene name may look like: safe as a single path segment, without
 resorting to escaping or length limits a filesystem might reject.
@@ -50,7 +46,7 @@ def validate_scene_name(name: str) -> str:
     :raises InvalidSceneName: If ``name`` is not exactly letters, digits, ``_`` or ``-``
         (1-64 characters), or is one of :data:`RESERVED_SCENE_NAMES`.
     """
-    if not SCENE_NAME_PATTERN.match(name):
+    if not SCENE_NAME_PATTERN.fullmatch(name):
         raise InvalidSceneName(
             "a scene name must be 1-64 characters of letters, digits, '_' or '-'"
         )
@@ -62,8 +58,7 @@ def validate_scene_name(name: str) -> str:
 @dataclass
 class SceneIndexEntry:
     """
-    One onboarded (or saved) scene bundle, as ``index.json`` advertises it to the
-    viewer.
+    One recorded (or saved) scene bundle, as ``index.json`` advertises it to the viewer.
 
     The viewer's header offers a robot and an environment separately, but only ever
     resolves the pair back to a bundle that was actually recorded — these entries are
@@ -93,23 +88,25 @@ class SceneIndexEntry:
     @classmethod
     def of_directory(cls, scenes_directory: Path) -> List[SceneIndexEntry]:
         """
-        Every onboarded bundle under a scenes directory, in name order.
+        Every recorded bundle under a scenes directory, in name order.
 
         :param scenes_directory: Directory holding the scene bundles.
         """
         entries = []
         for bundle_directory in sorted(scenes_directory.iterdir()):
             if bundle_directory.name in RESERVED_SCENE_NAMES:
-                continue  # a throwaway bundle, never something a user onboarded
+                continue  # a throwaway bundle, never something a user recorded
             scene_path = bundle_directory / "scene.json"
             if not scene_path.is_file():
                 continue
-            entries.append(
-                cls.of_scene(
-                    bundle_directory.name,
-                    json.loads(scene_path.read_text(encoding="utf-8")),
+            scene = GeneratedJson(scene_path).read()
+            if not isinstance(scene, dict):
+                logger.warning(
+                    "Skipping invalid scene metadata in %s: expected an object",
+                    scene_path,
                 )
-            )
+                continue
+            entries.append(cls.of_scene(bundle_directory.name, scene))
         return entries
 
     @classmethod
@@ -172,15 +169,23 @@ def write_scene_index(path: Path, name: str) -> None:
     The ``scenes`` list is rebuilt from the bundles actually on disk, each carrying its
     robot/environment identity for the viewer's pickers, so a bundle that was removed or
     renamed since it was indexed cannot leave a stale entry behind. ``default`` is
-    filled in on the first scene onboarded and left alone after that.
+    filled in on the first scene recorded and left alone after that.
 
     :param path: Path of the scene index file.
     :param name: Name of the scene to register.
     """
-    index: Dict[str, Any] = {}
-    if path.is_file():
-        index = json.loads(path.read_text(encoding="utf-8"))
+    index = GeneratedJson(path).read()
     if not isinstance(index, dict):
+        if path.is_file():
+            with NamedTemporaryFile(
+                prefix=path.name + ".corrupt-", dir=path.parent, delete=False
+            ) as preserved:
+                preserved.write(path.read_bytes())
+            logger.warning(
+                "Rebuilding invalid scene index %s; original preserved at %s",
+                path,
+                preserved.name,
+            )
         index = {}
     index["scenes"] = [
         entry.to_payload() for entry in SceneIndexEntry.of_directory(path.parent)

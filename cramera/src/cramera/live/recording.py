@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from typing_extensions import Dict, List, Optional
@@ -163,7 +163,7 @@ class Recording:
             self._frames.append(
                 RecordedFrame(
                     frames=dict(snapshot.frames),
-                    base=snapshot.base,
+                    base=list(snapshot.base) if snapshot.base is not None else None,
                     objects={
                         key: list(value) for key, value in snapshot.objects.items()
                     },
@@ -189,6 +189,21 @@ class Recording:
             return statechart
         held = self._frames[-1].statechart
         return held if held == statechart else statechart
+
+    def update_statechart(self, statechart: Optional[ChartSnapshot]) -> None:
+        """Complete the latest world frame with a plan's final chart observation.
+
+        A plan boundary can follow chart changes without another world update.
+        Preserve the final observation on the latest pose and timestamp.
+
+        :param statechart: The chart observed when the plan node completed.
+        """
+        with self._lock:
+            if self.state is not RecordingState.RECORDING or not self._frames:
+                return
+            self._frames[-1] = replace(
+                self._frames[-1], statechart=self._held_statechart(statechart)
+            )
 
     def stop(self) -> List[RecordedFrame]:
         """

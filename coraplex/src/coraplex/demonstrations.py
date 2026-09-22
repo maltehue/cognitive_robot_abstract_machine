@@ -12,18 +12,19 @@ from __future__ import annotations
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from types import TracebackType
 
 import rclpy
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
-from typing_extensions import ClassVar, List, Optional, Self, Type
+from typing_extensions import ClassVar, List, Type
 
 from coraplex.alternative_motion_mapping import AlternativeMotion
 from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import ExecutionType, VisualizationBackend
 from coraplex.execution_environment import ExecutionEnvironment
-from coraplex.plans.plan import Plan
-from coraplex.visualization import WorldVisualization
+from coraplex.visualization import VisualizationSession, WorldVisualization
+from coraplex.plans.plan_node import PlanNode
 from semantic_digital_twin.adapters.ros.world_fetcher import fetch_world_from_service
 from semantic_digital_twin.adapters.ros.world_synchronizer import WorldSynchronizer
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
@@ -178,25 +179,30 @@ class RobotDemonstration(ABC):
     Whether collision avoidance is added to every motion state chart of this run.
     """
 
+    repetitions: int = 1
+    """
+    How often the plan is performed against the scene.
+
+    Repeating only makes sense for a plan that leaves the scene as it found it, such as
+    one carrying an object away and back again.
+    """
+
     default_visualization_backend: VisualizationBackend = VisualizationBackend.RVIZ
-    """
-    The renderer a simulated run watches the world with, unless the ``CORAPLEX_*``
-    environment overrides it. Set to :attr:`VisualizationBackend.CRAMERA` to serve the
-    run to the browser viewer, :attr:`VisualizationBackend.NONE` to run headless, etc.
-    Exposed so a caller decides the backend from the outside without touching the plan.
-    """
+    """Renderer used unless explicitly selected through the environment."""
+
+    visualization: WorldVisualization | None = field(init=False, default=None)
+    """The visualization owned by this simulated demonstration."""
 
     ros_session: RobotDemonstrationRosSession | None = field(init=False, default=None)
     """
     Session held for the duration of a real run, and ``None`` in simulation.
     """
 
-    visualization: Optional[WorldVisualization] = field(init=False, default=None)
+    _visualization_session: VisualizationSession | None = field(
+        init=False, default=None, repr=False
+    )
     """
-    The visualization backend started for a simulated run (``None`` until then, and for a
-    real run whose world comes from the controller). The plan is attached to it in
-    :meth:`run` so executed actions and motions appear on its timeline, and it keeps
-    showing the world after the plan ends until :meth:`stop_visualization` closes it.
+    Explicit context retaining the viewer until the demonstration context exits.
     """
 
     @abstractmethod
@@ -226,12 +232,9 @@ class RobotDemonstration(ABC):
         """
 
     @abstractmethod
-    def build_plan(self, context: Context) -> Plan:
+    def build_plan(self, context: Context) -> PlanNode:
         """
         Build the plan this demonstration performs.
-
-        :param context: Robot and world used to resolve the authored actions.
-        :return: Executable plan including its callbacks and root action node.
         """
 
     @property
@@ -259,16 +262,17 @@ class RobotDemonstration(ABC):
         this demonstration's own description otherwise.
         """
         self.ros_session = RobotDemonstrationRosSession.start(self.ros_node_name)
+        VisualizationSession.register(self.stop_visualization)
 
         if self.execution_type is not ExecutionType.REAL:
             world = self.build_simulated_world()
-            # The backend (RViz markers, cramera browser viewer, Rerun, or none) is chosen
-            # by default_visualization_backend, overridable through the CORAPLEX_* env vars.
             self.visualization = WorldVisualization.from_environment(
-                world, default_backend=self.default_visualization_backend
+                world,
+                default_backend=self.default_visualization_backend,
+                ros_node=self.ros_node,
+                collision_visualization=True,
             ).start()
             return world
-
         world = self.ros_session.fetch_world()
         WorldSynchronizer(_world=world, node=self.ros_session.node)
         return world
@@ -277,57 +281,77 @@ class RobotDemonstration(ABC):
         """
         Acquire a world, populate it if needed, and perform the plan against it.
 
-        The visualization outlives the plan, so the finished run can still be inspected;
-        use this demonstration as a context manager, or call :meth:`stop_visualization`,
-        to close the viewer.
-
         :return: The world the demonstration acted on.
         """
-        world = self.acquire_world()
         try:
+            world = self.acquire_world()
             if not self.is_scene_populated(world):
                 self.populate_scene(world)
-            plan = self.build_plan(self.build_context(world))
-            if self.visualization is not None:
-                self.visualization.attach_plan(plan)
-            with ExecutionEnvironment(
-                execution_type=self.execution_type,
-                collision_avoidance=self.collision_avoidance,
-            ):
-                plan.perform()
+            for _ in range(self.repetitions):
+                plan = self.build_plan(self.build_context(world))
+                if self.visualization is not None:
+                    self.visualization.attach_plan(plan)
+                with ExecutionEnvironment(
+                    execution_type=self.execution_type,
+                    collision_avoidance=self.collision_avoidance,
+                ):
+                    plan.perform()
         finally:
             self.tear_down()
         return world
 
     def tear_down(self) -> None:
         """
-        Release the ROS session if this demonstration started the ROS context.
+        Release owned ROS resources after execution.
 
-        A viewer still showing the world keeps the session, because the RViz backend
-        publishes markers and TF through it and the cramera bridge listens for them on
-        it. A session running inside a context somebody else owns is left alone: that
-        owner decides when its nodes go away, and destroying this one early can drop
-        world modifications that have not reached the controller yet.
+        An explicitly selected browser viewer remains available for inspection until
+        :meth:`stop_visualization`. A borrowed ROS session is left to its owner.
         """
-        if self.visualization is not None and self.visualization.is_rendering:
-            return
-        self.visualization = None
+        if self.visualization is not None:
+            if VisualizationSession.is_active():
+                return
+            if self.visualization.cramera_visualization is None:
+                self.visualization.stop()
+                self.visualization = None
         if self.ros_session is None or not self.ros_session.owns_context:
             return
         self.ros_session.stop()
         self.ros_session = None
 
+    def __enter__(self) -> RobotDemonstration:
+        """
+        Retain visualization resources until this explicit context exits.
+        """
+        self._visualization_session = VisualizationSession()
+        self._visualization_session.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """
+        Close the viewer and owned ROS resources when the explicit context ends.
+
+        :param exception_type: The exception raised in the context, if any.
+        :param exception: The original exception propagated to the caller.
+        :param traceback: The traceback attached to that exception.
+        """
+        try:
+            if self._visualization_session is not None:
+                self._visualization_session.__exit__(
+                    exception_type, exception, traceback
+                )
+        finally:
+            self._visualization_session = None
+
     def stop_visualization(self) -> None:
-        """
-        Close the viewer the run was watched with, and release what only it still held.
-        """
+        """Close the retained viewer and executor, preserving a borrowed ROS context."""
         if self.visualization is not None:
             self.visualization.stop()
             self.visualization = None
-        self.tear_down()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exception_type, exception, traceback) -> None:
-        self.stop_visualization()
+        if self.ros_session is not None:
+            self.ros_session.stop()
+            self.ros_session = None

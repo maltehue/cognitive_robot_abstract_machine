@@ -14,16 +14,25 @@ from random_events.product_algebra import Event
 
 from coraplex.plans.failures import PlanFailure
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AvoidCollisionBetweenGroups,
+)
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Floor
 from semantic_digital_twin.spatial_types import (
     HomogeneousTransformationMatrix,
+    Point2,
     Point3,
     Pose,
 )
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import OmniDrive
-from semantic_digital_twin.world_description.geometry import BoundingBox, Bounds
+from semantic_digital_twin.world_description.geometry import (
+    VolumetricBoundingBox,
+    PlanarBoundingBox,
+    Bounds,
+)
 from semantic_digital_twin.world_description.graph_of_convex_sets.boxes import (
-    GraphOfBoundingBoxes,
+    PlanarGraphOfBoundingBoxes,
 )
 from semantic_digital_twin.world_description.shape_collection import (
     BoundingBoxCollection,
@@ -123,7 +132,7 @@ class NavigationConnector:
     component: int
     """Index of the reachable component in the rotational free-space graph."""
 
-    points: list[Point3]
+    points: list[Point2]
     """Ordered positions from the endpoint to a place with room to turn."""
 
 
@@ -134,7 +143,7 @@ class NavigationConnector:
 class NavigationDeparture:
     """Find a straight departure that increases existing obstacle separation."""
 
-    graph: GraphOfBoundingBoxes
+    graph: PlanarGraphOfBoundingBoxes
     """Fixed-heading free space including the full requested clearance."""
     obstacles: BoundingBoxCollection
     """Forbidden base positions including clearance and waypoint tolerance."""
@@ -143,18 +152,22 @@ class NavigationDeparture:
     tolerance: float
     """Inset keeping the departure destination inside a free graph cell."""
 
-    def find(self, start: Point3) -> Point3 | None:
+    def find(self, start: Point2) -> Point2 | None:
         """Find a safe translation into normal clearance without moving the world.
 
         :param start: Actual base position projected to the graph's height plane.
         :return: Nearest valid free-space entry, or None if departure is unsafe.
         """
-        coordinates = start.to_np()[:3].flatten()
-        buffers = [box.to_array_bounds() for box in self.obstacles]
-        offset = np.array([self.clearance, self.clearance, 0])
+        coordinates = start.to_np().flatten()
+        buffers = [
+            Bounds(bounds.lower[:2], bounds.upper[:2])
+            for box in self.obstacles
+            for bounds in [box.to_array_bounds()]
+        ]
+        offset = np.full(2, self.clearance)
         occupied = [Bounds(box.lower + offset, box.upper - offset) for box in buffers]
         if any(
-            box.clip_segment(coordinates, np.zeros(3)) is not None for box in occupied
+            box.clip_segment(coordinates, np.zeros(2)) is not None for box in occupied
         ):
             return None
         candidates = [
@@ -172,9 +185,7 @@ class NavigationDeparture:
                 self.allows_segment(coordinates, candidate, buffer, physical)
                 for buffer, physical in zip(buffers, occupied)
             ):
-                return Point3.from_iterable(
-                    candidate, reference_frame=start.reference_frame
-                )
+                return Point2(*candidate, reference_frame=start.reference_frame)
         return None
 
     def allows_segment(
@@ -219,7 +230,7 @@ class NavigationDeparture:
 class NavigationTransit:
     """Join turning regions through an orientation-constrained free-space layer."""
 
-    path: NavigationPath
+    path: RobotNavigationPath
     """Planner supplying held-posture geometry and the unchanged obstacle clearance."""
 
     search_space: BoundingBoxCollection
@@ -290,7 +301,7 @@ class NavigationTransit:
         best_route = None
         best_distance = float("inf")
         for heading in self.heading_poses(start, goal):
-            graph = GraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
+            graph = PlanarGraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
                 self.search_space,
                 self.path.translation_obstacles(
                     heading, self.path.bounds_at_pose(heading)
@@ -300,8 +311,8 @@ class NavigationTransit:
                 for arrival in arrivals:
                     first, last = departure.points[-1], arrival.points[-1]
                     if (
-                        graph.node_of_point(first) is None
-                        or graph.node_of_point(last) is None
+                        graph._node_of_point(first) is None
+                        or graph._node_of_point(last) is None
                     ):
                         continue
                     middle = graph.path_from_to(first, last)
@@ -310,7 +321,7 @@ class NavigationTransit:
                     approach = list(reversed(arrival.points))
                     points = departure.points + middle[1:] + approach[1:]
                     distance = sum(
-                        float(first.euclidean_distance(second))
+                        float(first.to_point3().euclidean_distance(second.to_point3()))
                         for first, second in zip(points, points[1:])
                     )
                     if distance >= best_distance:
@@ -324,7 +335,7 @@ class NavigationTransit:
 
 
 @dataclass
-class NavigationPath:
+class RobotNavigationPath:
     """
     Construct base waypoints with a whole-robot collision footprint.
     """
@@ -374,6 +385,46 @@ class NavigationPath:
     Face each travel segment when a route with room for base rotation is available.
     """
 
+    def support_contact_rules(self) -> list[AvoidCollisionBetweenGroups]:
+        """
+        Keep physical floor collision checks without demanding a gap below the base.
+
+        :return: Contact thresholds for lower robot bodies and their supporting floor.
+        """
+        origin = HomogeneousTransformationMatrix(reference_frame=self.world.root)
+        base_pose = self.robot.root.global_pose
+        rules = []
+        for floor in self.world.get_semantic_annotations_by_type(Floor):
+            bounds = floor.as_bounding_box_collection_at_origin(origin).bounding_box()
+            if not (
+                bounds.min_x <= float(base_pose.x) <= bounds.max_x
+                and bounds.min_y <= float(base_pose.y) <= bounds.max_y
+                and bounds.max_z <= float(base_pose.z) + self.geometry_tolerance
+            ):
+                continue
+            lower_bodies = [
+                body
+                for body in self.robot.bodies_with_collision
+                for body_bounds in [
+                    body.collision.as_bounding_box_collection_at_origin(
+                        origin
+                    ).bounding_box()
+                ]
+                if body_bounds.min_z
+                <= bounds.max_z + self.clearance + self.waypoint_tolerance
+                and body_bounds.max_z >= bounds.max_z
+            ]
+            if lower_bodies:
+                rules.append(
+                    AvoidCollisionBetweenGroups(
+                        body_group_a=lower_bodies,
+                        body_group_b=floor.bodies_with_collision,
+                        buffer_zone_distance=0.0,
+                        violated_distance=-self.geometry_tolerance,
+                    )
+                )
+        return rules
+
     def translation_obstacles(
         self, start: Pose, robot_bounds: BoundingBoxCollection
     ) -> BoundingBoxCollection:
@@ -403,7 +454,7 @@ class NavigationPath:
                 if not overlapping:
                     continue
                 obstacles.append(
-                    BoundingBox(
+                    VolumetricBoundingBox(
                         box.min_x
                         - max(part.max_x for part in overlapping)
                         + start.x
@@ -445,7 +496,7 @@ class NavigationPath:
                 max(abs(part.min_y - start.y), abs(part.max_y - start.y)),
             )
             envelopes.append(
-                BoundingBox(
+                VolumetricBoundingBox(
                     start.x - radius,
                     start.y - radius,
                     part.min_z,
@@ -497,7 +548,7 @@ class NavigationPath:
         upper_height = max(box.max_z for box in world_bounds)
         search = BoundingBoxCollection(
             [
-                BoundingBox(
+                VolumetricBoundingBox(
                     min(world_T_start.x, world_T_target.x) - self.search_margin,
                     min(world_T_start.y, world_T_target.y) - self.search_margin,
                     lower_height,
@@ -519,13 +570,8 @@ class NavigationPath:
                 rtol=0,
             )
         )
-        height = (lower_height + upper_height) / 2
-        start = Point3(
-            world_T_start.x, world_T_start.y, height, reference_frame=self.world.root
-        )
-        goal = Point3(
-            world_T_target.x, world_T_target.y, height, reference_frame=self.world.root
-        )
+        start = Point2.from_pose(world_T_start)
+        goal = Point2.from_pose(world_T_target)
         footprints = (
             [False, True]
             if fixed_orientation and self.face_travel_direction
@@ -536,22 +582,22 @@ class NavigationPath:
             departure = None
             if fixed_orientation:
                 obstacles = self.translation_obstacles(world_T_start, world_bounds)
-                graph = GraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
+                graph = PlanarGraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
                     search, obstacles
                 )
-                if graph.node_of_point(start) is None:
+                if graph._node_of_point(start) is None:
                     departure = NavigationDeparture(
                         graph, obstacles, self.clearance, self.geometry_tolerance
                     ).find(start)
             else:
-                graph = GraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
+                graph = PlanarGraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
                     search, self.rotation_obstacles(world_T_start, world_bounds)
                 )
                 rotation_graph = graph
             route_start = departure if departure is not None else start
             if (
-                graph.node_of_point(route_start) is None
-                or graph.node_of_point(goal) is None
+                graph._node_of_point(route_start) is None
+                or graph._node_of_point(goal) is None
             ):
                 reason = NavigationFailureReason.OCCUPIED_ENDPOINT
                 continue
@@ -612,8 +658,8 @@ class NavigationPath:
     def endpoint_connections(
         self,
         pose: Pose,
-        point: Point3,
-        rotation_graph: GraphOfBoundingBoxes,
+        point: Point2,
+        rotation_graph: PlanarGraphOfBoundingBoxes,
         *,
         allow_departure: bool = False,
     ) -> list[NavigationConnector]:
@@ -627,11 +673,11 @@ class NavigationPath:
         :raises NavigationPathUnavailable: If the actual endpoint footprint is occupied.
         """
         obstacles = self.translation_obstacles(pose, self.bounds_at_pose(pose))
-        graph = GraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
+        graph = PlanarGraphOfBoundingBoxes.navigation_map_from_bounding_boxes(
             rotation_graph.search_space,
             obstacles,
         )
-        node = graph.node_of_point(point)
+        node = graph._node_of_point(point)
         prefix = []
         if node is None and allow_departure:
             departure = NavigationDeparture(
@@ -640,7 +686,7 @@ class NavigationPath:
             if departure is not None:
                 prefix = [point]
                 point = departure
-                node = graph.node_of_point(point)
+                node = graph._node_of_point(point)
         if node is None:
             raise NavigationPathUnavailable(
                 self.target, NavigationFailureReason.OCCUPIED_ENDPOINT
@@ -662,7 +708,7 @@ class NavigationPath:
                 *[rotation_graph.graph[index].simple_event for index in component]
             )
             overlap = BoundingBoxCollection.from_event(
-                self.world.root, reachable_space & turning_space
+                PlanarBoundingBox, self.world.root, reachable_space & turning_space
             )
             if not overlap:
                 continue
@@ -670,16 +716,16 @@ class NavigationPath:
             for box in overlap:
                 bounds = box.to_array_bounds()
                 coordinates = np.clip(
-                    point.to_np()[:3].flatten(),
+                    point.to_np().flatten(),
                     bounds.lower + self.geometry_tolerance,
                     bounds.upper - self.geometry_tolerance,
                 )
-                candidates.append(
-                    Point3.from_iterable(coordinates, reference_frame=self.world.root)
-                )
+                candidates.append(Point2(*coordinates, reference_frame=self.world.root))
             portal = min(
                 candidates,
-                key=lambda candidate: float(point.euclidean_distance(candidate)),
+                key=lambda candidate: float(
+                    point.to_point3().euclidean_distance(candidate.to_point3())
+                ),
             )
             points = graph.path_from_to(point, portal)
             if points is not None:
@@ -692,9 +738,9 @@ class NavigationPath:
         self,
         start_pose: Pose,
         goal_pose: Pose,
-        start: Point3,
-        goal: Point3,
-        rotation_graph: GraphOfBoundingBoxes,
+        start: Point2,
+        goal: Point2,
+        rotation_graph: PlanarGraphOfBoundingBoxes,
     ) -> NavigationRoute:
         """Join fixed-heading departure and approach paths through turning free space.
 
@@ -724,7 +770,7 @@ class NavigationPath:
                 approach = list(reversed(arrival.points))
                 points = departure.points + middle[1:] + approach[1:]
                 distance = sum(
-                    float(first.euclidean_distance(second))
+                    float(first.to_point3().euclidean_distance(second.to_point3()))
                     for first, second in zip(points, points[1:])
                 )
                 if distance >= best_distance:
@@ -757,7 +803,7 @@ class NavigationPath:
             )
         return best_route
 
-    def poses_at_heading(self, points: list[Point3], pose: Pose) -> list[Pose]:
+    def poses_at_heading(self, points: list[Point2], pose: Pose) -> list[Pose]:
         """Restore the base height and a fixed orientation to graph positions.
 
         :param points: Ordered positions in the planar graph.

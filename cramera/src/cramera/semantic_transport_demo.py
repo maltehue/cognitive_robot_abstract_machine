@@ -20,9 +20,9 @@ from coraplex.datastructures.grasp import GraspDescription
 from coraplex.demonstrations import RobotDemonstration
 from coraplex.plans.factories import sequential
 from coraplex.plans.plan import Plan
+from semantic_digital_twin.semantic_annotations.mixins import HasRootBody
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
 from cramera.live.placement_surface import PlacementSurface
-from krrood.entity_query_language.factories import a, variable
 from semantic_digital_twin.api import (
     BodySpecification,
     Connection6DoFSpecification,
@@ -35,7 +35,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidCollisionBetweenGroups,
 )
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Table
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Pose
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.geometry import Scale
 
@@ -165,9 +165,9 @@ class SemanticTransportDemo(RobotDemonstration):
         )
         return sequential(
             [
-                a(TransportAction)(
-                    object_designator=body,
-                    target_location=variable(Pose, domain=destination),
+                TransportAction(
+                    object_designator=HasRootBody(root=body),
+                    target_location=destination,
                     arm=Arms.LEFT,
                     grasp_description=grasp,
                     look_at_operation_site=False,

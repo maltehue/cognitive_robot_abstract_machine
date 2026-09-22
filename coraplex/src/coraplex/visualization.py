@@ -1,30 +1,35 @@
+"""Optional world visualization selected without changing a robot plan."""
+
 from __future__ import annotations
 
-import logging
 import os
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from contextlib import ExitStack
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
+from importlib.metadata import entry_points
+from types import TracebackType
 
-import rerun
-from typing_extensions import TYPE_CHECKING, Optional, Self, Type, TypeVar
+from typing_extensions import TYPE_CHECKING, ClassVar, Self
 
-from coraplex.datastructures.enums import TaskStatus, VisualizationBackend
 from coraplex.exceptions import (
     UnknownVisualizationOption,
     VisualizationBackendUnavailable,
 )
+from coraplex.datastructures.enums import VisualizationBackend
+from coraplex.plans.plan_node import PlanNode, DesignatorNode, MotionNode
 from coraplex.plans.plan_callbacks import PlanCallback
-from coraplex.plans.plan_node import DesignatorNode, MotionNode, PlanNode
+from giskardpy.motion_statechart.data_types import LifeCycleValues
+import rerun
 from semantic_digital_twin.adapters.rerun import RerunAdapter, RerunMode
-from semantic_digital_twin.world import World
 
 if TYPE_CHECKING:
-    import rclpy.node
+    from rclpy.node import Node
 
     from coraplex.plans.plan import Plan
-    from cramera.live.visualization import LiveVisualization
-
-logger = logging.getLogger(__name__)
+    from semantic_digital_twin.world import World
 
 try:
     import rclpy
@@ -34,56 +39,96 @@ try:
 except ImportError:
     rclpy = None
     VizMarkerPublisher = None
-    logger.info(
-        "Could not import VizMarkerPublisher. This is probably because you are not running ROS."
+
+
+# %% provider contract
+@dataclass
+class PlanVisualization(ABC):
+    """A visualization provider observing a world and its executed plans."""
+
+    world: World
+    """The world presented by this provider."""
+
+    @abstractmethod
+    def start(self) -> Self:
+        """Start serving this world and return the provider."""
+
+    @abstractmethod
+    def stop(self) -> None:
+        """Stop serving and release resources owned by this provider."""
+
+    @abstractmethod
+    def plan_callback(self, plan: Plan) -> PlanCallback:
+        """Create an execution observer for a plan.
+
+        :param plan: The plan to observe.
+        :return: A callback registered by the visualization owner.
+        """
+
+
+class VisualizationOption(StrEnum):
+    """Configuration names for optional visualization providers."""
+
+    BACKEND = "CORAPLEX_VISUALIZATION"
+    """Environment setting selecting the renderer."""
+    RERUN_MODE = "CORAPLEX_RERUN_MODE"
+    """Environment setting selecting Rerun's output mode."""
+    RERUN_TARGET = "CORAPLEX_RERUN_TARGET"
+    """Environment setting selecting Rerun's file or server."""
+    PROVIDER_GROUP = "coraplex.visualizations"
+    """Installed entry points implementing PlanVisualization."""
+
+
+# %% visualization owner
+@dataclass
+class VisualizationSession:
+    """Close visualizations acquired in a context when execution leaves that context."""
+
+    _current: ClassVar[ContextVar[VisualizationSession | None]] = ContextVar(
+        "visualization_session", default=None
     )
+    """The cleanup scope active in the current execution context."""
+    _cleanup: ExitStack = field(default_factory=ExitStack, init=False)
+    """Resource cleanup callbacks in reverse acquisition order."""
+    _token: Token[VisualizationSession | None] = field(init=False)
+    """The previous scope restored when this context exits."""
 
+    def __enter__(self) -> Self:
+        """Make this session the owner of subsequently started visualizations."""
+        self._token = self._current.set(self)
+        return self
 
-# %% environment configuration
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close acquired resources and restore the enclosing session.
 
-VISUALIZATION_BACKEND_VARIABLE = "CORAPLEX_VISUALIZATION"
-"""
-Environment variable naming the :class:`VisualizationBackend` member to use.
-"""
+        :param exception_type: The exception type raised inside the scope, if any.
+        :param exception: The original exception propagated after cleanup.
+        :param traceback: The traceback associated with that exception.
+        """
+        try:
+            self._cleanup.close()
+        finally:
+            self._current.reset(self._token)
 
-RERUN_MODE_VARIABLE = "CORAPLEX_RERUN_MODE"
-"""
-Environment variable naming the :class:`RerunMode` member to use.
-"""
+    @classmethod
+    def is_active(cls) -> bool:
+        """Return whether the current context owns visualization cleanup."""
+        return cls._current.get() is not None
 
-RERUN_TARGET_VARIABLE = "CORAPLEX_RERUN_TARGET"
-"""
-Environment variable holding the Rerun gRPC URL or ``.rrd`` file path.
-"""
+    @classmethod
+    def register(cls, cleanup: Callable[[], None]) -> None:
+        """Register cleanup in the active session, if one exists.
 
-EnumType = TypeVar("EnumType", bound=Enum)
-
-
-def _enum_from_environment(
-    variable: str, enum_type: Type[EnumType], default: EnumType
-) -> EnumType:
-    """
-    Read an enum member from an environment variable by its case-insensitive name.
-
-    :param variable: The environment variable to read.
-    :param enum_type: The enum the value must name a member of.
-    :param default: The member returned when the variable is unset.
-    :raises UnknownVisualizationOption: When the value names no member.
-    """
-    value = os.environ.get(variable)
-    if value is None:
-        return default
-    member_name = value.strip().upper()
-    if member_name not in enum_type.__members__:
-        raise UnknownVisualizationOption(
-            environment_variable=variable,
-            value=value,
-            valid_values=[name.lower() for name in enum_type.__members__],
-        )
-    return enum_type[member_name]
-
-
-# %% plan events on the Rerun timeline
+        :param cleanup: Release an acquired resource without requiring its caller to retain it.
+        """
+        current = cls._current.get()
+        if current is not None:
+            current._cleanup.callback(cleanup)
 
 
 @dataclass
@@ -98,13 +143,19 @@ class RerunPlanCallback(PlanCallback):
     The adapter whose recording and timeline the entries are logged to.
     """
 
-    def on_start(self, node: PlanNode):
+    def on_start(self, node: PlanNode) -> None:
+        """
+        :param node: The plan node whose execution has started.
+        """
         self._log(node, "started", rerun.TextLogLevel.INFO)
 
-    def on_end(self, node: PlanNode):
+    def on_end(self, node: PlanNode) -> None:
+        """
+        :param node: The plan node whose execution has ended.
+        """
         level = (
             rerun.TextLogLevel.ERROR
-            if node.status == TaskStatus.FAILED
+            if node.status == LifeCycleValues.FAILED
             else rerun.TextLogLevel.INFO
         )
         self._log(node, "ended", level)
@@ -116,6 +167,9 @@ class RerunPlanCallback(PlanCallback):
         """
         A short label for a node: the designator's class name, nested under its owning
         action for motions.
+
+        :param node: The plan node represented in the recording.
+        :return: The readable label used for this node's event stream.
         """
         if isinstance(node, MotionNode) and node.parent_action_node is not None:
             return f"{node.parent_action_node!r}/{node!r}"
@@ -126,6 +180,10 @@ class RerunPlanCallback(PlanCallback):
     def _log(self, node: PlanNode, event: str, level: rerun.TextLogLevel) -> None:
         """
         Log one text entry for a node at the world's current state version.
+
+        :param node: The plan node producing this event.
+        :param event: The execution boundary being recorded.
+        :param level: The severity associated with this boundary.
         """
         label = self._node_label(node)
         rerun.set_time(
@@ -140,165 +198,185 @@ class RerunPlanCallback(PlanCallback):
         )
 
 
-# %% canonical entry point
-
-
 @dataclass
 class WorldVisualization:
-    """
-    The canonical way to watch a world in 3D while a plan runs.
-
-    Select a backend, :meth:`start` it, and optionally :meth:`attach_plan` so executed
-    actions and motions appear on the same timeline as the robot's motion.
-    """
+    """Own a selected renderer and the execution observers attached to it."""
 
     world: World
-    """
-    The world to visualize.
-    """
-
+    """The observed world."""
     backend: VisualizationBackend = VisualizationBackend.NONE
-    """
-    The renderer to use.
-    """
-
+    """The explicitly selected renderer."""
+    ros_node: Node | None = field(default=None, kw_only=True)
+    """A borrowed ROS node, or a node created for an RViz renderer."""
+    collision_visualization: bool = field(default=False, kw_only=True)
+    """Whether the RViz renderer also publishes native collision results."""
     rerun_mode: RerunMode = field(default=RerunMode.SPAWN, kw_only=True)
-    """
-    Where the Rerun recording streams to.
-    """
-
-    rerun_target: Optional[str] = field(default=None, kw_only=True)
-    """
-    GRPC URL or ``.rrd`` file path for the ``CONNECT`` and ``SAVE`` Rerun modes.
-    """
-
-    state_log_stride: int = field(default=5, kw_only=True)
-    """
-    Log every N-th world state version to Rerun; action boundaries are always logged.
-    """
-
-    rerun_adapter: Optional[RerunAdapter] = field(init=False, default=None)
-    """
-    The adapter streaming the world to Rerun, when the backend is ``RERUN``.
-    """
-
-    ros_node: Optional[rclpy.node.Node] = field(init=False, default=None)
-    """
-    The node publishing markers and TF, when the backend is ``RVIZ``.
-    """
-
-    cramera_visualization: Optional[LiveVisualization] = field(init=False, default=None)
-    """
-    The live bridge serving the world to the browser, when the backend is ``CRAMERA``.
-    """
+    """Where the native Rerun adapter sends its recording."""
+    rerun_target: str | None = field(default=None, kw_only=True)
+    """The Rerun output file or server."""
+    rviz_publisher: VizMarkerPublisher | None = field(default=None, init=False)
+    """The owned RViz marker publisher."""
+    rerun_adapter: RerunAdapter | None = field(default=None, init=False)
+    """The owned native Rerun adapter."""
+    cramera_visualization: PlanVisualization | None = field(default=None, init=False)
+    """The optional installed browser visualization provider."""
+    _callbacks: list[PlanCallback] = field(default_factory=list, init=False)
+    """Plan callbacks registered by this owner."""
+    _owns_node: bool = field(default=False, init=False)
+    """Whether this owner created its ROS node."""
+    _owns_context: bool = field(default=False, init=False)
+    """Whether this owner initialized its ROS context."""
 
     @classmethod
     def from_environment(
         cls,
         world: World,
         default_backend: VisualizationBackend = VisualizationBackend.NONE,
+        *,
+        ros_node: Node | None = None,
+        collision_visualization: bool = False,
     ) -> Self:
-        """
-        Build a visualization configured by the ``CORAPLEX_*`` environment variables.
+        """Read optional renderer settings while preserving the supplied default.
 
         :param world: The world to visualize.
-        :param default_backend: The backend used when the environment does not select
-            one.
+        :param default_backend: Renderer used without an explicit setting.
+        :param ros_node: An existing ROS node available for RViz publishing.
+        :param collision_visualization: Whether to publish RViz collision results.
         """
+        backend = (
+            os.environ.get(VisualizationOption.BACKEND, default_backend.value)
+            .strip()
+            .lower()
+        )
+        mode = (
+            os.environ.get(VisualizationOption.RERUN_MODE, RerunMode.SPAWN.value)
+            .strip()
+            .lower()
+        )
+        if backend not in {member.value for member in VisualizationBackend}:
+            raise UnknownVisualizationOption(
+                VisualizationOption.BACKEND,
+                backend,
+                [member.value for member in VisualizationBackend],
+            )
+        if mode not in {member.value for member in RerunMode}:
+            raise UnknownVisualizationOption(
+                VisualizationOption.RERUN_MODE,
+                mode,
+                [member.value for member in RerunMode],
+            )
         return cls(
             world=world,
-            backend=_enum_from_environment(
-                VISUALIZATION_BACKEND_VARIABLE, VisualizationBackend, default_backend
-            ),
-            rerun_mode=_enum_from_environment(
-                RERUN_MODE_VARIABLE, RerunMode, RerunMode.SPAWN
-            ),
-            rerun_target=os.environ.get(RERUN_TARGET_VARIABLE),
+            backend=VisualizationBackend(backend),
+            ros_node=ros_node,
+            collision_visualization=collision_visualization,
+            rerun_mode=RerunMode(mode),
+            rerun_target=os.environ.get(VisualizationOption.RERUN_TARGET),
         )
 
     @property
     def is_rendering(self) -> bool:
-        """
-        Whether a started backend is showing the world, as opposed to running headless.
-        """
-        return self.backend is not VisualizationBackend.NONE
-
-    def start(self) -> Self:
-        """
-        Start the selected backend and return this visualization.
-
-        :raises VisualizationBackendUnavailable: When the selected backend cannot run in
-            this environment.
-        """
-        match self.backend:
-            case VisualizationBackend.NONE:
-                pass
-            case VisualizationBackend.RERUN:
-                self._start_rerun()
-            case VisualizationBackend.RVIZ:
-                self._start_rviz()
-            case VisualizationBackend.CRAMERA:
-                self._start_cramera()
-        return self
-
-    def _start_rerun(self) -> None:
-        self.rerun_adapter = RerunAdapter(
-            _world=self.world,
-            application_id="coraplex",
-            mode=self.rerun_mode,
-            target=self.rerun_target,
-            state_history=True,
-            state_log_stride=self.state_log_stride,
+        """:return: Whether this owner has a started renderer."""
+        return any(
+            renderer is not None
+            for renderer in (
+                self.rviz_publisher,
+                self.rerun_adapter,
+                self.cramera_visualization,
+            )
         )
 
+    def start(self) -> Self:
+        """Start the selected renderer once.
+
+        :return: This visualization owner.
+        """
+        if self.is_rendering:
+            return self
+        match self.backend:
+            case VisualizationBackend.RVIZ:
+                self._start_rviz()
+            case VisualizationBackend.RERUN:
+                self.rerun_adapter = RerunAdapter(
+                    _world=self.world,
+                    mode=self.rerun_mode,
+                    target=self.rerun_target,
+                    state_history=True,
+                )
+            case VisualizationBackend.CRAMERA:
+                providers = entry_points(
+                    group=VisualizationOption.PROVIDER_GROUP, name=self.backend.value
+                )
+                if len(providers) != 1:
+                    raise VisualizationBackendUnavailable(
+                        self.backend, "The selected provider is unavailable or invalid"
+                    )
+                provider_type = next(iter(providers)).load()
+                if not issubclass(provider_type, PlanVisualization):
+                    raise VisualizationBackendUnavailable(
+                        self.backend, "The selected provider is unavailable or invalid"
+                    )
+                self.cramera_visualization = provider_type(world=self.world).start()
+        if self.is_rendering:
+            VisualizationSession.register(self.stop)
+        return self
+
     def _start_rviz(self) -> None:
+        """Start native marker publishing, borrowing an existing ROS node if supplied."""
         if VizMarkerPublisher is None:
             raise VisualizationBackendUnavailable(
-                backend=self.backend,
-                reason="rclpy is not importable; RViz needs a ROS 2 environment",
+                self.backend, "The selected provider is unavailable or invalid"
             )
-        # compose with a context someone else (e.g. a demonstration) owns
-        if not rclpy.ok():
-            rclpy.init()
-        self.ros_node = rclpy.create_node("viz_marker")
-        VizMarkerPublisher(_world=self.world, node=self.ros_node).with_tf_publisher()
+        if self.ros_node is None:
+            self._owns_context = not rclpy.ok()
+            if self._owns_context:
+                rclpy.init()
+            self.ros_node = rclpy.create_node("coraplex_visualization")
+            self._owns_node = True
+        self.rviz_publisher = VizMarkerPublisher(_world=self.world, node=self.ros_node)
+        if self.collision_visualization:
+            self.rviz_publisher.with_collision_visualization()
 
-    def _start_cramera(self) -> None:
-        try:
-            from cramera.live.visualization import LiveVisualization
-        except ImportError:
-            raise VisualizationBackendUnavailable(
-                backend=self.backend,
-                reason="cramera is not importable; install the cramera package",
-            )
-        self.cramera_visualization = LiveVisualization(world=self.world).start()
+    def attach_plan(self, plan: Plan | PlanNode) -> None:
+        """Observe a plan through the running optional provider.
 
-    def attach_plan(self, plan: Plan) -> None:
+        :param plan: A plan or its root node.
         """
-        Publish the plan's execution to the running backend.
-
-        On Rerun the plan's node starts and ends appear as text entries on the
-        recording's timeline; on cramera the plan tree, its per-node progress and the
-        executing motion statechart appear in the viewer's panels. Does nothing for
-        backends without a plan display.
-        """
-        if self.rerun_adapter is not None:
-            plan.node_callbacks.append(
-                RerunPlanCallback(adapter=self.rerun_adapter, plan=plan)
-            )
+        observed_plan = plan.plan if isinstance(plan, PlanNode) else plan
+        if any(callback.plan is observed_plan for callback in self._callbacks):
+            return
+        callback = None
         if self.cramera_visualization is not None:
-            plan.node_callbacks.append(self.cramera_visualization.plan_callback(plan))
+            callback = self.cramera_visualization.plan_callback(observed_plan)
+        elif self.rerun_adapter is not None:
+            callback = RerunPlanCallback(adapter=self.rerun_adapter, plan=observed_plan)
+        if callback is not None:
+            observed_plan.node_callbacks.append(callback)
+            self._callbacks.append(callback)
 
     def stop(self) -> None:
-        """
-        Detach the backend from the world and release its resources.
-        """
-        if self.rerun_adapter is not None:
-            self.rerun_adapter.stop()
-            self.rerun_adapter = None
-        if self.ros_node is not None:
-            self.ros_node.destroy_node()
-            self.ros_node = None
+        """Remove owned observers and renderers, retaining borrowed ROS resources."""
+        for callback in self._callbacks:
+            callback.plan.node_callbacks[:] = [
+                registered
+                for registered in callback.plan.node_callbacks
+                if registered is not callback
+            ]
+        self._callbacks.clear()
         if self.cramera_visualization is not None:
             self.cramera_visualization.stop()
             self.cramera_visualization = None
+        if self.rerun_adapter is not None:
+            self.rerun_adapter.stop()
+            self.rerun_adapter = None
+        if self.rviz_publisher is not None:
+            self.rviz_publisher.stop()
+            self.rviz_publisher = None
+        if self._owns_node:
+            self.ros_node.destroy_node()
+            self.ros_node = None
+            self._owns_node = False
+        if self._owns_context:
+            if rclpy.ok():
+                rclpy.shutdown()
+            self._owns_context = False

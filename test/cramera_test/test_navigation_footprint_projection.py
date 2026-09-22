@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from coraplex.locations.navigation import NavigationPath
+from coraplex.locations.navigation import RobotNavigationPath
 from semantic_digital_twin.api import BodySpecification
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Pose
@@ -39,7 +39,7 @@ def test_projected_footprint_matches_actual_rotated_collision_geometry(
         )
     target = Pose.from_xyz_rpy(1, -0.5, yaw=heading, reference_frame=world.root)
     initial = robot.root.global_pose.to_np().copy()
-    predicted = NavigationPath(world, robot, target).bounds_at_pose(target)
+    predicted = RobotNavigationPath(world, robot, target).bounds_at_pose(target)
     np.testing.assert_array_equal(robot.root.global_pose.to_np(), initial)
 
     robot.set_root_pose(target)

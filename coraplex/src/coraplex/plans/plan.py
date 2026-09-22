@@ -19,9 +19,10 @@ from typing_extensions import (
 )
 
 from coraplex.plans.plan_entity import PlanEntity
-from coraplex.datastructures.enums import TaskStatus
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.plans.plan_node import (
     PlanNode,
+    MotionNode,
     ActionNode,
     DesignatorNode,
 )
@@ -40,10 +41,10 @@ from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.world import World
 
 if TYPE_CHECKING:
+    from giskardpy.motion_statechart.motion_statechart import MotionStatechart
     from coraplex.plans.plan_callbacks import PlanCallback
     from coraplex.datastructures.dataclasses import Context
     from coraplex.plans.designator import Designator
-    from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 
 
 logger = logging.getLogger(__name__)
@@ -271,9 +272,14 @@ class Plan:
 
         :param node: The node that started.
         """
-        for ancestor in reversed(node.path):
-            if ancestor.status == TaskStatus.CREATED:
-                ancestor.status = TaskStatus.RUNNING
+        ancestors = (
+            []
+            if isinstance(node, MotionNode) and node._execution_in_progress
+            else node.path
+        )
+        for ancestor in reversed(ancestors):
+            if ancestor.status == LifeCycleValues.NOT_STARTED:
+                ancestor.status = LifeCycleValues.RUNNING
                 ancestor.start_time = datetime.now()
                 ancestor.end_time = None
                 for callback in self.node_callbacks:
@@ -289,7 +295,8 @@ class Plan:
         """
         for callback in self.node_callbacks:
             callback.on_end(node)
-        self._complete_collapsed_ancestors(node)
+        if not (isinstance(node, MotionNode) and node._execution_in_progress):
+            self._complete_collapsed_ancestors(node)
 
     def _complete_collapsed_ancestors(self, node: PlanNode) -> None:
         """
@@ -300,21 +307,48 @@ class Plan:
         for ancestor in node.path:
             if ancestor._execution_in_progress:
                 break
-            if ancestor.status not in (TaskStatus.CREATED, TaskStatus.RUNNING):
+            if ancestor.status not in (
+                LifeCycleValues.NOT_STARTED,
+                LifeCycleValues.RUNNING,
+            ):
                 continue
             status = ancestor.completed_children_status
             if status is None:
                 continue
             ancestor.status = status
             ancestor.end_time = datetime.now()
-            if status == TaskStatus.FAILED:
-                ancestor.reason = next(
-                    child.reason
+            if status == LifeCycleValues.FAILED:
+                failed = next(
+                    child
                     for child in ancestor.execution_children
-                    if child.status == TaskStatus.FAILED
+                    if child.status == LifeCycleValues.FAILED
                 )
+                ancestor.reason = failed.reason
+                ancestor.execution_error = failed.execution_error
             for callback in self.node_callbacks:
                 callback.on_end(ancestor)
+
+    def notify_node_reset(self, node: PlanNode) -> None:
+        """
+        Clear derived completion when a native retry resets a child motion.
+
+        :param node: The motion returned to its unstarted state by native history.
+        """
+        for ancestor in node.path:
+            if ancestor._execution_in_progress:
+                break
+            pending = all(
+                child.status == LifeCycleValues.NOT_STARTED
+                for child in ancestor.execution_children
+            )
+            ancestor.status = (
+                LifeCycleValues.NOT_STARTED if pending else LifeCycleValues.RUNNING
+            )
+            ancestor.end_time = None
+            ancestor.reason = None
+            ancestor.execution_error = None
+            if pending:
+                ancestor.start_time = None
 
     def notify_motion_tick(self, statechart: MotionStatechart) -> None:
         """
@@ -407,16 +441,26 @@ class Plan:
         :param layout: The algorithm used to place the nodes.
         :return: The running visualizer.
         """
-        visualizer = self._visualizer_classes[backend](
+        visualizer = self._create_visualizer(backend=backend, layout=layout)
+        visualizer.run()
+        return visualizer
+
+    def _create_visualizer(
+        self, backend: GraphVisualizerBackend, layout: GraphLayout
+    ) -> GraphVisualizerBase:
+        """
+        :param backend: The rendering technology to use.
+        :param layout: The algorithm used to place the nodes.
+        :return: A visualizer of this plan, before it is started.
+        """
+        return self._visualizer_classes[backend](
             graph=self.plan_graph,
             label_getter=lambda node: node.__node_label__(),
             information_getter=lambda node: node.__node_info__(),
-            color_getter=lambda node: node.status.color.replace("-", ""),
+            color_getter=lambda node: node.status.color.to_hex(),
             layout=layout,
             title=repr(self),
         )
-        visualizer.run()
-        return visualizer
 
     def _node_details(self, node: PlanNode) -> List[str]:
         """
@@ -428,7 +472,7 @@ class Plan:
             f"start: {node.start_time}",
             f"end: {node.end_time}",
             f"result: {node.result}",
-            f"reason: {node.reason}",
+            f"reason: {node.execution_error or node.reason}",
         ]
 
     def __repr__(self):

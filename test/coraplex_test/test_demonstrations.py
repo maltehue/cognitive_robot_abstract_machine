@@ -16,6 +16,7 @@ from typing_extensions import List
 
 from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import ExecutionType, VisualizationBackend
+from coraplex.visualization import VisualizationSession
 from coraplex.plans.executables import GiskardExecutable
 from coraplex.plans.factories import code
 from coraplex.plans.plan_node import PlanNode
@@ -220,7 +221,9 @@ def test_tear_down_runs_when_the_plan_fails(cylinder_bot_world):
 # %% the viewer outliving the plan
 
 
-def test_run_leaves_the_viewer_showing_the_finished_world(cylinder_bot_world):
+def test_explicit_session_keeps_the_viewer_showing_the_finished_world(
+    cylinder_bot_world,
+):
     """
     A viewer closed the moment the plan ends shows nothing worth watching, and
     ``cramera-live`` keeps the process alive precisely so the finished run can be
@@ -232,13 +235,14 @@ def test_run_leaves_the_viewer_showing_the_finished_world(cylinder_bot_world):
         default_visualization_backend=VisualizationBackend.RVIZ,
     )
 
-    demonstration.run()
+    with VisualizationSession():
+        demonstration.run()
 
-    assert demonstration.visualization is not None
-    assert demonstration.visualization.ros_node is not None
-    assert demonstration.ros_session is not None
-
-    demonstration.stop_visualization()
+        assert demonstration.visualization is not None
+        assert demonstration.visualization.ros_node is not None
+        assert demonstration.ros_session is not None
+    assert demonstration.visualization is None
+    assert demonstration.ros_session is None
 
 
 def test_stopping_the_visualization_releases_the_session_it_published_through(

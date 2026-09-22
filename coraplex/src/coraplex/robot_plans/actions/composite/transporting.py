@@ -28,6 +28,7 @@ from coraplex.robot_plans.actions.core.robot_body import ParkArmsAction, MoveTor
 from coraplex.view_manager import ViewManager
 from semantic_digital_twin.datastructures.definitions import TorsoState
 from semantic_digital_twin.reasoning.predicates import InsideOf
+from semantic_digital_twin.semantic_annotations.mixins import HasRootBody
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Drawer
 from semantic_digital_twin.spatial_types.spatial_types import Pose
 from semantic_digital_twin.world_description.world_entity import Body
@@ -39,10 +40,9 @@ class TransportAction(ActionDescription):
     Transports an object to a position using an arm.
     """
 
-    object_designator: Body = field(repr=False)
+    object_designator: HasRootBody = field(repr=False)
     """
-    Object designator_description describing the object that should be
-    transported.
+    The annotation of the object that should be transported.
     """
 
     target_location: Pose | Iterable[Pose]
@@ -68,10 +68,11 @@ class TransportAction(ActionDescription):
 
     def inside_container(self) -> List[Body]:
         bodies = []
+        object_body = self.object_designator.root
         for body in self.world.bodies:
-            if body == self.object_designator:
+            if body == object_body:
                 continue
-            if InsideOf(self.object_designator, body).compute_containment_ratio() > 0.9:
+            if InsideOf(object_body, body).compute_containment_ratio() > 0.9:
                 bodies.append(body)
         return bodies
 
@@ -103,7 +104,7 @@ class TransportAction(ActionDescription):
         handle = drawer_annotation[0].handle.root
 
         return [
-            *self._make_navigation_actions(handle.global_pose),
+            *self._make_navigation_actions(handle),
             OpenAction(handle, self.arm),
         ]
 
@@ -151,7 +152,7 @@ class TransportAction(ActionDescription):
                 ),
                 *self._make_look_at_actions(self.target_location),
                 a(PlaceAction)(
-                    object_designator=self.object_designator,
+                    object_designator=self.object_designator.root,
                     target_location=self.target_location,
                     arm=self.arm,
                 ),
@@ -159,7 +160,7 @@ class TransportAction(ActionDescription):
         return [
             a(MoveAndPlaceAction)(
                 standing_position=None,
-                object_designator=self.object_designator,
+                object_designator=self.object_designator.root,
                 target_location=variable(Pose, domain=self.target_location),
                 arm=self.arm,
                 keep_joint_states=True,
@@ -176,8 +177,8 @@ class TransportAction(ActionDescription):
             self.grasp_description
             or GraspDescription.robot_relative_default(
                 ViewManager.get_end_effector_view(self.arm, self.robot),
-                self.object_designator.global_pose,
-                self.object_designator,
+                self.object_designator.root.global_pose,
+                self.object_designator.root,
             )
         )
 
@@ -189,9 +190,9 @@ class TransportAction(ActionDescription):
             [
                 ParkArmsAction(Arms.BOTH),
                 *self._make_navigation_actions(
-                    self.object_designator, self.grasp_description
+                    self.object_designator.root, self.grasp_description
                 ),
-                *self._make_look_at_actions(self.object_designator.global_pose),
+                *self._make_look_at_actions(self.object_designator.root.global_pose),
                 a(PickUpAction)(
                     object_designator=self.object_designator,
                     arm=self.arm,
@@ -214,10 +215,9 @@ class PickAndPlaceAction(ActionDescription):
     the robot.
     """
 
-    object_designator: Body
+    object_designator: HasRootBody
     """
-    Object designator_description describing the object that should be
-    transported.
+    The annotation of the object that should be transported.
     """
 
     target_location: Pose
@@ -245,7 +245,9 @@ class PickAndPlaceAction(ActionDescription):
                     grasp_description=self.grasp_description,
                 ),
                 ParkArmsAction(Arms.BOTH),
-                PlaceAction(self.object_designator, self.target_location, self.arm),
+                PlaceAction(
+                    self.object_designator.root, self.target_location, self.arm
+                ),
                 ParkArmsAction(Arms.BOTH),
             ]
         )
@@ -335,9 +337,9 @@ class MoveAndPickUpAction(ActionDescription):
     """
     The pose to stand before trying to pick up the object.
     """
-    object_designator: Body
+    object_designator: HasRootBody
     """
-    The object to pick up.
+    The annotation of the object to pick up.
     """
     arm: Arms
     """
@@ -359,7 +361,7 @@ class MoveAndPickUpAction(ActionDescription):
             [
                 NavigateAction(self.standing_position, self.keep_joint_states),
                 FaceAtAction(
-                    self.object_designator.global_pose, self.keep_joint_states
+                    self.object_designator.root.global_pose, self.keep_joint_states
                 ),
                 PickUpAction(self.object_designator, self.arm, self.grasp_description),
             ]

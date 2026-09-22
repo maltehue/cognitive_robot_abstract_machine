@@ -16,8 +16,8 @@ import pytest
 
 from semantic_digital_twin.adapters.mesh import STLParser
 from semantic_digital_twin.adapters.urdf import URDFParser
-from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
+from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Milk,
 )
@@ -26,7 +26,10 @@ from semantic_digital_twin.spatial_types.spatial_types import (
     Pose,
 )
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.world_description.connections import (
+    FixedConnection,
+    OmniDrive,
+)
 from semantic_digital_twin.world_description.world_entity import Body
 
 from coraplex.datastructures.enums import Arms, VisualizationBackend
@@ -37,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 ROBOT_SPAWN_POSITION_XY = (1.5, 2.5)
 """
-Where the robot spawns in the apartment, in front of the kitchen counter.
+Apartment base position in front of the kitchen counter.
 """
 
 try:
@@ -55,23 +58,17 @@ except ImportError:
 
 def start_visualization(world: World) -> WorldVisualization:
     """
-    Start the visualization the ``CORAPLEX_*`` environment variables select.
-
-    Without a selection, publishes to RViz when ROS is available and shows nothing
-    otherwise, so demos stay headless in CI while ``CORAPLEX_VISUALIZATION`` swaps in
-    any other backend without touching the demo.
+    Start the selected renderer, defaulting to native RViz when available.
 
     :param world: The world to visualize.
-    :return: The started visualization, so a demo can :meth:`attach_plan` to it.
+    :return: The renderer owner, accepting optional plan observers.
     """
     default_backend = (
         VisualizationBackend.RVIZ
         if VizMarkerPublisher is not None
         else VisualizationBackend.NONE
     )
-    return WorldVisualization.from_environment(
-        world, default_backend=VisualizationBackend.CRAMERA
-    ).start()
+    return WorldVisualization.from_environment(world, default_backend).start()
 
 
 def attach_tool(

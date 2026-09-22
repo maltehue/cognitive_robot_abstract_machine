@@ -10,14 +10,16 @@ from unittest.mock import Mock
 import pytest
 
 from coraplex.datastructures.dataclasses import Context
-from coraplex.datastructures.enums import Arms, TaskStatus
+from coraplex.datastructures.enums import Arms
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.datastructures.grasp import GraspDescription
 from coraplex.execution_environment import simulated_robot
 from coraplex.locations.factories import _get_object_in_hand
-from coraplex.plans.attachment_nodes import AttachNode, DetachNode
+from coraplex.plans.attachment_nodes import ReAttachNode
 from coraplex.plans.factories import execute_single, sequential
 from coraplex.plans.plan_callbacks import PlanCallback
 from coraplex.plans.plan_node import ActionNode, PlanNode
+from coraplex.plans.underspecified import ActionTrial
 from coraplex.robot_plans.actions.composite import transporting
 from coraplex.robot_plans.actions.composite.facing import FaceAtAction
 from coraplex.robot_plans.actions.composite.transporting import (
@@ -105,7 +107,7 @@ class DestinationAttempts(PlanCallback):
         return sequential(
             [
                 MoveGripperMotion(GripperState.CLOSE, action.arm),
-                AttachNode(body=self.body, new_parent=tool.tool_frame),
+                ReAttachNode(body=self.body, new_parent=tool.tool_frame),
             ]
         )
 
@@ -118,7 +120,7 @@ class DestinationAttempts(PlanCallback):
         return sequential(
             [
                 MoveGripperMotion(GripperState.OPEN, action.arm),
-                DetachNode(body=self.body),
+                ReAttachNode(body=self.body, new_parent=self.context.world.root),
             ]
         )
 
@@ -174,6 +176,7 @@ def test_transport_retries_destinations_after_one_pickup(
     targets = [
         Pose.from_xyz_rpy(x=x, y=1, z=1, reference_frame=world.root) for x in (1, 2)
     ]
+    monkeypatch.setattr(ActionTrial, "succeeds", lambda trial, action: True)
     observations = DestinationAttempts(context, body, targets)
     monkeypatch.setattr(transporting, "reachability_location", observations.locations)
     monkeypatch.setattr(TransportAction, "inside_container", lambda action: [])
@@ -190,7 +193,7 @@ def test_transport_retries_destinations_after_one_pickup(
                 )
             ),
         )
-    action = TransportAction(body, targets, Arms.LEFT)
+    action = TransportAction(Milk(root=body), targets, Arms.LEFT)
     root = sequential([action], context=context)
     root.plan.node_callbacks.append(observations)
 
@@ -204,10 +207,10 @@ def test_transport_retries_destinations_after_one_pickup(
     assert len(observations.navigation_targets) == 2
     attempts = root.plan.get_nodes_by_designator_type(MoveAndPlaceAction)
     assert [node.status for node in attempts] == [
-        TaskStatus.FAILED,
-        TaskStatus.SUCCEEDED,
+        LifeCycleValues.FAILED,
+        LifeCycleValues.SUCCEEDED,
     ]
-    assert root.status is TaskStatus.SUCCEEDED
+    assert root.status is LifeCycleValues.SUCCEEDED
     assert body.parent_connection.parent is world.root
 
 

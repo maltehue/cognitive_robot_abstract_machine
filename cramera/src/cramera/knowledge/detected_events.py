@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from cramera.recording_fields import SceneField, TrajectoryField
 
 from typing_extensions import Any, Dict, List, Optional
 
@@ -31,33 +32,6 @@ EVENT_CLASS_SUFFIX = "Event"
 The word every detected event's class name ends in, which is what one of them is called
 when a question asks for it out loud.
 """
-
-
-class TrajectoryField(StrEnum):
-    """
-    Key a recorded scene's trajectory carries its frame stamps under.
-    """
-
-    FRAME_TIMES = "at"
-
-
-class SceneField(StrEnum):
-    """
-    Key a recorded scene bundle carries what it is, and what it saw, under.
-
-    The robot and the environment are derived from what the run loaded; the two name
-    fields hold what a person called them instead, which a thin derivation makes worth
-    saying -- every world built in code calls its environment ``environment``.
-    """
-
-    DETECTED_EVENTS = "detectedEvents"
-    TASK = "task"
-    ROBOT_NAME = "robotName"
-    ENVIRONMENT_NAME = "environmentName"
-    PLAN_TREES = "planTrees"
-    """
-    Executed plan hierarchies available during recorded playback.
-    """
 
 
 class EventField(StrEnum):

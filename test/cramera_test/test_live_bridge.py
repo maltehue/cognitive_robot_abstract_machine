@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pytest
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.spatial_types import (
     HomogeneousTransformationMatrix,
@@ -673,10 +674,12 @@ class TestCapturedObjects:
 
     def test_a_rotation_the_idle_sim_never_applied_survives_a_later_drag(self):
         """
-        Setting an object's rotation while the sim is idle reaches no snapshot -- no tick
-        applies it -- so a drag afterwards has only the earlier drag target to keep the
-        orientation from. This is the Plan Builder's own order of work: rotate the object
-        on its card, place it in the 3D view, capture.
+        Setting an object's rotation while the sim is idle reaches no snapshot -- no
+        tick applies it -- so a drag afterwards has only the earlier drag target to keep
+        the orientation from.
+
+        This is the Plan Builder's own order of work: rotate the object on its card,
+        place it in the 3D view, capture.
         """
         bridge = self.bridge_with_a_turned_object()
         upside_down = [1.0, 0.0, 0.0, 0.0]
@@ -1162,7 +1165,7 @@ class TestChartSnapshot:
         bridge.observe_chart(chart)
         assert bridge.get_chart()["signature"] == signature
         assert [node["life_cycle"] for node in bridge.get_chart()["nodes"]] == [
-            "DONE"
+            LifeCycleValues.SUCCEEDED.name
         ] * 3
 
     def test_new_chart_replaces_structure(self):

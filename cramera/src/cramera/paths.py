@@ -1,24 +1,15 @@
 """
-Filesystem locations for cramera, all overridable via environment.
+Filesystem locations for the packaged viewer and generated scene bundles.
 
-The frontend (``web/``) ships inside the package. Scene bundles are *generated*
-artifacts (tens to hundreds of MB per scene, produced by ``cramera-onboard``)
-and are deliberately not part of this repository — they are versioned in
-https://github.com/cram2/cram-scenes, wired in as the *optional* submodule
-``cramera/scenes`` (live visualization and freshly onboarded scenes work
-without it). :func:`scenes_directory` looks in this order:
-
-    1. CRAMERA_SCENES=/path/to/scenes        explicit override
-    2. cramera/scenes                        the submodule, if initialized
-                                              (git submodule update --init cramera/scenes)
-    3. ~/.cramera/scenes                     default data directory
-
-    CRAMERA_ARCHITECTURE=/path/to/repo       CRAM repo scanned by the knowledge graph
+Live recordings are saved under ``CRAMERA_DATA`` or the user's data directory.
+``CRAMERA_SCENES`` selects an additional scene archive. A local ``cramera/scenes``
+archive is also discovered when it contains an index.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from typing_extensions import List, Optional
@@ -28,15 +19,20 @@ WEB_ROOT = Path(__file__).resolve().parent / "web"
 The packaged frontend: index.html, panels, vendored libraries.
 """
 
+SCENE_NAME_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+"""
+Single-segment names accepted for saved recordings and internal captures.
+"""
+
 LIVE_SCENE_NAME = "__live__"
 """
 Reserved scene name a live-attach snapshot is bundled under (see
 :mod:`cramera.live.live_bundle`), rebuilt from the running demo's current world on every
-attach. Written under :func:`local_scenes_directory`, like
-:data:`RECORDING_SCENE_NAME`: a shared copy would be shadowed by a stale local one and
-would litter a git-tracked checkout.
+attach. Written under :func:`local_scenes_directory`, like :data:`RECORDING_SCENE_NAME`:
+a shared copy would be shadowed by a stale local one and would litter a git-tracked
+checkout.
 
-Excluded from the real scene index — never a bundle a user onboarded.
+Excluded from the real scene index — never a bundle a user recorded.
 """
 
 RECORDING_SCENE_NAME = "__recording__"
@@ -44,9 +40,9 @@ RECORDING_SCENE_NAME = "__recording__"
 Reserved scene name a captured live run is bundled under while unsaved (see
 :mod:`cramera.live.recording_bundle`), analogous to :data:`LIVE_SCENE_NAME`. Always
 written under :func:`local_scenes_directory`, never inside a shared scenes root, so
-saving or discarding it never touches a git-tracked ``cram-scenes`` checkout.
+saving or discarding it never touches the shared scene archive.
 
-Excluded from the real scene index — never a bundle a user onboarded.
+Excluded from the real scene index — never a bundle a user recorded.
 """
 
 
@@ -69,17 +65,16 @@ def data_directory() -> Path:
 
 SCENES_SUBMODULE = WEB_ROOT.parents[2] / "scenes"
 """
-The optional cram-scenes submodule checkout (``<member dir>/scenes``).
+An optional local scene archive (``<member dir>/scenes``).
 """
 
 
 def scenes_directory() -> Path:
     """
-    Directory holding the onboarded scene bundles (``<name>/scene.json``).
+    Directory holding the recorded scene bundles (``<name>/scene.json``).
 
     Search order: the ``CRAMERA_SCENES`` environment variable, then the initialized
-    cram-scenes submodule, then ``~/.cramera/scenes``. An un-initialized
-    submodule is an empty directory and is skipped (index.json is the marker).
+    local scene archive, then ``~/.cramera/scenes``. An empty archive directory is skipped (index.json is the marker).
     """
     configured = _configured_path("CRAMERA_SCENES")
     if configured:
@@ -93,7 +88,7 @@ def local_scenes_directory() -> Path:
     """
     Writable, local-only root for live recordings (temporary and saved).
 
-    Deliberately ignores ``CRAMERA_SCENES`` and the cram-scenes submodule: a recording
+    Deliberately ignores ``CRAMERA_SCENES`` and the local scene archive: a recording
     must never land inside a shared, git-tracked scenes root, even when one is checked
     out — saving a captured live run is a local action, not a contribution to it.
     """
@@ -106,7 +101,7 @@ def scene_roots() -> List[Path]:
 
     A local recording shadows a shared scene of the same name. Returns one entry when
     :func:`scenes_directory` already resolves to :func:`local_scenes_directory` (the
-    common case, no shared submodule checked out), else both.
+    common case, no shared scene archive configured), else both.
     """
     shared = scenes_directory()
     local = local_scenes_directory()
@@ -120,9 +115,14 @@ def resolve_scene_directory(name: str) -> Optional[Path]:
 
     :param name: Name of the scene to look up.
     """
+    if not SCENE_NAME_PATTERN.fullmatch(name):
+        return None
     for root in scene_roots():
         candidate = root / name
-        if (candidate / "scene.json").is_file():
+        if (
+            candidate.resolve().is_relative_to(root.resolve())
+            and (candidate / "scene.json").is_file()
+        ):
             return candidate
     return None
 

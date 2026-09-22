@@ -566,13 +566,19 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
     // a picker with nothing to choose (one option, or none) stays visible but
     // disabled — it disappearing/reappearing as another picker changes would
     // shift the header layout around under the user's cursor
-    function fillSelect(sel, values, selected) {
-      sel.innerHTML = values.map(function (v) {
-        const value = v || '';
-        const label = v || '(bench only)';
-        return '<option value="' + value + '"' + (value === (selected || '') ? ' selected' : '') + '>' + label + '</option>';
-      }).join('');
-      sel.disabled = values.length <= 1;
+    function appendOption(select, value, label, selected) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      option.selected = value === (selected || '');
+      select.appendChild(option);
+    }
+    function fillSelect(select, values, selected) {
+      select.replaceChildren();
+      values.forEach(function (value) {
+        appendOption(select, value || '', value || '(bench only)', selected);
+      });
+      select.disabled = values.length <= 1;
     }
 
     // Scene: every scene, labelled by the task it was recorded for, independent of the
@@ -584,10 +590,10 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
     const sceneOptions = ScenePicker.options(scenes);
     if (nameSel && namePicker && sceneOptions.length > 1) {
       namePicker.style.display = '';
-      nameSel.innerHTML = sceneOptions.map(function (o) {
-        const selected = o.name === (activeName || '') ? ' selected' : '';
-        return '<option value="' + o.name + '"' + selected + '>' + o.task + '</option>';
-      }).join('');
+      nameSel.replaceChildren();
+      sceneOptions.forEach(function (choice) {
+        appendOption(nameSel, choice.name, choice.task, activeName);
+      });
       nameSel.disabled = sceneOptions.length <= 1;
       nameSel.addEventListener('change', function () {
         window.location.search = '?scene=' + encodeURIComponent(nameSel.value);
@@ -643,7 +649,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
       });
     });
 
-    buildMarker(sc.placeTarget);
+    buildPlaceTargetMarker(sc.placeTarget);
     manager.onLoad = function () {
       upgradeMaterials();
       if (!finalized) finalize();
@@ -1012,7 +1018,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
   // the Plan Builder embeds the scene with ?scene; the blue place target is a recording
   // affordance with no meaning there, so never show it in that embed
   const _embeddedScene = /[?&]scene(\b|=)/.test(window.location.search);
-  function buildMarker(pt) {
+  function buildPlaceTargetMarker(pt) {
     if (!pt || _embeddedScene) { marker.visible = false; return; }
     const blue = 0x35a7ff;
     const barMat = new THREE.MeshBasicMaterial({ color: blue });
@@ -1631,7 +1637,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
     clearMarkers();
     const markers = lastMarkerPayload ? lastMarkerPayload.markers : [];
     MarkerSettings.visibleMarkers(markers, hiddenMarkerNs).forEach(function (marker) {
-      const built = buildMarker(marker);
+      const built = buildDebugMarker(marker);
       if (built) markerRoot.add(built);
     });
     needsRender = true;
@@ -1653,7 +1659,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
       roughness: 0.55, metalness: 0.05, envMapIntensity: 0.6,
     });
   }
-  function buildMarker(marker) {
+  function buildDebugMarker(marker) {
     const spec = MarkerSpecs.buildSpec(marker);
     if (!spec) return null;
     const holder = new THREE.Group();
@@ -1965,6 +1971,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
   function tick() {
     if (!running) return;
     requestAnimationFrame(tick);
+    const elapsedSeconds = clock.getDelta();
     // imported models finish loading asynchronously, so their materials are re-tamed
     // for a while after mount; once that window closes the loop goes on-demand again
     if (models.length && clock.getElapsedTime() < MATERIAL_SETTLE_SECONDS) {
@@ -1983,7 +1990,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
     }
     const moved = cameraController.update();
     if (playing && traj && !liveOn) {
-      playhead += ((traj.framesPerSecond || 30) / 60) * 1.6 * playbackSpeedMultiplier;
+      playhead += (traj.framesPerSecond || 30) * elapsedSeconds * playbackSpeedMultiplier;
       if (playhead >= traj.frames.length - 1) { playhead = traj.frames.length - 1; playing = false; stepCb('__done__'); }
       applyFrame(playhead);
       playheadCbs.forEach(function (cb) { cb(playhead); });

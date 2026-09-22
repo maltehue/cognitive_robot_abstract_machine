@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from coraplex.datastructures.dataclasses import Context
-from coraplex.datastructures.enums import Arms, TaskStatus
+from coraplex.datastructures.enums import Arms
+from giskardpy.motion_statechart.data_types import LifeCycleValues
 from coraplex.execution_environment import simulated_robot_advanced
 from coraplex.plans.factories import execute_single, sequential
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction, ParkArmsAction
@@ -126,7 +127,7 @@ def test_parking_and_torso_keep_the_other_instance_stationary(
         plan.perform()
     for action_type in (ParkArmsAction, MoveTorsoAction):
         [action] = plan.get_nodes_by_designator_type(action_type)
-        assert action.status is TaskStatus.SUCCEEDED
+        assert action.status is LifeCycleValues.SUCCEEDED
     assert trajectory.idle_transforms
     for transforms in trajectory.idle_transforms:
         np.testing.assert_allclose(transforms, initial_idle, atol=1e-12)
