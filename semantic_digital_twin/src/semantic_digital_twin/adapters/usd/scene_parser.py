@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from typing_extensions import Dict, List, Optional, Self
+import math
+
+from typing_extensions import Dict, List, Optional, Self, Tuple
 
 from semantic_digital_twin.adapters.usd.stage_parser import (
     Gf,
@@ -25,9 +27,17 @@ from semantic_digital_twin.semantic_annotations.usd_semantics import UsdStageOri
 from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
     Point3,
+    Vector3,
 )
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.world_description.connections import (
+    FixedConnection,
+    RevoluteConnection,
+)
+from semantic_digital_twin.world_description.degree_of_freedom import (
+    DegreeOfFreedomLimits,
+)
+from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world_description.geometry import Shape
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
@@ -93,6 +103,122 @@ def _stage_origin_in(root_pose: Gf.Matrix4d, root_body: Body) -> Point3:
     """
     origin = root_pose.GetInverse().Transform(Gf.Vec3d(0, 0, 0))
     return Point3(origin[0], origin[1], origin[2], reference_frame=root_body)
+
+
+# %% the joints a stage articulates its objects with
+
+JOINT_AXES = {
+    UsdGeom.Tokens.x: (1, 0, 0),
+    UsdGeom.Tokens.y: (0, 1, 0),
+    UsdGeom.Tokens.z: (0, 0, 1),
+}
+"""
+The direction each ``physics:axis`` token names, in the joint's own frame.
+"""
+
+
+@dataclass(frozen=True)
+class UsdRevoluteJoint:
+    """
+    One revolute joint of the stage: what turns, about what, and how far.
+
+    Named for where it comes from, because a world already has a ``Hinge`` - the
+    semantic annotation saying a thing in it turns on one. This is what the stage
+    states, before any of that is decided.
+    """
+
+    parent_path: Sdf.Path
+    """
+    The prim the joint holds the turning body to.
+    """
+
+    child_T_joint: Gf.Matrix4d
+    """
+    Where the joint sits in the frame of the body that turns.
+    """
+
+    axis: Tuple[float, float, float]
+    """
+    The direction turned about, in the joint's own frame.
+    """
+
+    lower: Optional[float]
+    """
+    The least the joint turns to, in radians, or ``None`` where it is unbounded.
+    """
+
+    upper: Optional[float]
+    """
+    The most it turns to, in radians, or ``None`` where it is unbounded.
+    """
+
+    @property
+    def limits(self) -> DegreeOfFreedomLimits:
+        """
+        :return: The limits the joint's degree of freedom is given.
+        """
+        lower, upper = DerivativeMap(), DerivativeMap()
+        lower.position, upper.position = self.lower, self.upper
+        return DegreeOfFreedomLimits(lower=lower, upper=upper)
+
+
+def _finite(limit: Optional[float]) -> Optional[float]:
+    """
+    :param limit: A limit as USD states it, in degrees.
+    :return: The same limit in radians, or ``None`` where USD says the joint is free to
+        turn - which it says with an infinity rather than by leaving the limit out.
+    """
+    if limit is None or not math.isfinite(limit):
+        return None
+    return math.radians(limit)
+
+
+def _joint_frame(local_position, local_rotation) -> Gf.Matrix4d:
+    """
+    :param local_position: Where the joint sits in a body's frame.
+    :param local_rotation: How it is turned in that frame.
+    :return: The joint's pose in that body's frame.
+    """
+    pose = Gf.Matrix4d(1.0)
+    if local_rotation is not None:
+        pose.SetRotateOnly(Gf.Quatd(local_rotation))
+    pose.SetTranslateOnly(Gf.Vec3d(*(local_position or (0.0, 0.0, 0.0))))
+    return pose
+
+
+def revolute_joints(stage: Usd.Stage) -> Dict[Sdf.Path, UsdRevoluteJoint]:
+    """
+    Read every revolute joint of a stage, by the body it turns.
+
+    A joint naming neither a body to turn nor one to turn against is left out, and so is
+    a second joint on a body already turning: a body hangs on one joint in a kinematic
+    tree, and a stage stating otherwise is a stage this parser cannot make a tree of.
+
+    :param stage: The stage to read.
+    :return: The hinge each turning body hangs on, by that body's path.
+    """
+    hinges: Dict[Sdf.Path, UsdRevoluteJoint] = {}
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdPhysics.RevoluteJoint):
+            continue
+        joint = UsdPhysics.RevoluteJoint(prim)
+        holds = joint.GetBody0Rel().GetTargets()
+        turns = joint.GetBody1Rel().GetTargets()
+        if len(holds) != 1 or len(turns) != 1 or turns[0] in hinges:
+            continue
+        axis = JOINT_AXES.get(joint.GetAxisAttr().Get())
+        if axis is None:
+            continue
+        hinges[turns[0]] = UsdRevoluteJoint(
+            parent_path=holds[0],
+            child_T_joint=_joint_frame(
+                joint.GetLocalPos1Attr().Get(), joint.GetLocalRot1Attr().Get()
+            ),
+            axis=axis,
+            lower=_finite(joint.GetLowerLimitAttr().Get()),
+            upper=_finite(joint.GetUpperLimitAttr().Get()),
+        )
+    return hinges
 
 
 # %% placed objects
@@ -237,8 +363,9 @@ class USDSceneParser(USDStageParser):
                 self._attach_semantic_labels(
                     world, placed_object.prim, placed_object.body
                 )
+            hinges = revolute_joints(self.stage)
             for placed_object in objects:
-                self._connect(world, placed_object, objects_by_path, root)
+                self._connect(world, placed_object, objects_by_path, root, hinges)
         return world
 
     # %% root placement
@@ -341,25 +468,58 @@ class USDSceneParser(USDStageParser):
         placed_object: PlacedObject,
         objects_by_path: Dict[Sdf.Path, PlacedObject],
         root: PlacedObject,
+        hinges: Dict[Sdf.Path, UsdRevoluteJoint],
     ) -> None:
         """
-        Fixes one object to the object whose subtree holds it.
+        Holds one object to another: on a hinge where the stage states a revolute joint
+        that turns it, and fixed in place otherwise.
 
         :param world: The world to add the connection to.
-        :param placed_object: The object to fix in place.
+        :param placed_object: The object to hold.
         :param objects_by_path: Every object of the stage, by the path of its prim.
         :param root: The object to fall back to when no prim above this one holds
             geometry.
+        :param hinges: The revolute joint each turning body hangs on, by its path.
         """
-        parent = self._enclosing_object(placed_object.prim, objects_by_path, root)
+        hinge = hinges.get(placed_object.prim.GetPath())
+        holder = hinge and objects_by_path.get(hinge.parent_path)
+        parent = holder or self._enclosing_object(
+            placed_object.prim, objects_by_path, root
+        )
+        parent_T_child = _relative_transform(
+            parent.world_pose, placed_object.world_pose, parent.body
+        )
+        if hinge is None or holder is None:
+            # A joint holding the object to something that is not an object of its own
+            # has nothing to hang from, so the object is fixed where it stands.
+            world.add_connection(
+                FixedConnection.create_with_dofs(
+                    world=world,
+                    parent=parent.body,
+                    child=placed_object.body,
+                    parent_T_connection_expression=parent_T_child,
+                )
+            )
+            return
+        # The turn happens about the joint's own frame, which is why the connection is
+        # put there rather than on the child: parent_T_connection carries the child's
+        # resting place and the joint's offset within it, and connection_T_child takes
+        # that offset back off, so that at an angle of zero the object stands exactly
+        # where the stage puts it however the joint was anchored.
+        child_T_joint = _usd_pose_to_transform(
+            Gf.Transform(hinge.child_T_joint).GetTranslation(),
+            Gf.Transform(hinge.child_T_joint).GetRotation().GetQuat(),
+            reference_frame=placed_object.body,
+        )
         world.add_connection(
-            FixedConnection.create_with_dofs(
+            RevoluteConnection.create_with_dofs(
                 world=world,
                 parent=parent.body,
                 child=placed_object.body,
-                parent_T_connection_expression=_relative_transform(
-                    parent.world_pose, placed_object.world_pose, parent.body
-                ),
+                parent_T_connection_expression=parent_T_child @ child_T_joint,
+                connection_T_child_expression=child_T_joint.inverse(),
+                axis=Vector3(*hinge.axis, reference_frame=parent.body),
+                dof_limits=hinge.limits,
             )
         )
 

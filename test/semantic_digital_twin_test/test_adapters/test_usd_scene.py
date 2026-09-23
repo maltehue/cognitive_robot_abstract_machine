@@ -19,7 +19,10 @@ from semantic_digital_twin.semantic_annotations.usd_semantics import (
     UsdStageOrigin,
 )
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.world_description.connections import (
+    FixedConnection,
+    RevoluteConnection,
+)
 from semantic_digital_twin.world_description.geometry import Box, Mesh
 from semantic_digital_twin.world_description.world_entity import Body, Connection
 
@@ -31,6 +34,7 @@ from .usd_stages import (
     build_jointless_stage_with_unsupported_geometry,
     build_scene_stage_with_a_guide_prim,
     build_scene_stage_with_authored_collision,
+    build_scene_stage_with_a_door_on_a_hinge,
     build_scene_stage_with_a_guide_under_a_prim_of_its_own,
     build_scene_stage_with_a_scaled_group,
     build_scene_stage_with_grouped_instances,
@@ -426,3 +430,91 @@ def test_parse_keeps_a_name_short_when_it_is_already_unique():
     names = [body.name.name for body in world.bodies if body is not world.root]
 
     assert sorted(names) == ["floor_a", "wall_a", "wall_b"]
+
+
+# %% objects a stage states a joint for
+
+
+def _parsed(stage) -> World:
+    """
+    :param stage: The stage to read.
+    :return: The world it becomes, rooted where it stands.
+    """
+    return USDSceneParser(stage=stage, prefix="test").parse()
+
+
+def _leaf_of(world: World) -> Body:
+    """
+    :param world: The parsed world.
+    :return: The body the stage hangs on a hinge.
+    """
+    return next(body for body in world.bodies if "door_0" in body.name.name)
+
+
+def test_a_revolute_joint_becomes_a_connection_that_turns():
+    world = _parsed(build_scene_stage_with_a_door_on_a_hinge())
+
+    [hinged] = [
+        connection
+        for connection in world.connections
+        if isinstance(connection, RevoluteConnection)
+    ]
+
+    assert hinged.child is _leaf_of(world)
+    assert "surface" in hinged.parent.name.name
+
+
+def test_a_revolute_joint_keeps_the_limits_the_stage_states():
+    world = _parsed(build_scene_stage_with_a_door_on_a_hinge(lower=-90.0, upper=5.0))
+
+    [hinged] = [
+        connection
+        for connection in world.connections
+        if isinstance(connection, RevoluteConnection)
+    ]
+    limits = hinged.dof.limits
+
+    # USD states a revolute limit in degrees and a world holds it in radians.
+    assert np.isclose(limits.lower.position, np.radians(-90.0))
+    assert np.isclose(limits.upper.position, np.radians(5.0))
+
+
+def test_an_object_with_no_joint_is_still_fixed_where_it_stands():
+    world = _parsed(build_scene_stage_with_a_door_on_a_hinge())
+
+    surface = next(body for body in world.bodies if "surface" in body.name.name)
+
+    assert isinstance(surface.parent_connection, FixedConnection)
+
+
+def test_a_leaf_stands_where_the_stage_puts_it_until_it_is_turned():
+    world = _parsed(build_scene_stage_with_a_door_on_a_hinge())
+    leaf = _leaf_of(world)
+
+    resting = leaf.visual.shapes[0].mesh_in_frame(world.root).bounds
+
+    # The stage places the leaf a metre along, where its own quad then reaches a metre
+    # further; a joint holding it must leave it exactly there.
+    assert np.allclose(resting[0], [1.0, 0.0, 0.0], atol=1e-6)
+    assert np.allclose(resting[1], [2.0, 1.0, 0.0], atol=1e-6)
+
+
+def test_turning_a_leaf_leaves_its_hinge_where_it_was():
+    world = _parsed(build_scene_stage_with_a_door_on_a_hinge())
+    leaf = _leaf_of(world)
+    [hinged] = [
+        connection
+        for connection in world.connections
+        if isinstance(connection, RevoluteConnection)
+    ]
+    before = np.asarray(leaf.visual.shapes[0].mesh_in_frame(world.root).vertices)
+
+    world.state[hinged.dof.id].position = np.radians(-45.0)
+    world.notify_state_change()
+    after = np.asarray(leaf.visual.shapes[0].mesh_in_frame(world.root).vertices)
+
+    moved = np.linalg.norm(after - before, axis=1)
+    # The leaf turns about its own origin, which the stage anchored the joint at, so
+    # the corner standing there is the one that does not move.
+    assert moved.min() < 1e-9
+    assert moved.max() > 0.1

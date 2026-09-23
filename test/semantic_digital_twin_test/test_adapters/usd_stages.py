@@ -777,3 +777,39 @@ def build_scene_stage_with_authored_collision() -> Usd.Stage:
         (1.0, 0.04, 2.0),
     )
     return stage
+
+
+def build_scene_stage_with_a_door_on_a_hinge(
+    anchored_at: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    lower: float = -90.0,
+    upper: float = 5.0,
+) -> Usd.Stage:
+    """
+    A minimal in-memory stage shaped like a scanned wall with a door hung in it: the
+    wall's own surface, a leaf standing beside it, and the revolute joint an asset
+    library writes to hold the one to the other.
+
+    :param anchored_at: Where the joint sits in the leaf's own frame. A library writes
+        each leaf about its own hinge, which is this left at the origin.
+    :param lower: The least the joint turns to, in degrees.
+    :param upper: The most it turns to, in degrees.
+    :return: The built in-memory stage.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, "/scene").GetPrim())
+
+    _define_placed_instance(stage, "/scene/Wall/wall_a/Geometry/surface", (0, 0, 0))
+    _define_placed_instance(stage, "/scene/Wall/wall_a/Geometry/door_0", (1, 0, 0))
+
+    joint = UsdPhysics.RevoluteJoint.Define(
+        stage, "/scene/Wall/wall_a/Geometry/surface/hinge"
+    )
+    joint.CreateBody0Rel().SetTargets(["/scene/Wall/wall_a/Geometry/surface"])
+    joint.CreateBody1Rel().SetTargets(["/scene/Wall/wall_a/Geometry/door_0"])
+    joint.CreateAxisAttr().Set(UsdGeom.Tokens.z)
+    joint.CreateLocalPos0Attr().Set(Gf.Vec3f(1, 0, 0))
+    joint.CreateLocalPos1Attr().Set(Gf.Vec3f(*anchored_at))
+    joint.CreateLowerLimitAttr().Set(lower)
+    joint.CreateUpperLimitAttr().Set(upper)
+    return stage
