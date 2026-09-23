@@ -14,6 +14,7 @@ from semantic_digital_twin.adapters.usd.parser import USDParser
 from semantic_digital_twin.adapters.usd.stage_parser import (
     Shading,
     UsdMeshShapeBuilder,
+    as_gltf_uv,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.semantic_annotations.usd_semantics import UsdSemanticLabels
@@ -609,6 +610,10 @@ def test_a_mesh_texturing_each_corner_separately_keeps_its_texture(texture_file)
 
 
 def test_a_mesh_texturing_each_corner_separately_keeps_every_coordinate(texture_file):
+    # A parsed mesh is carried on as glTF, which measures the second coordinate down
+    # from the top of the image where USD measures it up from the bottom, so what is
+    # kept is every authored coordinate turned over rather than every authored
+    # coordinate as it stands.
     stage = build_stage_with_face_varying_texture_coordinates(texture_file)
     authored = np.array(
         UsdGeom.PrimvarsAPI(stage.GetPrimAtPath("/object/mesh")).GetPrimvar("st").Get()
@@ -619,8 +624,20 @@ def test_a_mesh_texturing_each_corner_separately_keeps_every_coordinate(texture_
     [shape] = world.root.visual.shapes
     np.testing.assert_allclose(
         np.unique(np.round(shape.mesh.visual.uv, 6), axis=0),
-        np.unique(np.round(authored, 6), axis=0),
+        np.unique(np.round(as_gltf_uv(authored), 6), axis=0),
     )
+
+
+def test_a_texture_coordinate_is_carried_on_the_way_gltf_reads_it(texture_file):
+    stage = build_stage_with_face_varying_texture_coordinates(texture_file)
+    authored = np.array(
+        UsdGeom.PrimvarsAPI(stage.GetPrimAtPath("/object/mesh")).GetPrimvar("st").Get()
+    )
+
+    turned = as_gltf_uv(authored)
+
+    np.testing.assert_allclose(turned[:, 0], authored[:, 0])
+    np.testing.assert_allclose(turned[:, 1], 1.0 - authored[:, 1])
 
 
 # %% inertials a file only half states
