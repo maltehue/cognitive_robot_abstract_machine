@@ -133,6 +133,15 @@ class Context(PlanEntity):
     suits a run nobody watches.
     """
 
+    control_frequency: float = 50.0
+    """
+    How many controller ticks a simulated motion takes per second of motion.
+
+    Each tick costs the same to compute whatever it covers, so a lower rate plays a
+    motion through in fewer ticks. A base drive converges at 10; a hand's fingers need
+    the full rate to close.
+    """
+
     def __post_init__(self):
         self.debug = self._debug
 
