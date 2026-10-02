@@ -480,6 +480,8 @@ class RobotNavigationPath:
         :param robot_bounds: World-frame collision boxes including attached objects.
         :return: Forbidden base positions for translation without turning.
         """
+        # Plain floats: a numpy bound minus a symbolic coordinate is an array.
+        start_x, start_y = start.to_np()[:2, 3]
         margin = self.clearance + self.waypoint_tolerance
         lower_height = min(part.min_z for part in robot_bounds)
         upper_height = max(part.max_z for part in robot_bounds)
@@ -503,20 +505,20 @@ class RobotNavigationPath:
                     VolumetricBoundingBox(
                         box.min_x
                         - max(part.max_x for part in overlapping)
-                        + start.x
+                        + start_x
                         - margin,
                         box.min_y
                         - max(part.max_y for part in overlapping)
-                        + start.y
+                        + start_y
                         - margin,
                         lower_height,
                         box.max_x
                         - min(part.min_x for part in overlapping)
-                        + start.x
+                        + start_x
                         + margin,
                         box.max_y
                         - min(part.min_y for part in overlapping)
-                        + start.y
+                        + start_y
                         + margin,
                         upper_height,
                         HomogeneousTransformationMatrix(
@@ -535,19 +537,21 @@ class RobotNavigationPath:
         :param robot_bounds: World-frame collision boxes including attached objects.
         :return: Forbidden base positions for translation with arbitrary heading.
         """
+        # Plain floats: a numpy bound minus a symbolic coordinate is an array.
+        start_x, start_y = start.to_np()[:2, 3]
         envelopes = []
         for part in robot_bounds:
             radius = hypot(
-                max(abs(part.min_x - start.x), abs(part.max_x - start.x)),
-                max(abs(part.min_y - start.y), abs(part.max_y - start.y)),
+                max(abs(part.min_x - start_x), abs(part.max_x - start_x)),
+                max(abs(part.min_y - start_y), abs(part.max_y - start_y)),
             )
             envelopes.append(
                 VolumetricBoundingBox(
-                    start.x - radius,
-                    start.y - radius,
+                    start_x - radius,
+                    start_y - radius,
                     part.min_z,
-                    start.x + radius,
-                    start.y + radius,
+                    start_x + radius,
+                    start_y + radius,
                     part.max_z,
                     HomogeneousTransformationMatrix(reference_frame=self.world.root),
                 )
