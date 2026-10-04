@@ -1902,30 +1902,48 @@ class Bridge:
         """
         Queue an object move from the viewer (called on an HTTP thread).
 
-        :param request: The move to apply on the next simulation tick.
+        :param request: The move to apply on the next simulation tick, or at once while
+            no plan runs.
         """
         with self._lock:
             snapshot_orientation = self.state.orientation_of(request.object_key)
         with self._moves_lock:
             self._moves.append(request)
-            # remember the drag target regardless of whether the sim applies it (it only
-            # applies on a motion tick); the Plan Builder reads these via /captured_objects
-            # to snap an object's pose into a start point or an action target.
+            # remember the drag target regardless of whether the world takes it; the
+            # Plan Builder reads these via /captured_objects to snap an object's pose
+            # into a start point or an action target.
             orientation = self._orientation_after(
                 request,
                 previous_target=self._last_moves.get(request.object_key),
                 snapshot_orientation=snapshot_orientation,
             )
             self._last_moves[request.object_key] = list(request.position) + orientation
+        self.apply_moves_unless_performing()
 
     def queue_joint_move(self, request: JointMoveRequest) -> None:
         """
         Queue a joint position from the viewer (called on an HTTP thread).
 
-        :param request: The joint position to apply on the next simulation tick.
+        :param request: The joint position to apply on the next simulation tick, or at
+            once while no plan runs.
         """
         with self._moves_lock:
             self._joint_moves.append(request)
+        self.apply_moves_unless_performing()
+
+    def apply_moves_unless_performing(self) -> None:
+        """
+        Apply the queued viewer moves at once while no plan runs.
+
+        During a plan the executor's tick is the only thread that may write the world
+        and applies them itself; between plans nothing ticks, so a door opened or an
+        object dragged in the viewer would otherwise wait for the next plan.
+        """
+        if self.world is None or self.is_performing():
+            return
+        with self.world.state.world_lock:
+            self.apply_moves()
+            self.world.notify_state_change()
 
     def pending_joint_moves(self) -> List[JointMoveRequest]:
         """

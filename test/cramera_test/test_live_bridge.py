@@ -407,7 +407,7 @@ class TestQueuedMoves:
         An object the world does not have must be skipped, not raise.
         """
         bridge = Bridge()
-        bridge.world = object()
+        bridge.world = World()
         bridge.publish_bodies({})
         bridge.queue_move(MoveRequest(object_key="ghost.stl", position=[0.0, 0.0, 0.0]))
         bridge.apply_moves()
@@ -492,14 +492,19 @@ class TestQueuedJointMoves:
         bridge.queue_joint_move(JointMoveRequest(connection_name="ghost", position=1.0))
         bridge.apply_moves()
 
-    def test_the_queue_holds_the_moves_until_the_simulation_thread_applies_them(self):
-        world, _ = make_hinged_door()
+    def test_the_queue_holds_the_moves_during_a_plan_until_its_tick_applies_them(
+        self, monkeypatch
+    ):
+        world, hinge = make_hinged_door()
         bridge = bridge_attached_to(world)
-        move = JointMoveRequest(connection_name="door", position=1.0)
+        monkeypatch.setattr(bridge, "is_performing", lambda: True)
+        move = JointMoveRequest(connection_name=str(hinge.name), position=1.0)
         bridge.queue_joint_move(move)
         assert bridge.pending_joint_moves() == [move]
+        assert hinge.position == 0.0
         bridge.apply_moves()
         assert bridge.pending_joint_moves() == []
+        assert hinge.position == 1.0
 
     def test_a_slider_position_opens_the_door(self):
         world, hinge = make_hinged_door()
@@ -1288,3 +1293,28 @@ class TestChartSnapshot:
             "UNKNOWN",
             "TRUE",
         ]
+
+
+# %% viewer moves while no plan runs
+class TestMovesWhileNoPlanRuns:
+    """
+    A running plan's tick is the only thread allowed to write the world, and it applies
+    the queued viewer moves itself.
+
+    Between plans nothing ticks, so a door opened or a joint set in the viewer has to be
+    applied the moment it arrives, or it would wait for the next plan and the world, its
+    mirrors and the viewer itself would never see it.
+    """
+
+    def test_a_joint_moved_while_no_plan_runs_is_applied_at_once(self):
+        world, hinge = make_hinged_door()
+        bridge = bridge_attached_to(world)
+
+        bridge.queue_joint_move(
+            JointMoveRequest(
+                connection_name=str(hinge.name), position=1.2, is_final=True
+            )
+        )
+
+        assert hinge.position == pytest.approx(1.2)
+        assert bridge.pending_joint_moves() == []
