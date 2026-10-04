@@ -708,3 +708,41 @@ class TestGraphTabOrder:
             "kinematics",
             "transforms",
         ]
+
+
+# %% compositor cost of the stylesheets
+BLUR_FILTER_PATTERN = re.compile(r"(?<![\w-])filter\s*:[^;}]*blur\(")
+"""
+A ``filter`` declaration that blurs the element it is set on.
+"""
+
+BACKDROP_FILTER_PATTERN = re.compile(r"backdrop-filter\s*:")
+"""
+A ``backdrop-filter`` declaration, which blurs whatever is drawn behind the element.
+"""
+
+
+def stylesheets() -> List[Path]:
+    """
+    Every stylesheet the frontend ships, at any depth under the web root.
+    """
+    return sorted(WEB_ROOT.glob("**/*.css"))
+
+
+class TestStylesheetsDrawWithoutBlur:
+    """
+    A browser whose compositor runs in software redoes every CSS blur over the whole
+    page on each frame the 3D canvas changes, which is what made the scene orbit at ten
+    frames a second: the blurs cost far more than the scene itself. A blurred look is
+    baked into the image instead of asked of the compositor.
+    """
+
+    def test_no_stylesheet_blurs_an_element(self):
+        for stylesheet in stylesheets():
+            text = stylesheet.read_text(encoding="utf-8")
+            assert BLUR_FILTER_PATTERN.search(text) is None, stylesheet.name
+
+    def test_no_stylesheet_blurs_its_backdrop(self):
+        for stylesheet in stylesheets():
+            text = stylesheet.read_text(encoding="utf-8")
+            assert BACKDROP_FILTER_PATTERN.search(text) is None, stylesheet.name

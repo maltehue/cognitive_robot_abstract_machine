@@ -56,9 +56,8 @@ body{
   display:flex;align-items:center;justify-content:space-between;
   padding:14px 22px;border-bottom:1px solid var(--line);
   background:linear-gradient(180deg,rgba(14,16,20,.9),rgba(6,7,9,.6));
-  backdrop-filter:blur(6px);
-  /* the backdrop-filter flattens this into one stacking context, so the whole bar
-     (dropdowns included) must sit above every panel's positioned internals */
+  /* the whole bar (dropdowns included) must sit above every panel's positioned
+     internals */
   position:relative;z-index:100;
 }
 .brand{display:flex;align-items:center;gap:14px}
@@ -99,11 +98,12 @@ body{
 /* %% 3d stage */
 .stage{position:relative;flex:1;min-height:0;overflow:hidden;background:
   radial-gradient(700px 500px at 50% 25%, #0a0c11 0%, #050608 70%);}
-/* blurred real-lab backdrop (the robot is composited on top, "sandbox" style) */
+/* blurred real-lab backdrop (the robot is composited on top, "sandbox" style). The
+   blur and darkening are baked into the picture: a CSS filter here is redone over the
+   whole stage on every frame the canvas changes, which a software compositor cannot
+   afford */
 .stage-bg{position:absolute;inset:0;z-index:0;
   background:url('img/ai-picture.png') center/cover no-repeat;
-  filter:blur(9px) brightness(.62) saturate(1.05);
-  transform:scale(1.12);            /* overscan so blurred edges stay off-screen */
 }
 .stage-bg:after{content:"";position:absolute;inset:0;
   background:radial-gradient(60% 60% at 50% 45%, rgba(5,10,20,0) 0%, rgba(5,10,20,.45) 100%)}
@@ -119,8 +119,8 @@ body{
 .layers-panel{
   position:absolute;left:14px;top:14px;z-index:3;min-width:180px;
   width:min(260px,calc(100% - 28px));max-height:calc(100% - 64px);overflow-y:auto;
-  background:rgba(12,20,34,.72);border:1px solid var(--line2);border-radius:4px;
-  padding:12px 13px;backdrop-filter:blur(7px);box-shadow:0 8px 26px rgba(0,0,0,.4)
+  background:rgba(12,20,34,.88);border:1px solid var(--line2);border-radius:4px;
+  padding:12px 13px;box-shadow:0 8px 26px rgba(0,0,0,.4)
 }
 .lp-title{
   font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);
@@ -173,7 +173,7 @@ body{
   position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:4;
   max-width:82%;text-align:center;font-size:13px;line-height:1.4;color:var(--ink);
   padding:9px 16px;border-radius:4px;border:1px solid var(--line2);
-  background:rgba(10,17,32,.78);backdrop-filter:blur(6px);
+  background:rgba(10,17,32,.9);
   box-shadow:0 8px 24px rgba(0,0,0,.4)
 }
 .step-caption b{color:var(--accent)}
@@ -495,8 +495,7 @@ body{
 }
 .legend{
   position:absolute;right:12px;top:46px;display:flex;flex-direction:column;gap:5px;
-  background:rgba(10,17,32,.72);border:1px solid var(--line2);border-radius:4px;padding:9px 11px;
-  backdrop-filter:blur(4px)
+  background:rgba(10,17,32,.88);border:1px solid var(--line2);border-radius:4px;padding:9px 11px;
 }
 .legend .li{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
 .legend .dot{width:11px;height:11px;border-radius:50%}
@@ -550,7 +549,7 @@ body{
 .graph-nav{
   position:absolute;left:52px;top:46px;z-index:6;display:flex;align-items:center;gap:6px;
   background:rgba(20,24,33,.82);border:1px solid #37404f;border-radius:4px;
-  padding:4px 8px;backdrop-filter:blur(4px);
+  padding:4px 8px;
 }
 .graph-nav button{
   background:none;border:1px solid #37404f;border-radius:3px;color:#c8d1e0;
@@ -564,7 +563,7 @@ body{
 .graph-max-btn,.graph-zoom button{
   background:rgba(20,24,33,.82);border:1px solid #37404f;border-radius:4px;color:#c8d1e0;
   font:inherit;font-size:14px;line-height:1;padding:6px 9px;cursor:pointer;
-  backdrop-filter:blur(4px);transition:.15s;
+  transition:.15s;
 }
 .graph-max-btn:hover,.graph-zoom button:hover{background:#1c222d;color:#fff;border-color:var(--accent)}
 .graph-max-btn{position:absolute;left:12px;top:46px;z-index:6}
