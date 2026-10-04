@@ -30,6 +30,7 @@ from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import Connection6DoF
 
 from .dataset.standing_robot import StandingRobot
+from .dataset.walking_robot import WalkingRobot
 
 DATASET = Path(__file__).parent / "dataset"
 FLOOR_SLAB = DATASET / "floor_slab.urdf"
@@ -128,6 +129,20 @@ def standing_scene(x: float) -> RobotScene:
     )
 
 
+def walking_scene(x: float) -> RobotScene:
+    return RobotScene(
+        instances=[
+            RobotInstance(
+                identifier="walking",
+                label="Walking robot",
+                robot_type=WalkingRobot,
+                pose=HomogeneousTransformationMatrix.from_xyz_rpy(x=x),
+            )
+        ],
+        active_identifier="walking",
+    )
+
+
 def test_a_robot_above_a_floor_stands_on_its_top() -> None:
     world = standing_scene(x=0.0).build_world(str(FLOOR_SLAB))
 
@@ -180,6 +195,26 @@ def test_a_robot_moved_off_a_floor_stands_on_the_ground() -> None:
     move_robot_to(world, robot, x=10.0, y=0.0, yaw=0.0)
 
     assert lowest_point_of(world, "standing") == pytest.approx(0.0, abs=1e-6)
+
+
+def test_a_robot_is_placed_where_it_stands_however_far_its_drive_carried_it() -> None:
+    """
+    A robot following a real one has the real robot's odometry written into its drive,
+    so its root no longer stands at its localization frame's origin.
+
+    Placing it stands the root where it is told, not the origin.
+    """
+    world = walking_scene(x=0.0).build_world()
+    [robot] = world.get_semantic_annotations_by_type(WalkingRobot)
+    robot.drive.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
+        x=1.5, yaw=math.pi / 2
+    )
+
+    move_robot_to(world, robot, x=3.0, y=4.0, yaw=0.0)
+
+    world_T_root = robot.root.global_pose.to_np()
+    assert world_T_root[:2, 3] == pytest.approx([3.0, 4.0])
+    assert math.atan2(world_T_root[1, 0], world_T_root[0, 0]) == pytest.approx(0.0)
 
 
 def test_a_robot_following_its_localization_is_not_moved() -> None:

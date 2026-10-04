@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from math import isfinite
+from math import atan2, isfinite
 import re
 
 import numpy as np
@@ -79,8 +79,9 @@ class UnknownEnvironmentJointError(ValueError):
 @dataclass
 class RobotPlacementNotFixedError(ValueError):
     """
-    Raised for moving a robot whose localization frame is not fixed to the world, such
-    as one following a real robot's localization, which would stop following if moved.
+    Raised for moving a robot whose localization frame is not fixed to the world, so
+    that there is no placement to re-fix; a spawned robot's always is, whether or not it
+    follows a real robot's odometry.
     """
 
     robot_name: str
@@ -349,11 +350,23 @@ def stand_on_the_floor(world: World, robot: AbstractRobot) -> float:
     return lift
 
 
+def yaw_of(pose: np.ndarray) -> float:
+    """
+    :param pose: A homogeneous transformation matrix.
+    :return: The angle it turns about the z axis, in radians.
+    """
+    return atan2(pose[1, 0], pose[0, 0])
+
+
 def move_robot_to(
     world: World, robot: AbstractRobot, x: float, y: float, yaw: float
 ) -> None:
     """
     Stand a robot somewhere else on the floor, facing another way.
+
+    It is the robot's root that is stood there. The localization frame is fixed wherever
+    that takes it, since the drive between the two carries the root as far from the
+    frame's origin as the odometry written into it says.
 
     :param world: The world the robot stands in.
     :param robot: The robot to move; its localization frame must be fixed to its parent,
@@ -362,10 +375,17 @@ def move_robot_to(
     :param y: Where it stands, along the world's y axis, in metres.
     :param yaw: Which way it faces, in radians.
     """
+    world_T_root = HomogeneousTransformationMatrix.from_xyz_rpy(
+        x=x, y=y, yaw=yaw
+    ).to_np()
+    odom_T_root = robot.root.parent_connection.origin.to_np()
+    world_T_odom = world_T_root @ np.linalg.inv(odom_T_root)
     _replace_placement(
         world,
         robot,
-        HomogeneousTransformationMatrix.from_xyz_rpy(x=x, y=y, yaw=yaw).to_np(),
+        HomogeneousTransformationMatrix.from_xyz_rpy(
+            x=world_T_odom[0, 3], y=world_T_odom[1, 3], yaw=yaw_of(world_T_odom)
+        ).to_np(),
     )
     stand_on_the_floor(world, robot)
 

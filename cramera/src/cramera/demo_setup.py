@@ -31,6 +31,7 @@ from cramera.multi_robot import (
     RobotScene,
     UnknownEnvironmentJointError,
     stand_joints_at,
+    yaw_of,
 )
 from cramera.paths import SCENE_NAME_PATTERN, setups_directory
 from cramera.plan_steps import BuilderPlan
@@ -178,8 +179,7 @@ class RobotSetup:
         """
         :return: Which way the robot faces where it starts, in radians.
         """
-        pose = self.instance.pose.to_np()
-        return math.atan2(pose[1, 0], pose[0, 0])
+        return yaw_of(self.instance.pose.to_np())
 
     @classmethod
     def from_payload(

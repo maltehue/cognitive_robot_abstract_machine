@@ -1851,7 +1851,10 @@ class Bridge:
         :param request: Which robot goes where.
         :raises RobotSelectionBusy: If a plan is running or paused.
         :raises UnknownRobot: If the requested robot is absent.
-        :raises RobotPlacementNotFixedError: If the robot follows its localization.
+        :raises RobotPlacementNotFixedError: If the robot's localization frame is not
+            fixed to the world, as a spawned robot's is. A robot following its
+            odometry is moved all the same: the frame is re-fixed so that the root
+            stands where asked, and the odometry carries on from there.
         """
         if self.is_performing():
             raise RobotSelectionBusy(
