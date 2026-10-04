@@ -1,4 +1,5 @@
-from time import perf_counter
+import logging
+from time import perf_counter, sleep
 
 import numpy as np
 
@@ -143,3 +144,72 @@ def test_stepped_simulation_pacer_advances_the_physics_one_cycle_per_sleep():
 
     fallen = 0.5 * 9.81 * (cycles / frequency) ** 2
     assert height == pytest.approx(1.0 - fallen, abs=0.01)
+
+
+# %% reporting a loop that falls behind its schedule
+def test_a_loop_that_keeps_its_schedule_reports_no_overrun():
+    pacer = SimulationPacer(real_time_factor=1.0)
+    pacer.target_frequency = 50
+    for _ in range(10):
+        pacer.sleep()
+
+    report = pacer.report()
+
+    assert report.cycles == 10
+    assert report.overrun_cycles == 0
+    assert np.isclose(report.pace, 1.0, rtol=0.05)
+
+
+def test_a_loop_whose_cycles_overrun_reports_how_far_it_fell_behind():
+    pacer = SimulationPacer(real_time_factor=1.0)
+    pacer.target_frequency = 100
+    pacer.sleep()  # the schedule starts with the first sleep
+    for _ in range(5):
+        sleep(0.03)
+        pacer.sleep()
+
+    report = pacer.report()
+
+    assert report.cycles == 6
+    assert report.overrun_cycles == 5
+    assert np.isclose(report.pace, 6 * 0.01 / (0.01 + 5 * 0.03), rtol=0.2)
+    assert f"{report.overrun_cycles} of {report.cycles}" in str(report)
+
+
+def test_a_loop_that_fell_behind_is_reported_when_the_motion_ends(caplog):
+    msc = MotionStatechart()
+    msc.add_node(counter := CountSeconds(seconds=0.05))
+    msc.add_node(EndMotion.when_true(counter))
+    # a slot of a tenth of a millisecond, which no tick of the controller fits into
+    executor = Executor(
+        context=MotionStatechartContext(
+            world=World(),
+            qp_controller_config=QPControllerConfig(target_frequency=10_000),
+        ),
+        pacer=SimulationPacer(real_time_factor=1.0),
+    )
+    executor.compile(msc)
+
+    with caplog.at_level(logging.WARNING, logger="giskardpy.executor"):
+        executor.tick_until_end(timeout=1000)
+
+    assert str(executor.pacer.report()).split(":")[1] in caplog.text
+
+
+def test_a_loop_that_kept_its_schedule_is_not_reported(caplog):
+    msc = MotionStatechart()
+    msc.add_node(counter := CountSeconds(seconds=0.2))
+    msc.add_node(EndMotion.when_true(counter))
+    executor = Executor(
+        context=MotionStatechartContext(
+            world=World(),
+            qp_controller_config=QPControllerConfig.create_with_simulation_defaults(),
+        ),
+        pacer=SimulationPacer(real_time_factor=1.0),
+    )
+    executor.compile(msc)
+
+    with caplog.at_level(logging.WARNING, logger="giskardpy.executor"):
+        executor.tick_until_end(timeout=1000)
+
+    assert "overran" not in caplog.text

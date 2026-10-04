@@ -427,6 +427,7 @@ class GiskardExecutable(Executable):
                 self.motion_state_chart.cleanup_nodes, context=executor.context
             )
             cleanup.callback(executor.set_velocity_acceleration_jerk_to_zero)
+            cleanup.callback(executor.report_pacing)
             try:
                 executor.compile(self.motion_state_chart)
                 stages = sum(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -28,6 +29,8 @@ from semantic_digital_twin.world_description.world_state_trajectory_plotter impo
 
 if TYPE_CHECKING:
     from semantic_digital_twin.adapters.multi_sim import MujocoSim
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,18 +61,85 @@ class NoPacing(Pacer):
         pass
 
 
+@dataclass(frozen=True)
+class PacingReport:
+    """
+    How closely a paced loop kept to its schedule.
+    """
+
+    cycles: int
+    """
+    How many cycles the loop ran.
+    """
+
+    overrun_cycles: int
+    """
+    How many of them took longer than their slot, so that the loop fell behind.
+    """
+
+    cycle_duration: float
+    """
+    How many seconds one cycle was meant to take.
+    """
+
+    wall_seconds: float
+    """
+    How many seconds the cycles took in all.
+    """
+
+    @property
+    def scheduled_seconds(self) -> float:
+        """
+        :return: How many seconds the cycles were meant to take in all.
+        """
+        return self.cycles * self.cycle_duration
+
+    @property
+    def pace(self) -> float:
+        """
+        :return: The scheduled time per second of wall time: 1.0 when the loop kept its
+            schedule, 0.5 when it took twice as long. For a loop paced at a real-time
+            factor this is the share of that factor it achieved.
+        """
+        if self.wall_seconds <= 0:
+            return 1.0
+        return self.scheduled_seconds / self.wall_seconds
+
+    def __str__(self) -> str:
+        return (
+            f"the loop ran at {self.pace:.2f}x of its schedule: {self.overrun_cycles} of "
+            f"{self.cycles} cycles overran their {self.cycle_duration * 1000:.0f} ms slot"
+        )
+
+
 @dataclass
 class ScheduledPacer(Pacer, ABC):
     """
     Holds a loop at a fixed cycle duration by sleeping until the next slot.
 
     A cycle that overruns its slot is not compensated by a shorter following one; the
-    schedule simply skips to the next slot after the current time.
+    schedule simply skips to the next slot after the current time, and :meth:`report`
+    says how often that happened.
     """
 
     _next_target_time: float | None = field(default=None, init=False)
     """
     Point in time the next cycle may start at, None until the first sleep.
+    """
+
+    _started_at: float | None = field(default=None, init=False)
+    """
+    Point in time the first cycle started at, None until the first sleep.
+    """
+
+    cycles: int = field(default=0, init=False)
+    """
+    How many cycles the loop has completed.
+    """
+
+    overrun_cycles: int = field(default=0, init=False)
+    """
+    How many cycles ended after the slot they were meant to end in.
     """
 
     @property
@@ -83,13 +153,31 @@ class ScheduledPacer(Pacer, ABC):
         cycle_duration = self.cycle_duration
         now = time.monotonic()
         if self._next_target_time is None:
+            self._started_at = now
             self._next_target_time = now + cycle_duration
         sleep_time = self._next_target_time - now
+        self.cycles += 1
         if sleep_time > 0:
             time.sleep(sleep_time)
             now = self._next_target_time
+        else:
+            self.overrun_cycles += 1
         while self._next_target_time <= now:
             self._next_target_time += cycle_duration
+
+    def report(self) -> PacingReport:
+        """
+        :return: How closely the loop has kept to its schedule so far.
+        """
+        wall_seconds = (
+            0.0 if self._started_at is None else time.monotonic() - self._started_at
+        )
+        return PacingReport(
+            cycles=self.cycles,
+            overrun_cycles=self.overrun_cycles,
+            cycle_duration=self.cycle_duration,
+            wall_seconds=wall_seconds,
+        )
 
 
 @dataclass
@@ -275,9 +363,22 @@ class Executor:
                     return
             raise TimeoutError("Timeout reached while waiting for end of motion.")
         finally:
+            self.report_pacing()
             self.set_velocity_acceleration_jerk_to_zero()
             self.motion_statechart.cleanup_nodes(context=self.context)
             self.context.cleanup()
+
+    def report_pacing(self) -> None:
+        """
+        Warn when the loop fell behind the schedule its pacer set, since a motion that
+        ran at a fraction of its real-time factor looks like a slow robot and is
+        otherwise told apart from one by nothing.
+        """
+        if not isinstance(self.pacer, ScheduledPacer):
+            return
+        report = self.pacer.report()
+        if report.overrun_cycles:
+            logger.warning("%s", report)
 
     def _raise_if_world_state_array_was_replaced(self):
         """
