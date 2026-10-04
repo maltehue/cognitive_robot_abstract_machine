@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+import errno
 import functools
 import json
 import os
@@ -56,7 +57,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 from typing_extensions import Any, ClassVar, Dict, Optional, Tuple, Type
 
@@ -700,6 +701,25 @@ class BridgeServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+@dataclass
+class BridgePortInUse(Exception):
+    """
+    Raised when the bridge cannot listen because another process already holds its port,
+    as a rule an earlier live demo that is still running.
+    """
+
+    port: int
+    """
+    The port that was asked for.
+    """
+
+    def __str__(self) -> str:
+        return (
+            f"port {self.port} is already in use: another live demo or cramera-live "
+            f"is still serving on it; stop it first, or set LIVE_VIZ_PORT"
+        )
+
+
 def serve(bridge: Bridge, port: int = DEFAULT_PORT) -> BridgeServer:
     """
     Start an HTTP server on a daemon thread, serving ``bridge``.
@@ -707,8 +727,14 @@ def serve(bridge: Bridge, port: int = DEFAULT_PORT) -> BridgeServer:
     :param bridge: The bridge every request handler on this server reads and writes.
     :param port: Port to listen on (all interfaces).
     :return: The running server.
+    :raises BridgePortInUse: If another process already listens on the port.
     """
     handler = functools.partial(BridgeRequestHandler, bridge=bridge)
-    server = BridgeServer(("0.0.0.0", port), handler)
+    try:
+        server = BridgeServer(("0.0.0.0", port), handler)
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        raise BridgePortInUse(port) from error
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

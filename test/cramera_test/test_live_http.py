@@ -978,3 +978,23 @@ class TestVocabularyEndpoints:
 
         assert payload["ok"] is False
         assert payload["entries"] == []
+
+
+# %% a port another process holds
+class TestServingOnATakenPort:
+    def test_a_taken_port_is_reported_by_number(self, bridge):
+        import socket
+
+        from cramera.live.http import BridgePortInUse
+
+        holder = socket.socket()
+        holder.bind(("0.0.0.0", 0))
+        holder.listen(1)
+        port = holder.getsockname()[1]
+        try:
+            with pytest.raises(BridgePortInUse) as raised:
+                serve(bridge, port)
+        finally:
+            holder.close()
+        assert raised.value.port == port
+        assert str(port) in str(raised.value)
