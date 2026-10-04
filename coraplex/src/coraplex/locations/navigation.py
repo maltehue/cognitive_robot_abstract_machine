@@ -379,6 +379,14 @@ class RobotNavigationPath:
     Numerical tolerance for planar height and supporting contact, in meters.
     """
 
+    avoid_collisions: bool = True
+    """
+    Whether the controller keeps the robot clear of obstacles while it drives the
+    route. The route itself is planned around them either way; the avoidance on top
+    costs the controller a check of the whole robot against the whole environment on
+    every cycle.
+    """
+
     keep_joint_states: bool = False
     """
     Whether execution holds the current joint posture throughout the route.

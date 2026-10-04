@@ -54,7 +54,8 @@ class TravelFacingWaypoint(CartesianPose):
 @dataclass(eq=False, repr=False)
 class CollisionAvoidingNavigation(Sequence):
     """
-    Follow planned base waypoints while continuously avoiding external collisions.
+    Follow planned base waypoints while continuously avoiding external collisions,
+    unless the path says the route alone is to keep the robot clear.
     """
 
     path: RobotNavigationPath = field(kw_only=True)
@@ -104,7 +105,7 @@ class CollisionAvoidingNavigation(Sequence):
             if len(goal_state) > 0:
                 self._joint_hold = JointPositionList(goal_state=goal_state)
                 self._add_child_to_motion_statechart(self._joint_hold)
-        if not any(
+        if self.path.avoid_collisions and not any(
             node.parent_node is None
             for node in self.motion_statechart.get_nodes_by_type(
                 ExternalCollisionAvoidance
@@ -229,6 +230,12 @@ class MoveMotion(BaseMotion):
     Turn omnidirectional bases toward travel when the planned clearance permits it.
     """
 
+    avoid_collisions: bool = field(default=True, kw_only=True)
+    """
+    Whether the controller keeps the robot clear of obstacles along the route, on top of
+    the route being planned around them.
+    """
+
     @property
     def collision_rules(self) -> list[CollisionRule]:
         """
@@ -254,6 +261,7 @@ class MoveMotion(BaseMotion):
                     clearance=self.obstacle_clearance,
                     keep_joint_states=self.keep_joint_states,
                     face_travel_direction=self.face_travel_direction,
+                    avoid_collisions=self.avoid_collisions,
                 ),
             )
         return CartesianPose(

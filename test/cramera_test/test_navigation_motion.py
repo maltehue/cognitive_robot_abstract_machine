@@ -475,3 +475,31 @@ def test_navigation_in_the_apartment_with_parked_arms(
     np.testing.assert_allclose(
         robot.root.global_pose.to_np(), target.to_np(), atol=0.01
     )
+
+
+def test_navigation_can_drive_without_collision_avoidance(
+    cylinder_bot_world: World,
+) -> None:
+    """
+    A navigation told not to avoid collisions runs no avoidance goal at all, and still
+    arrives: the route is planned around the obstacles beforehand.
+
+    :param cylinder_bot_world: Existing mobile robot and environment geometry.
+    """
+    world = cylinder_bot_world
+    robot = world.get_semantic_annotations_by_type(AbstractRobot)[0]
+    plan = execute_single(
+        MoveMotion(
+            Pose.from_xyz_rpy(-0.3, reference_frame=world.root),
+            avoid_collisions=False,
+        ),
+        context=Context(world=world, robot=robot, _debug=False),
+    ).plan
+    trajectory = NavigationTrajectory(robot)
+    plan.node_callbacks.append(trajectory)
+    with simulated_robot:
+        plan.perform()
+    assert trajectory.avoidance_counts == {0}
+    np.testing.assert_allclose(
+        robot.root.global_pose.to_np()[:3, 3], [-0.3, 0, 0], atol=0.01
+    )

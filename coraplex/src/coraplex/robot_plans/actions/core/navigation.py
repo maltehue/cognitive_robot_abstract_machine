@@ -60,6 +60,12 @@ class NavigateAction(ActionDescription):
     Turn toward travel where space permits, retaining the requested final orientation.
     """
 
+    avoid_collisions: bool = field(default=True, kw_only=True)
+    """
+    Whether the controller keeps the robot clear of obstacles while driving, on top of
+    the route being planned around them.
+    """
+
     @property
     def _action_plan(self) -> PlanNode:
         return execute_single(
@@ -67,6 +73,7 @@ class NavigateAction(ActionDescription):
                 self.robot.pose_facing(self.target_location),
                 self.keep_joint_states,
                 face_travel_direction=self.face_travel_direction,
+                avoid_collisions=self.avoid_collisions,
             )
         )
 
