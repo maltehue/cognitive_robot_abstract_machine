@@ -1,9 +1,48 @@
-INFO:__main__:running demo: /home/hassouna/cram-worktrees/cram-viz/coraplex/demos/coraplex_generated/_builder_scaffold.py
-Unknown tag "material" in /robot[@name='apartment']/link[@name='coffe_machine']/collision[1]
-Unknown attribute "type" in /robot[@name='pr2']/link[@name='base_laser_link']
-Unknown attribute "type" in /robot[@name='pr2']/link[@name='wide_stereo_optical_frame']
-Unknown attribute "type" in /robot[@name='pr2']/link[@name='narrow_stereo_optical_frame']
-Unknown attribute "type" in /robot[@name='pr2']/link[@name='laser_tilt_link']
-Unknown tag "material" in /robot[@name='pr2']/link[@name='l_force_torque_link']/collision[1]
-INFO:cramera.live.bridge:attached to world (robot=PR2, 83 joints)
+/home/huerkamp/.virtualenvs/cram-env/lib/python3.12/site-packages/matplotlib/projections/__init__.py:63: UserWarning: Unable to import Axes3D. This may be due to multiple versions of Matplotlib being installed (e.g. as a system package and as a pip package). As a result, the 3D projection is not available.
+  warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+INFO:__main__:running demo: /home/huerkamp/libs/cognitive_robot_abstract_machine/coraplex/demos/coraplex_generated/_builder_scaffold.py
+/home/huerkamp/.virtualenvs/cram-env/lib/python3.12/site-packages/PIL/Image.py:3578: DecompressionBombWarning: Image size (118635664 pixels) exceeds limit of 89478485 pixels, could be decompression bomb DOS attack.
+  warnings.warn(
+/home/huerkamp/.virtualenvs/cram-env/lib/python3.12/site-packages/PIL/Image.py:3578: DecompressionBombWarning: Image size (90630400 pixels) exceeds limit of 89478485 pixels, could be decompression bomb DOS attack.
+  warnings.warn(
+Unknown tag "mujoco" in /robot[@name='walker_s2_description']
+Unknown tag "mujoco" in /robot[@name='walker_s2_description']
+INFO:cramera.live.bridge:attached to world (robot=WalkerS2, 89 joints)
 INFO:cramera.live.ros_markers:watching markers on /semworld/viz_marker, /coraplex/viz_marker
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/cramera/src/cramera/live/runner.py", line 179, in <module>
+    main()
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/cramera/src/cramera/live/runner.py", line 165, in main
+    runpy.run_path(str(demo), run_name="__main__")
+  File "<frozen runpy>", line 286, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/coraplex/demos/coraplex_generated/_builder_scaffold.py", line 157, in <module>
+    main()
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/coraplex/demos/coraplex_generated/_builder_scaffold.py", line 153, in main
+    ).run()
+      ^^^^^
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/coraplex/src/coraplex/demonstrations.py", line 287, in run
+    world = self.acquire_world()
+            ^^^^^^^^^^^^^^^^^^^^
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/coraplex/src/coraplex/demonstrations.py", line 274, in acquire_world
+    ).start()
+      ^^^^^^^
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/coraplex/src/coraplex/visualization.py", line 319, in start
+    self.cramera_visualization = provider_type(world=self.world).start()
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/cramera/src/cramera/live/visualization.py", line 281, in start
+    self.bridge.live_server = serve(self.bridge, self.port)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/huerkamp/libs/cognitive_robot_abstract_machine/cramera/src/cramera/live/http.py", line 691, in serve
+    server = BridgeServer(("0.0.0.0", port), handler)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socketserver.py", line 457, in __init__
+    self.server_bind()
+  File "/usr/lib/python3.12/http/server.py", line 136, in server_bind
+    socketserver.TCPServer.server_bind(self)
+  File "/usr/lib/python3.12/socketserver.py", line 473, in server_bind
+    self.socket.bind(self.server_address)
+OSError: [Errno 98] Address already in use
