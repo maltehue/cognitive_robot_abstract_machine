@@ -198,3 +198,19 @@ test('a deliberately chosen recorded scene is never auto-attached away from', fu
   assert.strictEqual(live.shouldAutoAttach('PR2_Apartment', true, false, false, true), false);
   assert.strictEqual(live.shouldAutoAttach('', false, false, false, true), true);
 });
+
+// %% which geometry the live scene is asked for
+test('a browser that chose the boxes asks for them', function () {
+  const live = load();
+  assert.strictEqual(live.liveSceneQuery('collision'), '?geometry=collision');
+});
+
+test('a browser never asks for the scan: a demo serving the boxes serves them for a reason', function () {
+  // a demo started with its environment as collision boxes, for Isaac Sim or a weak
+  // computer, must not be upgraded to the scan by a choice this browser stored in an
+  // earlier demo; unset and "visual" both leave the geometry to the demo
+  const live = load();
+  assert.strictEqual(live.liveSceneQuery('visual'), '');
+  assert.strictEqual(live.liveSceneQuery(''), '');
+  assert.strictEqual(live.liveSceneQuery(null), '');
+});

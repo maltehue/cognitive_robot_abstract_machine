@@ -1512,9 +1512,10 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
   function setAutoLive(on) {
     try { localStorage.setItem(AUTO_LIVE_KEY, on ? '1' : '0'); } catch (e) {}
   }
-  // which geometry the running demo's environment is drawn with ('visual' or
-  // 'collision'); unset leaves it to the demo. Persisted, because switching it rebuilds
-  // the live bundle and reloads the page.
+  // which geometry this browser wants the running demo's environment drawn with:
+  // 'collision' asks for the boxes, anything else leaves it to the demo (see
+  // LiveMode.liveSceneQuery). Persisted, because switching it rebuilds the live bundle
+  // and reloads the page.
   const ENVIRONMENT_GEOMETRY_KEY = 'cramera-environment-geometry';
   function environmentGeometry() {
     try { return localStorage.getItem(ENVIRONMENT_GEOMETRY_KEY) || ''; } catch (e) { return ''; }

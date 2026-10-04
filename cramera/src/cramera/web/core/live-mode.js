@@ -29,11 +29,25 @@
     return sceneName === SCENE_NAME;
   }
 
+  const COLLISION = 'collision';
+  /* The environment drawn as the boxes it collides as; must match
+     cramera.body_geometry.DrawnGeometry.COLLISION. */
+
   global.LiveMode = {
     SCENE_NAME: SCENE_NAME,
     NAVIGATE: NAVIGATE,
     TOGGLE: TOGGLE,
     isLiveScene: isLiveScene,
+
+    /* The query the live scene is fetched with, given the geometry this browser stored
+       for the environment. A browser that cannot draw a scanned building asks for the
+       boxes; it never asks for the scan, because a demo serving the boxes does so for a
+       reason -- Isaac Sim drawing the lab beside it, or a weak computer -- that a choice
+       stored in an earlier demo must not override. Anything but the boxes is left to
+       the demo. */
+    liveSceneQuery: function (storedGeometry) {
+      return storedGeometry === COLLISION ? '?geometry=' + COLLISION : '';
+    },
 
     /* Whether the live pose stream may drive the scene `sceneName` is showing. */
     attachable: function (sceneName) {
