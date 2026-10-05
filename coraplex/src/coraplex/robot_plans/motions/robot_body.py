@@ -13,6 +13,7 @@ from giskardpy.motion_statechart.tasks.joint_tasks import (
 from giskardpy.motion_statechart.tasks.pointing import Pointing
 from coraplex.robot_plans.mixins import HasMaxJointVelocity
 from coraplex.robot_plans.motions.base import BaseMotion
+from semantic_digital_twin.world_description.world_entity import Body
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.exceptions import (
     DuplicateWorldEntityError,
@@ -137,12 +138,32 @@ class LookingMotion(BaseMotion):
 
     @property
     def _motion_chart(self):
-        # Turning from the torso keeps the base where it is; a robot without a torso
-        # turns its camera from its own root.
-        torso = self.robot.get_torso_if_specified()
         return Pointing(
-            root_link=torso.root if torso is not None else self.robot.root,
+            root_link=self._turned_from,
             tip_link=self.camera.root,
             goal_point=self.target.to_position(),
             pointing_axis=self.camera.forward_facing_axis,
         )
+
+    @property
+    def _turned_from(self) -> Body:
+        """
+        The body the camera is turned from.
+
+        From the torso's root as a rule, which keeps the base where it is and lets a
+        torso that lifts or turns help the head; from the robot's own root where there
+        is no torso. A robot whose torso costs more to move than any other joint - a
+        humanoid keeping its balance - does not bend to look: where it has a neck the
+        camera hangs from, the camera is turned from the neck's root alone.
+        """
+        torso = self.robot.get_torso_if_specified()
+        neck = self.robot.get_neck_if_specified()
+        if (
+            torso is not None
+            and torso.motion_cost > 1.0
+            and neck is not None
+            and self.camera.root
+            in set(self.world.get_kinematic_structure_entities_of_branch(neck.root))
+        ):
+            return neck.root
+        return torso.root if torso is not None else self.robot.root

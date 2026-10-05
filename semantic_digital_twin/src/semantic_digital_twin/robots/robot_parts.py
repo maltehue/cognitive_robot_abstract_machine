@@ -1203,6 +1203,15 @@ class AbstractRobot(Agent, HasRobotParts, ABC):
         [torso] = [p for p in self._robot_parts if isinstance(p, Torso)]
         return torso
 
+    def get_neck_if_specified(self) -> Optional[Neck]:
+        """
+        :return: The robot's neck, or None for a robot built without one.
+        """
+        for part in self._robot_parts:
+            if isinstance(part, Neck):
+                return part
+        return None
+
     def get_torso_if_specified(self) -> Optional[Torso]:
         """
         :return: The robot's torso, or None for a robot built without one.
