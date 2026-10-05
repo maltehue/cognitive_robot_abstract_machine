@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Optional, Any
 
 import numpy as np
+import trimesh
 import trimesh.boolean
 from trimesh.collision import CollisionManager
 from typing_extensions import List, TYPE_CHECKING, Iterable, Type
@@ -620,6 +621,7 @@ def is_place_occupied(
     # Prepare collision manager with the region mesh
     cm = CollisionManager()
     cm.add_object("region", region_mesh)
+    region_min, region_max = region_mesh.bounds
 
     # Iterate over collidable bodies and test collision
     for body in world.bodies_with_collision:
@@ -630,9 +632,21 @@ def is_place_occupied(
         if mesh_local is None or getattr(mesh_local, "is_empty", False):
             continue
 
+        # A body whose bounds lie clear of the region's cannot touch it; copying and
+        # transforming its mesh would cost far more than ruling it out, and in a world
+        # with a robot in it most bodies are its links, nowhere near the region.
+        world_T_body = body.global_pose.to_np()
+        corners = trimesh.transform_points(
+            trimesh.bounds.corners(mesh_local.bounds), world_T_body
+        )
+        if (corners.max(axis=0) < region_min).any() or (
+            corners.min(axis=0) > region_max
+        ).any():
+            continue
+
         # Transform body mesh into world frame
         body_mesh = mesh_local.copy()
-        body_mesh.apply_transform(body.global_pose.to_np())
+        body_mesh.apply_transform(world_T_body)
 
         # Early exit on first collision
         if cm.in_collision_single(body_mesh):

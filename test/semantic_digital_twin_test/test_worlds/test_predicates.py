@@ -584,6 +584,53 @@ def test_region_is_occupied(pr2_world_state_reset):
     )
 
 
+def test_a_body_touching_the_region_occupies_it_and_a_far_one_does_not():
+    # Bodies whose bounds lie clear of the region are ruled out before their meshes
+    # are tested; one that only touches the region's edge still counts.
+    world = World.create_with_root_body("root")
+
+    def body_at(name: str, x: float) -> Body:
+        body = Body(name=PrefixedName(name))
+        body.collision = ShapeCollection(
+            [
+                Box(
+                    origin=HomogeneousTransformationMatrix(reference_frame=body),
+                    scale=Scale(0.2, 0.2, 0.2),
+                )
+            ],
+            reference_frame=body,
+        )
+        with world.modify_world():
+            world.add_body(body)
+            world.add_connection(
+                FixedConnection(
+                    parent=world.root,
+                    child=body,
+                    parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        x=x, reference_frame=world.root
+                    ),
+                )
+            )
+        return body
+
+    near = body_at("near", 1.0)
+    body_at("far", 5.0)
+    region = VolumetricBoundingBox(
+        -0.05, -0.05, -0.05, 0.05, 0.05, 0.05, HomogeneousTransformationMatrix()
+    )
+
+    def occupied(x: float, **kwargs) -> bool:
+        return is_place_occupied(
+            region, Pose.from_xyz_rpy(x, reference_frame=world.root), world, **kwargs
+        )
+
+    assert not occupied(0.0)
+    assert occupied(1.0)
+    assert occupied(1.15)  # the region's edge meets the body's
+    assert not occupied(1.0, allowed_bodies=[near])
+    assert occupied(5.0)
+
+
 def test_is_pose_free_for_robot(pr2_apartment_state_reset):
     view = pr2_apartment_state_reset.get_semantic_annotations_by_type(PR2)[0]
     assert is_pose_free_for_robot(
