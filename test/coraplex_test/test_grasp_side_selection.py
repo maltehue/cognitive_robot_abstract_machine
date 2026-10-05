@@ -170,6 +170,18 @@ def only_from_above(end_effector: TracyLeftGripper, monkeypatch) -> None:
     monkeypatch.setattr(end_effector, "__class__", GripperThatGraspsOnlyFromAbove)
 
 
+FROM_ABOVE_WHATEVER_THE_HEIGHT = PreferredGraspAlignment(
+    preferred_axis=AxisIdentifier.Undefined,
+    with_vertical_alignment=True,
+    with_rotated_gripper=False,
+    vertical_face=VerticalAlignment.TOP,
+)
+"""
+The alignment of an end effector that comes down from above even on an object standing
+lower than the robot's root.
+"""
+
+
 class TestAlignmentOfAnEndEffectorBuiltForOne:
     """
     An end effector that can only grasp one way is planned with that alignment unless
@@ -191,6 +203,23 @@ class TestAlignmentOfAnEndEffectorBuiltForOne:
 
         assert grasp.approach_direction is declared.approach_direction
         assert grasp.vertical_alignment is declared.vertical_alignment
+
+    def test_a_named_vertical_face_holds_whatever_the_robots_height(self, tracy_world):
+        end_effector = end_effector_of(tracy_world, Tracy)
+        root_height = float(end_effector._robot.root.global_pose.to_np()[2, 3])
+        # An object well below the robot's root: judged by height it would be taken
+        # from below.
+        low = Pose.from_xyz_rpy(0.5, 0.0, root_height - 0.5, reference_frame=tracy_world.root)
+
+        by_height = GraspDescription.robot_relative_default(
+            end_effector, low, grasp_alignment=FROM_ABOVE
+        )
+        named = GraspDescription.robot_relative_default(
+            end_effector, low, grasp_alignment=FROM_ABOVE_WHATEVER_THE_HEIGHT
+        )
+
+        assert by_height.vertical_alignment is VerticalAlignment.BOTTOM
+        assert named.vertical_alignment is VerticalAlignment.TOP
 
     def test_an_alignment_the_caller_names_wins(self, tracy_world, monkeypatch):
         end_effector = end_effector_of(tracy_world, Tracy)

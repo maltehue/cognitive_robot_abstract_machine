@@ -391,7 +391,9 @@ class GraspDescription:
         side_faces = GraspDescription.calculate_closest_faces(vector_side, side_axis)
 
         vector_vertical = Vector3(np.nan, np.nan, object_V_robot.z)
-        if vertical:
+        if grasp_alignment and grasp_alignment.vertical_face is not None:
+            vertical_faces = [grasp_alignment.vertical_face]
+        elif vertical:
             vertical_faces = GraspDescription.calculate_closest_faces(vector_vertical)
         else:
             vertical_faces = [VerticalAlignment.NoAlignment]
@@ -616,6 +618,14 @@ class PreferredGraspAlignment:
     with_rotated_gripper: bool
     """
     Indicates if the gripper should be rotated by 90° around X.
+    """
+
+    vertical_face: Optional[VerticalAlignment] = None
+    """
+    The face a vertical alignment takes whatever the robot's height: an end effector
+    that always comes down from above says ``TOP``. Left out, the face is read off
+    where the object stands relative to the robot's root, which for a humanoid rooted
+    at its pelvis is the bottom of anything standing lower than its hips.
     """
 
 
