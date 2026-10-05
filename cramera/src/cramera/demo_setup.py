@@ -21,6 +21,7 @@ from semantic_digital_twin.adapters.usd.stage_parser import RootPlacement
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.geometry import Scale
 from typing_extensions import Any, ClassVar, Dict, List, Mapping, Optional, Self
 
 from cramera.body_geometry import DrawnGeometry
@@ -62,6 +63,10 @@ class SetupField(StrEnum):
     STEPS = "steps"
     ENVIRONMENT_JOINT_POSITIONS = "environmentJointPositions"
     ENVIRONMENT_GEOMETRY = "environmentGeometry"
+    OBJECTS = "objects"
+    NAME = "name"
+    Z = "z"
+    SIZE = "size"
 
 
 class MalformedSetupError(Exception):
@@ -239,13 +244,90 @@ class RobotSetup:
         }
 
 
+# %% the objects lying about
+
+
+@dataclass
+class ObjectSetup:
+    """
+    One box of a demo setup, lying somewhere in the environment to be carried.
+    """
+
+    name: str
+    """
+    What the box is called in the world; what a plan's pick, place and transport steps
+    name it by. A name ending in a mesh file's suffix is one the viewer streams pose by
+    pose, so the box can change hands without the viewer loading the scene again.
+    """
+
+    pose: HomogeneousTransformationMatrix
+    """
+    Where the middle of the box starts out, in the environment's frame.
+    """
+
+    size: Scale = field(default_factory=lambda: Scale(0.06, 0.06, 0.1))
+    """
+    How big the box is, in metres.
+    """
+
+    @property
+    def yaw(self) -> float:
+        """
+        :return: Which way the box is turned, in radians.
+        """
+        return yaw_of(self.pose.to_np())
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> Self:
+        """
+        :param payload: The Plan Builder's form of one box.
+        :return: The box it describes.
+        :raises MalformedSetupError: If the box has no name, no place or no size.
+        """
+        name = payload.get(SetupField.NAME)
+        if not isinstance(name, str) or not name:
+            raise MalformedSetupError(f"an object needs a name, not {name!r}")
+        try:
+            coordinates = [
+                float(payload[key]) for key in (SetupField.X, SetupField.Y, SetupField.Z)
+            ]
+            yaw = float(payload.get(SetupField.YAW, 0.0))
+            size = [float(side) for side in payload[SetupField.SIZE]]
+        except (KeyError, TypeError, ValueError) as error:
+            raise MalformedSetupError(
+                f"an object lies at x, y, z with a yaw and a size of three sides: {name}"
+            ) from error
+        if len(size) != 3 or not all(math.isfinite(v) for v in coordinates + size):
+            raise MalformedSetupError(f"{name} has no finite place or size")
+        return cls(
+            name=name,
+            pose=HomogeneousTransformationMatrix.from_xyz_rpy(*coordinates, yaw=yaw),
+            size=Scale(*size),
+        )
+
+    def to_payload(self) -> Dict[str, Any]:
+        """
+        :return: The Plan Builder's form of this box.
+        """
+        pose = self.pose.to_np()
+        return {
+            SetupField.NAME: self.name,
+            SetupField.X: float(pose[0, 3]),
+            SetupField.Y: float(pose[1, 3]),
+            SetupField.Z: float(pose[2, 3]),
+            SetupField.YAW: self.yaw,
+            SetupField.SIZE: [self.size.x, self.size.y, self.size.z],
+        }
+
+
 # %% a whole setup
 
 
 @dataclass
 class DemoSetup:
     """
-    The environment of a demo and the robots standing in it.
+    The environment of a demo, the robots standing in it and the boxes lying about in
+    it.
     """
 
     environment: Optional[EnvironmentFile]
@@ -256,6 +338,11 @@ class DemoSetup:
     robots: List[RobotSetup]
     """
     The robots, in the order they are listed.
+    """
+
+    objects: List[ObjectSetup] = field(default_factory=list)
+    """
+    The boxes lying about to be carried, each where it starts out.
     """
 
     environment_joint_positions: Dict[str, float] = field(default_factory=dict)
@@ -363,6 +450,7 @@ class DemoSetup:
                 payload.get(SetupField.ENVIRONMENT)
             ),
             robots=[RobotSetup.from_payload(robot, robot_types) for robot in robots],
+            objects=cls._objects_from_payload(payload.get(SetupField.OBJECTS) or []),
             environment_joint_positions=cls._joint_positions_from_payload(
                 payload.get(SetupField.ENVIRONMENT_JOINT_POSITIONS) or {}
             ),
@@ -370,6 +458,21 @@ class DemoSetup:
                 payload.get(SetupField.ENVIRONMENT_GEOMETRY) or DrawnGeometry.VISUAL
             ),
         )
+
+    @staticmethod
+    def _objects_from_payload(payload: Any) -> List[ObjectSetup]:
+        """
+        :param payload: The builder's form of the boxes lying about.
+        :return: The boxes it describes.
+        :raises MalformedSetupError: If it is not a list of boxes, or two share a name.
+        """
+        if not isinstance(payload, list):
+            raise MalformedSetupError(f"objects are a list, not {payload!r}")
+        objects = [ObjectSetup.from_payload(entry) for entry in payload]
+        names = [box.name for box in objects]
+        if len(set(names)) != len(names):
+            raise MalformedSetupError(f"an object is placed only once, got {names}")
+        return objects
 
     @staticmethod
     def _drawn_geometry_from_payload(payload: Any) -> DrawnGeometry:
@@ -436,6 +539,7 @@ class DemoSetup:
         return {
             SetupField.ENVIRONMENT: environment,
             SetupField.ROBOTS: [robot.to_payload() for robot in self.robots],
+            SetupField.OBJECTS: [box.to_payload() for box in self.objects],
             SetupField.ENVIRONMENT_JOINT_POSITIONS: dict(
                 self.environment_joint_positions
             ),

@@ -265,6 +265,7 @@
       z: opts.z != null ? opts.z : stage.z,
       roll: opts.roll != null ? opts.roll : 0.0, pitch: opts.pitch != null ? opts.pitch : 0.0,
       yaw: opts.yaw != null ? opts.yaw : 0.0,   // roll/pitch/yaw in radians (codegen uses radians)
+      size: opts.size || null,                  // [sx, sy, sz] of a box the scene builds; null for a mesh
       poseOpen: false,                          // XYZ/RPY controls collapsed by default
       color: OBJ_COLORS[(objSeq) % OBJ_COLORS.length] };
     // an object the catalog offers with an annotation class carries the class along
@@ -1565,8 +1566,9 @@
   function fetchCaptured() {
     return fetch(bridgeUrl() + '/captured_objects').then(function (r) { if (!r.ok) throw new Error('live scene is unavailable'); return r.json(); }).then(function (d) { return (d && d.objects) || {}; });
   }
-  // list the running scene's loose objects as this page's objects, each where it lies
-  // right now, so a step may name one and the generated demo spawns it there
+  // show the running scene's loose objects as this page's objects where each lies right
+  // now: a box the setup lists is moved there, one the scene was given on its command
+  // line alone is added, so a step may name either and a saved setup starts it there
   async function adoptLiveObjects() {
     let live;
     try { live = await fetchCaptured(); } catch (e) { return; }
@@ -1574,7 +1576,9 @@
       const pose = live[key];
       if (!pose || pose.length < 7) return;
       const rpy = quatToRpy(pose.slice(3));
-      addObject(key, { x: r3(pose[0]), y: r3(pose[1]), z: r3(pose[2]), roll: r3(rpy[0]), pitch: r3(rpy[1]), yaw: r3(rpy[2]) });
+      const at = { x: r3(pose[0]), y: r3(pose[1]), z: r3(pose[2]), roll: r3(rpy[0]), pitch: r3(rpy[1]), yaw: r3(rpy[2]) };
+      const listed = objects.find(function (o) { return o.mesh === key; });
+      if (listed) Object.assign(listed, at); else addObject(key, at);
     });
   }
   function quatToRpy(q) { // q = [qx,qy,qz,qw] -> [roll, pitch, yaw] (ROS convention)
@@ -1922,9 +1926,12 @@
       if (answer.setup.environment) ensureEnvironmentOption(answer.setup.environment.path);
       steps = active.steps;
       attachedToRunningDemo = chosen === RUNNING_DEMO_SETUP;
-      // a setup carries no objects to be carried; a running demo's scene holds the ones
-      // it was started with, which its Pick, Place and Transport steps may name
+      // the setup's boxes, which Pick, Place and Transport steps may name; in a running
+      // demo each is shown where it lies right now rather than where it started
       objects = [];
+      (builderState.objects || []).forEach(function (box) {
+        addObject(box.name, {x: box.x, y: box.y, z: box.z, yaw: box.yaw, size: box.size});
+      });
       if (attachedToRunningDemo) await adoptLiveObjects();
       renderObjects();
       if (attachedToRunningDemo) showRunningDemo(true);
@@ -1938,7 +1945,7 @@
     const name = ($('pb-setup-name').value || '').trim();
     if (!name) { status('name the setup first', 'err'); return; }
     // the environment as offered, so a map is refused by the server by its name
-    const payload = window.DemoSetupForm.toPayload(builderState, steps, selectedEnvironment());
+    const payload = window.DemoSetupForm.toPayload(builderState, steps, selectedEnvironment(), objects);
     try {
       const answer = await fetch('/api/setup/save', {method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({name: name, setup: payload})}).then(function (r) { return r.json(); });

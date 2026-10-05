@@ -17,6 +17,7 @@ from cramera.demo_setup import (
     MalformedSetupError,
     MapEnvironmentInSetupError,
     MirroredRobotWithPlanError,
+    ObjectSetup,
     RobotSetup,
     SetupField,
     SetupLibrary,
@@ -35,6 +36,7 @@ from cramera.multi_robot import RobotInstance
 from cramera.plan_steps import BuilderPlan, LookAt, Point
 from semantic_digital_twin.adapters.usd.stage_parser import RootPlacement
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from semantic_digital_twin.world_description.geometry import Scale
 
 from .dataset.standing_robot import StandingRobot
 
@@ -70,12 +72,21 @@ def mirrored_robot() -> RobotSetup:
     )
 
 
+def block_on_a_table() -> ObjectSetup:
+    return ObjectSetup(
+        name="block.stl",
+        pose=HomogeneousTransformationMatrix.from_xyz_rpy(x=13.27, y=-2.02, z=1.02, yaw=0.4),
+        size=Scale(0.06, 0.06, 0.2),
+    )
+
+
 def setup_in(environment_path: str) -> DemoSetup:
     return DemoSetup(
         environment=USDSceneEnvironmentFile(
             path=environment_path, root_placement=RootPlacement.STAGE_ORIGIN
         ),
         robots=[looking_robot(), mirrored_robot()],
+        objects=[block_on_a_table()],
     )
 
 
@@ -382,3 +393,81 @@ def test_a_setup_keeps_how_big_the_textures_of_its_scan_are_drawn(
     assert DemoSetup.load(tmp_path / "demo.json").environment.maximum_texture_size == (
         2048
     )
+
+
+# %% the boxes lying about
+
+
+def test_a_saved_setup_keeps_its_boxes(tmp_path: Path) -> None:
+    path = tmp_path / "setup.json"
+    setup_in("/scans/lab/world.usda").save(path)
+
+    [box] = DemoSetup.load(path).objects
+
+    assert box.name == "block.stl"
+    assert box.pose.to_np() == pytest.approx(block_on_a_table().pose.to_np())
+    assert box.size == Scale(0.06, 0.06, 0.2)
+
+
+def test_a_setup_saved_before_there_were_boxes_has_none(tmp_path: Path) -> None:
+    path = tmp_path / "setup.json"
+    setup_in("/scans/lab/world.usda").save(path)
+    written = json.loads(path.read_text())
+    del written["objects"]
+    path.write_text(json.dumps(written))
+
+    assert DemoSetup.load(path).objects == []
+
+
+def test_the_boxes_travel_in_the_builders_form() -> None:
+    setup = setup_in("/scans/lab/world.usda")
+
+    read = DemoSetup.from_payload(setup.to_payload(), ROBOT_TYPES)
+
+    [box] = read.objects
+    assert box.name == "block.stl"
+    assert box.pose.to_np() == pytest.approx(block_on_a_table().pose.to_np())
+    assert box.yaw == pytest.approx(0.4)
+    assert box.size == Scale(0.06, 0.06, 0.2)
+    assert setup.to_payload()[SetupField.OBJECTS] == [
+        {
+            SetupField.NAME: "block.stl",
+            SetupField.X: pytest.approx(13.27),
+            SetupField.Y: pytest.approx(-2.02),
+            SetupField.Z: pytest.approx(1.02),
+            SetupField.YAW: pytest.approx(0.4),
+            SetupField.SIZE: [0.06, 0.06, 0.2],
+        }
+    ]
+
+
+def test_a_builders_form_without_boxes_reads_as_a_setup_of_none() -> None:
+    payload = setup_in("/scans/lab/world.usda").to_payload()
+    del payload[SetupField.OBJECTS]
+
+    assert DemoSetup.from_payload(payload, ROBOT_TYPES).objects == []
+
+
+@pytest.mark.parametrize(
+    "box",
+    [
+        {"x": 1.0, "y": 2.0, "z": 0.9, "yaw": 0.0, "size": [0.1, 0.1, 0.1]},
+        {"name": "block.stl", "x": 1.0, "y": 2.0, "yaw": 0.0, "size": [0.1, 0.1, 0.1]},
+        {"name": "block.stl", "x": 1.0, "y": 2.0, "z": 0.9, "size": [0.1, 0.1]},
+        {"name": "block.stl", "x": "there", "y": 2.0, "z": 0.9, "size": [0.1, 0.1, 0.1]},
+    ],
+)
+def test_a_box_without_a_name_a_place_or_a_size_is_refused(box: dict) -> None:
+    payload = setup_in("/scans/lab/world.usda").to_payload()
+    payload[SetupField.OBJECTS] = [box]
+
+    with pytest.raises(MalformedSetupError):
+        DemoSetup.from_payload(payload, ROBOT_TYPES)
+
+
+def test_a_box_is_placed_only_once() -> None:
+    payload = setup_in("/scans/lab/world.usda").to_payload()
+    payload[SetupField.OBJECTS] = payload[SetupField.OBJECTS] * 2
+
+    with pytest.raises(MalformedSetupError):
+        DemoSetup.from_payload(payload, ROBOT_TYPES)

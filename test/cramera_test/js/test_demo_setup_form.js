@@ -130,3 +130,33 @@ test('a scene placement is not carried over to another environment', function ()
 
   assert.deepStrictEqual(JSON.parse(JSON.stringify(saved.environment)), {path: '/lab/other.usda'});
 });
+
+// %% the boxes lying about
+test('a box with a size is written as the setup\'s, a mesh for a generated demo is not', function () {
+  const {state} = twoRobots();
+  const objects = [
+    {id: 'o1', mesh: 'block.stl', name: 'block.stl', x: 13.27, y: -2.02, z: 1.02, yaw: 0.4, size: [0.06, 0.06, 0.2]},
+    {id: 'o2', mesh: 'milk.stl', name: 'milk.stl', x: 1, y: 2, z: 0.9, yaw: 0},
+  ];
+
+  const payload = Form.toPayload(state, [], '/lab/world.usda', objects);
+
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(payload.objects)),
+    [{name: 'block.stl', x: 13.27, y: -2.02, z: 1.02, yaw: 0.4, size: [0.06, 0.06, 0.2]}]);
+});
+
+test('a setup read back lists its boxes for the page to show', function () {
+  const {state} = twoRobots();
+  const payload = Form.toPayload(state, [], '/lab/world.usda',
+    [{id: 'o1', mesh: 'block.stl', name: 'block.stl', x: 13.27, y: -2.02, z: 1.02, yaw: 0.4, size: [0.06, 0.06, 0.2]}]);
+  const opened = new State([humanoid, arm]);
+
+  Form.applyTo(opened, payload, function (type, params) { return {id: 'n', type: type, params: params}; });
+
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(opened.objects)),
+    [{name: 'block.stl', x: 13.27, y: -2.02, z: 1.02, yaw: 0.4, size: [0.06, 0.06, 0.2]}]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(Form.toPayload(state, [], '/lab/world.usda').objects)), []);
+  const bare = new State([humanoid, arm]);
+  Form.applyTo(bare, {environment: null, robots: payload.robots}, function (type, params) { return {id: 'n', type: type, params: params}; });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(bare.objects)), []);
+});

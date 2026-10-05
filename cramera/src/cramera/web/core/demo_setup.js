@@ -1,8 +1,9 @@
 // The Plan Builder's robots in the form a saved demo setup takes (cramera.demo_setup):
 // the environment and where its own joints stand, every robot with where it stands, the
 // joint state and localization topics it follows, whether it repeats its plan, and the
-// plan itself. The builder writes its state into that form to save it and reads a setup
-// back to open it.
+// plan itself, and every box lying about to be carried, where it starts and how big it
+// is. The builder writes its state into that form to save it and reads a setup back to
+// open it.
 (function () {
   'use strict';
 
@@ -25,6 +26,11 @@
     if (!environment || !environment.rootPlacement) return null;
     return {path: environment.path, rootPlacement: environment.rootPlacement};
   }
+  // a box the builder lists, as a setup writes it: only a box with a size is a box the
+  // scene can build; a mesh placed for a generated demo is spawned by that demo instead
+  function boxPayload(object) {
+    return {name: object.mesh, x: object.x, y: object.y, z: object.z, yaw: object.yaw || 0, size: object.size.slice()};
+  }
 
   window.DemoSetupForm = {
     /**
@@ -33,11 +39,14 @@
      *   active robot and is not yet stored on it.
      * @param {string|object} environment The environment file's path, or the offered
      *   environment (see PlanBuilderState.offerEnvironments in core/builder_state.js).
+     * @param {Array<object>} [objects] The builder's objects; the ones with a size are
+     *   written as the setup's boxes, by their mesh key as the scene names the body.
      * @returns {object} The setup in the form the server saves.
      */
-    toPayload: function (state, activeSteps, environment) {
+    toPayload: function (state, activeSteps, environment, objects) {
       return {
         environment: environmentPayload(environment, state.environmentRootPlacement),
+        objects: (objects || []).filter(function (object) { return Array.isArray(object.size); }).map(boxPayload),
         robots: state.instances.map(function (robot) {
           const steps = robot.id === state.activeIdentifier ? activeSteps : robot.steps;
           return {
@@ -55,7 +64,8 @@
     },
 
     /**
-     * Replace the builder's robots with a setup's.
+     * Replace the builder's robots with a setup's, and note its boxes on the state as
+     * {name, x, y, z, yaw, size} for the page to list.
      * @param {object} state The builder's PlanBuilderState.
      * @param {object} payload A setup in the form the server hands out.
      * @param {function(string, object): object} makeStep Makes a builder step of a type
@@ -78,6 +88,9 @@
         };
       });
       state.authoredRobotPoses = new Map();
+      state.objects = (payload.objects || []).map(function (box) {
+        return {name: box.name, x: box.x, y: box.y, z: box.z, yaw: box.yaw || 0, size: (box.size || []).slice()};
+      });
       state.environmentJointPositions = Object.assign({}, payload.environmentJointPositions || {});
       state.environmentGeometry = payload.environmentGeometry || window.PlanBuilderState.DRAWN_GEOMETRY.VISUAL;
       state.environmentRootPlacement = rootPlacementOf(payload.environment);
