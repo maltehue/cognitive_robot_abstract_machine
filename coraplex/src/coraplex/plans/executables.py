@@ -278,10 +278,34 @@ class GiskardExecutable(Executable):
             self.motion_state_chart.add_node(
                 SelfCollisionAvoidance(robot=self.context.robot)
             )
+        for goal in self.accompanying_goals():
+            # Alongside the motion, not part of its end: the motion ends when its own
+            # goals are reached whether or not this one is.
+            self.motion_state_chart.add_node(goal)
 
         end_motion = EndMotion()
         end_motion.start_condition = end_trigger
         self.motion_state_chart.add_node(end_motion)
+
+    def accompanying_goals(self) -> List[MotionStatechartNode]:
+        """
+        :return: The goals the actions above this executable's motions have their
+            motions accompanied by, one node each, built against the world as it is
+            now; a goal of an action applies to every motion under that action.
+        """
+        from coraplex.plans.plan_node import ActionNode
+
+        seen = set()
+        goals = []
+        for node in self.motion_mappings:
+            for ancestor in node.path:
+                if not isinstance(ancestor, ActionNode) or id(ancestor) in seen:
+                    continue
+                seen.add(id(ancestor))
+                action = ancestor.designator
+                for goal in getattr(action, "accompanied_by", None) or []:
+                    goals.append(goal.node(action))
+        return goals
 
     def _add_condition_monitors(self, end_trigger: Scalar) -> Scalar:
         """

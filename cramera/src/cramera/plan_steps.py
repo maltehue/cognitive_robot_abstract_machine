@@ -21,6 +21,7 @@ from coraplex.datastructures.grasp import GraspDescription
 from coraplex.plans.factories import sequential
 from coraplex.plans.plan_node import PlanNode
 from coraplex.robot_plans.actions.base import ActionDescription
+from coraplex.robot_plans.accompanying import LookingAt
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
 from coraplex.robot_plans.actions.core.navigation import LookAtAction, NavigateAction
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
@@ -48,7 +49,7 @@ from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Sofa,
     Table,
 )
-from semantic_digital_twin.spatial_types.spatial_types import Pose
+from semantic_digital_twin.spatial_types.spatial_types import Point3, Pose
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -604,8 +605,8 @@ class Pick(PlanStep):
 
     look_at_operation_site: bool = False
     """
-    Whether the robot looks at the object before taking it: the builder's constraint
-    that the robot must look where it operates.
+    Whether the robot keeps its camera on the object while taking it: the builder's
+    constraint that the robot must look where it operates.
     """
 
     @classmethod
@@ -625,19 +626,21 @@ class Pick(PlanStep):
             StepParameter.LOOK_AT_OPERATION_SITE: self.look_at_operation_site,
         }
 
-    def action(self, context: Context) -> Union[Match, PlanNode]:
+    def action(self, context: Context) -> Match:
         body = body_named(context.world, self.object_name)
-        pick = a(PickUpAction)(
+        # Looking is kept alongside the pick's motions rather than done before them: a
+        # camera kept on the object while the hand reaches, which the motions do not
+        # wait for.
+        looking = [LookingAt(Point3(0, 0, 0, reference_frame=body))]
+        return a(PickUpAction)(
             object_designator=graspable(context.world, body),
             arm=self.arm,
             grasp_description=variable(
                 GraspDescription,
                 domain=DefaultGraspWhenGrounded(body, self.arm, context.robot),
             ),
+            _accompanied_by=looking if self.look_at_operation_site else [],
         )
-        if not self.look_at_operation_site:
-            return pick
-        return sequential([LookAtAction(body.global_pose), pick])
 
 
 @dataclass(frozen=True)
@@ -665,9 +668,8 @@ class Place(PlanStep):
 
     look_at_operation_site: bool = False
     """
-    Whether the robot looks at where the object goes before putting it down - at the
-    pose, or at the surface it goes on: the builder's constraint that the robot must
-    look where it operates.
+    Whether the robot keeps its camera on where the object goes while putting it down:
+    the builder's constraint that the robot must look where it operates.
     """
 
     @classmethod
@@ -689,7 +691,7 @@ class Place(PlanStep):
             **_drop_off_parameters(self.target),
         }
 
-    def action(self, context: Context) -> Union[Match, PlanNode]:
+    def action(self, context: Context) -> Match:
         # Grounded when its turn comes, as a query: a place action built outright reads
         # the grasp off the hand, which holds nothing until the pick before it is done.
         body = body_named(context.world, self.object_name)
@@ -698,32 +700,15 @@ class Place(PlanStep):
             if isinstance(self.target, LevelPose)
             else variable(Pose, domain=self.target.poses(context.world, body))
         )
-        place = a(PlaceAction)(object_designator=body, target_location=target, arm=self.arm)
-        if not self.look_at_operation_site:
-            return place
-        return sequential([LookAtAction(self._looked_at(context.world)), place])
-
-    def _looked_at(self, world: World) -> Pose:
-        """
-        :param world: The world the object is put down in.
-        :return: Where the robot looks before putting it down: the pose itself, or the
-            middle of the surface it goes on, which is all that is known of a place on
-            it before the place is grounded.
-        """
-        if isinstance(self.target, LevelPose):
-            return self.target.pose(world)
-        [surface] = PlacementSurface(
-            world=world,
-            body=body_named(world, self.object_name),
-            surface_type=SURFACE_TYPES[self.target.surface_type],
-            surface_name=self.target.surface_name,
-        ).matching_surfaces()[:1] or [None]
-        if surface is None:
-            raise MalformedPlanError(
-                f"the world holds no {self.target.surface_type} to put"
-                f" {self.object_name!r} down on"
-            )
-        return surface.root.global_pose
+        # Looking is kept alongside the place's motions rather than done before them: a
+        # camera kept on where the object goes - the pose, once the place is grounded -
+        # which the motions do not wait for.
+        return a(PlaceAction)(
+            object_designator=body,
+            target_location=target,
+            arm=self.arm,
+            _accompanied_by=[LookingAt()] if self.look_at_operation_site else [],
+        )
 
 
 @dataclass(frozen=True)

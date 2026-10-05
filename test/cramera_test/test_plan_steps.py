@@ -17,6 +17,7 @@ from krrood.entity_query_language.query.match import Match
 from semantic_digital_twin.datastructures.definitions import TorsoState
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Table
 
+from coraplex.robot_plans.accompanying import LookingAt
 from cramera.live.placement_surface import PlacementSurface
 from cramera.model_catalog import BuilderStep
 from cramera.plan_steps import (
@@ -341,9 +342,7 @@ class TestActionsAPlanPerforms:
 
 
 class TestLookingWhereItOperates:
-    def test_a_pick_told_to_look_looks_at_the_object_first(self):
-        from coraplex.plans.plan_node import PlanNode
-
+    def test_a_pick_told_to_look_keeps_the_camera_on_the_object(self):
         milk = shaped_body("demo", "milk.stl")
         world = world_with(milk)
         [pick] = read(
@@ -353,16 +352,20 @@ class TestLookingWhereItOperates:
 
         action = pick.action(context_on(world))
 
-        assert isinstance(action, PlanNode)
-        [look, grounded] = action.children
-        assert isinstance(look.designator, LookAtAction)
-        assert look.designator.target.to_position().to_np()[:3] == pytest.approx(
-            milk.global_pose.to_position().to_np()[:3]
+        [looking] = action.kwargs["_accompanied_by"]
+        assert isinstance(looking, LookingAt)
+        assert looking.target.reference_frame is milk
+
+    def test_a_pick_not_told_to_look_looks_nowhere_in_particular(self):
+        milk = shaped_body("demo", "milk.stl")
+        action = (
+            read(step(BuilderStep.PICK, object="milk.stl", arm="LEFT"))
+            .steps[0]
+            .action(context_on(world_with(milk)))
         )
+        assert action.kwargs["_accompanied_by"] == []
 
-    def test_a_place_told_to_look_looks_at_the_pose_first(self):
-        from coraplex.plans.plan_node import PlanNode
-
+    def test_a_place_told_to_look_keeps_the_camera_on_where_the_object_goes(self):
         milk = shaped_body("demo", "milk.stl")
         world = world_with(milk)
         [place] = read(
@@ -381,39 +384,10 @@ class TestLookingWhereItOperates:
 
         action = place.action(context_on(world))
 
-        assert isinstance(action, PlanNode)
-        [look, _] = action.children
-        assert isinstance(look.designator, LookAtAction)
-        assert look.designator.target.to_position().to_np()[:3] == pytest.approx(
-            [2.4, 1.8, 0.8]
-        )
-
-    def test_a_place_on_a_surface_told_to_look_looks_at_the_surface(self):
-        from coraplex.plans.plan_node import PlanNode
-
-        milk = shaped_body("demo", "milk.stl")
-        table = shaped_body("demo", "table")
-        world = world_with(milk, table)
-        with world.modify_world():
-            world.add_semantic_annotation(Table(root=table))
-        [place] = read(
-            step(
-                BuilderStep.PLACE,
-                object="milk.stl",
-                arm="LEFT",
-                targetMode="semantic",
-                surfaceType="Table",
-                lookAtOperationSite=True,
-            )
-        ).steps
-
-        action = place.action(context_on(world))
-
-        assert isinstance(action, PlanNode)
-        [look, _] = action.children
-        assert look.designator.target.to_position().to_np()[:3] == pytest.approx(
-            table.global_pose.to_position().to_np()[:3]
-        )
+        [looking] = action.kwargs["_accompanied_by"]
+        assert isinstance(looking, LookingAt)
+        # Read off the grounded place's own target when the motion is prepared.
+        assert looking.target is None
 
     def test_a_transport_told_to_look_passes_it_on(self):
         milk = shaped_body("demo", "milk.stl")

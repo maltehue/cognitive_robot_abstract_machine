@@ -96,8 +96,9 @@ class SetGripperAction(ActionDescription):
 @dataclass
 class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
     """
-    Park the arms of the robot, and its torso too if the torso declares a parked state:
-    a humanoid that bent to reach parks standing upright.
+    Park the arms of the robot, and its torso and neck too where they declare a parked
+    state: a humanoid that bent to reach and looked at what it reached for parks
+    standing upright and facing forward.
     """
 
     arm: Arms
@@ -122,9 +123,12 @@ class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
         :return: The joint positions that should be set for the arm to be in the park position.
         """
         parked = list(ViewManager().get_all_arm_views(self.arm, self.robot))
-        torso = self.robot.get_torso_if_specified()
-        if torso is not None and torso.has_joint_state_of_type(StaticJointState.PARK):
-            parked.append(torso)
+        for part in (
+            self.robot.get_torso_if_specified(),
+            self.robot.get_neck_if_specified(),
+        ):
+            if part is not None and part.has_joint_state_of_type(StaticJointState.PARK):
+                parked.append(part)
         names = []
         values = []
         for part in parked:

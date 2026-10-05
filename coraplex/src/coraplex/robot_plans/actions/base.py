@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 
 from typing_extensions import (
@@ -14,6 +14,7 @@ from typing_extensions import (
     Iterable,
     Optional,
 )
+
 
 from coraplex.datastructures.dataclasses import Context
 from coraplex.exceptions import ContextIsUnavailable
@@ -41,6 +42,26 @@ class ActionDescription(Designator):
     from which it builds a symbolic plan and hence can be viewed as an easy abstraction
     of concrete low-level behavior that makes sense in certain contexts.
     """
+
+    _accompanied_by: list = field(default_factory=list, kw_only=True, repr=False)
+    """
+    The :class:`~coraplex.robot_plans.accompanying.AccompanyingGoal` goals every
+    motion of this action runs alongside its own, without any of them having to be
+    reached for a motion to end: a camera kept on the object while the hand reaches for
+    it, say. Read through :attr:`accompanied_by`.
+
+    Named private so that the ORM, which stores actions, leaves it out, and annotated
+    as a plain list because a designator's type hints are resolved in the namespace of
+    the module its concrete class lives in, which need not know the goal type.
+    """
+
+    @property
+    def accompanied_by(self) -> list:
+        """
+        :return: The goals every motion of this action runs alongside its own.
+        """
+        return self._accompanied_by
+
 
     @property
     def world(self) -> Optional[World]:
