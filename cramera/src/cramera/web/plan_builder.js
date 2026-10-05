@@ -1565,6 +1565,18 @@
   function fetchCaptured() {
     return fetch(bridgeUrl() + '/captured_objects').then(function (r) { if (!r.ok) throw new Error('live scene is unavailable'); return r.json(); }).then(function (d) { return (d && d.objects) || {}; });
   }
+  // list the running scene's loose objects as this page's objects, each where it lies
+  // right now, so a step may name one and the generated demo spawns it there
+  async function adoptLiveObjects() {
+    let live;
+    try { live = await fetchCaptured(); } catch (e) { return; }
+    Object.keys(live).forEach(function (key) {
+      const pose = live[key];
+      if (!pose || pose.length < 7) return;
+      const rpy = quatToRpy(pose.slice(3));
+      addObject(key, { x: r3(pose[0]), y: r3(pose[1]), z: r3(pose[2]), roll: r3(rpy[0]), pitch: r3(rpy[1]), yaw: r3(rpy[2]) });
+    });
+  }
   function quatToRpy(q) { // q = [qx,qy,qz,qw] -> [roll, pitch, yaw] (ROS convention)
     const x = q[0], y = q[1], z = q[2], w = q[3];
     const roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
@@ -1909,9 +1921,12 @@
       const active = window.DemoSetupForm.applyTo(builderState, answer.setup, makeStep);
       if (answer.setup.environment) ensureEnvironmentOption(answer.setup.environment.path);
       steps = active.steps;
-      objects = [];                        // a setup carries no objects to be carried
-      renderObjects();
       attachedToRunningDemo = chosen === RUNNING_DEMO_SETUP;
+      // a setup carries no objects to be carried; a running demo's scene holds the ones
+      // it was started with, which its Pick, Place and Transport steps may name
+      objects = [];
+      if (attachedToRunningDemo) await adoptLiveObjects();
+      renderObjects();
       if (attachedToRunningDemo) showRunningDemo(true);
       renderRobotInstances(); renderBlocks(); renderSteps(); showModelStatus(); reshowIfGenerated();
       const name = attachedToRunningDemo ? 'the running demo' : chosen;
