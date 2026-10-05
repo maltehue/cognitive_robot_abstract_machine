@@ -29,7 +29,6 @@ from semantic_digital_twin.world_description.world_entity import Body
 
 logger = logging.getLogger(__name__)
 
-
 Action = TypeVar("Action")
 ActionGoal = TypeVar("ActionGoal")
 ActionResult = TypeVar("ActionResult")
