@@ -334,6 +334,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
       label.visible = labelsOn;
       g.add(label);
       objectLabels[spec.key] = label;
+      g.userData.catalogColor = spec.color;
       objectMeshes[spec.key] = g;
       delete objectPending[spec.key];
       worldRoot.add(g);
@@ -1993,10 +1994,14 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
         const liveKeys = {};
         live.forEach(function (o) {
           liveKeys[o.key] = 1;
-          if (objectMeshes[o.key]) {                  // already present — reuse
-            objectMeshes[o.key].visible = true;
+          const present = objectMeshes[o.key];
+          if (present && present.userData.catalogColor === o.color) {   // already present — reuse
+            present.visible = true;
             return;
           }
+          // a scene restarted with the object painted differently publishes it under
+          // the same key; the mesh kept from before is replaced rather than kept
+          if (present) removeObject(o.key);
           const spec = { id: o.id, key: o.key, color: o.color,
             preserveMaterials: o.preserveMaterials === true };
           if (o.kind === 'shapes' && o.shapes) { spec.shapes = o.shapes; spec.liveBase = liveUrl(); }
