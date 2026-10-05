@@ -36,6 +36,7 @@ from giskardpy.motion_statechart.motion_statechart import (
     StateHistoryObserver,
 )
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from coraplex.motion_costs import controller_config
 from giskardpy.executor import NoPacing, SimulationPacer
 from giskardpy.ros_executor import Ros2Executor
 from krrood.entity_query_language.factories import evaluate_condition
@@ -408,7 +409,8 @@ class GiskardExecutable(Executable):
         executor = Ros2Executor(
             context=MotionStatechartContext(
                 world=self.context.world,
-                qp_controller_config=QPControllerConfig(
+                qp_controller_config=controller_config(
+                    self.context.robot,
                     target_frequency=self.context.control_frequency,
                     prediction_horizon=4,
                     verbose=False,

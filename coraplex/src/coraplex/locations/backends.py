@@ -15,6 +15,7 @@ from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
 from giskardpy.qp.exceptions import InfeasibleException
 from giskardpy.qp.qp_controller_config import QPControllerConfig
+from coraplex.motion_costs import controller_config
 from coraplex.datastructures.enums import Arms
 from coraplex.datastructures.grasp import GraspDescription, GraspPose
 from coraplex.locations.base import Location, PoseGeneratorBackend
@@ -165,8 +166,8 @@ class GiskardLocationBackend(PoseGeneratorBackend):
         executor = Executor(
             MotionStatechartContext(
                 world=world,
-                qp_controller_config=QPControllerConfig(
-                    target_frequency=50, prediction_horizon=4, verbose=False
+                qp_controller_config=controller_config(
+                    self.robot, target_frequency=50, prediction_horizon=4, verbose=False
                 ),
             ),
         )

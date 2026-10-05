@@ -637,6 +637,17 @@ class Torso(KinematicChain, ABC):
     of freedom to its attachments, such as arms or the neck.
     """
 
+    motion_cost: float = 1.0
+    """
+    How costly moving the torso's joints is to a whole-body motion, relative to any
+    other joint of the robot.
+
+    A controller that may use every joint between the floor and a hand bends a torso as
+    readily as it bends an elbow. A humanoid that has to keep its balance moves its arms
+    rather than its waist, so its torso costs more than one; a torso that only lifts,
+    like a wheeled robot's, costs the same as any joint.
+    """
+
 
 @dataclass(eq=False)
 class Arm(KinematicChain, HasEndEffector[TGenericEndEffector], ABC):
