@@ -16,7 +16,6 @@ from cramera.demo_setup import (
     InvalidSetupNameError,
     MalformedSetupError,
     MapEnvironmentInSetupError,
-    MirroredRobotWithPlanError,
     ObjectSetup,
     RobotSetup,
     SetupField,
@@ -196,20 +195,17 @@ def test_a_robot_standing_nowhere_is_refused() -> None:
         DemoSetup.from_payload(payload, ROBOT_TYPES)
 
 
-def test_a_robot_following_a_topic_takes_no_plan() -> None:
+def test_a_robot_following_a_real_one_keeps_its_plan_for_the_builder() -> None:
+    # The scene leaves such a robot to the real one; the plan is what the builder
+    # opens with for it, so it travels with the setup like any other.
     payload = payload_of(setup_in("/w.usda"))
     payload["robots"][0]["jointStateTopic"] = "/camera_arm/joint_states"
-
-    with pytest.raises(MirroredRobotWithPlanError):
-        DemoSetup.from_payload(payload, ROBOT_TYPES)
-
-
-def test_a_robot_localized_by_its_own_robot_takes_no_plan() -> None:
-    payload = payload_of(setup_in("/w.usda"))
     payload["robots"][0]["localizationTopic"] = "/camera_arm/odom"
 
-    with pytest.raises(MirroredRobotWithPlanError):
-        DemoSetup.from_payload(payload, ROBOT_TYPES)
+    [robot, _] = DemoSetup.from_payload(payload, ROBOT_TYPES).robots
+
+    assert robot.follows_a_real_robot
+    assert robot.plan == looking_robot().plan
 
 
 def test_a_localization_topic_travels_in_the_builders_form() -> None:

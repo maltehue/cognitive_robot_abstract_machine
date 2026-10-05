@@ -75,6 +75,7 @@
       renderRobotInstances(); renderBlocks(); showModelStatus();
       addStep('park_arms'); addStep('move_torso');
       ['pb-generate', 'pb-run', 'pb-live-start', 'pb-download', 'pb-save'].forEach(function (id) { $(id).disabled = false; });
+      return openFromAddress();
     }).catch(function (error) { status('Cannot load CRAM models: ' + error.message, 'err'); });
   }
   function selectRobot() {
@@ -1902,6 +1903,30 @@
     }
     select.value = path;
   }
+  // open the setup the address asks for (?open=running for the running demo's, or a
+  // saved setup's name), once the catalog is loaded; a demo that is still coming up is
+  // waited for, since a browser started with it opens before its scene is built
+  const OPEN_POLL_SECONDS = 3;
+  const OPEN_WAIT_MINUTES = 15;
+  async function openFromAddress() {
+    const wanted = new URLSearchParams(window.location.search).get('open');
+    if (!wanted) return;
+    const chosen = wanted === 'running' ? RUNNING_DEMO_SETUP : wanted;
+    const deadline = Date.now() + OPEN_WAIT_MINUTES * 60 * 1000;
+    while (Date.now() < deadline) {
+      await refreshSetupList();
+      const select = $('pb-setup-open');
+      if (Array.from(select.options).some(function (option) { return option.value === chosen; })) {
+        select.value = chosen;
+        await openSetup();
+        return;
+      }
+      if (chosen !== RUNNING_DEMO_SETUP) { status('no setup named ' + wanted, 'err'); return; }
+      status('waiting for the running demo to come up ...', 'ok');
+      await new Promise(function (resolve) { setTimeout(resolve, OPEN_POLL_SECONDS * 1000); });
+    }
+    status('the running demo did not come up', 'err');
+  }
   async function refreshSetupList() {
     const select = $('pb-setup-open');
     const choices = [['', '— choose a setup —']];
@@ -1922,7 +1947,10 @@
       const url = chosen === RUNNING_DEMO_SETUP ? bridgeUrl() + '/setup' : '/api/setup/open?name=' + encodeURIComponent(chosen);
       const answer = await fetch(url, {cache: 'no-store'}).then(function (r) { return r.json(); });
       if (!answer.ok) throw new Error(answer.error || 'the setup could not be opened');
-      const active = window.DemoSetupForm.applyTo(builderState, answer.setup, makeStep);
+      // a step read back gets the builder's defaults for whatever its form left out
+      const active = window.DemoSetupForm.applyTo(builderState, answer.setup, function (type, params) {
+        return makeStep(type, Object.assign({}, (BLOCKS[type] || {}).params || {}, params));
+      });
       if (answer.setup.environment) ensureEnvironmentOption(answer.setup.environment.path);
       steps = active.steps;
       attachedToRunningDemo = chosen === RUNNING_DEMO_SETUP;

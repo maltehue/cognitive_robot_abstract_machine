@@ -91,22 +91,6 @@ class UnknownRobotModelError(MalformedSetupError):
 
 
 @dataclass
-class MirroredRobotWithPlanError(MalformedSetupError):
-    """
-    Raised for a robot that is to follow a real robot - its joint states or its
-    localization - and to perform a plan: what the real robot reports would take every
-    position the plan moves to straight back.
-    """
-
-    identifier: str
-    """
-    The robot given both.
-    """
-
-    def __str__(self) -> str:
-        return f"{self.identifier} follows a real robot, so it cannot perform a plan as well"
-
-
 @dataclass
 class MapEnvironmentInSetupError(MalformedSetupError):
     """
@@ -158,7 +142,10 @@ class RobotSetup:
 
     plan: BuilderPlan = field(default_factory=BuilderPlan)
     """
-    What the robot does once the scene is up.
+    What the robot does once the scene is up; or, for a robot that follows a real one,
+    the plan the plan builder opens with for it, ready to be run on it: a scene leaves
+    such a robot to the real one, since what the real robot reports would take every
+    position a plan moved to straight back.
     """
 
     repeats_plan: bool = False
@@ -166,10 +153,6 @@ class RobotSetup:
     Whether the robot starts its plan again each time it has finished it, until the
     scene is stopped.
     """
-
-    def __post_init__(self) -> None:
-        if self.follows_a_real_robot and self.plan.steps:
-            raise MirroredRobotWithPlanError(self.instance.identifier)
 
     @property
     def follows_a_real_robot(self) -> bool:
