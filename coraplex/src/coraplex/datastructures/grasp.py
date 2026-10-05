@@ -15,6 +15,7 @@ from semantic_digital_twin.spatial_types.spatial_types import (
     Point3,
     Vector3,
     Quaternion,
+    RotationMatrix,
 )
 from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase
 from semantic_digital_twin.world_description.world_entity import (
@@ -151,17 +152,19 @@ class GraspDescription:
         )
 
         if body:
-            bb_in_frame = body.collision.as_bounding_box_collection_in_frame(
-                body
-            ).bounding_box()
-
-            approach_axis = np.array(self.approach_direction.axis.value, dtype=bool)
-
+            half_extent = self.half_extent_along_approach(body)
             # Pre-pose calculation
-            offset = (
-                np.array(bb_in_frame.dimensions)[approach_axis] / 2
-                + self.manipulation_offset
-            )[0]
+            offset = half_extent + self.manipulation_offset
+            depth = self.end_effector.grasp_depth
+            if depth is not None and half_extent > depth:
+                # The body reaches further into the hand than the hand is deep, so the
+                # hand cannot close around its centre: it holds the body by the part
+                # that fits, with the body's near face as deep in the hand as it goes.
+                target_T_gripper_goal = translate_pose_along_local_axis(
+                    target_T_gripper_goal,
+                    self.manipulation_axis(),
+                    -(half_extent - depth),
+                )
         else:
             offset = 0
 
@@ -174,7 +177,12 @@ class GraspDescription:
 
         # Lift pose calculation. We want the lift pose to be moved along the global z-axis, but the final pose should be in the target frame.
         map_T_grasp = world.transform(
-            target_T_grasp_pose.to_homogeneous_matrix(), world.root
+            Pose(
+                target_T_gripper_goal.to_position(),
+                target_T_grasp_pose.to_quaternion(),
+                reference_frame=target,
+            ).to_homogeneous_matrix(),
+            world.root,
         )
         grasp_T_lift = HomogeneousTransformationMatrix.from_xyz_rpy(
             z=self.manipulation_offset
@@ -196,6 +204,29 @@ class GraspDescription:
         if reverse:
             sequence.reverse()
         return sequence
+
+    def approach_axis_in_body(self) -> np.ndarray:
+        """
+        :return: The direction the end effector approaches along, as a unit vector in
+            the frame of the body it grasps: down for a grasp from the top, along one of
+            the body's horizontal axes for a grasp from the side.
+        """
+        body_R_tool = RotationMatrix.from_quaternion(self.grasp_orientation()).to_np()
+        return body_R_tool[:3, :3] @ np.array(self.manipulation_axis(), dtype=float)
+
+    def half_extent_along_approach(self, body: Body) -> float:
+        """
+        :param body: The body to grasp.
+        :return: How far the body's bounding box reaches from its centre against the
+            approach, in meters.
+        """
+        dimensions = np.array(
+            body.collision.as_bounding_box_collection_in_frame(body)
+            .bounding_box()
+            .dimensions,
+            dtype=float,
+        )
+        return float(np.abs(self.approach_axis_in_body()) @ dimensions) / 2
 
     def grasp_pose_sequence(self, body: Body):
         """

@@ -608,6 +608,16 @@ class EndEffector(AbstractRobotPart, ABC):
 The axis of the end_effector's tool frame that is facing forward.
     """
 
+    grasp_depth: Optional[float] = field(default=None, kw_only=True)
+    """
+    How far a grasped body may reach into the end effector past the tool frame, against
+    the approach, before it touches the palm, in meters.
+
+    None when nothing stops it: a jaw gripper straddles a body of any extent along its
+    approach, so it holds every body at the centre. A hand that comes down palm first
+    has to hold a tall body by its top instead, and says here how much of it fits.
+    """
+
     def __post_init__(self):
         super().__post_init__()
         rotation_matrix = RotationMatrix.from_quaternion(self.front_facing_orientation)

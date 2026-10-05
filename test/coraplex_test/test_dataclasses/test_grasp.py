@@ -43,6 +43,12 @@ class _FixtureGeometry(float, Enum):
     Half the milk mesh's extent along its y axis.
     """
 
+    MILK_HALF_HEIGHT = 0.0969
+    """
+    Half the milk mesh's extent along its z axis, which a grasp from the top stands
+    off by.
+    """
+
     BOX_HALF_EXTENT = 0.05
     """
     Half the fixture box's extent along every axis.
@@ -588,7 +594,7 @@ def test_pose_sequence_top(immutable_simple_pr2_world):
     assert sequence[0].reference_frame == world.get_body_by_name("milk.stl")
 
     assert sequence[0].to_position().to_list() == pytest.approx(
-        [0, 0, _FixtureGeometry.MILK_HALF_DEPTH + grasp_desc.manipulation_offset, 1],
+        [0, 0, _FixtureGeometry.MILK_HALF_HEIGHT + grasp_desc.manipulation_offset, 1],
         abs=0.01,
     )
     assert sequence[1].to_position().to_list() == pytest.approx([0, 0, 0, 1], abs=0.01)
@@ -620,7 +626,7 @@ def test_pose_sequence_top_tracy(tracy_milk_world):
     assert sequence[0].reference_frame == world.get_body_by_name("milk.stl")
 
     assert sequence[0].to_position().to_list() == pytest.approx(
-        [0, 0, _FixtureGeometry.MILK_HALF_DEPTH + grasp_desc.manipulation_offset, 1],
+        [0, 0, _FixtureGeometry.MILK_HALF_HEIGHT + grasp_desc.manipulation_offset, 1],
         abs=0.01,
     )
     assert sequence[1].to_position().to_list() == pytest.approx([0, 0, 0, 1], abs=0.01)
