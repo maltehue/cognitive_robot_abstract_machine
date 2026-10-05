@@ -160,3 +160,23 @@ test('a setup read back lists its boxes for the page to show', function () {
   Form.applyTo(bare, {environment: null, robots: payload.robots}, function (type, params) { return {id: 'n', type: type, params: params}; });
   assert.deepStrictEqual(JSON.parse(JSON.stringify(bare.objects)), []);
 });
+
+// %% a constraint attached to a step travels as the switch it turns on
+test('a look-at attached to a pick travels as its switch', function () {
+  const constraintsContext = {window: {}};
+  vm.runInNewContext(fs.readFileSync(path.join(WEB, 'plan_constraints.js'), 'utf8'), constraintsContext);
+  const withConstraints = {window: {PlanConstraints: constraintsContext.window.PlanConstraints}};
+  vm.runInNewContext(fs.readFileSync(path.join(WEB, 'builder_state.js'), 'utf8'), withConstraints);
+  vm.runInNewContext(fs.readFileSync(path.join(WEB, 'demo_setup.js'), 'utf8'), withConstraints);
+  const state = new withConstraints.window.PlanBuilderState([humanoid, arm]);
+  state.addRobot('WalkerS2', {x: 0, y: 2, yaw: 0});
+  const pick = {id: 's1', type: 'pick', params: {object: 'block.stl', arm: 'LEFT'}};
+  const looking = withConstraints.window.PlanConstraints.compile('Robot must look where it operates', pick);
+  pick.constraints = [{text: 'Robot must look where it operates', goal: looking.goal, params: looking.params, stepArgument: looking.stepArgument}];
+
+  const payload = withConstraints.window.DemoSetupForm.toPayload(state, [pick], '/lab/world.usda');
+
+  assert.strictEqual(looking.stepArgument, 'look_at_operation_site');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(payload.robots[0].steps[0].params)),
+    {object: 'block.stl', arm: 'LEFT', lookAtOperationSite: true});
+});

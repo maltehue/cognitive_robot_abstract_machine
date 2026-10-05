@@ -31,6 +31,7 @@ from cramera.plan_steps import (
     Pick,
     Place,
     StepField,
+    StepParameter,
     SurfaceTarget,
     Transport,
 )
@@ -334,3 +335,109 @@ class TestActionsAPlanPerforms:
         assert isinstance(action.target_location, PlacementSurface)
         assert action.target_location.surface_type is Table
         assert action.target_location.surface_name is None
+
+
+# %% looking where it operates
+
+
+class TestLookingWhereItOperates:
+    def test_a_pick_told_to_look_looks_at_the_object_first(self):
+        from coraplex.plans.plan_node import PlanNode
+
+        milk = shaped_body("demo", "milk.stl")
+        world = world_with(milk)
+        [pick] = read(
+            step(BuilderStep.PICK, object="milk.stl", arm="LEFT", lookAtOperationSite=True)
+        ).steps
+        assert pick.look_at_operation_site
+
+        action = pick.action(context_on(world))
+
+        assert isinstance(action, PlanNode)
+        [look, grounded] = action.children
+        assert isinstance(look.designator, LookAtAction)
+        assert look.designator.target.to_position().to_np()[:3] == pytest.approx(
+            milk.global_pose.to_position().to_np()[:3]
+        )
+
+    def test_a_place_told_to_look_looks_at_the_pose_first(self):
+        from coraplex.plans.plan_node import PlanNode
+
+        milk = shaped_body("demo", "milk.stl")
+        world = world_with(milk)
+        [place] = read(
+            step(
+                BuilderStep.PLACE,
+                object="milk.stl",
+                arm="LEFT",
+                targetMode="pose",
+                x=2.4,
+                y=1.8,
+                z=0.8,
+                yaw=0.0,
+                lookAtOperationSite=True,
+            )
+        ).steps
+
+        action = place.action(context_on(world))
+
+        assert isinstance(action, PlanNode)
+        [look, _] = action.children
+        assert isinstance(look.designator, LookAtAction)
+        assert look.designator.target.to_position().to_np()[:3] == pytest.approx(
+            [2.4, 1.8, 0.8]
+        )
+
+    def test_a_place_on_a_surface_told_to_look_looks_at_the_surface(self):
+        from coraplex.plans.plan_node import PlanNode
+
+        milk = shaped_body("demo", "milk.stl")
+        table = shaped_body("demo", "table")
+        world = world_with(milk, table)
+        with world.modify_world():
+            world.add_semantic_annotation(Table(root=table))
+        [place] = read(
+            step(
+                BuilderStep.PLACE,
+                object="milk.stl",
+                arm="LEFT",
+                targetMode="semantic",
+                surfaceType="Table",
+                lookAtOperationSite=True,
+            )
+        ).steps
+
+        action = place.action(context_on(world))
+
+        assert isinstance(action, PlanNode)
+        [look, _] = action.children
+        assert look.designator.target.to_position().to_np()[:3] == pytest.approx(
+            table.global_pose.to_position().to_np()[:3]
+        )
+
+    def test_a_transport_told_to_look_passes_it_on(self):
+        milk = shaped_body("demo", "milk.stl")
+        [transport] = read(
+            step(
+                BuilderStep.TRANSPORT,
+                object="milk.stl",
+                arm="LEFT",
+                targetMode="semantic",
+                surfaceType="Table",
+                lookAtOperationSite=True,
+            )
+        ).steps
+
+        action = transport.action(context_on(world_with(milk)))
+
+        assert action.look_at_operation_site is True
+
+    def test_the_switch_reads_back_as_written(self):
+        written = step(
+            BuilderStep.PICK, object="milk.stl", arm="LEFT", lookAtOperationSite=True
+        )
+        plan = read(written)
+        assert read(*plan.to_payload()) == plan
+        assert plan.to_payload()[0][StepField.PARAMETERS][
+            StepParameter.LOOK_AT_OPERATION_SITE
+        ] is True

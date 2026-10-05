@@ -1687,7 +1687,7 @@
     try {
       answer = await fetch(bridgeUrl() + '/plan/run', {method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({identifier: instance.id, model: instance.model,
-          steps: steps.map(function (step) { return {type: step.type, params: Object.assign({}, step.params)}; })})})
+          steps: steps.map(function (step) { return {type: step.type, params: Object.assign({}, step.params, PlanConstraints.stepParameters(step.constraints || []))}; })})})
         .then(function (r) { return r.json(); });
     } catch (error) { if (my === _runMonitor) liveStatus('the running demo cannot be reached: ' + error.message, 'err'); return; }
     if (my !== _runMonitor) return;
@@ -1947,9 +1947,19 @@
       const url = chosen === RUNNING_DEMO_SETUP ? bridgeUrl() + '/setup' : '/api/setup/open?name=' + encodeURIComponent(chosen);
       const answer = await fetch(url, {cache: 'no-store'}).then(function (r) { return r.json(); });
       if (!answer.ok) throw new Error(answer.error || 'the setup could not be opened');
-      // a step read back gets the builder's defaults for whatever its form left out
+      // a step read back gets the builder's defaults for whatever its form left out,
+      // and a switch it carries comes back as the constraint that turns it on
       const active = window.DemoSetupForm.applyTo(builderState, answer.setup, function (type, params) {
-        return makeStep(type, Object.assign({}, (BLOCKS[type] || {}).params || {}, params));
+        const made = makeStep(type, Object.assign({}, (BLOCKS[type] || {}).params || {}, params));
+        Object.keys(PlanConstraints.PARAMETER).forEach(function (argument) {
+          const name = PlanConstraints.PARAMETER[argument];
+          if (!made.params[name]) { delete made.params[name]; return; }
+          delete made.params[name];
+          const text = PlanConstraints.sentenceFor(name);
+          const comp = PlanConstraints.compile(text, made);
+          made.constraints = (made.constraints || []).concat([{ text: text, goal: comp.goal, params: comp.params, stepArgument: comp.stepArgument }]);
+        });
+        return made;
       });
       if (answer.setup.environment) ensureEnvironmentOption(answer.setup.environment.path);
       steps = active.steps;

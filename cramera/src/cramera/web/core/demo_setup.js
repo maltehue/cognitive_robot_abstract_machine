@@ -4,10 +4,15 @@
 // plan itself, and every box lying about to be carried, where it starts and how big it
 // is. The builder writes its state into that form to save it and reads a setup back to
 // open it.
-(function () {
+(function (global) {
   'use strict';
 
-  function plainStep(step) { return {type: step.type, params: Object.assign({}, step.params)}; }
+  // a step as a setup writes it: its parameters, with the switches its attached
+  // constraints turn on, so a look-at travels with the plan
+  function plainStep(step) {
+    const switches = global.PlanConstraints ? global.PlanConstraints.stepParameters(step.constraints || []) : {};
+    return {type: step.type, params: Object.assign({}, step.params, switches)};
+  }
   // a file by its path, with the placement an opened setup gave that same file
   function filePayload(path, rootPlacement) {
     if (rootPlacement && rootPlacement.path === path) return {path: path, rootPlacement: rootPlacement.rootPlacement};
@@ -98,4 +103,4 @@
       return state.instances[0];
     },
   };
-})();
+})(window);

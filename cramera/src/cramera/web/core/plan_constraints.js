@@ -19,8 +19,10 @@
 
   const STEP = {
     TRANSPORT: 'transport',
+    PICK: 'pick',
+    PLACE: 'place',
   };
-  /* The plan steps a constraint can change the generated code of. */
+  /* The plan steps a constraint can change: the ones that act on an object. */
 
   const ARGUMENT = {
     LOOK_AT_OPERATION_SITE: 'look_at_operation_site',
@@ -30,9 +32,14 @@
      is the whole of "look where it operates" and the only one coraplex has an action
      for; every other goal still needs the live bridge. */
 
+  const PARAMETER = {};
+  PARAMETER[ARGUMENT.LOOK_AT_OPERATION_SITE] = 'lookAtOperationSite';
+  /* The step parameter each switch travels as in a plan posted to a running scene or
+     saved in a setup, where a pick or place step reads it too (cramera.plan_steps). */
+
   const ENFORCED_BY = {};
-  ENFORCED_BY[GOAL.POINTING_AT] = { step: STEP.TRANSPORT, argument: ARGUMENT.LOOK_AT_OPERATION_SITE };
-  /* Which step a goal is enforced on, and with which switch. */
+  ENFORCED_BY[GOAL.POINTING_AT] = { steps: [STEP.TRANSPORT, STEP.PICK, STEP.PLACE], argument: ARGUMENT.LOOK_AT_OPERATION_SITE };
+  /* Which steps a goal is enforced on, and with which switch. */
 
   const NAMED_OBJECT = /\b(milk|bowl|spoon|fork|knife|plate|cup|mug|tray|bottle|flask|vial|beaker|tube|rack|sample|cereal|box|jar|glass|can|whisk|bread)\b/;
   /* The objects a sentence can name, so "keep the bowl above the table" is about the
@@ -120,7 +127,7 @@
         return {
           goal: rule.goal,
           params: rule.params(object, length),
-          stepArgument: (enforced && step && step.type === enforced.step) ? enforced.argument : null,
+          stepArgument: (enforced && step && enforced.steps.indexOf(step.type) >= 0) ? enforced.argument : null,
         };
       }
       return { goal: null, params: {}, stepArgument: null };
@@ -137,5 +144,22 @@
       });
       return keywordArguments;
     },
+
+    /* The same switches as step parameters, for a plan posted to a running scene or
+       saved in a setup: {lookAtOperationSite: true} for a look-at. */
+    stepParameters: function (constraints) {
+      const parameters = {};
+      (constraints || []).forEach(function (constraint) {
+        const name = constraint.stepArgument && PARAMETER[constraint.stepArgument];
+        if (name) parameters[name] = true;
+      });
+      return parameters;
+    },
+
+    /* The sentence to attach for a step parameter read back from a setup, or null. */
+    sentenceFor: function (parameterName) {
+      return parameterName === PARAMETER[ARGUMENT.LOOK_AT_OPERATION_SITE] ? 'Robot must look where it operates' : null;
+    },
+    PARAMETER: PARAMETER,
   };
 })(window);
