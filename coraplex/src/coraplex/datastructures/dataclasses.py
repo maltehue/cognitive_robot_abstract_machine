@@ -133,6 +133,18 @@ class Context(PlanEntity):
     suits a run nobody watches.
     """
 
+    rehearse_grounded_actions: bool = True
+    """
+    Whether an action grounded from a query when its turn comes - a pick with the
+    grasp chosen then, a place wherever a surface has room - is first tried out on a
+    copy of the world, so that a candidate that cannot succeed is dropped before the
+    robot moves.
+
+    Copying a world the size of a scanned building and simulating the candidate in it
+    takes several seconds for every such action. A plan someone watches may rather have
+    the robot move at once and try the next candidate only if the first fails for real.
+    """
+
     control_frequency: float = 50.0
     """
     How many controller ticks a simulated motion takes per second of motion.

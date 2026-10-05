@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from uuid import UUID, uuid4
 
 from typing_extensions import Dict, List, Optional
@@ -347,6 +347,39 @@ def test_rejected_candidates_are_tried_against_one_copy(
     assert trials[0].world is not world
     assert trials[1].world is trials[0].world
     assert trials[2].world is trials[0].world
+
+
+def test_a_context_that_does_not_rehearse_tries_candidates_for_real(
+    apartment_world_pr2_copy_with_context,
+):
+    """
+    A context that does not rehearse grounded actions attaches each candidate as it
+    comes and tries it against the real world; one that fails there is worked around by
+    the next, and no copy of the world is ever made.
+    """
+    world, robot, context = apartment_world_pr2_copy_with_context
+    context = replace(context, rehearse_grounded_actions=False)
+    dof = world.degrees_of_freedom[0]
+    probe_key = register_probe()
+
+    action = a(RecordingAction)(
+        probe_key=probe_key,
+        dof_id=dof.id,
+        fail_on_attempt_number=variable_from([1, None]),
+    )
+    plan = execute_single(action_like=action, context=context).plan
+    with simulated_robot:
+        plan.perform()
+
+    assert plan.root.status == LifeCycleValues.SUCCEEDED
+    assert [
+        child.designator.fail_on_attempt_number for child in plan.root.children
+    ] == [1, None]
+    probe = _registered_probes[probe_key]
+    # candidate 1 fails for real, candidate 2 succeeds for real; nothing was tried
+    # on a copy first.
+    assert len(probe.calls) == 2
+    assert all(call.world is world for call in probe.calls)
 
 
 def test_real_failure_keeps_state_and_next_trial_reflects_it(

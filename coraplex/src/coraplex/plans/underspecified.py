@@ -253,7 +253,10 @@ class UnderspecifiedNode(ExecutionBoundaryNode):
         (:class:`ActionTrial`), which is rolled back between candidates; a candidate that
         fails there is discarded without ever being attached to the plan or touching the
         real world, so a bad parameterization cannot poison a later attempt. Only a
-        candidate that survives its trial is attached and returned.
+        candidate that survives its trial is attached and returned. A context that does
+        not :attr:`~coraplex.datastructures.dataclasses.Context.rehearse_grounded_actions`
+        skips the trial: the next candidate is attached as it comes, to be found out for
+        real.
 
         Driven by :class:`~pycram.plans.executables.UnderspecifiedExecutable` to ground the
         action at execution time, and reused by failure handling to retry with a freshly
@@ -262,12 +265,12 @@ class UnderspecifiedNode(ExecutionBoundaryNode):
         :return: True if a new candidate was generated, False if the iterator is
             exhausted without any candidate surviving its trial.
         """
-        if self._trial is None:
+        if self._trial is None and self.context.rehearse_grounded_actions:
             self._trial = ActionTrial(context=self.context)
 
         action = self._pull_next_action()
         while action is not None:
-            if self._trial.succeeds(action):
+            if self._trial is None or self._trial.succeeds(action):
                 self._attach(action)
                 self.current_candidate.notify()
                 return True
