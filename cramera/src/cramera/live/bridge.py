@@ -919,6 +919,30 @@ class BridgeStatus:
         return payload
 
 
+def _mesh_files_of(body: Body) -> List[str]:
+    """
+    :param body: A body the bundle draws.
+    :return: One entry per mesh file its visual is drawn from, with the file's size and
+        modification time, so a bundle built from older meshes is told apart from the
+        world as it is now; a mesh not on disk is named alone.
+    """
+    entries = []
+    for shape in getattr(body.visual, "shapes", None) or []:
+        filename = getattr(shape, "filename", None)
+        if not filename:
+            continue
+        stamp = ""
+        try:
+            local = Path(shape.local_file)
+            if local.exists():
+                stat = local.stat()
+                stamp = f"@{stat.st_size}:{int(stat.st_mtime)}"
+        except Exception:  # a mesh no source can answer for is named alone
+            pass
+        entries.append(f"{_signed_name(body)}~{filename}{stamp}")
+    return entries
+
+
 def _signed_name(body: Any) -> str:
     """
     The name a body stands under in the bundle signature.
@@ -1517,8 +1541,8 @@ class Bridge:
     def bundle_signature(self) -> str:
         """
         A digest of the bundled scene's content: the identity, parentage and connection
-        type of every body the live bundle serializes, the robot's identity and how the
-        scene is presented.
+        type of every body the live bundle serializes, the mesh files it is drawn from
+        as they stand on disk, the robot's identity and how the scene is presented.
 
         Deliberately excludes the overlay's tracked objects — a demo re-parenting a
         grasped object changes the world model but not the bundled scene, and must not
@@ -1553,6 +1577,7 @@ class Bridge:
                         type(connection).__name__ if connection else "root",
                     )
                 )
+                entries.extend(_mesh_files_of(body))
         except Exception as error:
             # boundary guard: the world is mid-modification and iterating it is not
             # safe; keep the previous signature rather than flapping the viewer.
