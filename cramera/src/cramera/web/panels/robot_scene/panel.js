@@ -764,6 +764,18 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
     }
     mat.needsUpdate = true;
   }
+  // a mesh in one flat look, whatever its scan or export shipped
+  function paintFlat(mesh, look) {
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    mats.forEach(function (mat) {
+      if (!mat || !mat.color) return;
+      mat.map = null;
+      mat.color.setHex(look.color);
+      if ('roughness' in mat) mat.roughness = look.roughness;
+      if ('metalness' in mat) mat.metalness = look.metalness;
+      mat.needsUpdate = true;
+    });
+  }
   const OWN_LIGHTS = new Set();
   scene3.traverse(function (c) { if (c.isLight) OWN_LIGHTS.add(c); });
   function stripImportedLights(root) {
@@ -778,6 +790,9 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
       c.userData._tamed = true;
       if (entry.preserveMaterials === true) {
         AuthoredMaterials.prepareMesh(c);
+        // a scanned floor is painted over even so: its scan is a flat grey darker than
+        // the walls', and a floor is nothing to look at
+        if (!entry.robot && window.EnvironmentTheme.isFloor(linkNameOf(c))) paintFlat(c, window.EnvironmentTheme.FLOOR_LOOK);
       } else {
         c.castShadow = true; c.receiveShadow = true;
         const link = entry.robot ? '' : linkNameOf(c);

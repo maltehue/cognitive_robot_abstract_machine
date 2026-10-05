@@ -18,6 +18,10 @@
     0xd7263d, 0x1b998b, 0xf4a261, 0x3a86ff, 0xffbe0b, 0x8338ec, 0x2ec4b6, 0xe63946,
   ];
 
+  //: the floor's flat look: a light grey a little lighter than the scanned lab's walls
+  //: average (164, 161, 157), so floor and wall read as one room
+  var FLOOR_LOOK = { color: 0xb8b5b0, roughness: 0.9, metalness: 0.0, texture: null };
+
   //: [pattern, look] tried in order; first match wins. ``texture`` names a procedural
   //: map the caller supplies (see panel.js's WOOD_COUNTER/WOOD_TABLE); null means a
   //: flat color.
@@ -37,7 +41,15 @@
     [/trash_can/, { color: 0x2a2d31, roughness: 0.5, metalness: 0.1, texture: null }],
     [/floor_lamp/, { color: 0xd4c9a8, roughness: 0.5, metalness: 0.3, texture: null }],
     [/wall/, { color: 0xd9d4cb, roughness: 0.95, metalness: 0.0, texture: null }],
+    [/floor/, FLOOR_LOOK],
   ];
+
+  //: a floor of its own: the scanned lab's floors come with a flat grey texture darker
+  //: than its walls, which a preserved scan keeps unless the floor is painted over
+  function isFloor(linkName) {
+    var name = (linkName || '').toLowerCase();
+    return /floor/.test(name) && !/floor_lamp/.test(name);
+  }
 
   function trailingIndex(name) {
     var match = /(\d+)$/.exec(name);
@@ -61,5 +73,7 @@
     return null;
   }
 
-  window.EnvironmentTheme = { lookOf: lookOf, VARIED_PALETTE: VARIED_PALETTE };
+  window.EnvironmentTheme = {
+    lookOf: lookOf, isFloor: isFloor, FLOOR_LOOK: FLOOR_LOOK, VARIED_PALETTE: VARIED_PALETTE,
+  };
 })();
