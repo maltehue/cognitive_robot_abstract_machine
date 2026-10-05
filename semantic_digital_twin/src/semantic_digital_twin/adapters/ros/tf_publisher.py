@@ -236,8 +236,11 @@ class TFPublisher(StateChangeCallback):
     """
 
     def __post_init__(self):
-        super().__post_init__()
-
+        # The publisher and the model callback have to exist before this callback is
+        # registered on the world: registering happens in the super call, and from then
+        # on any thread that changes the world's state -- a mirror writing a real
+        # robot's odometry, a simulator stepping -- calls on_state_change, which would
+        # find no tf_model_callback yet and die with an AttributeError.
         self.tf_pub = self.node.create_publisher(TFMessage, self.tf_topic, 10)
         sleep(0.2)
         self.tf_model_callback = TfPublisherModelCallback(
@@ -246,6 +249,7 @@ class TFPublisher(StateChangeCallback):
             ignored_kinematic_structure_entities=self.ignored_kinematic_structure_entities,
         )
         self.tf_model_callback.notify_model_change()
+        super().__post_init__()
         self.on_state_change()
 
     def stop(self):
