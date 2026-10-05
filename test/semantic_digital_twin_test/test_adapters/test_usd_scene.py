@@ -18,6 +18,7 @@ from semantic_digital_twin.pipeline.pipeline import Pipeline
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Door,
     Floor,
+    Table,
 )
 from semantic_digital_twin.semantic_annotations.usd_semantics import (
     UsdSemanticLabels,
@@ -250,6 +251,20 @@ def test_an_object_labelled_otherwise_is_no_floor():
 def test_an_unlabelled_stage_has_no_floor():
     world = parse(build_scene_stage_with_grouped_instances())
 
+    assert world.get_semantic_annotations_by_type(Floor) == []
+
+
+@pytest.mark.skipif(
+    not USD_SEMANTICS_AVAILABLE, reason="usd-core predates UsdSemantics"
+)
+@pytest.mark.parametrize("label", ["Table", "workbench"])
+def test_an_object_in_a_prim_labelled_table_or_workbench_is_a_table(label):
+    world = parse(build_scene_stage_with_a_labelled_floor(label))
+
+    [table] = world.get_semantic_annotations_by_type(Table)
+
+    assert table.root is body_named(world, "floor_a")
+    assert table.name.name == "table_of_floor_a"
     assert world.get_semantic_annotations_by_type(Floor) == []
 
 

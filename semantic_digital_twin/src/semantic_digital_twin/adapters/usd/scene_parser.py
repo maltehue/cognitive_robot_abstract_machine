@@ -23,9 +23,11 @@ from semantic_digital_twin.adapters.usd.stage_parser import (
 )
 from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.semantic_annotations.mixins import HasSupportingSurface
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Door,
     Floor,
+    Table,
 )
 from semantic_digital_twin.semantic_annotations.usd_semantics import UsdStageOrigin
 from semantic_digital_twin.spatial_types.spatial_types import (
@@ -50,6 +52,17 @@ FLOOR_LABEL = "floor"
 """
 The semantic label, compared without regard to case, that makes an object a
 :class:`~semantic_digital_twin.semantic_annotations.semantic_annotations.Floor`.
+"""
+
+SURFACE_LABELS: Dict[str, type[HasSupportingSurface]] = {
+    FLOOR_LABEL: Floor,
+    "table": Table,
+    "workbench": Table,
+}
+"""
+The semantic labels, compared without regard to case, that make an object something
+with a surface to stand or put things on, and what each makes it. A scanned building
+labels its objects with the vendor's categories, and a workbench is a table one works at.
 """
 
 
@@ -378,12 +391,14 @@ class USDSceneParser(USDStageParser):
             for placed_object in objects:
                 self._connect(world, placed_object, objects_by_path, root, hinges)
             for placed_object in objects:
-                if self._is_labelled_floor(placed_object.prim):
+                surface_type = self._labelled_surface_type(placed_object.prim)
+                if surface_type is not None:
                     world.add_semantic_annotation(
-                        Floor(
+                        surface_type(
                             root=placed_object.body,
                             name=PrefixedName(
-                                f"floor_of_{placed_object.body.name.name}",
+                                f"{surface_type.__name__.lower()}_of_"
+                                f"{placed_object.body.name.name}",
                                 prefix=placed_object.body.name.prefix,
                             ),
                         )
@@ -393,24 +408,29 @@ class USDSceneParser(USDStageParser):
     # %% what an object is
 
     @classmethod
-    def _is_labelled_floor(cls, prim: Usd.Prim) -> bool:
+    def _labelled_surface_type(
+        cls, prim: Usd.Prim
+    ) -> Optional[type[HasSupportingSurface]]:
         """
-        Whether a prim, or a prim it lies in, carries the semantic label
-        :data:`FLOOR_LABEL` under any taxonomy.
+        What a prim, or a prim it lies in, is labelled as among :data:`SURFACE_LABELS`,
+        under any taxonomy.
 
         A scanned building labels the object as a whole, while its bodies are the
         geometry-owning prims inside it, so the label is looked for up the prim's
         ancestors as well as on the prim itself.
 
         :param prim: The prim a body was built from.
-        :return: Whether the body is something to stand on.
+        :return: The annotation the label asks for, or ``None`` for a body labelled as
+            nothing with a surface.
         """
         while prim and not prim.IsPseudoRoot():
             for labels in cls._read_semantic_labels(prim).values():
-                if any(label.lower() == FLOOR_LABEL for label in labels):
-                    return True
+                for label in labels:
+                    surface_type = SURFACE_LABELS.get(label.lower())
+                    if surface_type is not None:
+                        return surface_type
             prim = prim.GetParent()
-        return False
+        return None
 
     # %% root placement
 
