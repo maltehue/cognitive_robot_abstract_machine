@@ -30,6 +30,7 @@ from coraplex.view_manager import ViewManager
 from krrood.entity_query_language.factories import a, variable
 from krrood.entity_query_language.query.match import Match
 from semantic_digital_twin.datastructures.definitions import TorsoState
+from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.semantic_annotations.mixins import (
     HasRootBody,
     HasSupportingSurface,
@@ -53,7 +54,7 @@ from semantic_digital_twin.world_description.world_entity import Body
 
 from cramera.live.placement_surface import PlacementSurface
 from cramera.model_catalog import BuilderStep
-from typing_extensions import Any, ClassVar, Dict, List, Optional, Type, Union
+from typing_extensions import Any, ClassVar, Dict, Iterator, List, Optional, Type, Union
 
 # %% the builder's form of a step
 
@@ -385,19 +386,26 @@ def graspable(world: World, body: Body) -> HasRootBody:
 
 
 @dataclass
-class PickUpWithDefaultGraspAction(ActionDescription):
+class DefaultGraspWhenGrounded:
     """
-    Pick an object up with the grasp the planner would choose for it, chosen when the
-    action's turn comes rather than when the plan is written.
+    The grasp the planner would choose for an object, chosen when the pick's turn comes
+    rather than when the plan is written.
 
     The default grasp approaches from the side the robot's reach favours, so it depends
     on where the robot stands; in a plan that first navigates to the object, that is
-    only known once the navigation is done.
+    only known once the navigation is done. A plan's actions are expanded as soon as the
+    plan is built - the viewer publishes its tree then - so the choice is kept out of
+    the actions and made the domain of a query variable, which is only iterated when
+    the pick is grounded.
+
+    .. warning::
+        :meth:`__iter__` must stay a generator, as
+        :class:`~coraplex.locations.base.DeferredLocation` explains.
     """
 
-    object_designator: HasRootBody = field(repr=False)
+    body: Body
     """
-    The annotation of the object to pick up.
+    The object to pick up.
     """
 
     arm: Arms
@@ -405,15 +413,17 @@ class PickUpWithDefaultGraspAction(ActionDescription):
     The arm that takes it.
     """
 
-    @property
-    def _action_plan(self) -> PlanNode:
-        body = self.object_designator.root
-        grasp = GraspDescription.robot_relative_default(
+    robot: AbstractRobot
+    """
+    The robot it belongs to.
+    """
+
+    def __iter__(self) -> Iterator[GraspDescription]:
+        yield GraspDescription.robot_relative_default(
             ViewManager.get_end_effector_view(self.arm, self.robot),
-            body.global_pose,
-            body,
+            self.body.global_pose,
+            self.body,
         )
-        return sequential([PickUpAction(self.object_designator, self.arm, grasp)])
 
 
 # %% the steps themselves
@@ -565,8 +575,8 @@ class LookAt(PlanStep):
 @dataclass(frozen=True)
 class Pick(PlanStep):
     """
-    Pick an object up, with the grasp the planner chooses for where the robot then
-    stands.
+    Pick an object up, with the grasp the planner chooses for where the robot stands
+    when the pick's turn comes.
     """
 
     STEP_TYPE: ClassVar[BuilderStep] = BuilderStep.PICK
@@ -591,9 +601,16 @@ class Pick(PlanStep):
     def to_parameters(self) -> Dict[str, Any]:
         return {StepParameter.OBJECT: self.object_name, StepParameter.ARM: self.arm.name}
 
-    def action(self, context: Context) -> ActionDescription:
+    def action(self, context: Context) -> Match:
         body = body_named(context.world, self.object_name)
-        return PickUpWithDefaultGraspAction(graspable(context.world, body), self.arm)
+        return a(PickUpAction)(
+            object_designator=graspable(context.world, body),
+            arm=self.arm,
+            grasp_description=variable(
+                GraspDescription,
+                domain=DefaultGraspWhenGrounded(body, self.arm, context.robot),
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -634,17 +651,16 @@ class Place(PlanStep):
             **_drop_off_parameters(self.target),
         }
 
-    def action(self, context: Context) -> Union[ActionDescription, Match]:
+    def action(self, context: Context) -> Match:
+        # Grounded when its turn comes, as a query: a place action built outright reads
+        # the grasp off the hand, which holds nothing until the pick before it is done.
         body = body_named(context.world, self.object_name)
-        if isinstance(self.target, LevelPose):
-            return PlaceAction(body, self.target.pose(context.world), self.arm)
-        return a(PlaceAction)(
-            object_designator=body,
-            target_location=variable(
-                Pose, domain=self.target.poses(context.world, body)
-            ),
-            arm=self.arm,
+        target = (
+            self.target.pose(context.world)
+            if isinstance(self.target, LevelPose)
+            else variable(Pose, domain=self.target.poses(context.world, body))
         )
+        return a(PlaceAction)(object_designator=body, target_location=target, arm=self.arm)
 
 
 @dataclass(frozen=True)

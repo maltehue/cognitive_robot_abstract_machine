@@ -11,7 +11,6 @@ from coraplex.datastructures.dataclasses import Context
 from coraplex.datastructures.enums import Arms
 from coraplex.robot_plans.actions.composite.transporting import TransportAction
 from coraplex.robot_plans.actions.core.navigation import LookAtAction, NavigateAction
-from coraplex.robot_plans.actions.core.placing import PlaceAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction, ParkArmsAction
 from krrood.adapters.json_serializer import from_json, to_json
 from krrood.entity_query_language.query.match import Match
@@ -22,6 +21,7 @@ from cramera.live.placement_surface import PlacementSurface
 from cramera.model_catalog import BuilderStep
 from cramera.plan_steps import (
     BuilderPlan,
+    DefaultGraspWhenGrounded,
     LevelPose,
     LookAt,
     MalformedPlanError,
@@ -29,7 +29,6 @@ from cramera.plan_steps import (
     ObjectStepInPlanError,
     ParkArms,
     Pick,
-    PickUpWithDefaultGraspAction,
     Place,
     StepField,
     SurfaceTarget,
@@ -243,7 +242,7 @@ class TestActionsAPlanPerforms:
         )
         assert action.target.reference_frame is world.root
 
-    def test_picking_takes_the_named_object_with_the_named_arm(self):
+    def test_picking_is_grounded_when_its_turn_comes(self):
         milk = shaped_body("demo", "milk.stl")
         world = world_with(milk)
         action = (
@@ -251,9 +250,17 @@ class TestActionsAPlanPerforms:
             .steps[0]
             .action(context_on(world))
         )
-        assert isinstance(action, PickUpWithDefaultGraspAction)
-        assert action.object_designator.root is milk
-        assert action.arm is Arms.RIGHT
+        # A query, not an action: the grasp depends on where the robot stands then.
+        assert isinstance(action, Match)
+
+    def test_the_default_grasp_is_only_chosen_when_iterated(self):
+        milk = shaped_body("demo", "milk.stl")
+        grasp = DefaultGraspWhenGrounded(milk, Arms.LEFT, robot=None)
+
+        # With no robot it cannot be chosen, and is not until the first item is asked.
+        iterator = iter(grasp)
+        with pytest.raises(Exception):
+            next(iterator)
 
     def test_an_object_the_world_does_not_hold_is_refused(self):
         with pytest.raises(MalformedPlanError):
@@ -261,7 +268,7 @@ class TestActionsAPlanPerforms:
                 0
             ].action(context_on(world_with()))
 
-    def test_placing_at_a_pose_puts_the_object_there(self):
+    def test_placing_at_a_pose_is_grounded_when_its_turn_comes(self):
         milk = shaped_body("demo", "milk.stl")
         world = world_with(milk)
         action = (
@@ -280,11 +287,9 @@ class TestActionsAPlanPerforms:
             .steps[0]
             .action(context_on(world))
         )
-        assert isinstance(action, PlaceAction)
-        assert action.object_designator is milk
-        assert action.target_location.to_position().to_np()[:3] == pytest.approx(
-            [2.4, 1.8, 0.8]
-        )
+        # A query, not an action: a place built outright reads the grasp off a hand
+        # that holds nothing until the pick before it is done.
+        assert isinstance(action, Match)
 
     def test_placing_on_a_surface_leaves_the_pose_to_be_found(self):
         milk = shaped_body("demo", "milk.stl")
