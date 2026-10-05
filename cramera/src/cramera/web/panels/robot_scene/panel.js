@@ -764,6 +764,12 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
     }
     mat.needsUpdate = true;
   }
+  // whether a link is a floor, by the theme's vocabulary; a theme without the notion,
+  // as a test's stub, knows no floors
+  function isFloorLink(link) {
+    const theme = window.EnvironmentTheme;
+    return !!(theme && typeof theme.isFloor === 'function' && theme.FLOOR_LOOK && theme.isFloor(link));
+  }
   // a mesh in one flat look, whatever its scan or export shipped
   function paintFlat(mesh, look) {
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -792,7 +798,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
         AuthoredMaterials.prepareMesh(c);
         // a scanned floor is painted over even so: its scan is a flat grey darker than
         // the walls', and a floor is nothing to look at
-        if (!entry.robot && window.EnvironmentTheme.isFloor(linkNameOf(c))) paintFlat(c, window.EnvironmentTheme.FLOOR_LOOK);
+        if (!entry.robot && isFloorLink(linkNameOf(c))) paintFlat(c, window.EnvironmentTheme.FLOOR_LOOK);
       } else {
         c.castShadow = true; c.receiveShadow = true;
         const link = entry.robot ? '' : linkNameOf(c);
