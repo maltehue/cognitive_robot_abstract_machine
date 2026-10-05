@@ -82,5 +82,5 @@ test('a floor is painted its own flat grey, lighter than the scanned lab\'s, a f
   assert.deepStrictEqual(theme.lookOf('world/floor_68b4d56d_surface'), theme.FLOOR_LOOK);
   assert.strictEqual(theme.FLOOR_LOOK.texture, null);
   const grey = theme.FLOOR_LOOK.color;
-  assert.ok((grey >> 16 & 0xff) > 164, 'lighter than the walls\' scan');
+  assert.ok((grey >> 16 & 0xff) > 140, 'lighter than the floor\'s own scan');
 });

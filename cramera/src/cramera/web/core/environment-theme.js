@@ -18,9 +18,9 @@
     0xd7263d, 0x1b998b, 0xf4a261, 0x3a86ff, 0xffbe0b, 0x8338ec, 0x2ec4b6, 0xe63946,
   ];
 
-  //: the floor's flat look: a light grey a little lighter than the scanned lab's walls
-  //: average (164, 161, 157), so floor and wall read as one room
-  var FLOOR_LOOK = { color: 0xb8b5b0, roughness: 0.9, metalness: 0.0, texture: null };
+  //: the floor's flat look: a grey close to the scanned lab's walls' average
+  //: (164, 161, 157), so floor and wall read as one room
+  var FLOOR_LOOK = { color: 0xa9a7a3, roughness: 0.9, metalness: 0.0, texture: null };
 
   //: [pattern, look] tried in order; first match wins. ``texture`` names a procedural
   //: map the caller supplies (see panel.js's WOOD_COUNTER/WOOD_TABLE); null means a
