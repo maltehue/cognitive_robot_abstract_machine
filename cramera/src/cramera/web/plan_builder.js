@@ -26,7 +26,7 @@
     look_at: { name: 'Look at', color: '#e6d36b', params: { x: 1.0, y: 0.0, z: 1.0 } },
     detect: { name: 'Detect', color: '#f0a35e', params: { object: '' } },
     transport: { name: 'Transport object', color: '#5b8cff', params: { object: '', x: 5.0, y: 3.3, z: 0.8, yaw: 1.57, arm: 'LEFT', targetMode: 'semantic', surfaceType: 'CounterTop', surfaceName: '' } },
-    pick: { name: 'Pick up', color: '#7ec9ff', params: { object: '', arm: 'LEFT', perceive: false } },
+    pick: { name: 'Pick up', color: '#7ec9ff', params: { object: '', arm: 'LEFT' } },
     place: { name: 'Place', color: '#ffc46b', params: { object: '', x: 2.4, y: 1.8, z: 0.8, yaw: 0.0, arm: 'LEFT', targetMode: 'pose', surfaceType: 'CounterTop', surfaceName: '' } },
   };
   // which step kinds act on a placed object (see core/plan_steps.js); a Pick or Place is a
@@ -679,7 +679,6 @@
         row(objSel(s)) +
         row('<span class="pb-group-lbl start">start (from) →</span>' + startCaptureButton(s)) +
         row(sel(s, 'arm', robotArms())) +
-        row(chk(s, 'perceive', 'perceive before grasping (look at the object and detect it first)')) +
         row('<span class="pb-hint3">the robot grasps from where it stands — put a Navigate step in front of this one</span>')
       );
     }

@@ -9,6 +9,9 @@
 </head>
 <body>
 <header class="topbar">
+  <div class="brand">
+    <img class="logo-img" src="img/aicor-logo.png" alt="AICOR — Artificial Intelligence Powered Cognition-Enabled Robotics" />
+  </div>
   <nav class="page-tabs">
     <a href="index.html">Scene</a>
     <a href="models.html">Models</a>
@@ -61,7 +64,8 @@
 <main class="pb-main">
   <!-- palette -->
   <aside class="pb-col pb-palette">
-    <h2>Robots in scene</h2>
+    <details class="pb-fold" id="pb-robots-fold">
+    <summary><h2>Robots in scene</h2></summary>
     <div class="pb-robots">
       <label>Active robot<select id="pb-robot-instance" class="pb-sel" aria-describedby="pb-robot-plan-note"></select></label>
       <div class="pb-robot-buttons"><button id="pb-add-robot" class="pb-btn sm">+ Add robot</button><button id="pb-remove-robot" class="pb-btn sm">Remove</button></div>
@@ -78,16 +82,10 @@
       <div id="pb-model-status" class="pb-hint2" role="status">Loading annotated robots…</div>
       <div id="pb-robot-plan-note" class="pb-hint2">Each robot keeps its own plan. Run executes the active robot; the others stay in the scene.</div>
     </div>
+    </details>
     <h2>Skills</h2>
     <div class="pb-hint2">Click or drag a skill into the plan →</div>
     <div id="pb-blocks"></div>
-    <h2 style="margin-top:18px">Objects</h2>
-    <div class="pb-hint2">Add, then drag in the scene to place</div>
-    <div class="pb-add-obj">
-      <select id="pb-mesh" class="pb-sel" aria-label="Object mesh"></select>
-      <button id="pb-add-obj" class="pb-btn sm">+ Add</button>
-    </div>
-    <div id="pb-objects"></div>
 
     <h2 style="margin-top:18px">Constraints <button id="pb-con-info" class="pb-info-btn" title="How natural-language constraints are translated">ⓘ</button></h2>
     <div class="pb-hint2">Write one, then drag it onto a plan step →</div>
@@ -97,6 +95,14 @@
     </div>
     <div id="pb-con-info-box" class="pb-con-info"></div>
     <div id="pb-cons"></div>
+
+    <h2 style="margin-top:18px">Objects</h2>
+    <div class="pb-hint2">Add, then drag in the scene to place</div>
+    <div class="pb-add-obj">
+      <select id="pb-mesh" class="pb-sel" aria-label="Object mesh"></select>
+      <button id="pb-add-obj" class="pb-btn sm">+ Add</button>
+    </div>
+    <div id="pb-objects"></div>
   </aside>
 
   <div class="pb-divider" data-div="1" title="Drag to resize"></div>

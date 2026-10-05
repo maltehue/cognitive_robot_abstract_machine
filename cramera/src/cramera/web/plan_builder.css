@@ -209,3 +209,12 @@
 .pb-robots .pb-robot-spawn label{flex-direction:column;align-items:flex-start}
 .pb-robots .pb-robot-spawn .pb-num{width:52px}
 #pb-plan-robot{margin-bottom:10px;color:var(--ink)}
+
+/* a palette section folded away until it is needed: the robots in the scene, which a
+   setup brings along and a plan seldom changes */
+.pb-fold{margin:0 0 12px}
+.pb-fold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none}
+.pb-fold>summary::-webkit-details-marker{display:none}
+.pb-fold>summary::before{content:'▸';font-size:12px;opacity:.7;transition:transform .15s}
+.pb-fold[open]>summary::before{transform:rotate(90deg)}
+.pb-fold>summary h2{display:inline;margin:0}
