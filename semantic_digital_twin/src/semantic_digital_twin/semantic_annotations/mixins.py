@@ -916,12 +916,21 @@ class HasSupportingSurface(IsStorageSpace):
             points_3d=points_3d,
         )
 
-        supporting_surface_z_position = self.root.collision.scale.z / 2
+        # The region's hull is built around the middle of its points, so it is hung
+        # where that middle lies on the body. A body's origin need not be its centre -
+        # a scanned table's is a corner on the floor - and the faces the surface was
+        # found on say where the top is either way.
+        middle_x, middle_y, middle_z = np.unique(
+            candidates_filtered.vertices, axis=0
+        ).mean(axis=0)
         self_C_supporting_surface = FixedConnection(
             parent=self.root,
             child=supporting_surface,
             parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                z=supporting_surface_z_position, reference_frame=self.root
+                x=float(middle_x),
+                y=float(middle_y),
+                z=float(middle_z),
+                reference_frame=self.root,
             ),
         )
         self._world.add_region(supporting_surface)

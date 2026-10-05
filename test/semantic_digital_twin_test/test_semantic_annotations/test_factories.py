@@ -77,11 +77,13 @@ from semantic_digital_twin.world_description.degree_of_freedom import (
     DegreeOfFreedomLimits,
 )
 from semantic_digital_twin.world_description.geometry import (
+    Box,
     VolumetricBoundingBox,
     Scale,
 )
 from semantic_digital_twin.world_description.shape_collection import (
     BoundingBoxCollection,
+    ShapeCollection,
 )
 from semantic_digital_twin.world_description.world_entity import Body
 from semantic_digital_twin.api import (
@@ -610,6 +612,39 @@ class TestFactories(unittest.TestCase):
         self.assertIsNotNone(surface)
         self.assertEqual(surface, table.supporting_surface)
         self.assertEqual(expected_z, surface.global_transform.z)
+
+    def test_supporting_surface_lies_on_top_of_a_table_whose_origin_is_a_corner(self):
+        # A scanned table is read with the vendor's origin: a corner on the floor, so
+        # its box lies entirely to one side of and above the origin.
+        world = World.create_with_root_body("root")
+        with world.modify_world():
+            table = Table.create_with_new_body_in_world(
+                name="table",
+                world=world,
+                world_root_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=2.0, y=3.0
+                ),
+            )
+        table.root.collision = ShapeCollection(
+            [
+                Box(
+                    origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        x=0.5, y=0.4, z=0.35, reference_frame=table.root
+                    ),
+                    scale=Scale(1.0, 0.8, 0.7),
+                )
+            ],
+            reference_frame=table.root,
+        )
+        table.root.visual = table.root.collision
+
+        with world.modify_world():
+            surface = table.calculate_supporting_surface()
+
+        self.assertIsNotNone(surface)
+        self.assertAlmostEqual(surface.global_transform.x, 2.5)
+        self.assertAlmostEqual(surface.global_transform.y, 3.4)
+        self.assertAlmostEqual(surface.global_transform.z, 0.7)
 
     def test_sample_points_from_surface(self):
         world = World.create_with_root_body("root")
