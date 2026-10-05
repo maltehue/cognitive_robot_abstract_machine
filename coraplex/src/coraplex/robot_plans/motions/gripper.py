@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Dict, Optional, List
 
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.data_types import (
@@ -24,6 +24,7 @@ from giskardpy.motion_statechart.tasks.joint_tasks import (
 from giskardpy.motion_statechart.monitors.monitors import LocalMinimumReached
 from semantic_digital_twin.datastructures.alignment import AlignmentPair
 from semantic_digital_twin.datastructures.definitions import GripperState
+from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.robots.justin import Justin
 from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase
 from semantic_digital_twin.robots.robot_parts import EndEffector
@@ -302,6 +303,85 @@ class MoveToolCenterPointMotion(
         if not accompanying_nodes:
             return task
         return Parallel([task, *accompanying_nodes], name="MoveTCP")
+
+
+@dataclass
+class MoveToolCenterPointKeepingAxisMotion(MoveToolCenterPointMotion):
+    """
+    Moves the tool centre point to the target's position while one axis of the tool
+    frame keeps pointing one way; the turn about that axis is left to the arm.
+
+    What a hand carrying a body from above wants when the body is to stay hanging as
+    it hangs: the approach axis stays pointing down, and the hand may turn about it as
+    the arm finds easiest, where holding the whole orientation would ask the wrist,
+    or the waist, for more than they have.
+    """
+
+    kept_axis: Vector3 = field(kw_only=True, default=None)
+    """
+    The axis of the tool frame that keeps its direction, in the tool frame.
+    """
+
+    kept_direction: Vector3 = field(kw_only=True, default=None)
+    """
+    The direction it keeps, in the frame of the motion's root link.
+    """
+
+    joint_goals: Dict[str, float] = field(kw_only=True, default_factory=dict)
+    """
+    Joints of the robot moved to these positions alongside, by their local names: a
+    torso parked upright while the hand is drawn back, say, which left to itself the
+    controller would lean back to bring the hand closer.
+    """
+
+    @property
+    def _motion_chart(self):
+        tip = ViewManager().get_end_effector_view(self.arm, self.robot).tool_frame
+        root = (
+            self.world.root
+            if isinstance(self.robot, HasMobileBase)
+            and self.robot.mobile_base.full_body_controlled
+            else self.robot.root
+        )
+        kept_axis = Vector3(*self.kept_axis.to_np()[:3], reference_frame=tip)
+        kept_direction = Vector3(
+            *self.kept_direction.to_np()[:3], reference_frame=root
+        )
+        tasks: List[MotionStatechartNode] = [
+            CartesianPosition(
+                root_link=root,
+                tip_link=tip,
+                goal_point=self.target.to_position(),
+                name="MoveTCP",
+                weight=DefaultWeights.WEIGHT_BELOW_COLLISION_AVOIDANCE,
+                threshold=self.resolved_position_threshold(),
+            ),
+            AlignPlanes(
+                root_link=root,
+                tip_link=tip,
+                goal_normal=kept_direction,
+                tip_normal=kept_axis,
+                name="MoveTCP/keep axis",
+                weight=DefaultWeights.WEIGHT_BELOW_COLLISION_AVOIDANCE,
+            ),
+            *self._velocity_limit_nodes(root, tip),
+        ]
+        if self.joint_goals:
+            by_name = {
+                connection.name.name: connection
+                for connection in self.robot.connections
+            }
+            tasks.append(
+                JointPositionList(
+                    goal_state=JointState.from_mapping(
+                        {by_name[name]: position for name, position in self.joint_goals.items()}
+                    ),
+                    name="MoveTCP/alongside",
+                )
+            )
+        if self.allow_gripper_collision:
+            tasks.extend(self._only_allow_gripper_collision_rules(self.arm))
+        return Parallel(tasks, name="MoveTCP")
 
 
 @dataclass

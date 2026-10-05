@@ -6,6 +6,8 @@ from typing import Tuple, List
 
 from typing_extensions import Optional, Dict, Any
 
+import numpy as np
+
 from coraplex.plans.plan_node import PlanNode
 from krrood.entity_query_language.core.base_expressions import SymbolicExpression
 from krrood.entity_query_language.core.variable import Variable
@@ -14,9 +16,12 @@ from coraplex.robot_plans import MoveManipulatorMotion
 from krrood.entity_query_language.factories import variable_from
 from semantic_digital_twin.reasoning.predicates import allclose
 from semantic_digital_twin.robots.robot_parts import EndEffector
+from semantic_digital_twin.world_description.connections import Connection
+from semantic_digital_twin.world_description.world_entity import Body
 from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
     Pose,
+    Vector3,
 )
 from coraplex.datastructures.enums import AxisIdentifier, Arms, MovementType
 
@@ -27,8 +32,10 @@ from coraplex.robot_plans.mixins import HasMaxJointVelocity, HasTcpGoalThreshold
 from coraplex.robot_plans.motions.gripper import (
     MoveGripperMotion,
     MoveTCPWaypointsMotion,
+    MoveToolCenterPointKeepingAxisMotion,
     MoveToolCenterPointMotion,
 )
+from coraplex.robot_plans.motions.base import BaseMotion
 from coraplex.robot_plans.motions.robot_body import MoveJointsMotion
 from coraplex.validation.goal_validator import create_multiple_joint_goal_validator
 from coraplex.view_manager import ViewManager
@@ -110,25 +117,27 @@ class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
     Entry from the enum for which arm should be parked.
     """
 
-    carry_clearance: float = field(default=0.45, kw_only=True)
+    carry_lift: float = field(default=0.6, kw_only=True)
     """
-    How far ahead of the robot's root a hand holding a body is drawn back to, at the
-    height it is at, before the arm folds, in meters.
+    How high above its parked place a hand holding a body is brought, in towards the
+    chest, before it comes down to that place, in meters.
 
     Folding the arm is a motion of its joints, which takes the hand on whatever arc
-    the joints describe: after a pick-up that arc led down through the table the body
-    had just been lifted from. Drawn straight back first, the body comes down beside
-    the table instead. A hand already that close stays where it is. A short retreat
-    is enough and reads as a plain pull back; drawn to 0.3 m, the Walker S2's hand had
-    to twist at the wrist to get there and bent the waist more.
+    the joints describe, and with a body hanging from the hand that arc swung the
+    body forward and down through the table it had just been lifted from, from
+    whatever height the fold started. So a hand that holds a body does not fold: it
+    is carried up and in to above its parked place, then down to it, both as straight
+    lines that keep the body hanging as it hangs, and the joints only settle the
+    parked pose at the end.
     """
 
-    carry_retreat_keeps_orientation: bool = field(default=True, kw_only=True)
+    carry_retreat_keeps_hold: bool = field(default=True, kw_only=True)
     """
-    Whether the hand keeps its orientation while it is drawn back, so that the body
-    it holds is carried back the way it hangs and the motion is a straight pull; else
-    the orientation is left to the arm, which is for a retreat the arm cannot make
-    otherwise.
+    Whether the hand keeps its approach axis pointing the way it points while it is
+    carried in, so that the body it holds stays hanging as it hangs, the hand free to
+    turn about that axis; else the orientation is left to the arm altogether. Holding
+    the whole orientation was tried and asked the waist to lean back, or the wrist
+    to go past its range.
     """
 
     @property
@@ -140,10 +149,7 @@ class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
             max_joint_velocity=self.max_joint_velocity,
         )
         retreats = [
-            retreat
-            for arm in self.arms
-            for retreat in [self.retreat_carrying(arm)]
-            if retreat is not None
+            retreat for arm in self.arms for retreat in self.retreat_carrying(arm)
         ]
         if not retreats:
             return execute_single(park)
@@ -158,56 +164,118 @@ class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
             return [Arms.LEFT, Arms.RIGHT]
         return [self.arm]
 
-    def retreat_carrying(self, arm: Arms) -> Optional[MoveToolCenterPointMotion]:
+    def retreat_carrying(self, arm: Arms) -> List[BaseMotion]:
         """
         :param arm: An arm about to be parked.
-        :return: The motion drawing its hand back to :attr:`carry_clearance` ahead of
-            the robot's root, keeping its height, when the hand holds a body and stands
-            further ahead than that; else ``None``.
+        :return: The motions carrying its hand, when it holds a body, up and in to
+            :attr:`carry_lift` above where the hand will be parked and then down to
+            there, keeping the body hanging as it hangs; the torso and the neck park
+            alongside, so that the controller does not lean the torso to bring the
+            hand closer. Nothing when the hand is empty.
         """
         views = ViewManager().get_all_arm_views(arm, self.robot)
         if not views or views[0] is None:
-            return None
+            return []
         end_effector = views[0].end_effector
         if not end_effector.held_bodies:
-            return None
+            return []
         root = self.robot.root
         root_T_tool = self.world.compute_forward_kinematics_np(
             root, end_effector.tool_frame
         )
-        if root_T_tool[0, 3] <= self.carry_clearance:
-            return None
-        drawn_back = root_T_tool.copy()
-        drawn_back[0, 3] = self.carry_clearance
-        return MoveToolCenterPointMotion(
-            HomogeneousTransformationMatrix(drawn_back, reference_frame=root).to_pose(),
-            arm,
-            allow_gripper_collision=False,
-            movement_type=(
-                MovementType.CARTESIAN
-                if self.carry_retreat_keeps_orientation
-                else MovementType.TRANSLATION
-            ),
-        )
-
-    def get_joint_poses(self) -> Tuple[List[str], List[float]]:
-        """
-        :return: The joint positions that should be set for the arm to be in the park position.
-        """
-        parked = list(ViewManager().get_all_arm_views(self.arm, self.robot))
-        for part in (
-            self.robot.get_torso_if_specified(),
-            self.robot.get_neck_if_specified(),
+        parked = self.parked_pose_of(end_effector.tool_frame)
+        above = root_T_tool.copy()
+        above[:3, 3] = parked[:3, 3]
+        above[2, 3] += self.carry_lift
+        down = above.copy()
+        down[2, 3] = parked[2, 3]
+        trunk_names, trunk_poses = self.get_joint_poses(arms=False)
+        alongside = dict(zip(trunk_names, trunk_poses))
+        approach = end_effector.front_facing_axis.to_np()[:3]
+        motions = []
+        # Up and in, the hand's approach keeps pointing the way it does now; coming
+        # down, the way it will point once parked, so that the descent ends in the
+        # parked pose rather than fighting it.
+        for waypoint, pointing in (
+            (above, root_T_tool[:3, :3] @ approach),
+            (down, parked[:3, :3] @ approach),
         ):
+            target = HomogeneousTransformationMatrix(
+                waypoint, reference_frame=root
+            ).to_pose()
+            if self.carry_retreat_keeps_hold:
+                motions.append(
+                    MoveToolCenterPointKeepingAxisMotion(
+                        target,
+                        arm,
+                        allow_gripper_collision=False,
+                        kept_axis=Vector3(*approach),
+                        kept_direction=Vector3(*pointing),
+                        joint_goals=alongside,
+                    )
+                )
+            else:
+                motions.append(
+                    MoveToolCenterPointMotion(
+                        target,
+                        arm,
+                        allow_gripper_collision=False,
+                        movement_type=MovementType.TRANSLATION,
+                    )
+                )
+        return motions
+
+    def parked_pose_of(self, tool_frame: Body) -> np.ndarray:
+        """
+        :param tool_frame: A hand's tool frame.
+        :return: Where it will be once everything this action parks is parked, as a
+            4 by 4 transformation matrix in the frame of the robot's root, read off the
+            forward kinematics with the parked joints at their parked positions and
+            every other joint as it is now; nothing is moved.
+        """
+        expression = self.world.compose_forward_kinematics_expression(
+            self.robot.root, tool_frame
+        )
+        targets = self.parked_joint_targets()
+        variables = [connection.dof.variables.position for connection in targets]
+        return expression.substitute(variables, list(targets.values())).evaluate()
+
+    def parked_joint_targets(
+        self, arms: bool = True, trunk: bool = True
+    ) -> Dict[Connection, float]:
+        """
+        :param arms: Whether the arms' parked joints are included.
+        :param trunk: Whether the torso's and the neck's parked joints are included,
+            where they declare a parked state.
+        :return: The parked position of every joint this action parks, by joint.
+        """
+        parked = (
+            list(ViewManager().get_all_arm_views(self.arm, self.robot)) if arms else []
+        )
+        trunk_parts = (
+            (self.robot.get_torso_if_specified(), self.robot.get_neck_if_specified())
+            if trunk
+            else ()
+        )
+        for part in trunk_parts:
             if part is not None and part.has_joint_state_of_type(StaticJointState.PARK):
                 parked.append(part)
-        names = []
-        values = []
+        targets: Dict[Connection, float] = {}
         for part in parked:
-            joint_state = part.get_joint_state_by_type(StaticJointState.PARK)
-            names.extend([c.name.name for c in joint_state.connections])
-            values.extend(joint_state.target_values)
-        return names, values
+            targets.update(part.get_joint_state_by_type(StaticJointState.PARK).items())
+        return targets
+
+    def get_joint_poses(
+        self, arms: bool = True, trunk: bool = True
+    ) -> Tuple[List[str], List[float]]:
+        """
+        :param arms: Whether the arms' parked joints are included.
+        :param trunk: Whether the torso's and the neck's parked joints are included,
+            where they declare a parked state.
+        :return: The joint positions that should be set for the arm to be in the park position.
+        """
+        targets = self.parked_joint_targets(arms=arms, trunk=trunk)
+        return [c.name.name for c in targets], list(targets.values())
 
 
 @dataclass
