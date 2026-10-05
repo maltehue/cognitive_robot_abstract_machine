@@ -215,6 +215,34 @@ class TestPlacementCandidates:
             float(point.z - bounds.center.z)
         )
 
+    def test_keeps_the_object_turned_as_it_is_in_the_world(
+        self, surface_scene: PlacementScene
+    ) -> None:
+        """
+        A hand that holds an object from above cannot turn it about the vertical
+        without swinging the whole arm, so a placement keeps the object's yaw rather
+        than forcing the surface's on it.
+
+        :param surface_scene: Scene whose table already has a supporting region.
+        """
+        world = surface_scene.world
+        location = PlacementSurface(world, surface_scene.object.root, Table)
+        bounds = (
+            surface_scene.object.root.collision.as_bounding_box_collection_in_frame(
+                surface_scene.object.root
+            ).bounding_box()
+        )
+        point = SurfaceSamples(surface_scene).point()
+        turned_by = 0.7
+
+        pose = location.placement_pose(point, bounds, turned_by)
+
+        world_T_pose = world.transform(pose, world.root).to_np()
+        assert PlacementSurface._yaw_of(world_T_pose) == pytest.approx(turned_by)
+        assert float(pose.to_position().z) == pytest.approx(
+            float(point.z - bounds.center.z)
+        )
+
 
 # %% surface selection and failures
 

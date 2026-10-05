@@ -12,7 +12,11 @@ import numpy as np
 
 from typing_extensions import TYPE_CHECKING
 
+from coraplex.datastructures.enums import ApproachDirection
+from coraplex.datastructures.grasp import GraspDescription
+from coraplex.datastructures.rotations import Rotations
 from coraplex.locations.base import PoseGeneratorBackend
+from semantic_digital_twin.robots.robot_parts import EndEffector
 from semantic_digital_twin.datastructures.variables import SpatialVariables
 from semantic_digital_twin.reasoning.predicates import is_place_occupied
 from semantic_digital_twin.semantic_annotations.mixins import (
@@ -20,7 +24,11 @@ from semantic_digital_twin.semantic_annotations.mixins import (
     HasSupportingSurface,
 )
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Point3
-from semantic_digital_twin.spatial_types.spatial_types import Pose
+from semantic_digital_twin.spatial_types.spatial_types import (
+    Pose,
+    Quaternion,
+    RotationMatrix,
+)
 from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 from semantic_digital_twin.world_description.shape_collection import (
     BoundingBoxCollection,
@@ -159,8 +167,9 @@ class PlacementSurface(PoseGeneratorBackend):
         )
         object_annotation = HasRootBody(root=self.body)
         object_position = self.body.global_pose.to_position()
+        yaw = self.placed_yaw()
         candidates = (
-            PlacementCandidate(surface, self.placement_pose(point, bounds))
+            PlacementCandidate(surface, self.placement_pose(point, bounds, yaw))
             for surface in surfaces
             for point in surface.sample_points_from_surface(
                 body_to_sample_for=object_annotation, amount=self.sample_count
@@ -208,19 +217,115 @@ class PlacementSurface(PoseGeneratorBackend):
             raise PlacementSurfaceMissing(self.surface_type, self.surface_name)
         return surfaces
 
-    def placement_pose(self, point: Point3, bounds: VolumetricBoundingBox) -> Pose:
+    def holder(self) -> EndEffector | None:
+        """
+        :return: The end effector the object hangs from, if a robot holds it.
+        """
+        parent = self.body.parent_connection.parent if self.body.parent_connection else None
+        for end_effector in self.world.get_semantic_annotations_by_type(EndEffector):
+            if end_effector.tool_frame is parent:
+                return end_effector
+        return None
+
+    def placed_yaw(self) -> float:
+        """
+        :return: How far about the vertical the object is turned when put down, in the
+            world, in radians.
+
+        A held object is put down turned the way the robot would pick it up from where
+        it stands: the robot's heading runs the same way through the object as it did
+        when the robot took it, whichever way the robot has turned since and however
+        the parked arm has turned the object meanwhile. A hand on top of an object
+        cannot turn it about the vertical without swinging the whole arm around. An
+        object nobody holds keeps its yaw.
+        """
+        held_by = self.holder()
+        if held_by is None:
+            return self._yaw_of(self.body.global_pose.to_np())
+        heading_in_body = self._rotation(
+            Quaternion(*Rotations.SIDE_ROTATIONS[self.approached_from(held_by)])
+        ) @ np.array([1.0, 0.0, 0.0])
+        robot_yaw = self._yaw_of(held_by._robot.root.global_pose.to_np())
+        return robot_yaw - float(np.arctan2(heading_in_body[1], heading_in_body[0]))
+
+    def approached_from(self, held_by: EndEffector) -> ApproachDirection:
+        """
+        :param held_by: The end effector holding the object.
+        :return: The side of the object the robot's heading went through when it took
+            the object: the one whose grasp, aligned as the hand holds the object and
+            turned about the approach as the hand prefers, matches how the object is
+            held best.
+
+        Turning the hand a quarter turn about the approach is the same hand orientation
+        as approaching from the next side over, so the side alone is ambiguous; the
+        hand's preference for the turn settles it, since the grasp that took the object
+        followed that preference.
+        """
+        holding = GraspDescription.from_attachment(held_by, self.body)
+        preference = getattr(held_by, "preferred_grasp_alignment", None)
+        rotated = (
+            preference.with_rotated_gripper
+            if preference is not None
+            else holding.rotate_gripper
+        )
+        measured = GraspDescription._measured_grasp_orientation(held_by, self.body)
+        return min(
+            Rotations.SIDE_ROTATIONS,
+            key=lambda side: GraspDescription(
+                side, holding.vertical_alignment, held_by, rotated
+            )
+            .grasp_orientation()
+            .rotational_distance(measured),
+        )
+
+    @staticmethod
+    def _rotation(quaternion) -> np.ndarray:
+        """
+        :param quaternion: An orientation.
+        :return: Its 3 by 3 rotation matrix.
+        """
+        return RotationMatrix.from_quaternion(quaternion).to_np()[:3, :3]
+
+    @staticmethod
+    def _yaw_of(transform: np.ndarray) -> float:
+        """
+        :param transform: A homogeneous transformation matrix.
+        :return: Its rotation about the vertical, in radians.
+        """
+        return float(np.arctan2(transform[1, 0], transform[0, 0]))
+
+    def placement_pose(
+        self,
+        point: Point3,
+        bounds: VolumetricBoundingBox,
+        world_yaw: float | None = None,
+    ) -> Pose:
         """
         Convert a sampled object-center point to the object's origin pose.
 
+        The object is turned as :meth:`placed_yaw` says rather than as the surface
+        faces.
+
         :param point: Sampled center in the supporting surface frame.
         :param bounds: Object bounds expressed in the object's frame.
+        :param world_yaw: How far the object is turned about the vertical in the world,
+            in radians; as it is turned now when left out.
         """
+        if world_yaw is None:
+            world_yaw = self.placed_yaw()
+        frame = point.reference_frame
+        yaw = world_yaw - self._yaw_of(
+            self.world.compute_forward_kinematics_np(self.world.root, frame)
+        )
         center = bounds.center
+        turned = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
+        offset = turned @ np.array([float(center.x), float(center.y)])
         return Pose.from_xyz_rpy(
-            point.x - center.x,
-            point.y - center.y,
-            point.z - center.z,
-            reference_frame=point.reference_frame,
+            float(point.x) - offset[0],
+            float(point.y) - offset[1],
+            float(point.z) - float(center.z),
+            yaw=yaw,
+            reference_frame=frame,
         )
 
     def supports_pose(
@@ -256,21 +361,22 @@ class PlacementSurface(PoseGeneratorBackend):
         mesh = surface.root.combined_mesh
         surface_T_object = self.world.transform(pose, surface.root)
         position = surface_T_object.to_position()
+        yaw = self._yaw_of(surface_T_object.to_np())
+        turned = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
         ray_height = mesh.bounds[1, 2] + bounds.height
         corners = list(
             product((bounds.min_x, bounds.max_x), (bounds.min_y, bounds.max_y))
-        )
+        ) + [(float(bounds.center.x), float(bounds.center.y))]
         origins = np.array(
             [
-                [float(position.x) + x, float(position.y) + y, ray_height]
-                for x, y in corners
-            ]
-            + [
                 [
-                    float(position.x + bounds.center.x),
-                    float(position.y + bounds.center.y),
+                    *(
+                        np.array([float(position.x), float(position.y)])
+                        + turned @ np.array([x, y])
+                    ),
                     ray_height,
                 ]
+                for x, y in corners
             ]
         )
         directions = np.tile([0.0, 0.0, -1.0], (len(origins), 1))
@@ -285,6 +391,7 @@ class PlacementSurface(PoseGeneratorBackend):
             position.x,
             position.y,
             float(heights.max()) - bounds.min_z,
+            yaw=yaw,
             reference_frame=surface.root,
         )
         return self.world.transform(resting_pose, pose.reference_frame)
