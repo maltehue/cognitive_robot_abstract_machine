@@ -74,7 +74,7 @@ test('every rule yields a complete look descriptor', function () {
   );
 });
 
-test('a floor is painted its own flat grey, lighter than the scanned lab\'s, a floor lamp is not', function () {
+test('a floor is painted its own flat warm grey, a floor lamp is not', function () {
   const theme = load();
   assert.strictEqual(theme.isFloor('world/floor_68b4d56d_surface'), true);
   assert.strictEqual(theme.isFloor('living_room_floor_lamp'), false);
@@ -82,5 +82,5 @@ test('a floor is painted its own flat grey, lighter than the scanned lab\'s, a f
   assert.deepStrictEqual(theme.lookOf('world/floor_68b4d56d_surface'), theme.FLOOR_LOOK);
   assert.strictEqual(theme.FLOOR_LOOK.texture, null);
   const grey = theme.FLOOR_LOOK.color;
-  assert.ok((grey >> 16 & 0xff) > 140, 'lighter than the floor\'s own scan');
+  assert.ok((grey >> 16 & 0xff) > (grey & 0xff), 'warm: more red than blue');
 });

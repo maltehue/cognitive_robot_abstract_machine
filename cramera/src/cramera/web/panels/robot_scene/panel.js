@@ -770,7 +770,9 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
     const theme = window.EnvironmentTheme;
     return !!(theme && typeof theme.isFloor === 'function' && theme.FLOOR_LOOK && theme.isFloor(link));
   }
-  // a mesh in one flat look, whatever its scan or export shipped
+  // a mesh in one flat look, whatever its scan or export shipped: lit by the lamps
+  // alone, since the room environment map about doubles a lit surface's brightness
+  // and would wash a mid grey out to white beside the unlit scan around it
   function paintFlat(mesh, look) {
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     mats.forEach(function (mat) {
@@ -779,6 +781,7 @@ Panels.define('robot-scene', function mountRobotScene(root, bus) {
       mat.color.setHex(look.color);
       if ('roughness' in mat) mat.roughness = look.roughness;
       if ('metalness' in mat) mat.metalness = look.metalness;
+      if ('envMapIntensity' in mat) mat.envMapIntensity = 0;
       mat.needsUpdate = true;
     });
   }
