@@ -110,16 +110,25 @@ class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
     Entry from the enum for which arm should be parked.
     """
 
-    carry_clearance: float = field(default=0.3, kw_only=True)
+    carry_clearance: float = field(default=0.45, kw_only=True)
     """
     How far ahead of the robot's root a hand holding a body is drawn back to, at the
     height it is at, before the arm folds, in meters.
 
     Folding the arm is a motion of its joints, which takes the hand on whatever arc
     the joints describe: after a pick-up that arc led down through the table the body
-    had just been lifted from. Drawn straight back first, over the robot's own stand,
-    the body comes down beside the table instead. A hand already that close stays
-    where it is.
+    had just been lifted from. Drawn straight back first, the body comes down beside
+    the table instead. A hand already that close stays where it is. A short retreat
+    is enough and reads as a plain pull back; drawn to 0.3 m, the Walker S2's hand had
+    to twist at the wrist to get there and bent the waist more.
+    """
+
+    carry_retreat_keeps_orientation: bool = field(default=True, kw_only=True)
+    """
+    Whether the hand keeps its orientation while it is drawn back, so that the body
+    it holds is carried back the way it hangs and the motion is a straight pull; else
+    the orientation is left to the arm, which is for a retreat the arm cannot make
+    otherwise.
     """
 
     @property
@@ -170,13 +179,15 @@ class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
             return None
         drawn_back = root_T_tool.copy()
         drawn_back[0, 3] = self.carry_clearance
-        # The hand's orientation is left to the arm: held palm down at that height, a
-        # hand could not be drawn back at all, and the park turns it anyway.
         return MoveToolCenterPointMotion(
             HomogeneousTransformationMatrix(drawn_back, reference_frame=root).to_pose(),
             arm,
             allow_gripper_collision=False,
-            movement_type=MovementType.TRANSLATION,
+            movement_type=(
+                MovementType.CARTESIAN
+                if self.carry_retreat_keeps_orientation
+                else MovementType.TRANSLATION
+            ),
         )
 
     def get_joint_poses(self) -> Tuple[List[str], List[float]]:
