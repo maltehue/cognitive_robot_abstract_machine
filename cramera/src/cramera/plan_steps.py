@@ -509,7 +509,9 @@ class ParkArms(PlanStep):
         return {StepParameter.ARM: self.arm.name}
 
     def action(self, context: Context) -> ActionDescription:
-        return ParkArmsAction(self.arm)
+        # A query, grounded when its turn comes, like a pick or a place: a park built
+        # when the plan is assembled would not yet know what the hand holds by then.
+        return a(ParkArmsAction)(arm=self.arm)
 
 
 @dataclass(frozen=True)

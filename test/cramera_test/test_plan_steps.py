@@ -208,8 +208,9 @@ class TestActionsAPlanPerforms:
             .steps[0]
             .action(context_on(world_with()))
         )
-        assert isinstance(action, ParkArmsAction)
-        assert action.arm is Arms.LEFT
+        # A query, not an action: grounded at its turn, the park knows what the hand
+        # holds by then and draws it clear before folding the arm.
+        assert isinstance(action, Match)
 
     def test_moving_the_torso_moves_it_to_the_named_state(self):
         action = (

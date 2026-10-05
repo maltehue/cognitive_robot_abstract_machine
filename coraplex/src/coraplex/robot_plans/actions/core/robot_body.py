@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Tuple, List
 
@@ -14,8 +14,11 @@ from coraplex.robot_plans import MoveManipulatorMotion
 from krrood.entity_query_language.factories import variable_from
 from semantic_digital_twin.reasoning.predicates import allclose
 from semantic_digital_twin.robots.robot_parts import EndEffector
-from semantic_digital_twin.spatial_types.spatial_types import Pose
-from coraplex.datastructures.enums import AxisIdentifier, Arms
+from semantic_digital_twin.spatial_types.spatial_types import (
+    HomogeneousTransformationMatrix,
+    Pose,
+)
+from coraplex.datastructures.enums import AxisIdentifier, Arms, MovementType
 
 from coraplex.datastructures.trajectory import PoseTrajectory
 from coraplex.plans.factories import execute_single, sequential
@@ -24,6 +27,7 @@ from coraplex.robot_plans.mixins import HasMaxJointVelocity, HasTcpGoalThreshold
 from coraplex.robot_plans.motions.gripper import (
     MoveGripperMotion,
     MoveTCPWaypointsMotion,
+    MoveToolCenterPointMotion,
 )
 from coraplex.robot_plans.motions.robot_body import MoveJointsMotion
 from coraplex.validation.goal_validator import create_multiple_joint_goal_validator
@@ -106,16 +110,73 @@ class ParkArmsAction(ActionDescription, HasMaxJointVelocity):
     Entry from the enum for which arm should be parked.
     """
 
+    carry_clearance: float = field(default=0.3, kw_only=True)
+    """
+    How far ahead of the robot's root a hand holding a body is drawn back to, at the
+    height it is at, before the arm folds, in meters.
+
+    Folding the arm is a motion of its joints, which takes the hand on whatever arc
+    the joints describe: after a pick-up that arc led down through the table the body
+    had just been lifted from. Drawn straight back first, over the robot's own stand,
+    the body comes down beside the table instead. A hand already that close stays
+    where it is.
+    """
+
     @property
     def _action_plan(self) -> PlanNode:
         joint_names, joint_poses = self.get_joint_poses()
+        park = MoveJointsMotion(
+            names=joint_names,
+            positions=joint_poses,
+            max_joint_velocity=self.max_joint_velocity,
+        )
+        retreats = [
+            retreat
+            for arm in self.arms
+            for retreat in [self.retreat_carrying(arm)]
+            if retreat is not None
+        ]
+        if not retreats:
+            return execute_single(park)
+        return sequential([*retreats, park])
 
-        return execute_single(
-            MoveJointsMotion(
-                names=joint_names,
-                positions=joint_poses,
-                max_joint_velocity=self.max_joint_velocity,
-            )
+    @property
+    def arms(self) -> List[Arms]:
+        """
+        :return: The arms parked, one by one.
+        """
+        if self.arm == Arms.BOTH:
+            return [Arms.LEFT, Arms.RIGHT]
+        return [self.arm]
+
+    def retreat_carrying(self, arm: Arms) -> Optional[MoveToolCenterPointMotion]:
+        """
+        :param arm: An arm about to be parked.
+        :return: The motion drawing its hand back to :attr:`carry_clearance` ahead of
+            the robot's root, keeping its height, when the hand holds a body and stands
+            further ahead than that; else ``None``.
+        """
+        views = ViewManager().get_all_arm_views(arm, self.robot)
+        if not views or views[0] is None:
+            return None
+        end_effector = views[0].end_effector
+        if not end_effector.held_bodies:
+            return None
+        root = self.robot.root
+        root_T_tool = self.world.compute_forward_kinematics_np(
+            root, end_effector.tool_frame
+        )
+        if root_T_tool[0, 3] <= self.carry_clearance:
+            return None
+        drawn_back = root_T_tool.copy()
+        drawn_back[0, 3] = self.carry_clearance
+        # The hand's orientation is left to the arm: held palm down at that height, a
+        # hand could not be drawn back at all, and the park turns it anyway.
+        return MoveToolCenterPointMotion(
+            HomogeneousTransformationMatrix(drawn_back, reference_frame=root).to_pose(),
+            arm,
+            allow_gripper_collision=False,
+            movement_type=MovementType.TRANSLATION,
         )
 
     def get_joint_poses(self) -> Tuple[List[str], List[float]]:
