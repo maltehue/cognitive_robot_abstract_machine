@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from typing_extensions import List, Union
 
@@ -15,7 +16,6 @@ from semantic_digital_twin.robots.robot_parts import AbstractRobot
 from semantic_digital_twin.robots.stretch import Stretch, StretchJoint
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
-    Connection6DoF,
     DifferentialDrive,
 )
 
@@ -60,10 +60,40 @@ class StretchStandaloneInterface(StandAloneRobotInterfaceConfig):
         self.register_controlled_joints(self.controlled_joint_names(self.world))
 
 
+class StretchTopic(StrEnum):
+    """
+    The topics the Stretch's controllers talk on, relative to the robot's namespace.
+    """
+
+    JOINT_STATES = "joint_states"
+    """
+    Where the robot reports its joint positions.
+    """
+
+    ODOMETRY = "odom"
+    """
+    Where the robot reports the pose of its base.
+    """
+
+    BASE_VELOCITY_COMMAND = "cmd_vel"
+    """
+    Where the base takes its velocity.
+    """
+
+    JOINT_VELOCITY_COMMAND = "joint_velocity_cmd"
+    """
+    Where the velocity group controller takes the velocities of its joints.
+    """
+
+
 @dataclass
 class StretchVelocityInterface(RobotInterfaceConfig):
     """
     Commands the arm, head and drive of Stretch through their velocity controllers.
+
+    The drive and the localization are those of the robot this interface belongs to,
+    so the interface works in a world holding other robots as well; the tf frames of
+    the localization are the names its bodies carry in the world.
     """
 
     @staticmethod
@@ -87,23 +117,21 @@ class StretchVelocityInterface(RobotInterfaceConfig):
         ]
 
     def setup(self):
+        diff_drive = self.robot.root.parent_connection
+        localization = diff_drive.parent.parent_connection
         self.sync_6dof_joint_with_tf_frame(
-            joint=self.world.get_connections_by_type(Connection6DoF)[0],
-            tf_parent_frame="map",
-            tf_child_frame="odom",
+            joint=localization,
+            tf_parent_frame=str(localization.parent.name),
+            tf_child_frame=str(localization.child.name),
+        )
+        self.sync_odometry_topic(StretchTopic.ODOMETRY, diff_drive)
+        self.add_base_cmd_velocity(
+            cmd_vel_topic=StretchTopic.BASE_VELOCITY_COMMAND, joint=diff_drive
         )
 
-        diff_drive = self.world.get_connections_by_type(DifferentialDrive)[0]
-        self.sync_odometry_topic(
-            "/odom",
-            diff_drive,
-        )
-
-        self.add_base_cmd_velocity(cmd_vel_topic="/stretch/cmd_vel", joint=diff_drive)
-
-        self.sync_joint_state_topic("/joint_states")
+        self.sync_joint_state_topic(StretchTopic.JOINT_STATES)
         self.add_joint_velocity_group_controller(
-            cmd_topic="/joint_velocity_cmd",
+            cmd_topic=StretchTopic.JOINT_VELOCITY_COMMAND,
             connections=self.velocity_controlled_joint_names(),
             minimum_valid_velocity=0.03,
             minimum_velocity_overrides={

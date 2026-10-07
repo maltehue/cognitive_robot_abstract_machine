@@ -59,6 +59,13 @@ class GiskardServerConfig:
     Frequency in hertz at which Giskard waits for goals.
     """
 
+    publishes_world: bool = True
+    """
+    Whether this server serves its world to other processes and draws it.
+
+    A server holding a world it fetched leaves both to the process that owns it.
+    """
+
     def __post_init__(self):
         if is_in_github_workflow():
             self.debug_mode = False

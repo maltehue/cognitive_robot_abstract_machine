@@ -59,6 +59,11 @@ class RecordedTransformLookup:
     The transform handed back to the caller.
     """
 
+    def wait_for_transform(
+        self, target_frame: str, source_frame: str, time: Any, timeout: Any
+    ) -> bool:
+        return True
+
     def lookup_pose(self, target_frame: str, source_frame: str) -> PoseStamped:
         return self.parent_T_child
 
