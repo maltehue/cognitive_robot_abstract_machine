@@ -1218,3 +1218,50 @@ def test_navigation_target_keeps_the_standing_height(narrow_opening):
     np.testing.assert_allclose(
         action._path()[-1].to_np(), robot.resolve_standing_pose(action.target).to_np()
     )
+
+
+# %% floors below mobile base geometry
+
+
+def test_navigation_finds_a_floor_above_the_base_root_frame(narrow_opening):
+    """
+    A root frame below its collision geometry does not hide the support floor.
+    """
+    world, robot, action = narrow_opening
+    floor = world.get_semantic_annotations_by_type(Floor)[0]
+    floor_height = action._extent_of(floor).max_z
+    connection = robot.root.parent_connection
+    displacement = (floor_height - robot.mobile_base.bounding_box.min_z) / 2
+    replacement = connection.copy_with_new_parent(
+        connection.parent,
+        HomogeneousTransformationMatrix.from_xyz_rpy(z=displacement),
+    )
+    with world.modify_world():
+        world.remove_connection(connection)
+        world.add_connection(replacement)
+    assert float(robot.root.global_pose.z) < floor_height
+    assert robot.mobile_base.bounding_box.min_z > floor_height
+
+    assert action._floor is floor
+
+
+def test_navigation_rejects_a_floor_above_the_base_geometry(narrow_opening):
+    """
+    A surface above both the base frame and its underside is not below the robot.
+    """
+    world, robot, action = narrow_opening
+    floor = world.get_semantic_annotations_by_type(Floor)[0]
+    connection = floor.root.parent_connection
+    replacement = connection.copy_with_new_parent(
+        connection.parent,
+        HomogeneousTransformationMatrix.from_xyz_rpy(
+            z=robot.mobile_base.bounding_box.max_z
+        ),
+    )
+    with world.modify_world():
+        world.remove_connection(connection)
+        world.add_connection(replacement)
+
+    with pytest.raises(NoFloorBelowRobot) as raised:
+        action._floor
+    assert raised.value.robot is robot
