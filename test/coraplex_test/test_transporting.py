@@ -14,7 +14,14 @@ from coraplex.datastructures.dataclasses import Context
 from coraplex.execution_environment import simulated_robot
 from coraplex.locations.locations import ReachabilityLocation
 from coraplex.plans.factories import sequential
-from coraplex.plans.plan_node import ActionNode
+from coraplex.plans.plan_node import ActionNode, MotionNode
+from coraplex.robot_plans.motions.gripper import (
+    MoveGripperMotion,
+    MoveToolCenterPointMotion,
+)
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AllowCollisionForEndEffector,
+)
 from coraplex.plans.underspecified import UnderspecifiedNode
 from coraplex.robot_plans.actions.base import ActionDescription
 from coraplex.robot_plans.actions.core.navigation import (
@@ -924,4 +931,45 @@ def test_facing_and_looking_at_a_target_turns_the_base_and_the_camera_towards_it
         camera_P_target / np.linalg.norm(camera_P_target),
         camera_V_forward / np.linalg.norm(camera_V_forward),
         atol=0.02,
+    )
+
+
+# %% selected pickup contacts
+
+
+def test_pickup_keeps_selected_contacts_through_approach_close_and_lift(
+    pr2_apartment_context,
+) -> None:
+    """
+    Targeted policy reaches nested grasp steps and the attached-object lift.
+    """
+    world, robot, context = pr2_apartment_context
+    milk = world.get_semantic_annotations_by_type(Milk)[0]
+    support = next(
+        body
+        for body in world.bodies_with_collision
+        if body not in robot.bodies and body is not milk.root
+    )
+    action = PickUpAction(
+        milk.grasp_candidates()[0],
+        robot.left_arm,
+        allow_environment_contacts=False,
+        support_bodies=[support],
+    )
+    sequential([action], context)
+    action.plan_node.notify()
+    motions = [
+        node.designator
+        for node in action.plan.all_nodes
+        if isinstance(node, MotionNode)
+        and isinstance(node.designator, (MoveGripperMotion, MoveToolCenterPointMotion))
+    ]
+
+    contact_motions = [motion for motion in motions if motion.allowed_contacts]
+    assert len(contact_motions) == 4
+    assert all(len(motion.allowed_contacts) == 2 for motion in contact_motions)
+    assert all(
+        not isinstance(rule, AllowCollisionForEndEffector)
+        for motion in contact_motions
+        for rule in motion.allowed_contacts
     )

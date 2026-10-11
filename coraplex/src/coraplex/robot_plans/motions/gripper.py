@@ -33,6 +33,7 @@ from coraplex.robot_plans.mixins import (
     HasTcpGoalThresholds,
 )
 from coraplex.robot_plans.motions.base import BaseMotion
+from coraplex.robot_plans.motions.contacts import HasContactRules
 from coraplex.datastructures.enums import (
     MovementType,
     WaypointsMovementType,
@@ -40,7 +41,7 @@ from coraplex.datastructures.enums import (
 
 
 @dataclass
-class MoveGripperMotion(BaseMotion, GripperStallToleranceParameters):
+class MoveGripperMotion(BaseMotion, GripperStallToleranceParameters, HasContactRules):
     """
     Opens or closes the gripper.
     """
@@ -94,10 +95,9 @@ class MoveGripperMotion(BaseMotion, GripperStallToleranceParameters):
                     max_velocity=self.finger_velocity,
                 )
             )
-        if self.allow_gripper_collision:
-            accompanying_nodes.extend(
-                self._only_allow_gripper_collision_rules(self.gripper)
-            )
+        accompanying_nodes.extend(
+            self.create_contact_nodes(self.gripper, bool(self.allow_gripper_collision))
+        )
         if not accompanying_nodes:
             return done_node
         return Parallel([done_node, *accompanying_nodes], name=name)
@@ -105,7 +105,7 @@ class MoveGripperMotion(BaseMotion, GripperStallToleranceParameters):
 
 @dataclass
 class MoveToolCenterPointMotion(
-    BaseMotion, CartesianVelocityLimitParameters, HasTcpGoalThresholds
+    BaseMotion, CartesianVelocityLimitParameters, HasTcpGoalThresholds, HasContactRules
 ):
     """
     Moves the Tool center point (TCP) of the robot.
@@ -193,10 +193,11 @@ class MoveToolCenterPointMotion(
         accompanying_nodes: List[MotionStatechartNode] = list(
             self._velocity_limit_nodes(root, tip)
         )
-        if self.allow_gripper_collision:
-            accompanying_nodes.extend(
-                self._only_allow_gripper_collision_rules(self.arm.end_effector)
+        accompanying_nodes.extend(
+            self.create_contact_nodes(
+                self.arm.end_effector, bool(self.allow_gripper_collision)
             )
+        )
         if not accompanying_nodes:
             return task
         return Parallel([task, *accompanying_nodes], name="MoveTCP")

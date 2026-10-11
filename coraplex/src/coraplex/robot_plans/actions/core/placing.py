@@ -26,6 +26,7 @@ from coraplex.robot_plans.mixins import (
     HasTcpGoalThresholds,
     PlaceTuningParameters,
 )
+from coraplex.robot_plans.motions.contacts import HasManipulationContacts
 from coraplex.robot_plans.motions.gripper import (
     MoveGripperMotion,
     MoveToolCenterPointMotion,
@@ -44,6 +45,7 @@ from semantic_digital_twin.grasping.grasp_candidates import (
 @dataclass
 class PlaceAction(
     ActionDescription,
+    HasManipulationContacts,
     HasApproachesGraspPoses,
     PlaceTuningParameters,
     HasGraspDetectionThreshold,
@@ -83,7 +85,9 @@ class PlaceAction(
                 MoveToolCenterPointMotion(
                     poses.retreat,
                     arm,
-                    allow_gripper_collision=True,
+                    allowed_contacts=self.create_contact_rules(
+                        arm.end_effector, self.object_designator.root
+                    ),
                     max_linear_velocity=self.transport_linear_velocity,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
@@ -91,7 +95,9 @@ class PlaceAction(
                 MoveToolCenterPointMotion(
                     poses.grasp,
                     arm,
-                    allow_gripper_collision=True,
+                    allowed_contacts=self.create_contact_rules(
+                        arm.end_effector, self.object_designator.root
+                    ),
                     max_linear_velocity=self.placing_linear_velocity,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
@@ -99,7 +105,9 @@ class PlaceAction(
                 MoveGripperMotion(
                     GripperState.OPEN,
                     arm.end_effector,
-                    allow_gripper_collision=True,
+                    allowed_contacts=self.create_contact_rules(
+                        arm.end_effector, self.object_designator.root
+                    ),
                     finger_velocity=self.release_opening_velocity,
                 ),
                 ReAttachNode(
@@ -108,6 +116,15 @@ class PlaceAction(
                 MoveToolCenterPointMotion(
                     poses.pre_grasp,
                     arm,
+                    allowed_contacts=(
+                        self.create_contact_rules(
+                            arm.end_effector,
+                            self.object_designator.root,
+                            include_supports=False,
+                        )
+                        if not self.allow_environment_contacts
+                        else []
+                    ),
                     max_linear_velocity=self.retract_linear_velocity,
                     position_threshold=self.position_threshold,
                     orientation_threshold=self.orientation_threshold,
