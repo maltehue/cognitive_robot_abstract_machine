@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 from dataclasses import field, dataclass
 from itertools import combinations
 from typing import Optional
@@ -301,34 +302,64 @@ class _CancelBecauseExternalCollisionViolated(_CancelBecauseCollisionViolated):
 @dataclass(eq=False, repr=False)
 class UpdateTemporaryCollisionRules(MotionStatechartNode):
     """
-    Updates the temporary collision rules for the robot.
+    Apply a motion's temporary rules and restore the previous policy on cleanup.
     """
 
     temporary_rules: list[CollisionRule] = field(kw_only=True)
+    """
+    Collision rules active while this node's motion runs.
+    """
+
     collision_matrix: CollisionMatrix = field(init=False)
+    """
+    The matrix built from the motion's temporary rules.
+    """
+
+    _previous_rules: list[CollisionRule] | None = field(
+        default=None, init=False, repr=False
+    )
+    """
+    The pre-build policy, or ``None`` before the node is built.
+    """
 
     def build_artifacts(self, context: MotionStatechartContext) -> NodeArtifacts:
+        """
+        Build the motion matrix without leaving its provisional policy active.
+        """
         artifacts = NodeArtifacts()
-        # safe old rules
-        old_temporary_rules = context.collision_manager.temporary_rules
-
-        # compute collision matrix with new rules
-        context.collision_manager.clear_temporary_rules()
-        context.collision_manager.extend_temporary_rule(self.temporary_rules)
-        context.collision_manager.update_collision_matrix()
-        self.collision_matrix = context.collision_manager.collision_matrix
-
-        context.collision_manager.clear_temporary_rules()
-        context.collision_manager.extend_temporary_rule(old_temporary_rules)
-        context.collision_manager.update_collision_matrix()
-
+        self._previous_rules = list(context.collision_manager.temporary_rules)
+        with ExitStack() as restoration:
+            restoration.callback(self._restore_previous_rules, context)
+            context.collision_manager.clear_temporary_rules()
+            context.collision_manager.extend_temporary_rule(self.temporary_rules)
+            context.collision_manager.update_collision_matrix()
+            self.collision_matrix = context.collision_manager.collision_matrix
         artifacts.observation = sm.Scalar.const_true()
         return artifacts
 
-    def on_start(self, context: MotionStatechartContext):
+    def on_start(self, context: MotionStatechartContext) -> None:
+        """
+        Activate the prebuilt collision matrix for the motion.
+        """
         context.collision_manager.clear_temporary_rules()
         context.collision_manager.extend_temporary_rule(self.temporary_rules)
         context.collision_manager.set_collision_matrix(self.collision_matrix)
+
+    def _restore_previous_rules(self, context: MotionStatechartContext) -> None:
+        """
+        Restore the policy saved before building this node.
+        """
+        if self._previous_rules is None:
+            return
+        context.collision_manager.clear_temporary_rules()
+        context.collision_manager.extend_temporary_rule(self._previous_rules)
+        context.collision_manager.update_collision_matrix()
+
+    def cleanup(self, context: MotionStatechartContext) -> None:
+        """
+        Restore the prior policy after success, cancellation or build failure.
+        """
+        self._restore_previous_rules(context)
 
 
 @dataclass(eq=False, repr=False)

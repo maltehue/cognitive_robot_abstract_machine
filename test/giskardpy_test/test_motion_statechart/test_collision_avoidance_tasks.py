@@ -1138,3 +1138,76 @@ def test_repeated_collision_pr2_apartment_does_not_increase_execution_time(
         f"Execution time is increasing: first half median {first_half_median:.4f}s, "
         f"second half median {second_half_median:.4f}s"
     )
+
+
+# %% temporary collision rule lifetime
+
+
+@pytest.mark.parametrize("start", [True, False])
+def test_temporary_collision_rules_restore_the_previous_matrix_on_cleanup(
+    cylinder_bot_world: World, start: bool
+) -> None:
+    """
+    Cleanup restores the prior policy whether or not the compiled node started.
+    """
+    context = MotionStatechartContext(world=cylinder_bot_world)
+    robot = cylinder_bot_world.get_semantic_annotations_by_type(AbstractRobot)[0]
+    obstacle = cylinder_bot_world.get_body_by_name("environment")
+    previous = AvoidCollisionBetweenGroups(
+        body_group_a=[robot.root], body_group_b=[obstacle]
+    )
+    manager = context.collision_manager
+    manager.extend_temporary_rule([previous])
+    manager.update_collision_matrix()
+    expected = set(manager.collision_matrix.collision_checks)
+    allowance = AllowCollisionBetweenGroups(
+        body_group_a=[robot.root], body_group_b=[obstacle]
+    )
+    node = UpdateTemporaryCollisionRules(temporary_rules=[allowance])
+    node.build_artifacts(context)
+    assert manager.temporary_rules == [previous]
+    if start:
+        node.on_start(context)
+        assert manager.temporary_rules == [allowance]
+    node.cleanup(context)
+
+    assert manager.temporary_rules == [previous]
+    assert manager.collision_matrix.collision_checks == expected
+
+
+def test_temporary_collision_rules_restore_after_build_failure(
+    cylinder_bot_world: World, mocker
+) -> None:
+    """
+    An interrupted matrix build cannot leave its provisional allowances active.
+    """
+    context = MotionStatechartContext(world=cylinder_bot_world)
+    previous = AvoidAllCollisions()
+    context.collision_manager.extend_temporary_rule([previous])
+    context.collision_manager.update_collision_matrix()
+    node = UpdateTemporaryCollisionRules(temporary_rules=[AllowAllCollisions()])
+    mocker.patch.object(
+        context.collision_manager,
+        "update_collision_matrix",
+        side_effect=[RuntimeError(), None],
+    )
+
+    with pytest.raises(RuntimeError):
+        node.build_artifacts(context)
+
+    assert context.collision_manager.temporary_rules == [previous]
+
+
+def test_unbuilt_collision_rule_cleanup_keeps_existing_policy(
+    cylinder_bot_world: World,
+) -> None:
+    """
+    Cleanup of a node that never built has no previous policy to restore.
+    """
+    context = MotionStatechartContext(world=cylinder_bot_world)
+    previous = AvoidAllCollisions()
+    context.collision_manager.extend_temporary_rule([previous])
+    node = UpdateTemporaryCollisionRules(temporary_rules=[AllowAllCollisions()])
+    node.cleanup(context)
+
+    assert context.collision_manager.temporary_rules == [previous]
