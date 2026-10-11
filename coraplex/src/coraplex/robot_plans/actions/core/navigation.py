@@ -271,14 +271,15 @@ class PathPlanningNavigateAction(ActionDescription):
         """
         :param floor: The floor to test.
         :return: Whether the robot's base rests within this floor's footprint and no
-            lower than its top.
+            lower than its top when measured at the root or base underside.
         """
         extent = self._extent_of(floor)
         base_pose = self.robot.root.global_pose
         return (
             extent.min_x <= float(base_pose.x) <= extent.max_x
             and extent.min_y <= float(base_pose.y) <= extent.max_y
-            and extent.max_z <= float(base_pose.z)
+            and extent.max_z
+            <= max(float(base_pose.z), self.robot.mobile_base.bounding_box.min_z)
         )
 
     def _path(self) -> list[Pose]:
