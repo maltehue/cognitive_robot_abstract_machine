@@ -9,6 +9,7 @@ from pathlib import Path
 from types import NoneType
 
 import numpy as np
+from trimesh.triangles import mass_properties
 import trimesh
 from numpy.typing import NDArray
 from typing_extensions import Dict, List, Optional, Sequence, Tuple, Type
@@ -20,6 +21,7 @@ from semantic_digital_twin.adapters.package_resolver import (
     PathResolver,
 )
 from semantic_digital_twin.adapters.usd.exceptions import (
+    UsdInertialGeometryError,
     UnsupportedUsdGeometryTypeError,
     UnsupportedUsdPhysicsJointTypeError,
     UsdPhysicsJointMissingChildBodyError,
@@ -956,7 +958,8 @@ class USDParser(WorldModelParser):
     @staticmethod
     def _parse_inertial(link_prim: Usd.Prim, body: Body) -> Optional[Inertial]:
         """
-        Parses a link prim's :class:`~pxr.UsdPhysics.MassAPI` inertial properties.
+        Read authored inertia and infer unspecified values from closed collision
+        geometry.
 
         :param link_prim: The link's root USD prim.
         :param body: The body the properties belong to, used as their reference frame.
@@ -975,12 +978,39 @@ class USDParser(WorldModelParser):
         diagonal_inertia = mass_api.GetDiagonalInertiaAttr().Get() or (0.0, 0.0, 0.0)
         principal_axes = mass_api.GetPrincipalAxesAttr().Get()
 
+        infer_center = not np.isfinite(center_of_mass).all()
+        infer_inertia = not np.any(diagonal_inertia)
+        if infer_center or infer_inertia:
+            mesh = body.collision.combined_mesh
+            if not mesh.is_volume:
+                raise UsdInertialGeometryError(
+                    file_path=link_prim.GetStage().GetRootLayer().identifier,
+                    prim_path=str(link_prim.GetPath()),
+                )
+            if infer_center:
+                center_of_mass = mesh.center_mass
+            if infer_inertia:
+                properties = mass_properties(
+                    mesh.triangles,
+                    density=mass / mesh.volume,
+                    center_mass=np.asarray(center_of_mass),
+                )
+                return Inertial(
+                    mass=mass,
+                    center_of_mass=Point3(*center_of_mass, reference_frame=body),
+                    inertia=InertiaTensor(data=properties.inertia),
+                )
+
         principal_moments = PrincipalMoments.from_values(
             i1=diagonal_inertia[0], i2=diagonal_inertia[1], i3=diagonal_inertia[2]
         )
         axes_rotation = _usd_pose_to_transform(
             Gf.Vec3d(0, 0, 0),
-            principal_axes if principal_axes is not None else Gf.Quatf(1, 0, 0, 0),
+            (
+                principal_axes
+                if principal_axes is not None and principal_axes.GetLength() > 0
+                else Gf.Quatf(1, 0, 0, 0)
+            ),
         )
         inertia_tensor = InertiaTensor.from_principal_moments_and_axes(
             moments=principal_moments,
