@@ -2,11 +2,14 @@
 How a transport moves to an object, fetches it and puts it down.
 """
 
+from __future__ import annotations
+
 import itertools
+from contextlib import ExitStack
 
 import numpy as np
 import pytest
-from typing_extensions import Callable, List, Type
+from typing_extensions import Callable, List, Type, TYPE_CHECKING
 
 from krrood.entity_query_language.factories import a, variable
 from krrood.entity_query_language.query.match import Match
@@ -47,6 +50,27 @@ from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Milk,
 )
 from semantic_digital_twin.robots.robot_parts import AbstractRobot, Arm
+from semantic_digital_twin.robots.armar7 import Armar7
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.world_description.connections import RevoluteConnection
+from ..semantic_digital_twin_test.test_adapters.usd_stages import (
+    USD_SEMANTICS_AVAILABLE,
+)
+from ..semantic_digital_twin_test.test_robots.test_pose_facing import (
+    description_is_available,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+if USD_SEMANTICS_AVAILABLE:
+    from ..dataset.usd_transportation import (
+        TransportationScene,
+        CarriedObjectSamples,
+        ScenePath,
+    )
+
 from semantic_digital_twin.grasping.grasp_candidates import (
     GraspCandidate,
     HasGraspCandidates,
@@ -1003,3 +1027,55 @@ def test_transport_grounds_carrying_and_placement_after_pick_up(pr2_apartment_co
     )
     assert grounded_carry.object_designator is carry.object_designator
     assert grounded_carry.target is carry.target
+
+
+# %% USD scene transportation
+
+
+@pytest.mark.skipif(
+    not USD_SEMANTICS_AVAILABLE,
+    reason="USD scene support labels require usd-core with UsdSemantics",
+)
+@pytest.mark.parametrize("robot_type", [PR2, Armar7])
+def test_transportation_in_an_imported_scene_preserves_the_attachment_and_release(
+    tmp_path: Path, robot_type: type[AbstractRobot]
+) -> None:
+    """
+    The complete core transport moves and releases its load in an articulated scene.
+    """
+    if not description_is_available(robot_type):
+        pytest.skip("The public robot description is not installed")
+    scene = TransportationScene.create(tmp_path, robot_type)
+    standing_height = float(scene.robot.root.global_pose.z)
+    travel = (
+        scene.destination.position.to_np()[:3]
+        - scene.robot.root.global_pose.position.to_np()[:3]
+    )
+    travel /= np.linalg.norm(travel)
+    previous_rules = list(scene.world.collision_manager.temporary_rules)
+    observer = CarriedObjectSamples(
+        _world=scene.world,
+        robot=scene.robot,
+        object_body=scene.graspable.root,
+        arm=scene.arm,
+    )
+    plan = scene.create_plan()
+    with ExitStack() as cleanup:
+        cleanup.callback(observer.stop)
+        with simulated_robot(collision_avoidance=True):
+            plan.perform()
+
+    assert len(observer.root_positions) > 1
+    assert np.ptp(np.asarray(observer.root_positions) @ travel) > 0.5
+    for transform in observer.object_T_tool:
+        np.testing.assert_allclose(transform, observer.object_T_tool[0], atol=1e-9)
+    assert scene.graspable.root.parent_kinematic_structure_entity is scene.world.root
+    np.testing.assert_allclose(
+        scene.graspable.root.global_pose.to_np(), scene.target.to_np(), atol=0.01
+    )
+    assert float(scene.robot.root.global_pose.z) == pytest.approx(standing_height)
+    assert scene.world.collision_manager.temporary_rules == previous_rules
+    door = scene.world.get_body_by_name(
+        PrefixedName(ScenePath.DOOR.lstrip("/"), ScenePath.ENVIRONMENT)
+    )
+    assert isinstance(door.parent_connection, RevoluteConnection)
