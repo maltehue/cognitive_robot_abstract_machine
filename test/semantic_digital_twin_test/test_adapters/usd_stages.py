@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 
 try:
     from pxr import Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
@@ -448,3 +449,56 @@ def build_component_scene() -> Usd.Stage:
     for path in (ComponentScenePath.FIRST, ComponentScenePath.SECOND):
         _define_link(stage, path)
     return stage
+
+
+# %% authored scene collision geometry
+
+
+class CollisionScenePath(StrEnum):
+    """
+    Geometry beneath one model component with a collision-only proxy.
+    """
+
+    OBJECT = "/object"
+    VISUAL = "/object/visual/sphere"
+    PROXY = "/object/collision/cube"
+
+
+class CollisionSceneFile(StrEnum):
+    """
+    Synthetic USD files used to exercise payload composition.
+    """
+
+    ASSET = "collision_asset.usda"
+    SCENE = "collision_scene.usda"
+
+
+def build_collision_scene(stage: Usd.Stage | None = None) -> Usd.Stage:
+    """
+    Build one visible shape and a distinct authored guide collider.
+    """
+    if stage is None:
+        stage = Usd.Stage.CreateInMemory()
+    component = UsdGeom.Xform.Define(stage, CollisionScenePath.OBJECT)
+    Usd.ModelAPI(component).SetKind(Kind.Tokens.component)
+    stage.SetDefaultPrim(component.GetPrim())
+    UsdGeom.Sphere.Define(stage, CollisionScenePath.VISUAL)
+    proxy = UsdGeom.Cube.Define(stage, CollisionScenePath.PROXY)
+    UsdGeom.Imageable(proxy).CreatePurposeAttr(UsdGeom.Tokens.guide)
+    UsdPhysics.CollisionAPI.Apply(proxy.GetPrim())
+    return stage
+
+
+def write_composed_collision_scene(directory: Path) -> Path:
+    """
+    Write an asset and a scene whose payload loads that asset.
+    """
+    asset_path = directory / CollisionSceneFile.ASSET
+    asset = build_collision_scene(Usd.Stage.CreateNew(str(asset_path)))
+    asset.GetRootLayer().Save()
+    scene_path = directory / CollisionSceneFile.SCENE
+    scene = Usd.Stage.CreateNew(str(scene_path))
+    component = UsdGeom.Xform.Define(scene, CollisionScenePath.OBJECT)
+    component.GetPrim().GetPayloads().AddPayload(str(asset_path))
+    scene.GetRootLayer().Save()
+    return scene_path

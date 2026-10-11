@@ -29,6 +29,9 @@ from semantic_digital_twin.world_description.geometry import Box, Cylinder, Mesh
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
+    CollisionScenePath,
+    build_collision_scene,
+    write_composed_collision_scene,
     MixedScenePath,
     ComponentScenePath,
     build_mixed_scene,
@@ -53,7 +56,7 @@ from .usd_stages import (
 )
 
 if PXR_AVAILABLE:
-    from pxr import Gf, Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 pytestmark = pytest.mark.skipif(
     not PXR_AVAILABLE, reason="usd-core (pxr) not installed"
@@ -649,3 +652,70 @@ def test_scene_parser_keeps_component_geometry_groups_in_one_body() -> None:
 
     assert body.name.name == ComponentScenePath.OBJECT.lstrip("/")
     assert len(body.visual.shapes) == 2
+
+
+# %% authored scene collision geometry
+
+
+def test_scene_parser_separates_visible_geometry_from_guide_collision_proxies() -> None:
+    """
+    A guide collider belongs to collision geometry without becoming visible.
+    """
+    stage = build_collision_scene()
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    [body] = [body for body in world.bodies if body is not world.root]
+
+    [visual] = body.visual.shapes
+    [collision] = body.collision.shapes
+    assert isinstance(visual, Sphere)
+    assert isinstance(collision, Box)
+    expected_size = (
+        UsdGeom.Cube(stage.GetPrimAtPath(CollisionScenePath.PROXY)).GetSizeAttr().Get()
+    )
+    assert collision.scale.x == expected_size
+
+
+def test_scene_parser_keeps_objects_with_only_guide_collision_geometry() -> None:
+    """
+    An object with only an authored collision proxy remains addressable.
+    """
+    stage = build_collision_scene()
+    stage.RemovePrim(CollisionScenePath.VISUAL)
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    [body] = [body for body in world.bodies if body is not world.root]
+
+    assert body.name.name == CollisionScenePath.OBJECT.lstrip("/")
+    assert body.visual.shapes == []
+    [collision] = body.collision.shapes
+    assert isinstance(collision, Box)
+
+
+def test_scene_parser_does_not_replace_disabled_colliders_with_visual_geometry() -> (
+    None
+):
+    """
+    An explicitly disabled collider does not trigger visual collision fallback.
+    """
+    stage = build_collision_scene()
+    UsdPhysics.CollisionAPI(
+        stage.GetPrimAtPath(CollisionScenePath.PROXY)
+    ).CreateCollisionEnabledAttr(False)
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    [body] = [body for body in world.bodies if body is not world.root]
+
+    assert body.collision.shapes == []
+
+
+def test_scene_parser_preserves_collision_proxies_in_a_loaded_payload(tmp_path) -> None:
+    """
+    Stage composition retains proxy ownership and its distinct geometry.
+    """
+    source = write_composed_collision_scene(tmp_path)
+    world = usd_parser.USDSceneParser.from_file(str(source)).parse()
+    [body] = [body for body in world.bodies if body is not world.root]
+
+    assert body.name.name == CollisionScenePath.OBJECT.lstrip("/")
+    [visual] = body.visual.shapes
+    [collision] = body.collision.shapes
+    assert isinstance(visual, Sphere)
+    assert isinstance(collision, Box)

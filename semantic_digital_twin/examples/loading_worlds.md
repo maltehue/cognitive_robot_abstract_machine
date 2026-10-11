@@ -59,3 +59,9 @@ the enclosing geometry prim's parent defines the object boundary.
 Grouping transforms and geometry scale are preserved. Coordinates remain in the
 stage's authored units and axes. Physics joints currently raise an explicit error.
 `USDParser` retains its asset-import behavior.
+
+
+`USDSceneParser` keeps visual geometry separate from `UsdPhysics.CollisionAPI`
+geometry. Guide colliders remain available for collision checks without becoming
+visible. When an object has no authored collider, its visible geometry is also
+used for collision. An explicitly disabled collider suppresses this fallback.
