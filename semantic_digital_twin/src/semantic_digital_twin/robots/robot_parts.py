@@ -77,7 +77,7 @@ from semantic_digital_twin.spatial_types import (
     RotationMatrix,
     HomogeneousTransformationMatrix,
 )
-from semantic_digital_twin.spatial_types.spatial_types import Pose
+from semantic_digital_twin.spatial_types.spatial_types import Point3, Pose
 from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world_description.connections import (
     ActiveConnection,
@@ -1139,6 +1139,34 @@ class AbstractRobot(Agent, HasRobotParts, ABC):
                 return parent_connection
         except AttributeError:
             pass
+
+    # %% standing root placement
+
+    def resolve_standing_pose(self, pose: Pose) -> Pose:
+        """
+        Preserve a target's planar position and orientation at the root's current
+        height in its parent frame.
+
+        :param pose: Requested placement expressed in any world frame.
+        :return: Placement at the standing height, in the requested reference frame.
+        """
+        drive_frame = self.root.parent_kinematic_structure_entity
+        if drive_frame is None:
+            return pose
+        drive_pose = self._world.transform(pose, drive_frame)
+        drive_T_root = self._world.compute_forward_kinematics(drive_frame, self.root)
+        standing_position = Point3(
+            drive_pose.x,
+            drive_pose.y,
+            drive_T_root.z,
+            reference_frame=drive_frame,
+        )
+        standing_pose = HomogeneousTransformationMatrix.from_point_rotation_matrix(
+            standing_position,
+            drive_pose.rotation_matrix,
+            reference_frame=drive_frame,
+        ).pose
+        return self._world.transform(standing_pose, pose.reference_frame)
 
     def set_root_pose(self, pose: Pose) -> None:
         """

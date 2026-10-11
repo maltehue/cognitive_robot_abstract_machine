@@ -7,7 +7,13 @@ from coraplex.plans.factories import sequential
 from coraplex.plans.plan_node import MotionNode
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.robot_plans.actions.core.placing import PlaceAction
-from coraplex.robot_plans.motions.gripper import MoveToolCenterPointMotion
+from coraplex.robot_plans.motions.gripper import (
+    MoveToolCenterPointMotion,
+    MoveGripperMotion,
+)
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AllowCollisionForEndEffector,
+)
 from semantic_digital_twin.robots.robot_parts import Arm
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
@@ -183,3 +189,36 @@ def test_place_takes_the_arm_its_pick_up_will_use(pr2_apartment_context):
     sequential([pick_up, place], context=context)
 
     assert _arms_moved_by(place) == {robot.right_arm}
+
+
+# %% targeted release contacts
+
+
+def test_place_applies_selected_contacts_through_release(pr2_holding_milk) -> None:
+    """Release motions keep selected object contacts without freeing the whole hand."""
+    world, robot, milk = pr2_holding_milk
+    action = PlaceAction(
+        milk,
+        Pose(reference_frame=world.root),
+        allow_environment_contacts=False,
+        support_bodies=[
+            next(
+                body for body in world.bodies_with_collision if body not in robot.bodies
+            )
+        ],
+    )
+    sequential([action], Context(world, robot, sampling_seed=SAMPLING_SEED))
+    motions = [
+        node.designator
+        for node in action._action_plan.descendants
+        if isinstance(node, MotionNode)
+        and isinstance(node.designator, (MoveToolCenterPointMotion, MoveGripperMotion))
+    ]
+
+    assert len(motions) == 4
+    assert [len(motion.allowed_contacts) for motion in motions] == [2, 2, 2, 1]
+    assert all(
+        not isinstance(rule, AllowCollisionForEndEffector)
+        for motion in motions
+        for rule in motion.allowed_contacts
+    )

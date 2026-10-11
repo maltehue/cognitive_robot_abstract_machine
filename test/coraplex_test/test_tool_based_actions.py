@@ -22,7 +22,18 @@ from coraplex.robot_plans.actions.composite.tool_based import (
     PouringAction,
     WipingAction,
 )
-from coraplex.robot_plans.motions.gripper import MoveTCPWaypointsAlignedMotion
+from coraplex.robot_plans.motions.gripper import (
+    MoveTCPWaypointsAlignedMotion,
+    MoveToolCenterPointMotion,
+    MoveGripperMotion,
+)
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AllowCollisionBetweenGroups,
+    AllowCollisionForEndEffector,
+)
+from semantic_digital_twin.datastructures.definitions import GripperState
+import coraplex.robot_plans.motions.contacts as coraplex_contacts
+from semantic_digital_twin.collision_checking.collision_matrix import CollisionCheck
 from krrood.ormatic.data_access_objects.helper import to_dao
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
@@ -345,3 +356,62 @@ def test_mixing_action_orm_roundtrip(tool_action_world, coraplex_testing_session
     coraplex_testing_session.commit()
 
     assert dao.database_id is not None
+
+
+# %% explicit manipulation contact pairs
+
+
+@pytest.mark.parametrize("close_gripper", [True, False])
+def test_manipulation_motion_keeps_explicit_contact_pairs(
+    tool_action_world, close_gripper: bool
+) -> None:
+    """
+    A motion's target allowance remains pair-specific instead of freeing the hand.
+    """
+    world, robot, context, container, tool_body = tool_action_world
+    gripper = robot.right_arm.end_effector
+    allowance = AllowCollisionBetweenGroups(
+        body_group_a=gripper.bodies_with_collision, body_group_b=[tool_body]
+    )
+    motion = (
+        MoveGripperMotion(GripperState.CLOSE, gripper, allowed_contacts=[allowance])
+        if close_gripper
+        else MoveToolCenterPointMotion(
+            Pose(reference_frame=world.root),
+            robot.right_arm,
+            allowed_contacts=[allowance],
+        )
+    )
+    sequential([motion], context)
+    [node] = _collision_rule_nodes(motion._motion_chart)
+
+    assert node.temporary_rules == [allowance]
+    assert all(
+        not isinstance(rule, AllowCollisionForEndEffector)
+        for rule in node.temporary_rules
+    )
+
+
+def test_targeted_manipulation_rules_leave_unrelated_objects_and_arm_links_checked(
+    tool_action_world,
+) -> None:
+    """
+    Only hand-object and object-support pairs are allowed by the selected policy.
+    """
+    from_policy = coraplex_contacts.HasManipulationContacts(
+        allow_environment_contacts=False
+    )
+    world, robot, context, container, tool_body = tool_action_world
+    gripper = robot.right_arm.end_effector
+    from_policy.support_bodies = [container]
+    rules = from_policy.create_contact_rules(gripper, tool_body)
+    for rule in rules:
+        rule.update(world)
+
+    pairs = {pair for rule in rules for pair in rule.allowed_collision_pairs}
+    assert pairs == {
+        CollisionCheck.create_and_validate(body, tool_body)
+        for body in gripper.bodies_with_collision
+        if body is not tool_body
+    } | {CollisionCheck.create_and_validate(tool_body, container)}
+    assert all(not isinstance(rule, AllowCollisionForEndEffector) for rule in rules)

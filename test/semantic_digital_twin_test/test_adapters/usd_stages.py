@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from enum import StrEnum
+from pathlib import Path
+
+from semantic_digital_twin.adapters.usd.parser import UsdAxis
+
 try:
-    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
     PXR_AVAILABLE = True
 except ImportError:
@@ -135,13 +140,10 @@ def build_stage_with_mesh_targeted_body0() -> Usd.Stage:
 
 def build_stage_with_textured_mesh(texture_file_path: str) -> Usd.Stage:
     """
-    A minimal in-memory stage with a single quad mesh, per-point ``st`` UV
-    coordinates, and a material whose ``diffuseColor`` is driven by a texture read
-    from ``texture_file_path`` - the layout
-    ``USDParser._diffuse_texture_path``/``_uv_coordinates`` read.
+    A quad mesh with per-point UV coordinates and a bound diffuse texture.
 
-    :param texture_file_path: Path to the texture image the material's
-        ``UsdUVTexture`` node reads.
+    :param texture_file_path: Path to the texture image the material's ``UsdUVTexture``
+        node reads.
     :return: The built in-memory stage.
     """
     stage = Usd.Stage.CreateInMemory()
@@ -349,4 +351,217 @@ def build_single_joint_stage_with_semantic_labels() -> Usd.Stage:
         ["seating"]
     )
 
+    return stage
+
+
+# %% authored scene placement
+
+
+class ScenePrimPath(StrEnum):
+    """
+    Prims used to exercise independent object transforms.
+    """
+
+    FIRST = "/object_a"
+    SECOND = "/object_b"
+    ROOT = "/object"
+    MESH = "/object/scaled/mesh"
+    CUBE = "/object/cube"
+
+
+def build_stage_with_placed_objects(up_axis: str, meters_per_unit: float) -> Usd.Stage:
+    """
+    Two translated and rotated objects in the declared stage coordinate system.
+    """
+    stage = build_jointless_stage_with_multiple_top_level_prims()
+    UsdGeom.SetStageUpAxis(stage, up_axis)
+    UsdGeom.SetStageMetersPerUnit(stage, meters_per_unit)
+    for index, path in enumerate((ScenePrimPath.FIRST, ScenePrimPath.SECOND)):
+        transform = UsdGeom.Xformable(stage.GetPrimAtPath(path))
+        transform.AddTranslateOp().Set(Gf.Vec3d(index + 1, 2, 3))
+        transform.AddRotateXYZOp().Set(Gf.Vec3f(10, 20, 30))
+    return stage
+
+
+def build_stage_with_scaled_root() -> Usd.Stage:
+    """
+    A root scale affecting both mesh vertices and a primitive's dimensions.
+    """
+    stage = build_stage_with_scaled_mesh(scale=(1.0, 1.0, 1.0))
+    root = UsdGeom.Xformable(stage.GetPrimAtPath(ScenePrimPath.ROOT))
+    root.AddScaleOp().Set(Gf.Vec3f(2, 3, 4))
+    UsdGeom.Cube.Define(stage, ScenePrimPath.CUBE)
+    return stage
+
+
+# %% scene object ownership
+
+
+class SceneJointType(StrEnum):
+    """
+    Joint types used to exercise scene articulation and diagnostics.
+    """
+
+    FIXED = "FixedJoint"
+    REVOLUTE = "RevoluteJoint"
+    PRISMATIC = "PrismaticJoint"
+    SPHERICAL = "SphericalJoint"
+
+
+class MixedScenePath(StrEnum):
+    """
+    Prims in a scene containing repeated object names and a movable link.
+    """
+
+    ROOT = "/scene"
+    GROUP = "/scene/group"
+    FIRST = "/scene/group/object"
+    SECOND = "/scene/object"
+    CHILD = "/scene/group/object/child"
+    JOINT = "/scene/joint"
+    OTHER_JOINT = "/scene/other_joint"
+
+
+def build_mixed_scene(joint_type: SceneJointType | None = None) -> Usd.Stage:
+    """
+    Build nested objects and optionally connect a child through a physics joint.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    root = UsdGeom.Xform.Define(stage, MixedScenePath.ROOT)
+    stage.SetDefaultPrim(root.GetPrim())
+    root.AddTranslateOp().Set(Gf.Vec3d(1, 2, 3))
+    group = UsdGeom.Xform.Define(stage, MixedScenePath.GROUP)
+    group.AddRotateZOp().Set(30)
+    for path in (MixedScenePath.FIRST, MixedScenePath.SECOND, MixedScenePath.CHILD):
+        _define_link(stage, path)
+    UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.FIRST)).AddTranslateOp().Set(
+        Gf.Vec3d(2, 0, 0)
+    )
+    if joint_type is None:
+        return stage
+    joint_classes = {
+        SceneJointType.FIXED: UsdPhysics.FixedJoint,
+        SceneJointType.REVOLUTE: UsdPhysics.RevoluteJoint,
+        SceneJointType.PRISMATIC: UsdPhysics.PrismaticJoint,
+        SceneJointType.SPHERICAL: UsdPhysics.SphericalJoint,
+    }
+    joint = joint_classes[joint_type].Define(stage, MixedScenePath.JOINT)
+    joint.CreateBody0Rel().SetTargets([MixedScenePath.FIRST])
+    joint.CreateBody1Rel().SetTargets([MixedScenePath.CHILD])
+    if joint_type in (SceneJointType.REVOLUTE, SceneJointType.PRISMATIC):
+        joint.CreateAxisAttr(UsdAxis.Z)
+        joint.CreateLowerLimitAttr(-10)
+        joint.CreateUpperLimitAttr(20)
+    return stage
+
+
+class ComponentScenePath(StrEnum):
+    """
+    A component containing geometry below separate grouping transforms.
+    """
+
+    ROOT = "/scene"
+    OBJECT = "/scene/component"
+    FIRST = "/scene/component/first"
+    SECOND = "/scene/component/second"
+
+
+def build_component_scene() -> Usd.Stage:
+    """
+    Build one component with geometry below two internal transforms.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.Xform.Define(stage, ComponentScenePath.ROOT)
+    component = UsdGeom.Xform.Define(stage, ComponentScenePath.OBJECT)
+    Usd.ModelAPI(component).SetKind(Kind.Tokens.component)
+    for path in (ComponentScenePath.FIRST, ComponentScenePath.SECOND):
+        _define_link(stage, path)
+    return stage
+
+
+# %% authored scene collision geometry
+
+
+class CollisionScenePath(StrEnum):
+    """
+    Geometry beneath one model component with a collision-only proxy.
+    """
+
+    OBJECT = "/object"
+    VISUAL = "/object/visual/sphere"
+    PROXY = "/object/collision/cube"
+
+
+class CollisionSceneFile(StrEnum):
+    """
+    Synthetic USD files used to exercise payload composition.
+    """
+
+    ASSET = "collision_asset.usda"
+    SCENE = "collision_scene.usda"
+
+
+def build_collision_scene(stage: Usd.Stage | None = None) -> Usd.Stage:
+    """
+    Build one visible shape and a distinct authored guide collider.
+    """
+    if stage is None:
+        stage = Usd.Stage.CreateInMemory()
+    component = UsdGeom.Xform.Define(stage, CollisionScenePath.OBJECT)
+    Usd.ModelAPI(component).SetKind(Kind.Tokens.component)
+    stage.SetDefaultPrim(component.GetPrim())
+    UsdGeom.Sphere.Define(stage, CollisionScenePath.VISUAL)
+    proxy = UsdGeom.Cube.Define(stage, CollisionScenePath.PROXY)
+    UsdGeom.Imageable(proxy).CreatePurposeAttr(UsdGeom.Tokens.guide)
+    UsdPhysics.CollisionAPI.Apply(proxy.GetPrim())
+    return stage
+
+
+def write_composed_collision_scene(directory: Path) -> Path:
+    """
+    Write an asset and a scene whose payload loads that asset.
+    """
+    asset_path = directory / CollisionSceneFile.ASSET
+    asset = build_collision_scene(Usd.Stage.CreateNew(str(asset_path)))
+    asset.GetRootLayer().Save()
+    scene_path = directory / CollisionSceneFile.SCENE
+    scene = Usd.Stage.CreateNew(str(scene_path))
+    component = UsdGeom.Xform.Define(scene, CollisionScenePath.OBJECT)
+    component.GetPrim().GetPayloads().AddPayload(str(asset_path))
+    scene.GetRootLayer().Save()
+    return scene_path
+
+
+# %% scene support semantics
+
+
+class SceneTaxonomy(StrEnum):
+    """
+    Label taxonomy exercised by the synthetic scene fixtures.
+    """
+
+    CLASS = "class"
+    CATEGORY = "category"
+
+
+class SceneLabel(StrEnum):
+    """
+    Known support labels and an unknown label retained by the importer.
+    """
+
+    FLOOR = "floor"
+    TABLE = "table"
+    WORKBENCH = "workbench"
+    UNKNOWN = "unclassified_object"
+
+
+def build_labelled_scene(label: str) -> Usd.Stage:
+    """
+    Build an object labelled above separate visible and collision groups.
+    """
+    stage = build_collision_scene()
+    labels = UsdSemantics.LabelsAPI.Apply(
+        stage.GetPrimAtPath(CollisionScenePath.OBJECT), SceneTaxonomy.CLASS
+    )
+    labels.CreateLabelsAttr([label])
     return stage

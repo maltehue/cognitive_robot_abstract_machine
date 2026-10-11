@@ -31,6 +31,7 @@ from coraplex.robot_plans.mixins import (
     PickUpTuningParameters,
     ReachTuningParameters,
 )
+from coraplex.robot_plans.motions.contacts import HasManipulationContacts
 from coraplex.robot_plans.motions.gripper import (
     MoveGripperMotion,
     MoveToolCenterPointMotion,
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class HasGraspChoice:
+class HasGraspChoice(HasManipulationContacts):
     """
     Adds to an action the grasp it takes hold by.
 
@@ -69,6 +70,7 @@ class HasGraspChoice:
 @dataclass
 class ReachAction(
     ActionDescription,
+    HasManipulationContacts,
     HasApproachesGraspPoses,
     ReachTuningParameters,
     HasGraspDetectionThreshold,
@@ -110,7 +112,9 @@ class ReachAction(
             MoveToolCenterPointMotion(
                 pre_pose,
                 self.arm,
-                allow_gripper_collision=True,
+                allowed_contacts=self.create_contact_rules(
+                    self.arm.end_effector, self.grasp.graspable.root
+                ),
                 max_linear_velocity=self.pre_approach_linear_velocity,
                 position_threshold=self.position_threshold,
                 orientation_threshold=self.orientation_threshold,
@@ -126,7 +130,9 @@ class ReachAction(
             MoveToolCenterPointMotion(
                 poses.grasp,
                 self.arm,
-                allow_gripper_collision=True,
+                allowed_contacts=self.create_contact_rules(
+                    self.arm.end_effector, self.grasp.graspable.root
+                ),
                 max_linear_velocity=self.final_approach_linear_velocity,
                 position_threshold=self.position_threshold,
                 orientation_threshold=self.orientation_threshold,
@@ -190,6 +196,8 @@ class PickUpAction(
             children=[
                 GraspingAction(
                     grasp=self.grasp,
+                    allow_environment_contacts=self.allow_environment_contacts,
+                    support_bodies=self.support_bodies,
                     arm=self.arm,
                     approach_clearance=self.approach_clearance,
                     retreat_distance=self.retreat_distance,
@@ -220,7 +228,9 @@ class PickUpAction(
                 MoveToolCenterPointMotion(
                     lift_to_pose,
                     self.arm,
-                    allow_gripper_collision=True,
+                    allowed_contacts=self.create_contact_rules(
+                        self.arm.end_effector, self.grasp.graspable.root
+                    ),
                     movement_type=MovementType.TRANSLATION,
                     max_linear_velocity=self.lift_linear_velocity,
                     position_threshold=self.position_threshold,
@@ -285,6 +295,8 @@ class GraspingAction(
             children=[
                 ReachAction(
                     grasp=self.grasp,
+                    allow_environment_contacts=self.allow_environment_contacts,
+                    support_bodies=self.support_bodies,
                     arm=self.arm,
                     approach_clearance=self.approach_clearance,
                     retreat_distance=self.retreat_distance,
@@ -298,7 +310,9 @@ class GraspingAction(
                 MoveGripperMotion(
                     motion=GripperState.CLOSE,
                     gripper=self.arm.end_effector,
-                    allow_gripper_collision=True,
+                    allowed_contacts=self.create_contact_rules(
+                        self.arm.end_effector, self.grasp.graspable.root
+                    ),
                     finger_velocity=self.grasp_closing_velocity,
                     stall_minimum_time=self.grasp_stall_minimum_time,
                     tolerate_stall=self.tolerate_grasp_stall,
