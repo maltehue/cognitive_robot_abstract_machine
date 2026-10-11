@@ -71,3 +71,11 @@ Scene articulations start at zero joint position. Apply configured initial posit
 through the world's state API. Unsupported joints, invalid endpoints, multiple
 parents, closed loops and scaled joint frames raise explicit parsing errors.
 Joint endpoints remain separate bodies even within one model component.
+
+
+Scene bodies retain labels authored on themselves and their ancestors. Object labels
+also establish geometry ownership when model-kind metadata is absent. The default
+`UsdSceneSemantics` maps `floor` to `Floor` and `table`/`workbench` to `Table`,
+case-insensitively; the nearest recognized label takes precedence. Unknown vocabulary
+is retained as `UsdSemanticLabels`. Supply a different `support_labels` mapping to
+interpret another vocabulary. Joint type alone does not classify furniture.
