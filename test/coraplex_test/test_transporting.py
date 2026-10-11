@@ -40,6 +40,7 @@ from coraplex.robot_plans.actions.composite.transporting import (
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.querying.predicates import IsAmongTheClosestGraspsTo
 from coraplex.robot_plans.actions.core.placing import PlaceAction
+from coraplex.robot_plans.actions.core.carrying import CarryAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Handle,
@@ -973,3 +974,32 @@ def test_pickup_keeps_selected_contacts_through_approach_close_and_lift(
         for motion in contact_motions
         for rule in motion.allowed_contacts
     )
+
+
+# %% carrying after the attachment is established
+
+
+def test_transport_grounds_carrying_and_placement_after_pick_up(pr2_apartment_context):
+    """
+    A carrying policy creates execution boundaries before state-dependent steps.
+    """
+    world, robot, context = pr2_apartment_context
+    milk = world.get_semantic_annotations_by_type(Milk)[0]
+    carry = CarryAction(milk, Pose.from_xyz_rpy(x=0.5, z=1, reference_frame=robot.root))
+    place = MoveAndPlaceAction.from_standing_position(
+        robot.root.global_pose, milk.root.global_pose, milk
+    )
+    transport = TransportAction(_pick_up_the_milk(world, context), place, carry=carry)
+    sequential([transport], context=context)
+    children = transport._action_plan.children
+
+    assert isinstance(children[2], UnderspecifiedNode)
+    assert children[2].designator_type is CarryAction
+    assert isinstance(children[3], UnderspecifiedNode)
+    assert children[3].designator_type is MoveAndPlaceAction
+
+    grounded_carry = next(
+        context.query_backend.evaluate(children[2].underspecified_action)
+    )
+    assert grounded_carry.object_designator is carry.object_designator
+    assert grounded_carry.target is carry.target
