@@ -112,6 +112,7 @@ class ReachAction(
             MoveToolCenterPointMotion(
                 pre_pose,
                 self.arm,
+                allow_gripper_collision=self.allow_environment_contacts,
                 allowed_contacts=self.create_contact_rules(
                     self.arm.end_effector, self.grasp.graspable.root
                 ),
@@ -130,6 +131,7 @@ class ReachAction(
             MoveToolCenterPointMotion(
                 poses.grasp,
                 self.arm,
+                allow_gripper_collision=self.allow_environment_contacts,
                 allowed_contacts=self.create_contact_rules(
                     self.arm.end_effector, self.grasp.graspable.root
                 ),
@@ -228,6 +230,7 @@ class PickUpAction(
                 MoveToolCenterPointMotion(
                     lift_to_pose,
                     self.arm,
+                    allow_gripper_collision=self.allow_environment_contacts,
                     allowed_contacts=self.create_contact_rules(
                         self.arm.end_effector, self.grasp.graspable.root
                     ),
@@ -310,6 +313,7 @@ class GraspingAction(
                 MoveGripperMotion(
                     motion=GripperState.CLOSE,
                     gripper=self.arm.end_effector,
+                    allow_gripper_collision=self.allow_environment_contacts,
                     allowed_contacts=self.create_contact_rules(
                         self.arm.end_effector, self.grasp.graspable.root
                     ),
