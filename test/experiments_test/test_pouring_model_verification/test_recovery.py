@@ -298,6 +298,28 @@ def test_a_logged_pour_replays_its_model_on_the_repose_angle_held_while_turning(
     )
 
 
+def test_a_logged_pour_replays_its_model_on_the_drain_rate_held_while_turning():
+    baseline = DEMO_PARAMETERS.with_dynamic_outflow_rate_constant(0.1)
+    perturbation = Perturbation(
+        parameter=ModelParameter.OUTFLOW_RATE_CONSTANT, factor=4.0
+    )
+    record = TrialRecord(
+        description={
+            TrialKey.PERTURBATION: perturbation.to_json(),
+            TrialKey.PARAMETERS: perturbation.around(DEMO_PARAMETERS).to_json(),
+        },
+        samples=pandas.DataFrame({Sample.PHASE: [Phase.TRANSFER]}),
+    )
+    pour = LoggedPour(record=record, baseline=baseline)
+    assert (
+        pour.given.outflow_rate_constant,
+        pour.true_point.outflow_rate_constant,
+    ) == (
+        perturbation.around(baseline).while_turning().outflow_rate_constant,
+        baseline.dynamic_outflow_rate_constant,
+    )
+
+
 # %% a cautious start while the aim is unconfirmed
 
 CAUTION = CautionSettings(cap_fraction=0.5, release_time=0.5)

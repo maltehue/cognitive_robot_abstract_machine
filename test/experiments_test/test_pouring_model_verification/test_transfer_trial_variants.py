@@ -3,6 +3,8 @@ import pytest
 from experiments.pouring_model_verification.parameters import (
     BASELINE,
     DEMO_PARAMETERS,
+    ModelParameter,
+    Perturbation,
 )
 from experiments.pouring_model_verification.inflow_model import FirstOrderInflowModel
 from experiments.pouring_model_verification.onset_rule import OnsetResponse, OnsetRule
@@ -26,9 +28,13 @@ from experiments.pouring_model_verification.transfer_trial import (
     SequencePosition,
     TransferTrial,
     CautionWithoutBankError,
+    DrainRateSpreadMissingError,
     PourFault,
 )
-from experiments.pouring_model_verification.hypothesis_bank import BankSettings
+from experiments.pouring_model_verification.hypothesis_bank import (
+    BankSettings,
+    DrainRateSpread,
+)
 from experiments.pouring_model_verification.recovery import CautionSettings
 from experiments.pouring_model_verification.sensor import SensorSet
 
@@ -261,3 +267,43 @@ def test_the_baffle_blocks_only_part_of_the_lip():
     geometry = SourceCup.CUP.geometry
     baffle = PourFault.LIP_BAFFLE.obstacle(SourceCup.CUP)
     assert 0.0 < baffle.scale.y < 2 * geometry.inner_radius
+
+
+# %% the twin's drain rate while turning
+
+DRAINING = DEMO_PARAMETERS.with_dynamic_outflow_rate_constant(
+    0.1
+).with_dynamic_outflow_rate_spread(0.3)
+WRONG_DRAIN = Perturbation(parameter=ModelParameter.OUTFLOW_RATE_CONSTANT, factor=4.0)
+
+
+def _draining_trial(baseline, bank: BankSettings) -> TransferTrial:
+    return TransferTrial(
+        scene=SCENE,
+        baseline=baseline,
+        perturbation=WRONG_DRAIN,
+        loop_mode=LoopMode.FILL_FEEDBACK,
+        seed=2,
+        bank=bank,
+        sensor_set=SensorSet.IDEAL,
+        sensor=SensorSet.IDEAL.receiver,
+        wrist_sensor=SensorSet.IDEAL.wrist,
+    )
+
+
+def test_a_bank_adapting_the_drain_rate_carries_the_twins_spread_with_the_error_set_in():
+    trial = _draining_trial(DRAINING, BankSettings(adapts_drain_rate=True))
+    assert trial.drain_rate == DrainRateSpread(
+        centre=DRAINING.dynamic_outflow_rate_constant * WRONG_DRAIN.factor,
+        spread=DRAINING.dynamic_outflow_rate_spread,
+    )
+
+
+def test_a_bank_that_does_not_adapt_the_drain_rate_carries_no_spread_of_it():
+    assert _draining_trial(DRAINING, BankSettings()).drain_rate is None
+
+
+def test_a_bank_adapting_the_drain_rate_needs_the_twins_spread_of_it():
+    trial = _draining_trial(DEMO_PARAMETERS, BankSettings(adapts_drain_rate=True))
+    with pytest.raises(DrainRateSpreadMissingError):
+        trial.drain_rate

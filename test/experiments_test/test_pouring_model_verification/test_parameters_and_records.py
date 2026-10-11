@@ -326,3 +326,34 @@ def test_an_error_in_the_repose_angle_moves_the_centre_but_keeps_the_spread():
     assert perturbation.around(SCATTERING).dynamic_repose_spread == (
         SCATTERING.dynamic_repose_spread
     )
+
+
+# %% the drain rate while the cup turns
+
+DRAINING = DEMO_PARAMETERS.with_dynamic_outflow_rate_constant(
+    DEMO_PARAMETERS.outflow_rate_constant * 0.5
+).with_dynamic_outflow_rate_spread(0.3)
+
+
+def test_a_turning_cup_drains_at_its_dynamic_rate():
+    assert DRAINING.while_turning().outflow_rate_constant == (
+        DRAINING.dynamic_outflow_rate_constant
+    )
+
+
+def test_an_error_in_the_drain_rate_scales_the_dynamic_one_and_keeps_its_spread():
+    perturbation = Perturbation(
+        parameter=ModelParameter.OUTFLOW_RATE_CONSTANT, factor=4.0
+    )
+    perturbed = perturbation.around(DRAINING)
+    assert (
+        perturbed.while_turning().outflow_rate_constant,
+        perturbed.dynamic_outflow_rate_spread,
+    ) == (
+        DRAINING.dynamic_outflow_rate_constant * perturbation.factor,
+        DRAINING.dynamic_outflow_rate_spread,
+    )
+
+
+def test_the_dynamic_drain_rate_and_its_spread_survive_a_round_trip_through_json():
+    assert ModelParameters.from_json(DRAINING.to_json()) == DRAINING

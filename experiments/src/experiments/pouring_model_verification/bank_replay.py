@@ -29,6 +29,7 @@ from experiments.pouring_model_verification.consistency import (
     RateResiduals,
 )
 from experiments.pouring_model_verification.hypothesis_bank import (
+    DrainRateSpread,
     OnsetSpread,
     BankSettings,
     DrainGeometry,
@@ -159,10 +160,10 @@ class LoggedPour:
     def given(self) -> ModelPoint:
         """
         :return: The parameters the controller's model was given, before any revision;
-            where the baseline holds a repose angle while turning, the error set
-            against that angle.
+            where the baseline holds values of its own while turning, the error set
+            against those.
         """
-        if self.baseline.dynamic_repose_angle is not None:
+        if self.baseline.has_dynamic_values:
             return self._point(self.perturbation.around(self.baseline).while_turning())
         parameters = ModelParameters.from_json(self.description[TrialKey.PARAMETERS])
         return ModelPoint(
@@ -474,6 +475,17 @@ class ReplayResult:
             return None
         return hypothesis_filter.mean().repose_angle
 
+    @property
+    def drain_rate_estimate(self) -> Optional[float]:
+        """
+        :return: The pour's drain rate as the outflow capacity hypothesis estimates it,
+            free of the twin's spread, or ``None`` without one.
+        """
+        hypothesis_filter = self.coupling.bank.filters.get(Hypothesis.OUTFLOW_CAPACITY)
+        if hypothesis_filter is None:
+            return None
+        return hypothesis_filter.mean().outflow_rate_constant
+
     def row(self) -> Dict[str, Any]:
         """
         :return: One row of the replay table.
@@ -527,7 +539,13 @@ class ReplayResult:
             )
         row["final_active"] = coupling.active.label
         row["onset_estimate"] = self.onset_estimate
-        row["onset_share_inside"] = coupling.bank.onset_share_inside()
+        row["onset_share_inside"] = coupling.bank.share_inside(
+            FreeParameter.REPOSE_ANGLE
+        )
+        row["drain_rate_estimate"] = self.drain_rate_estimate
+        row["drain_rate_share_inside"] = coupling.bank.share_inside(
+            FreeParameter.OUTFLOW_RATE_CONSTANT
+        )
         if self.consistency is not None:
             row["consistent"] = self.consistency.consistent
             for feature, outside in self.consistency.outside.items():
@@ -550,6 +568,7 @@ def replay(
     forces_second_lip: bool = False,
     onset: Optional[OnsetSpread] = None,
     outflow_capacity: bool = False,
+    drain_rate: Optional[DrainRateSpread] = None,
     checks_consistency: bool = False,
     residuals: Optional[Dict[Feature, RateResiduals]] = None,
     predictive_share: float = PREDICTIVE_SHARE,
@@ -564,6 +583,8 @@ def replay(
         the model is given, or ``None`` for one fixed angle.
     :param outflow_capacity: Whether the twin has the concept of how much can pass the
         lip.
+    :param drain_rate: How the twin's drain rate scatters from pour to pour, whose
+        centre the model is given, or ``None`` for one fixed rate.
     :param checks_consistency: Whether the explanation the controller ends on is checked
         against what the pour showed.
     :param residuals: How far each feature lands from its prediction on sound pours, by
@@ -576,6 +597,10 @@ def replay(
     base = pour.given
     if onset is not None:
         base = base.with_values({FreeParameter.REPOSE_ANGLE: onset.centre})
+    if drain_rate is not None:
+        base = base.with_values(
+            {FreeParameter.OUTFLOW_RATE_CONSTANT: drain_rate.centre}
+        )
     knowledge = sensor_knowledge(sensors, fall_time=pour.fall_time)
     bank = HypothesisBank(
         hypotheses=hypotheses_for(pour.source, forces_second_lip, outflow_capacity),
@@ -585,6 +610,7 @@ def replay(
         settings=settings,
         seed=seed,
         onset=onset,
+        drain_rate=drain_rate,
     )
     coupling = BankCoupling(bank=bank)
     for reading in readings:

@@ -13,7 +13,9 @@ from experiments.pouring_model_verification.scene import SourceCup
 from experiments.pouring_model_verification.transfer_trial import BankSteering
 
 from experiments.pouring_model_verification.hypothesis_bank import (
+    INTERVAL_SPREADS,
     PARAMETER_ORDER,
+    DrainRateSpread,
     OnsetSpread,
     BankSettings,
     DrainGeometry,
@@ -207,21 +209,26 @@ def _poured_readings(
     return readings
 
 
-def _bank(onset: Optional[OnsetSpread] = None) -> HypothesisBank:
+def _bank(
+    onset: Optional[OnsetSpread] = None,
+    drain_rate: Optional[DrainRateSpread] = None,
+    hypotheses: tuple = (
+        Hypothesis.NOMINAL,
+        Hypothesis.ONSET,
+        Hypothesis.AIM,
+        Hypothesis.COUPLED,
+        Hypothesis.CATCH_ALL,
+    ),
+) -> HypothesisBank:
     return HypothesisBank(
-        hypotheses=(
-            Hypothesis.NOMINAL,
-            Hypothesis.ONSET,
-            Hypothesis.AIM,
-            Hypothesis.COUPLED,
-            Hypothesis.CATCH_ALL,
-        ),
+        hypotheses=hypotheses,
         geometry=GEOMETRY,
         base=GIVEN,
         sensors=EXACT_SENSORS,
         settings=BankSettings(),
         seed=0,
         onset=onset,
+        drain_rate=drain_rate,
     )
 
 
@@ -375,6 +382,113 @@ def test_every_hypothesis_that_keeps_the_onset_draws_it_from_the_twins_spread(
     hypothesis, adapts
 ):
     assert hypothesis.adapts_onset is adapts
+
+
+# %% a drain rate that varies from pour to pour
+
+RATE_SPREAD = DrainRateSpread(centre=GIVEN.outflow_rate_constant, spread=0.15)
+
+
+def test_the_twins_drain_rate_interval_is_a_band_of_factors_around_the_centre():
+    factor = math.exp(INTERVAL_SPREADS * RATE_SPREAD.spread)
+    assert RATE_SPREAD.interval == pytest.approx(
+        (RATE_SPREAD.centre / factor, RATE_SPREAD.centre * factor)
+    )
+
+
+def test_the_share_of_a_drain_rate_posterior_inside_the_interval_counts_its_weights():
+    inside, outside = RATE_SPREAD.centre, RATE_SPREAD.centre * 5.0
+    share = RATE_SPREAD.share_inside(
+        numpy.array([inside, outside]), numpy.array([0.25, 0.75])
+    )
+    assert share == pytest.approx(0.25)
+
+
+def test_with_a_drain_rate_spread_the_nominal_hypothesis_adapts_its_drain_rate():
+    bank = _bank(drain_rate=RATE_SPREAD)
+    assert bank.filters[Hypothesis.NOMINAL].free == (
+        FreeParameter.OUTFLOW_RATE_CONSTANT,
+    )
+
+
+@pytest.mark.parametrize(
+    "hypothesis, adapts",
+    [
+        (Hypothesis.NOMINAL, True),
+        (Hypothesis.ONSET, True),
+        (Hypothesis.AIM, True),
+        (Hypothesis.COUPLED, True),
+        (Hypothesis.SECOND_LIP, True),
+        (Hypothesis.CATCH_ALL, True),
+        (Hypothesis.OUTFLOW_CAPACITY, False),
+    ],
+)
+def test_every_hypothesis_that_keeps_the_drain_rate_draws_it_from_the_twins_spread(
+    hypothesis, adapts
+):
+    assert hypothesis.adapts_drain_rate is adapts
+
+
+def test_a_drain_rate_drawn_from_the_twins_spread_stays_put_within_the_pour():
+    bank = _bank(drain_rate=RATE_SPREAD)
+    bank.observe(_poured_readings(GIVEN)[0])
+    hypothesis_filter = bank.filters[Hypothesis.NOMINAL]
+    column = PARAMETER_ORDER.index(FreeParameter.OUTFLOW_RATE_CONSTANT)
+    before = hypothesis_filter.parameters[:, column].copy()
+    hypothesis_filter._walk()
+    assert numpy.array_equal(hypothesis_filter.parameters[:, column], before)
+
+
+def test_the_drain_rates_drawn_scatter_within_the_twins_spread():
+    bank = _bank(drain_rate=RATE_SPREAD)
+    bank.observe(_poured_readings(GIVEN)[0])
+    column = PARAMETER_ORDER.index(FreeParameter.OUTFLOW_RATE_CONSTANT)
+    rates = bank.filters[Hypothesis.NOMINAL].parameters[:, column]
+    factor = math.exp(5 * RATE_SPREAD.spread)
+    assert (
+        rates.min() > RATE_SPREAD.centre / factor
+        and rates.max() < RATE_SPREAD.centre * factor
+        and rates.std() > 0.0
+    )
+
+
+_WITH_CAPACITY = (
+    Hypothesis.NOMINAL,
+    Hypothesis.ONSET,
+    Hypothesis.OUTFLOW_CAPACITY,
+    Hypothesis.CATCH_ALL,
+)
+
+
+def _coupled_drain(truth: ModelPoint) -> BankCoupling:
+    coupling = BankCoupling(
+        bank=_bank(drain_rate=RATE_SPREAD, hypotheses=_WITH_CAPACITY)
+    )
+    for reading in _poured_readings(truth):
+        coupling.observe(reading, poured_share=0.0)
+    return coupling
+
+
+def test_a_drain_inside_the_twins_spread_is_adapted_to_rather_than_blamed():
+    truth = GIVEN.with_values(
+        {
+            FreeParameter.OUTFLOW_RATE_CONSTANT: GIVEN.outflow_rate_constant
+            * math.exp(RATE_SPREAD.spread)
+        }
+    )
+    assert _coupled_drain(truth).active is Hypothesis.NOMINAL
+
+
+def test_a_drain_far_outside_the_twins_spread_is_blamed_on_the_outflow_capacity():
+    truth = GIVEN.with_values(
+        {FreeParameter.OUTFLOW_RATE_CONSTANT: GIVEN.outflow_rate_constant * 5.0}
+    )
+    assert _coupled_drain(truth).active is Hypothesis.OUTFLOW_CAPACITY
+
+
+def test_the_drain_rate_is_vetoed_while_its_posterior_lies_within_the_twins_spread():
+    coupling = _coupled_drain(GIVEN)
+    assert FreeParameter.OUTFLOW_RATE_CONSTANT in coupling.vetoed
 
 
 # %% an onset constant within the pour

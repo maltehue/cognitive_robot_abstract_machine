@@ -167,6 +167,14 @@ class Hypothesis(StrEnum):
         return FreeParameter.REPOSE_ANGLE not in self.concepts
 
     @property
+    def adapts_drain_rate(self) -> bool:
+        """
+        :return: Whether this hypothesis keeps the drain rate as the twin has it, which
+            with a drain rate spread estimates each pour's rate within that spread.
+        """
+        return FreeParameter.OUTFLOW_RATE_CONSTANT not in self.concepts
+
+    @property
     def revises(self) -> bool:
         """
         :return: Whether committing to this hypothesis changes the controller's model.
@@ -564,70 +572,116 @@ class SensorKnowledge:
         return dict(self.__dict__)
 
 
-# %% the repose angle as it varies from pour to pour
+# %% the twin's values as they vary from pour to pour
 
-ONSET_INTERVAL_SPREADS = 1.96
+INTERVAL_SPREADS = 1.96
 """
-How many spreads either side of the centre the twin's 95 % interval of the repose angle
-reaches.
+How many spreads either side of the centre the twin's 95 % interval of a value reaches.
 """
 
 OUTSIDE_SHARE = 0.95
 """
-The share of a pour's repose angle posterior that has to lie outside the twin's interval
-before the twin's centre counts as wrong.
+The share of a pour's posterior that has to lie outside the twin's interval before the
+twin's centre counts as wrong.
 """
 
 
 @dataclass(frozen=True)
-class OnsetSpread:
+class ParameterSpread:
     """
-    The twin's repose angle while the cup turns, as the pours scatter it: a centre and a
-    spread, each pour drawing its own angle from them.
+    A value of the twin as the pours scatter it while the cup turns: a centre and a
+    spread, each pour drawing its own value from them.
     """
 
     centre: float
     """
-    The angle the pours scatter around, in radians.
+    The value the pours scatter around.
     """
 
     spread: float
     """
-    How widely they scatter, as a standard deviation, in radians.
+    How widely they scatter, as a standard deviation on the scale the value scatters on.
     """
+
+    def _scaled(self, values: numpy.ndarray | float) -> numpy.ndarray | float:
+        """
+        :return: Values on the scale they scatter on.
+        """
+        return values
+
+    def _unscaled(self, values: numpy.ndarray | float) -> numpy.ndarray | float:
+        """
+        :return: Values on the scale they scatter on, back on their own.
+        """
+        return values
 
     @property
     def interval(self) -> Tuple[float, float]:
         """
-        :return: The range 95 % of the pours' angles fall in, in radians.
+        :return: The range 95 % of the pours' values fall in.
         """
-        half = ONSET_INTERVAL_SPREADS * self.spread
-        return self.centre - half, self.centre + half
+        half = INTERVAL_SPREADS * self.spread
+        centre = self._scaled(self.centre)
+        return float(self._unscaled(centre - half)), float(
+            self._unscaled(centre + half)
+        )
 
-    def share_inside(self, angles: numpy.ndarray, weights: numpy.ndarray) -> float:
+    def draw(self, random: numpy.random.Generator, count: int) -> numpy.ndarray:
         """
-        :param angles: Particles of a pour's repose angle.
+        :param random: Where the draws come from.
+        :param count: How many pours to draw.
+        :return: One value per pour.
+        """
+        return self._unscaled(
+            random.normal(self._scaled(self.centre), self.spread, count)
+        )
+
+    def share_inside(self, values: numpy.ndarray, weights: numpy.ndarray) -> float:
+        """
+        :param values: Particles of a pour's value.
         :param weights: Their weights.
         :return: The share of the weight lying within the interval.
         """
         low, high = self.interval
-        inside = (angles >= low) & (angles <= high)
+        inside = (values >= low) & (values <= high)
         return float(numpy.sum(weights[inside]) / numpy.sum(weights))
 
-    def side_of(self, angle: float) -> int:
+    def side_of(self, value: float) -> int:
         """
-        :param angle: A pour's repose angle, in radians.
+        :param value: A pour's value.
         :return: ``1`` above the interval, ``-1`` below it, ``0`` within it.
         """
         low, high = self.interval
-        return 1 if angle > high else -1 if angle < low else 0
+        return 1 if value > high else -1 if value < low else 0
 
     def to_json(self) -> Dict[str, float]:
         return {"centre": self.centre, "spread": self.spread}
 
     @classmethod
-    def from_json(cls, data: Dict[str, float]) -> OnsetSpread:
+    def from_json(cls, data: Dict[str, float]) -> ParameterSpread:
         return cls(centre=data["centre"], spread=data["spread"])
+
+
+@dataclass(frozen=True)
+class OnsetSpread(ParameterSpread):
+    """
+    The twin's repose angle while the cup turns, in radians, scattering evenly either
+    side of its centre.
+    """
+
+
+@dataclass(frozen=True)
+class DrainRateSpread(ParameterSpread):
+    """
+    The twin's drain rate while the cup turns, in 1/s, scattering by factors: its spread
+    is a standard deviation of the rate's logarithm.
+    """
+
+    def _scaled(self, values: numpy.ndarray | float) -> numpy.ndarray | float:
+        return numpy.log(values)
+
+    def _unscaled(self, values: numpy.ndarray | float) -> numpy.ndarray | float:
+        return numpy.exp(values)
 
 
 # %% the settings of the bank
@@ -770,6 +824,13 @@ class BankSettings:
     readings.
     """
 
+    adapts_drain_rate: bool = False
+    """
+    Whether every hypothesis that keeps the drain rate carries the twin's spread of it,
+    estimating each pour's rate within it, and the drain counts as wrong only outside
+    it.
+    """
+
     def to_json(self) -> Dict[str, Any]:
         return {
             name: value
@@ -855,6 +916,12 @@ class HypothesisFilter:
     model as given draws each pour's angle from, or ``None`` for one fixed angle.
     """
 
+    drain_rate: Optional[DrainRateSpread] = None
+    """
+    How the drain rate scatters from pour to pour, which a hypothesis keeping the drain
+    rate draws each pour's rate from, or ``None`` for one fixed rate.
+    """
+
     parameters: numpy.ndarray = field(init=False)
     """
     One row of parameters per particle, in :data:`PARAMETER_ORDER`.
@@ -923,12 +990,15 @@ class HypothesisFilter:
     @property
     def free(self) -> Tuple[FreeParameter, ...]:
         """
-        :return: The parameters this filter estimates: with an onset spread, a
-            hypothesis holding the model as given estimates the pour's repose angle too.
+        :return: The parameters this filter estimates: with a spread of the twin's
+            repose angle or drain rate, a hypothesis keeping that value estimates the
+            pour's own too.
         """
         free = self.hypothesis.free_parameters(self.settings.frees_rate)
         if self.adapts_onset:
-            return (FreeParameter.REPOSE_ANGLE,) + free
+            free = (FreeParameter.REPOSE_ANGLE,) + free
+        if self.adapts_drain_rate and FreeParameter.OUTFLOW_RATE_CONSTANT not in free:
+            free = free + (FreeParameter.OUTFLOW_RATE_CONSTANT,)
         return free
 
     @property
@@ -950,6 +1020,26 @@ class HypothesisFilter:
             spread rather than from its bounds.
         """
         return self.onset is not None and self.hypothesis.adapts_onset
+
+    @property
+    def adapts_drain_rate(self) -> bool:
+        """
+        :return: Whether this filter draws the pour's drain rate from the twin's spread
+            rather than from its bounds.
+        """
+        return self.drain_rate is not None and self.hypothesis.adapts_drain_rate
+
+    def _spread_of(self, parameter: FreeParameter) -> Optional[ParameterSpread]:
+        """
+        :return: The twin's spread this filter draws the pour's value of a parameter
+            from, or ``None`` where it draws from the bounds.
+        """
+        match parameter:
+            case FreeParameter.REPOSE_ANGLE if self.adapts_onset:
+                return self.onset
+            case FreeParameter.OUTFLOW_RATE_CONSTANT if self.adapts_drain_rate:
+                return self.drain_rate
+        return None
 
     @property
     def bounds(self) -> ParameterBounds:
@@ -986,12 +1076,9 @@ class HypothesisFilter:
         for parameter in self.free:
             low, high = self.bounds.of(parameter)
             column = PARAMETER_ORDER.index(parameter)
-            if parameter is FreeParameter.REPOSE_ANGLE and self.adapts_onset:
-                draws = numpy.clip(
-                    self.random.normal(self.onset.centre, self.onset.spread, count),
-                    low,
-                    high,
-                )
+            spread = self._spread_of(parameter)
+            if spread is not None:
+                draws = numpy.clip(spread.draw(self.random, count), low, high)
             elif ParameterBounds.is_logarithmic(parameter):
                 draws = numpy.exp(
                     self.random.uniform(math.log(low), math.log(high), count)
@@ -1096,11 +1183,13 @@ class HypothesisFilter:
 
     def _walk(self) -> None:
         """
-        Let each free parameter drift a little, held within its bounds. A repose angle
-        drawn from the twin's spread is the pour's own and stays put.
+        Let each free parameter drift a little, held within its bounds. A value drawn
+        from the twin's spread is the pour's own and stays put.
         """
         for parameter in self.free:
-            if parameter is FreeParameter.REPOSE_ANGLE and self.keeps_onset_static:
+            if self._spread_of(parameter) is not None or (
+                parameter is FreeParameter.REPOSE_ANGLE and self.keeps_onset_static
+            ):
                 continue
             column = PARAMETER_ORDER.index(parameter)
             low, high = self.bounds.of(parameter)
@@ -1381,6 +1470,11 @@ class HypothesisBank:
     How the repose angle scatters from pour to pour, or ``None`` for one fixed angle.
     """
 
+    drain_rate: Optional[DrainRateSpread] = None
+    """
+    How the drain rate scatters from pour to pour, or ``None`` for one fixed rate.
+    """
+
     filters: Dict[Hypothesis, HypothesisFilter] = field(init=False)
     """
     One filter per hypothesis.
@@ -1406,6 +1500,7 @@ class HypothesisBank:
                 settings=self.settings,
                 random=numpy.random.default_rng([self.seed, index]),
                 onset=self.onset,
+                drain_rate=self.drain_rate,
             )
             for index, hypothesis in enumerate(self.hypotheses)
         }
@@ -1447,23 +1542,36 @@ class HypothesisBank:
             for hypothesis, value in log_posterior.items()
         }
 
-    def onset_share_inside(self) -> Optional[float]:
+    def spread_of(self, parameter: FreeParameter) -> Optional[ParameterSpread]:
         """
-        :return: The share of the pour's repose angle posterior within the twin's
-            interval, read off the most probable hypothesis that holds the onset wrong,
-            or ``None`` without an onset spread or such a hypothesis.
+        :return: The twin's spread of a parameter, or ``None`` where it has none.
         """
+        match parameter:
+            case FreeParameter.REPOSE_ANGLE:
+                return self.onset
+            case FreeParameter.OUTFLOW_RATE_CONSTANT:
+                return self.drain_rate
+        return None
+
+    def share_inside(self, parameter: FreeParameter) -> Optional[float]:
+        """
+        :param parameter: A parameter the twin has a spread of.
+        :return: The share of the pour's posterior of that parameter within the twin's
+            interval, read off the most probable hypothesis that holds it wrong, or
+            ``None`` without a spread or such a hypothesis.
+        """
+        spread = self.spread_of(parameter)
         candidates = [
             hypothesis
             for hypothesis in self.hypotheses
-            if FreeParameter.REPOSE_ANGLE in hypothesis.concepts
+            if parameter in hypothesis.concepts
         ]
-        if self.onset is None or not candidates or not self.started:
+        if spread is None or not candidates or not self.started:
             return None
         chosen = max(candidates, key=self.probabilities.get)
         hypothesis_filter = self.filters[chosen]
-        column = PARAMETER_ORDER.index(FreeParameter.REPOSE_ANGLE)
-        return self.onset.share_inside(
+        column = PARAMETER_ORDER.index(parameter)
+        return spread.share_inside(
             hypothesis_filter.parameters[:, column], hypothesis_filter.weights
         )
 

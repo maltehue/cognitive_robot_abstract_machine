@@ -234,6 +234,8 @@ class TrialKey(StrEnum):
     TWIN_ONSET = "twin_onset"
     ONSET_ESTIMATE = "onset_estimate"
     ONSET_SHARE_INSIDE = "onset_share_inside"
+    TWIN_DRAIN_RATE = "twin_drain_rate"
+    DRAIN_RATE_SHARE_INSIDE = "drain_rate_share_inside"
     CONSISTENCY = "consistency"
     FAULT = "fault"
     OUTCOME = "outcome"

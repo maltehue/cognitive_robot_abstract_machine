@@ -67,6 +67,16 @@ class ParametersKey(StrEnum):
     How widely that angle scatters from pour to pour.
     """
 
+    DYNAMIC_OUTFLOW_RATE_CONSTANT = "dynamic_outflow_rate_constant"
+    """
+    The drain rate held while the cup is turning.
+    """
+
+    DYNAMIC_OUTFLOW_RATE_SPREAD = "dynamic_outflow_rate_spread"
+    """
+    How widely that rate scatters from pour to pour.
+    """
+
 
 @dataclass(frozen=True)
 class ModelParameters:
@@ -111,6 +121,19 @@ class ModelParameters:
     deviation in radians, or ``None`` for one angle every pour holds.
     """
 
+    dynamic_outflow_rate_constant: Optional[float] = None
+    """
+    Outflow rate constant of the drain while the cup is turning, in 1/s, or ``None``
+    where it is not told apart from :attr:`outflow_rate_constant`, the one fitted to a
+    cup held still.
+    """
+
+    dynamic_outflow_rate_spread: Optional[float] = None
+    """
+    How widely the rate held while turning scatters from pour to pour, as a standard
+    deviation of its logarithm, or ``None`` for one rate every pour holds.
+    """
+
     def value_of(self, parameter: ModelParameter) -> float:
         """
         :param parameter: The parameter to read.
@@ -147,14 +170,21 @@ class ModelParameters:
         :param parameter: The parameter to scale.
         :param factor: What to multiply it by.
         :return: A copy of this set with that one parameter scaled; scaling the repose
-            angle scales the angle held while turning with it.
+            angle or the drain rate scales the value held while turning with it.
         """
         scaled = self.with_value(parameter, self.value_of(parameter) * factor)
-        if parameter is not ModelParameter.REPOSE_ANGLE or (
-            self.dynamic_repose_angle is None
-        ):
-            return scaled
-        return scaled.with_dynamic_repose_angle(self.dynamic_repose_angle * factor)
+        match parameter:
+            case ModelParameter.REPOSE_ANGLE if self.dynamic_repose_angle is not None:
+                return scaled.with_dynamic_repose_angle(
+                    self.dynamic_repose_angle * factor
+                )
+            case ModelParameter.OUTFLOW_RATE_CONSTANT if (
+                self.dynamic_outflow_rate_constant is not None
+            ):
+                return scaled.with_dynamic_outflow_rate_constant(
+                    self.dynamic_outflow_rate_constant * factor
+                )
+        return scaled
 
     def with_dynamic_repose_angle(self, angle: Optional[float]) -> ModelParameters:
         """
@@ -171,14 +201,48 @@ class ModelParameters:
         """
         return replace(self, dynamic_repose_spread=spread)
 
+    def with_dynamic_outflow_rate_constant(
+        self, rate: Optional[float]
+    ) -> ModelParameters:
+        """
+        :param rate: The drain rate while the cup is turning, in 1/s.
+        :return: A copy of this set draining at that rate while turning.
+        """
+        return replace(self, dynamic_outflow_rate_constant=rate)
+
+    def with_dynamic_outflow_rate_spread(
+        self, spread: Optional[float]
+    ) -> ModelParameters:
+        """
+        :param spread: How widely the rate held while turning scatters from pour to
+            pour, as a standard deviation of its logarithm.
+        :return: A copy of this set with that spread.
+        """
+        return replace(self, dynamic_outflow_rate_spread=spread)
+
+    @property
+    def has_dynamic_values(self) -> bool:
+        """
+        :return: Whether this set holds any value of its own while the cup is turning.
+        """
+        return (
+            self.dynamic_repose_angle is not None
+            or self.dynamic_outflow_rate_constant is not None
+        )
+
     def while_turning(self) -> ModelParameters:
         """
         :return: This set as it holds while the cup is turning: the dynamic repose angle
-            in place of the one at rest, where one is known.
+            and drain rate in place of those at rest, where they are known.
         """
-        if self.dynamic_repose_angle is None:
-            return self
-        return replace(self, repose_angle=self.dynamic_repose_angle)
+        turning = self
+        if self.dynamic_repose_angle is not None:
+            turning = replace(turning, repose_angle=self.dynamic_repose_angle)
+        if self.dynamic_outflow_rate_constant is not None:
+            turning = replace(
+                turning, outflow_rate_constant=self.dynamic_outflow_rate_constant
+            )
+        return turning
 
     def applied_to(
         self, equation: ArticulatedPouringEquation
@@ -202,6 +266,8 @@ class ModelParameters:
         optional = {
             ParametersKey.DYNAMIC_REPOSE_ANGLE: self.dynamic_repose_angle,
             ParametersKey.DYNAMIC_REPOSE_SPREAD: self.dynamic_repose_spread,
+            ParametersKey.DYNAMIC_OUTFLOW_RATE_CONSTANT: self.dynamic_outflow_rate_constant,
+            ParametersKey.DYNAMIC_OUTFLOW_RATE_SPREAD: self.dynamic_outflow_rate_spread,
         }
         return {
             **values,
@@ -217,6 +283,12 @@ class ModelParameters:
             lip_offset_scale=data[ModelParameter.LIP_OFFSET],
             dynamic_repose_angle=data.get(ParametersKey.DYNAMIC_REPOSE_ANGLE),
             dynamic_repose_spread=data.get(ParametersKey.DYNAMIC_REPOSE_SPREAD),
+            dynamic_outflow_rate_constant=data.get(
+                ParametersKey.DYNAMIC_OUTFLOW_RATE_CONSTANT
+            ),
+            dynamic_outflow_rate_spread=data.get(
+                ParametersKey.DYNAMIC_OUTFLOW_RATE_SPREAD
+            ),
         )
 
 

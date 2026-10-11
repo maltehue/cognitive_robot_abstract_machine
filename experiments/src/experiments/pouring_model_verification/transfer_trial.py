@@ -58,6 +58,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
     DrainGeometry,
     FreeParameter,
     HypothesisBank,
+    DrainRateSpread,
     OnsetSpread,
     ModelPoint,
     Reading,
@@ -414,6 +415,19 @@ class OnsetSpreadMissingError(Exception):
         super().__init__(
             "A bank that adapts the onset needs the twin's repose angle while turning "
             "and its spread."
+        )
+
+
+class DrainRateSpreadMissingError(Exception):
+    """
+    Raised when a bank is to carry the twin's spread of the drain rate but the twin
+    holds none for the cup.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A bank that adapts the drain rate needs the twin's drain rate while "
+            "turning and its spread."
         )
 
 
@@ -2291,6 +2305,38 @@ class TransferTrial:
             spread=parameters.dynamic_repose_spread,
         )
 
+    @property
+    def drain_rate(self) -> Optional[DrainRateSpread]:
+        """
+        :return: The twin's spread of the drain rate this pour's bank carries, with the
+            error set into its centre; ``None`` for a bank that does not adapt the drain
+            rate.
+        :raises DrainRateSpreadMissingError: If the bank adapts the drain rate and the
+            twin has no spread for the cup.
+        """
+        if self.bank is None or not self.bank.adapts_drain_rate:
+            return None
+        parameters = self.perturbation.around(self.baseline)
+        if parameters.dynamic_outflow_rate_spread is None:
+            raise DrainRateSpreadMissingError()
+        return DrainRateSpread(
+            centre=parameters.while_turning().outflow_rate_constant,
+            spread=parameters.dynamic_outflow_rate_spread,
+        )
+
+    @property
+    def start_model_values(self) -> Dict[FreeParameter, float]:
+        """
+        :return: The centres of the twin's spreads the bank carries, which the
+            controller's model starts on.
+        """
+        values = {}
+        if self.onset is not None:
+            values[FreeParameter.REPOSE_ANGLE] = self.onset.centre
+        if self.drain_rate is not None:
+            values[FreeParameter.OUTFLOW_RATE_CONSTANT] = self.drain_rate.centre
+        return values
+
     def __post_init__(self) -> None:
         if not self.controller.uses_pouring_model and self.gains is None:
             raise MissingPidGainsError(self.controller)
@@ -2431,11 +2477,9 @@ class TransferTrial:
             discharge_coefficient=parameters.discharge_coefficient,
             outflow_rate_constant=parameters.outflow_rate_constant,
         )
-        start_model = self.kept_model or self.fixed_model or built
-        if self.onset is not None:
-            start_model = start_model.with_values(
-                {FreeParameter.REPOSE_ANGLE: self.onset.centre}
-            )
+        start_model = (self.kept_model or self.fixed_model or built).with_values(
+            self.start_model_values
+        )
         scene.run_on(start_model, built, cautious=False)
         if self.kept_repose_angle is not None:
             scene.variables.set_value(
@@ -2797,10 +2841,7 @@ class TransferTrial:
             discharge_coefficient=scene.source.fill_equation.discharge_coefficient,
             outflow_rate_constant=scene.source.fill_equation.outflow_rate_constant,
         )
-        onset = self.onset
-        base = self.kept_model or built
-        if onset is not None:
-            base = base.with_values({FreeParameter.REPOSE_ANGLE: onset.centre})
+        base = (self.kept_model or built).with_values(self.start_model_values)
         bank = HypothesisBank(
             hypotheses=hypotheses_for(
                 self.scene.source,
@@ -2812,7 +2853,8 @@ class TransferTrial:
             sensors=sensor_knowledge(self.sensor_set, fall_time=scene.fall_time),
             settings=self.bank,
             seed=self.seed,
-            onset=onset,
+            onset=self.onset,
+            drain_rate=self.drain_rate,
         )
         caution = tilt_rate_cap = None
         extra: List[Task] = []
@@ -2842,9 +2884,9 @@ class TransferTrial:
     def _onset_record(self, steering: BankSteering) -> Dict[str, Any]:
         """
         :param steering: The bank's steering the transfer ran with.
-        :return: The twin's spread of the repose angle the bank carried, the pour's
-            repose angle as the onset hypothesis estimates it, how much of that estimate
-            lay within the spread, and how the explanation the pour ended on held up
+        :return: The twin's spreads of the repose angle and the drain rate the bank
+            carried, the pour's repose angle as the onset hypothesis estimates it, how
+            much of each posterior lay within its spread, and how the explanation the pour ended on held up
             against what it showed.
         """
         bank = steering.coupling.bank
@@ -2866,7 +2908,13 @@ class TransferTrial:
                 if onset_filter is None or not bank.started
                 else onset_filter.mean().repose_angle
             ),
-            TrialKey.ONSET_SHARE_INSIDE: bank.onset_share_inside(),
+            TrialKey.ONSET_SHARE_INSIDE: bank.share_inside(FreeParameter.REPOSE_ANGLE),
+            TrialKey.TWIN_DRAIN_RATE: (
+                None if bank.drain_rate is None else bank.drain_rate.to_json()
+            ),
+            TrialKey.DRAIN_RATE_SHARE_INSIDE: bank.share_inside(
+                FreeParameter.OUTFLOW_RATE_CONSTANT
+            ),
             TrialKey.CONSISTENCY: (
                 None if consistency is None else consistency.to_json()
             ),

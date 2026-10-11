@@ -203,12 +203,14 @@ class BankCoupling:
         """
         :return: The parameters the controller runs on: those the active hypothesis
             gives, or the model as given for a hypothesis that neither revises it nor
-            adapts its repose angle to the pour.
+            adapts its repose angle or drain rate to the pour.
         """
         if not self.bank.started:
             return self.bank.base
         active = self.bank.filters[self.active]
-        if not self.active.revises and not active.adapts_onset:
+        if not self.active.revises and not (
+            active.adapts_onset or active.adapts_drain_rate
+        ):
             return self.bank.base
         return active.controller_point(self._tilt, self._trickle)
 
@@ -275,13 +277,19 @@ class BankCoupling:
     @property
     def vetoed(self) -> frozenset[FreeParameter]:
         """
-        :return: The onset, while the pour's repose angle may still lie within the
-            twin's spread: only a pour clearly outside it shows the twin's centre wrong.
+        :return: Each concept the twin has a spread of, the onset or the drain rate,
+            while the pour's value may still lie within that spread: only a pour clearly
+            outside it shows the twin's centre wrong.
         """
-        share = self.bank.onset_share_inside()
-        if share is None or share <= 1.0 - OUTSIDE_SHARE:
-            return frozenset()
-        return frozenset({FreeParameter.REPOSE_ANGLE})
+        return frozenset(
+            parameter
+            for parameter in (
+                FreeParameter.REPOSE_ANGLE,
+                FreeParameter.OUTFLOW_RATE_CONSTANT,
+            )
+            if (share := self.bank.share_inside(parameter)) is not None
+            and share > 1.0 - OUTSIDE_SHARE
+        )
 
     def summary(self) -> Dict[str, Any]:
         """
