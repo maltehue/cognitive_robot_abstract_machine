@@ -1,4 +1,9 @@
+from __future__ import annotations
+
 import math
+from pathlib import Path
+
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 
 import semantic_digital_twin.adapters.usd.exceptions as usd_exceptions
 
@@ -6,6 +11,11 @@ import semantic_digital_twin.adapters.usd.scene_parser as usd_parser
 
 import numpy as np
 import pytest
+
+from semantic_digital_twin.specifications.worlds import WorldSpecification
+from semantic_digital_twin.specifications.kinematic_structure_entities import (
+    BodySpecification,
+)
 from PIL import Image
 
 from semantic_digital_twin.adapters.usd.exceptions import (
@@ -29,7 +39,13 @@ from semantic_digital_twin.world_description.connections import (
     PrismaticConnection,
     RevoluteConnection,
 )
-from semantic_digital_twin.world_description.geometry import Box, Cylinder, Mesh, Sphere
+from semantic_digital_twin.world_description.geometry import (
+    Box,
+    Cylinder,
+    Mesh,
+    Sphere,
+    Scale,
+)
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
@@ -38,6 +54,7 @@ from .usd_stages import (
     build_labelled_scene,
     SceneJointType,
     CollisionScenePath,
+    CollisionSceneFile,
     build_collision_scene,
     write_composed_collision_scene,
     MixedScenePath,
@@ -1036,3 +1053,78 @@ def test_scene_parser_support_vocabulary_is_configurable_and_case_insensitive() 
     [floor] = world.get_semantic_annotations_by_type(Floor)
 
     assert floor.root.name.name == CollisionScenePath.OBJECT.lstrip("/")
+
+
+# %% scene materialization
+
+
+def test_scene_placement_moves_static_objects_and_articulations_together() -> None:
+    """
+    A stage pose affects root connections once while retaining local joint frames.
+    """
+    stage = build_mixed_scene(SceneJointType.REVOLUTE)
+    authored = usd_parser.USDSceneParser(stage=stage).parse()
+    world_T_scene = HomogeneousTransformationMatrix.from_xyz_rpy(
+        x=4, y=-2, z=1, yaw=np.pi / 2
+    )
+    placed = usd_parser.USDSceneParser(stage=stage, world_T_scene=world_T_scene).parse()
+
+    for body in authored.bodies:
+        if body is authored.root:
+            continue
+        actual = placed.get_body_by_name(body.name)
+        np.testing.assert_allclose(
+            actual.global_transform.to_np(),
+            world_T_scene.to_np() @ body.global_transform.to_np(),
+            atol=1e-12,
+        )
+
+
+def test_usd_world_specification_preserves_world_frame_spawn_poses(
+    tmp_path: Path,
+) -> None:
+    """
+    Starting objects use the world frame independently of the scene placement.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    scene_file = tmp_path / CollisionSceneFile.SCENE
+    stage.GetRootLayer().Export(str(scene_file))
+    world_T_scene = HomogeneousTransformationMatrix.from_xyz_rpy(x=3, z=2)
+    object_pose = HomogeneousTransformationMatrix.from_xyz_rpy(x=-1, y=2, z=4)
+    object_specification = BodySpecification.box(
+        "transport_object", Scale(0.1, 0.1, 0.1), parent_T_self=object_pose
+    )
+    specification = WorldSpecification.from_usd_scene(
+        str(scene_file), world_T_scene=world_T_scene, objects=[object_specification]
+    )
+    world = specification.to_domain_object()
+
+    np.testing.assert_allclose(
+        world.get_body_by_name(object_specification.name).global_transform.to_np(),
+        object_pose.to_np(),
+    )
+    authored = usd_parser.USDSceneParser(stage=stage).parse()
+    body = authored.get_body_by_name(MixedScenePath.SECOND.lstrip("/"))
+    actual = world.get_body_by_name(MixedScenePath.SECOND.lstrip("/"))
+    np.testing.assert_allclose(
+        actual.global_transform.to_np(),
+        world_T_scene.to_np() @ body.global_transform.to_np(),
+    )
+
+
+def test_usd_world_specification_materializes_fresh_scenes(tmp_path: Path) -> None:
+    """
+    Repeated materialization creates independent entities and retains articulation.
+    """
+    stage = build_mixed_scene(SceneJointType.REVOLUTE)
+    scene_file = tmp_path / CollisionSceneFile.SCENE
+    stage.GetRootLayer().Export(str(scene_file))
+    specification = WorldSpecification.from_usd_scene(str(scene_file))
+    first = specification.to_domain_object()
+    second = specification.to_domain_object()
+
+    assert {body.id for body in first.bodies}.isdisjoint(
+        body.id for body in second.bodies
+    )
+    child = second.get_body_by_name(MixedScenePath.CHILD.lstrip("/"))
+    assert isinstance(child.parent_connection, RevoluteConnection)
