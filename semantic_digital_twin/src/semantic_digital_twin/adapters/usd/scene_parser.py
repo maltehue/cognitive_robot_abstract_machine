@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import numpy as np
 import rustworkx
@@ -19,27 +20,49 @@ from semantic_digital_twin.spatial_types.spatial_types import (
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.geometry import Shape
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
+from typing_extensions import Iterator
 from semantic_digital_twin.world_description.world_entity import Body
 
-# %% scene objects and articulations
+# %% scene object ownership
+
+
+class UsdObjectKind(StrEnum):
+    """
+    USD model kinds that own their internal geometry.
+    """
+
+    COMPONENT = "component"
+    SUBCOMPONENT = "subcomponent"
+
+
+@dataclass
+class UsdSceneGeometry:
+    """Visible shapes and authored collision shapes owned by one scene body."""
+
+    visual: list[Shape] = field(default_factory=list)
+    """Shapes visible in the stage."""
+
+    collision: list[Shape] = field(default_factory=list)
+    """Shapes with enabled authored collision."""
+
+    has_authored_collision: bool = False
+    """Whether collision was explicitly authored, including disabled colliders."""
 
 
 @dataclass
 class USDSceneParser(USDParser):
     """
     Import separate scene objects and tree-shaped articulations in stage coordinates.
-
-    Geometry-owning prims and joint targets become bodies named by their stage paths.
-    Grouping transforms position those bodies; unconstrained bodies are fixed to their
-    nearest enclosing body or the stage frame. Physics joints use their authored local
-    anchors and start at zero position, as in :class:`USDParser`. Scaled joint frames
-    and closed-loop constraints are rejected.
     """
 
     _body_paths: set[str] = field(default_factory=set, init=False)
     """
     Object boundaries excluded from an enclosing body's geometry traversal.
     """
+
+    _joint_paths: set[str] = field(default_factory=set, init=False)
+    """Explicit joint endpoints that remain separate within model components."""
 
     def parse(self) -> World:
         """
@@ -79,32 +102,41 @@ class USDSceneParser(USDParser):
 
     def _resolve_object_prim(self, prim_path: usd.Sdf.Path) -> usd.Usd.Prim:
         """
-        Resolve a joint target or geometry prim to its enclosing object.
+        Resolve geometry to its nearest rigid body or model component.
         """
         prim = self.stage.GetPrimAtPath(prim_path)
         if not prim.IsValid() or prim.IsPseudoRoot() or prim.IsA(usd.UsdPhysics.Joint):
             raise UsdSceneTopologyError(
                 file_path=self.source_description, prim_path=str(prim_path)
             )
-        if prim.IsA(usd.UsdGeom.Gprim) and not prim.GetParent().IsPseudoRoot():
-            return prim.GetParent()
-        return prim
+        owner = (
+            prim.GetParent()
+            if prim.IsA(usd.UsdGeom.Gprim) and not prim.GetParent().IsPseudoRoot()
+            else prim
+        )
+        ancestor = owner
+        while not ancestor.IsPseudoRoot():
+            model = usd.Usd.ModelAPI(ancestor)
+            if (
+                str(ancestor.GetPath()) in self._joint_paths
+                or ancestor.HasAPI(usd.UsdPhysics.RigidBodyAPI)
+                or (
+                    any(
+                        model.IsKind(kind, usd.Usd.ModelAPI.KindValidationNone)
+                        for kind in UsdObjectKind
+                    )
+                )
+            ):
+                return ancestor
+            ancestor = ancestor.GetParent()
+        return owner
 
     def _collect_object_prims(
         self, joint_prims: list[usd.Usd.Prim]
     ) -> dict[usd.Sdf.Path, usd.Usd.Prim]:
-        """
-        Find geometry owners and validated joint endpoints throughout the stage.
-        """
+        """Find geometry owners and explicit joint endpoints throughout the stage."""
         objects: dict[usd.Sdf.Path, usd.Usd.Prim] = {}
-        for prim in self.stage.Traverse():
-            if (
-                prim.IsA(usd.UsdGeom.Gprim)
-                and usd.UsdGeom.Imageable(prim).ComputePurpose()
-                != usd.UsdGeom.Tokens.guide
-            ):
-                owner = self._resolve_object_prim(prim.GetPath())
-                objects[owner.GetPath()] = owner
+        self._joint_paths = set()
         for prim in joint_prims:
             joint = usd.UsdPhysics.Joint(prim)
             for relationship in (joint.GetBody0Rel(), joint.GetBody1Rel()):
@@ -114,8 +146,26 @@ class USDSceneParser(USDParser):
                         file_path=self.source_description, prim_path=str(prim.GetPath())
                     )
                 for target in targets:
+                    endpoint = self.stage.GetPrimAtPath(target)
+                    if (
+                        not endpoint.IsValid()
+                        or endpoint.IsPseudoRoot()
+                        or endpoint.IsA(usd.UsdPhysics.Joint)
+                    ):
+                        raise UsdSceneTopologyError(
+                            file_path=self.source_description, prim_path=str(target)
+                        )
+                    if (
+                        endpoint.IsA(usd.UsdGeom.Gprim)
+                        and not endpoint.GetParent().IsPseudoRoot()
+                    ):
+                        endpoint = endpoint.GetParent()
+                    self._joint_paths.add(str(endpoint.GetPath()))
+        for prim in joint_prims:
+            joint = usd.UsdPhysics.Joint(prim)
+            for relationship in (joint.GetBody0Rel(), joint.GetBody1Rel()):
+                for target in relationship.GetTargets():
                     owner = self._resolve_object_prim(target)
-                    # Joint anchors are local rigid poses; scaled frames need a separate conversion.
                     authored = usd.UsdGeom.Xformable(
                         owner
                     ).ComputeLocalToWorldTransform(usd.Usd.TimeCode.Default())
@@ -127,7 +177,70 @@ class USDSceneParser(USDParser):
                             file_path=self.source_description, prim_path=str(target)
                         )
                     objects[owner.GetPath()] = owner
+        for prim in self.stage.Traverse():
+            if prim.IsA(usd.UsdGeom.Gprim) and (
+                usd.UsdGeom.Imageable(prim).ComputePurpose() != usd.UsdGeom.Tokens.guide
+                or prim.HasAPI(usd.UsdPhysics.CollisionAPI)
+            ):
+                owner = self._resolve_object_prim(prim.GetPath())
+                objects[owner.GetPath()] = owner
         return objects
+
+    # %% visual and collision geometry
+
+    def _geometry_prims(self, link_prim: usd.Usd.Prim) -> Iterator[usd.Usd.Prim]:
+        """Yield geometry belonging to this object, excluding nested body boundaries."""
+        iterator = iter(usd.Usd.PrimRange(link_prim))
+        for prim in iterator:
+            if prim != link_prim and str(prim.GetPath()) in self._body_paths:
+                iterator.PruneChildren()
+                continue
+            if prim.IsA(usd.UsdGeom.Gprim):
+                yield prim
+
+    def _collect_geometry(
+        self, link_prim: usd.Usd.Prim, link_to_world: usd.Gf.Matrix4d
+    ) -> UsdSceneGeometry:
+        """Separate visible shapes from authored colliders within one object."""
+        geometry = UsdSceneGeometry()
+        for prim in self._geometry_prims(link_prim):
+            imageable = usd.UsdGeom.Imageable(prim)
+            visible = imageable.ComputePurpose() != usd.UsdGeom.Tokens.guide
+            authored_collision = prim.HasAPI(usd.UsdPhysics.CollisionAPI)
+            geometry.has_authored_collision |= authored_collision
+            collision_enabled = (
+                authored_collision
+                and usd.UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get()
+            )
+            if not visible and not collision_enabled:
+                continue
+            shape = self._create_shape(prim, link_to_world)
+            if visible:
+                geometry.visual.append(shape)
+            if collision_enabled:
+                geometry.collision.append(shape)
+        if not geometry.has_authored_collision:
+            geometry.collision = list(geometry.visual)
+        return geometry
+
+    def _create_link_body(
+        self, link_prim: usd.Usd.Prim, link_to_world: usd.Gf.Matrix4d | None = None
+    ) -> Body:
+        """Build a body with distinct visual and collision shape collections."""
+        if link_to_world is None:
+            link_to_world = self._resolve_rigid_world_transform(link_prim)
+        geometry = self._collect_geometry(link_prim, link_to_world)
+        body = Body(
+            name=PrefixedName(link_prim.GetName(), self.prefix),
+            visual=ShapeCollection(geometry.visual),
+            collision=ShapeCollection(geometry.collision),
+        )
+        inertial = self._parse_inertial(link_prim, body)
+        if inertial is not None:
+            body.inertial = inertial
+        return body
+
+    # %% scene connection tree
 
     def _resolve_link_body(
         self, link_bodies: dict[str, Body], prim_path: usd.Sdf.Path
@@ -136,31 +249,6 @@ class USDSceneParser(USDParser):
         Return the already-created body for a validated joint endpoint.
         """
         return link_bodies[str(self._resolve_object_prim(prim_path).GetPath())]
-
-    def _shapes_in_subtree(
-        self, link_prim: usd.Usd.Prim, link_to_world: usd.Gf.Matrix4d | None = None
-    ) -> list[Shape]:
-        """
-        Build this object's geometry while excluding nested object boundaries.
-        """
-        if link_to_world is None:
-            link_to_world = self._resolve_rigid_world_transform(link_prim)
-        shapes = []
-        iterator = iter(usd.Usd.PrimRange(link_prim))
-        for prim in iterator:
-            if prim != link_prim and str(prim.GetPath()) in self._body_paths:
-                iterator.PruneChildren()
-                continue
-            if (
-                prim.IsA(usd.UsdGeom.Gprim)
-                and usd.UsdGeom.Imageable(prim).ComputePurpose()
-                == usd.UsdGeom.Tokens.guide
-            ):
-                continue
-            shape = self._create_shape(prim, link_to_world)
-            if shape is not None:
-                shapes.append(shape)
-        return shapes
 
     def _complete_connections(
         self,

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 
 from semantic_digital_twin.adapters.usd.parser import UsdAxis
 
 try:
-    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
     PXR_AVAILABLE = True
 except ImportError:
@@ -393,7 +394,7 @@ def build_stage_with_scaled_root() -> Usd.Stage:
     return stage
 
 
-# %% mixed scenes
+# %% scene object ownership
 
 
 class SceneJointType(StrEnum):
@@ -452,3 +453,80 @@ def build_mixed_scene(joint_type: SceneJointType | None = None) -> Usd.Stage:
         joint.CreateLowerLimitAttr(-10)
         joint.CreateUpperLimitAttr(20)
     return stage
+
+
+class ComponentScenePath(StrEnum):
+    """
+    A component containing geometry below separate grouping transforms.
+    """
+
+    ROOT = "/scene"
+    OBJECT = "/scene/component"
+    FIRST = "/scene/component/first"
+    SECOND = "/scene/component/second"
+
+
+def build_component_scene() -> Usd.Stage:
+    """
+    Build one component with geometry below two internal transforms.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.Xform.Define(stage, ComponentScenePath.ROOT)
+    component = UsdGeom.Xform.Define(stage, ComponentScenePath.OBJECT)
+    Usd.ModelAPI(component).SetKind(Kind.Tokens.component)
+    for path in (ComponentScenePath.FIRST, ComponentScenePath.SECOND):
+        _define_link(stage, path)
+    return stage
+
+
+# %% authored scene collision geometry
+
+
+class CollisionScenePath(StrEnum):
+    """
+    Geometry beneath one model component with a collision-only proxy.
+    """
+
+    OBJECT = "/object"
+    VISUAL = "/object/visual/sphere"
+    PROXY = "/object/collision/cube"
+
+
+class CollisionSceneFile(StrEnum):
+    """
+    Synthetic USD files used to exercise payload composition.
+    """
+
+    ASSET = "collision_asset.usda"
+    SCENE = "collision_scene.usda"
+
+
+def build_collision_scene(stage: Usd.Stage | None = None) -> Usd.Stage:
+    """
+    Build one visible shape and a distinct authored guide collider.
+    """
+    if stage is None:
+        stage = Usd.Stage.CreateInMemory()
+    component = UsdGeom.Xform.Define(stage, CollisionScenePath.OBJECT)
+    Usd.ModelAPI(component).SetKind(Kind.Tokens.component)
+    stage.SetDefaultPrim(component.GetPrim())
+    UsdGeom.Sphere.Define(stage, CollisionScenePath.VISUAL)
+    proxy = UsdGeom.Cube.Define(stage, CollisionScenePath.PROXY)
+    UsdGeom.Imageable(proxy).CreatePurposeAttr(UsdGeom.Tokens.guide)
+    UsdPhysics.CollisionAPI.Apply(proxy.GetPrim())
+    return stage
+
+
+def write_composed_collision_scene(directory: Path) -> Path:
+    """
+    Write an asset and a scene whose payload loads that asset.
+    """
+    asset_path = directory / CollisionSceneFile.ASSET
+    asset = build_collision_scene(Usd.Stage.CreateNew(str(asset_path)))
+    asset.GetRootLayer().Save()
+    scene_path = directory / CollisionSceneFile.SCENE
+    scene = Usd.Stage.CreateNew(str(scene_path))
+    component = UsdGeom.Xform.Define(scene, CollisionScenePath.OBJECT)
+    component.GetPrim().GetPayloads().AddPayload(str(asset_path))
+    scene.GetRootLayer().Save()
+    return scene_path

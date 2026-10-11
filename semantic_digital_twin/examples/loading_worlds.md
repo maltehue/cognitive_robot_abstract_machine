@@ -49,21 +49,25 @@ Supported file formates are:
 - stl
 
 
-## USD scenes
+## Separate USD scene objects
 
-For USD files containing multiple objects, use the optional `USDSceneParser`:
+Use `USDSceneParser.from_file(path).parse()` to import static scene objects as
+separate bodies. Body names retain their full prim paths, with the initial slash
+removed. Model components and rigid bodies own their internal geometry; otherwise
+the enclosing geometry prim's parent defines the object boundary.
 
-```python
-from semantic_digital_twin.adapters.usd.scene_parser import USDSceneParser
+Grouping transforms and geometry scale are preserved. Coordinates remain in the
+stage's authored units and axes. Fixed, revolute and prismatic physics joints retain their authored local anchors, axes and limits.
+`USDParser` retains its asset-import behavior.
 
-world = USDSceneParser.from_file("scene.usda", prefix="scene").parse()
-```
 
-This requires `usd-core`. Bodies are named by their full stage paths, without the
-leading slash, so repeated object names remain distinct. Static objects keep their
-placement and scale; fixed, revolute, and prismatic joints retain their local anchors
-and limits. Coordinates remain in the stage's authored units and axes.
+`USDSceneParser` keeps visual geometry separate from `UsdPhysics.CollisionAPI`
+geometry. Guide colliders remain available for collision checks without becoming
+visible. When an object has no authored collider, its visible geometry is also
+used for collision. An explicitly disabled collider suppresses this fallback.
 
-Joints start at zero position. Scaled joint frames, closed loops, and multiple joints
-controlling the same child are rejected. `USDParser` remains available for importing
-one asset with its existing behavior.
+
+Scene articulations start at zero joint position. Apply configured initial positions
+through the world's state API. Unsupported joints, invalid endpoints, multiple
+parents, closed loops and scaled joint frames raise explicit parsing errors.
+Joint endpoints remain separate bodies even within one model component.
