@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from semantic_digital_twin.adapters.usd.parser import UsdAxis
+
 try:
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
@@ -388,4 +390,65 @@ def build_stage_with_scaled_root() -> Usd.Stage:
     root = UsdGeom.Xformable(stage.GetPrimAtPath(ScenePrimPath.ROOT))
     root.AddScaleOp().Set(Gf.Vec3f(2, 3, 4))
     UsdGeom.Cube.Define(stage, ScenePrimPath.CUBE)
+    return stage
+
+
+# %% mixed scenes
+
+
+class SceneJointType(StrEnum):
+    """
+    Joint types used to exercise scene articulation and diagnostics.
+    """
+
+    FIXED = "FixedJoint"
+    REVOLUTE = "RevoluteJoint"
+    PRISMATIC = "PrismaticJoint"
+    SPHERICAL = "SphericalJoint"
+
+
+class MixedScenePath(StrEnum):
+    """
+    Prims in a scene containing repeated object names and a movable link.
+    """
+
+    ROOT = "/scene"
+    GROUP = "/scene/group"
+    FIRST = "/scene/group/object"
+    SECOND = "/scene/object"
+    CHILD = "/scene/group/object/child"
+    JOINT = "/scene/joint"
+    OTHER_JOINT = "/scene/other_joint"
+
+
+def build_mixed_scene(joint_type: SceneJointType | None = None) -> Usd.Stage:
+    """
+    Build nested objects and optionally connect a child through a physics joint.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    root = UsdGeom.Xform.Define(stage, MixedScenePath.ROOT)
+    stage.SetDefaultPrim(root.GetPrim())
+    root.AddTranslateOp().Set(Gf.Vec3d(1, 2, 3))
+    group = UsdGeom.Xform.Define(stage, MixedScenePath.GROUP)
+    group.AddRotateZOp().Set(30)
+    for path in (MixedScenePath.FIRST, MixedScenePath.SECOND, MixedScenePath.CHILD):
+        _define_link(stage, path)
+    UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.FIRST)).AddTranslateOp().Set(
+        Gf.Vec3d(2, 0, 0)
+    )
+    if joint_type is None:
+        return stage
+    joint_classes = {
+        SceneJointType.FIXED: UsdPhysics.FixedJoint,
+        SceneJointType.REVOLUTE: UsdPhysics.RevoluteJoint,
+        SceneJointType.PRISMATIC: UsdPhysics.PrismaticJoint,
+        SceneJointType.SPHERICAL: UsdPhysics.SphericalJoint,
+    }
+    joint = joint_classes[joint_type].Define(stage, MixedScenePath.JOINT)
+    joint.CreateBody0Rel().SetTargets([MixedScenePath.FIRST])
+    joint.CreateBody1Rel().SetTargets([MixedScenePath.CHILD])
+    if joint_type in (SceneJointType.REVOLUTE, SceneJointType.PRISMATIC):
+        joint.CreateAxisAttr(UsdAxis.Z)
+        joint.CreateLowerLimitAttr(-10)
+        joint.CreateUpperLimitAttr(20)
     return stage

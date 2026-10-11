@@ -47,3 +47,23 @@ Supported file formates are:
 - urdf
 - mjcf
 - stl
+
+
+## USD scenes
+
+For USD files containing multiple objects, use the optional `USDSceneParser`:
+
+```python
+from semantic_digital_twin.adapters.usd.scene_parser import USDSceneParser
+
+world = USDSceneParser.from_file("scene.usda", prefix="scene").parse()
+```
+
+This requires `usd-core`. Bodies are named by their full stage paths, without the
+leading slash, so repeated object names remain distinct. Static objects keep their
+placement and scale; fixed, revolute, and prismatic joints retain their local anchors
+and limits. Coordinates remain in the stage's authored units and axes.
+
+Joints start at zero position. Scaled joint frames, closed loops, and multiple joints
+controlling the same child are rejected. `USDParser` remains available for importing
+one asset with its existing behavior.

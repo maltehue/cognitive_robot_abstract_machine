@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import semantic_digital_twin.adapters.usd.scene_parser as usd_parser
+import semantic_digital_twin.adapters.usd.exceptions as usd_exceptions
 from semantic_digital_twin.adapters.usd.exceptions import (
     UnsupportedUsdGeometryTypeError,
     UnsupportedUsdPhysicsJointTypeError,
@@ -27,6 +29,9 @@ from semantic_digital_twin.world_description.geometry import Box, Cylinder, Mesh
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
+    SceneJointType,
+    MixedScenePath,
+    build_mixed_scene,
     ScenePrimPath,
     build_stage_with_placed_objects,
     build_stage_with_scaled_root,
@@ -47,7 +52,7 @@ from .usd_stages import (
 )
 
 if PXR_AVAILABLE:
-    from pxr import Gf, Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 pytestmark = pytest.mark.skipif(
     not PXR_AVAILABLE, reason="usd-core (pxr) not installed"
@@ -555,3 +560,202 @@ def test_parse_places_scaled_mesh_vertices_in_the_authored_world_frame() -> None
     ).T[:, :3]
 
     np.testing.assert_allclose(world_vertices, expected_vertices, atol=1e-9)
+
+
+# %% mixed scenes
+
+
+def test_scene_parser_keeps_nested_objects_and_geometry_separate() -> None:
+    """
+    Grouping transforms place independently named bodies without copied geometry.
+    """
+    stage = build_mixed_scene()
+    world = usd_parser.USDSceneParser(stage=stage, prefix="scene").parse()
+
+    assert len(world.bodies) == 4
+    assert len({body.name for body in world.bodies}) == len(world.bodies)
+    for path in (MixedScenePath.FIRST, MixedScenePath.SECOND, MixedScenePath.CHILD):
+        body = world.get_body_by_name(path.lstrip("/"))
+        assert len(body.visual.shapes) == 1
+        expected = UsdGeom.Xformable(
+            stage.GetPrimAtPath(path)
+        ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        np.testing.assert_allclose(
+            body.global_transform.to_np(), np.array(expected).T, atol=1e-9
+        )
+    assert all(
+        isinstance(connection, FixedConnection) for connection in world.connections
+    )
+
+
+@pytest.mark.parametrize(
+    "joint_type, connection_type",
+    [
+        (SceneJointType.FIXED, FixedConnection),
+        (SceneJointType.REVOLUTE, RevoluteConnection),
+        (SceneJointType.PRISMATIC, PrismaticConnection),
+    ],
+)
+def test_scene_parser_retains_joints_and_unrelated_objects(
+    joint_type: SceneJointType, connection_type: type
+) -> None:
+    """
+    A joint controls only its child while unrelated objects stay in the scene.
+    """
+    stage = build_mixed_scene(joint_type)
+    world = usd_parser.USDSceneParser(stage=stage, prefix="scene").parse()
+    child = world.get_body_by_name(MixedScenePath.CHILD.lstrip("/"))
+    parent = world.get_body_by_name(MixedScenePath.FIRST.lstrip("/"))
+    connection = next(
+        connection for connection in world.connections if connection.child is child
+    )
+    assert type(connection) is connection_type
+    assert connection.parent is parent
+    assert len(world.bodies) == 4
+    assert (
+        len(world.get_body_by_name(MixedScenePath.SECOND.lstrip("/")).visual.shapes)
+        == 1
+    )
+    if connection_type is not FixedConnection:
+        joint = (
+            UsdPhysics.RevoluteJoint(stage.GetPrimAtPath(MixedScenePath.JOINT))
+            if connection_type is RevoluteConnection
+            else UsdPhysics.PrismaticJoint(stage.GetPrimAtPath(MixedScenePath.JOINT))
+        )
+        lower = joint.GetLowerLimitAttr().Get()
+        upper = joint.GetUpperLimitAttr().Get()
+        if connection_type is RevoluteConnection:
+            lower, upper = math.radians(lower), math.radians(upper)
+        assert connection.raw_dof.limits.lower.position == pytest.approx(lower)
+        assert connection.raw_dof.limits.upper.position == pytest.approx(upper)
+        unrelated = world.get_body_by_name(MixedScenePath.SECOND.lstrip("/"))
+        initial = unrelated.global_transform.to_np().copy()
+        connection.position = upper
+        assert not np.allclose(
+            child.global_transform.to_np(), parent.global_transform.to_np()
+        )
+        np.testing.assert_allclose(unrelated.global_transform.to_np(), initial)
+
+
+def test_scene_parser_rejects_multiple_joints_for_one_child() -> None:
+    """
+    Two independent constraints cannot become one tree connection.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    joint = UsdPhysics.FixedJoint.Define(stage, MixedScenePath.OTHER_JOINT)
+    joint.CreateBody1Rel().SetTargets([MixedScenePath.CHILD])
+    with pytest.raises(usd_exceptions.UsdSceneTopologyError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_rejects_closed_joint_loops() -> None:
+    """
+    A joint back to an ancestor would close the scene's connection tree.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    joint = UsdPhysics.FixedJoint.Define(stage, MixedScenePath.OTHER_JOINT)
+    joint.CreateBody0Rel().SetTargets([MixedScenePath.CHILD])
+    joint.CreateBody1Rel().SetTargets([MixedScenePath.FIRST])
+    with pytest.raises(usd_exceptions.UsdSceneTopologyError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_rejects_unsupported_joint_types() -> None:
+    """
+    An unsupported joint is diagnosed instead of flattening its object.
+    """
+    stage = build_mixed_scene(SceneJointType.SPHERICAL)
+    with pytest.raises(UnsupportedUsdPhysicsJointTypeError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_preserves_scaled_world_geometry() -> None:
+    """
+    Grouping scale is baked into geometry while body frames remain rigid.
+    """
+    stage = build_mixed_scene()
+    UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.GROUP)).AddScaleOp().Set(
+        Gf.Vec3f(2, 3, 4)
+    )
+    world = usd_parser.USDSceneParser(stage=stage, prefix="scene").parse()
+    body = world.get_body_by_name(MixedScenePath.FIRST.lstrip("/"))
+    mesh_prim = next(
+        prim
+        for prim in stage.GetPrimAtPath(MixedScenePath.FIRST).GetChildren()
+        if prim.IsA(UsdGeom.Mesh)
+    )
+    expected_transform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()
+    )
+    expected = np.array(
+        [
+            expected_transform.Transform(Gf.Vec3d(point))
+            for point in UsdGeom.Mesh(mesh_prim).GetPointsAttr().Get()
+        ]
+    )
+    [mesh] = body.visual.shapes
+    vertices = np.column_stack(
+        (mesh.unscaled_mesh.vertices, np.ones(len(mesh.unscaled_mesh.vertices)))
+    )
+    actual = (body.global_transform.to_np() @ mesh.origin.to_np() @ vertices.T).T[:, :3]
+    np.testing.assert_allclose(actual, expected, atol=1e-9)
+
+
+def test_scene_parser_rejects_scaled_joint_frames() -> None:
+    """
+    Joint anchors cannot silently lose an authored frame scale.
+    """
+    stage = build_mixed_scene(SceneJointType.REVOLUTE)
+    UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.GROUP)).AddScaleOp().Set(
+        Gf.Vec3f(2, 2, 2)
+    )
+    with pytest.raises(usd_exceptions.UsdScaledJointFrameError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+@pytest.mark.parametrize("targets", [[], [MixedScenePath.CHILD, MixedScenePath.SECOND]])
+def test_scene_parser_rejects_missing_or_ambiguous_joint_children(
+    targets: list[str],
+) -> None:
+    """
+    A child endpoint must select exactly one object.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    UsdPhysics.Joint(
+        stage.GetPrimAtPath(MixedScenePath.JOINT)
+    ).GetBody1Rel().SetTargets(targets)
+    expected_error = (
+        usd_exceptions.UsdSceneTopologyError
+        if targets
+        else UsdPhysicsJointMissingChildBodyError
+    )
+    with pytest.raises(expected_error):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_rejects_nonexistent_joint_targets() -> None:
+    """
+    A broken reference is diagnosed before creating scene connections.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    stage.RemovePrim(MixedScenePath.CHILD)
+    with pytest.raises(usd_exceptions.UsdSceneTopologyError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_excludes_guide_geometry() -> None:
+    """
+    Guide geometry is absent from both collision and visual geometry.
+    """
+    stage = build_mixed_scene()
+    prim = next(
+        prim
+        for prim in stage.GetPrimAtPath(MixedScenePath.SECOND).GetChildren()
+        if prim.IsA(UsdGeom.Gprim)
+    )
+    UsdGeom.Imageable(prim).CreatePurposeAttr(UsdGeom.Tokens.guide)
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    assert {str(body.name.name) for body in world.bodies if body is not world.root} == {
+        MixedScenePath.FIRST.lstrip("/"),
+        MixedScenePath.CHILD.lstrip("/"),
+    }
