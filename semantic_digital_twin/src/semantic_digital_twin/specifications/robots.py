@@ -4,8 +4,8 @@ Specifications of robots placed into a world.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Type, cast
+from dataclasses import dataclass, field
+from typing_extensions import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from semantic_digital_twin.adapters.urdf import URDFParser
@@ -36,7 +36,7 @@ class RobotSpecification:
     a mobile base.
     """
 
-    semantic_annotation_type: Type[AbstractRobot]
+    semantic_annotation_type: type[AbstractRobot]
     """
     The robot to merge into the world.
     """
@@ -53,6 +53,13 @@ class RobotSpecification:
     The start pose of the robot in its ``odom`` frame.
 
     If None, identity is used.
+    """
+
+    prefix: str | None = field(default=None, kw_only=True)
+    """
+    Namespace for the robot's bodies, connections and degrees of freedom.
+
+    ``None`` retains the description's robot name.
     """
 
     def spawn(self, world: World) -> AbstractRobot:
@@ -77,7 +84,7 @@ class RobotSpecification:
         is_active = issubclass(connection_type, ActiveConnection)
 
         robot_world = URDFParser.from_file(
-            self.semantic_annotation_type.get_ros_file_path()
+            self.semantic_annotation_type.get_ros_file_path(), prefix=self.prefix
         ).parse()
         robot_id = self.semantic_annotation_type.from_world(robot_world).id
 
