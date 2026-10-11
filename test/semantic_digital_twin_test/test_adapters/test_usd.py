@@ -19,6 +19,8 @@ from semantic_digital_twin.adapters.usd.parser import (
     UsdAxis,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.adapters.usd.semantics import UsdSceneSemantics
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Floor, Table
 from semantic_digital_twin.semantic_annotations.usd_semantics import UsdSemanticLabels
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
@@ -31,6 +33,9 @@ from semantic_digital_twin.world_description.geometry import Box, Cylinder, Mesh
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
+    SceneLabel,
+    SceneTaxonomy,
+    build_labelled_scene,
     SceneJointType,
     CollisionScenePath,
     build_collision_scene,
@@ -60,6 +65,9 @@ from .usd_stages import (
 
 if PXR_AVAILABLE:
     from pxr import Gf, Kind, Usd, UsdGeom, UsdPhysics
+
+if USD_SEMANTICS_AVAILABLE:
+    from pxr import UsdSemantics
 
 pytestmark = pytest.mark.skipif(
     not PXR_AVAILABLE, reason="usd-core (pxr) not installed"
@@ -866,3 +874,165 @@ def test_scene_parser_keeps_joint_links_separate_inside_one_component() -> None:
     assert isinstance(child.parent_connection, RevoluteConnection)
     assert len(parent.visual.shapes) == 1
     assert len(child.visual.shapes) == 1
+
+
+# %% scene support semantics
+
+
+@pytest.mark.skipif(not USD_SEMANTICS_AVAILABLE, reason="USD label schemas unavailable")
+@pytest.mark.parametrize(
+    "label, annotation_type",
+    [
+        (SceneLabel.FLOOR, Floor),
+        (SceneLabel.TABLE, Table),
+        (SceneLabel.WORKBENCH, Table),
+    ],
+)
+def test_scene_parser_identifies_labelled_support_surfaces(
+    label, annotation_type
+) -> None:
+    """
+    A labelled object exposes the corresponding core support annotation.
+    """
+    stage = build_labelled_scene(label)
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    [annotation] = world.get_semantic_annotations_by_type(annotation_type)
+
+    assert annotation.root.name.name == CollisionScenePath.OBJECT.lstrip("/")
+
+
+@pytest.mark.skipif(not USD_SEMANTICS_AVAILABLE, reason="USD label schemas unavailable")
+def test_scene_parser_preserves_inherited_labels_on_joint_link_bodies() -> None:
+    """
+    A joint link retains labels authored on its enclosing component.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    labels = UsdSemantics.LabelsAPI.Apply(
+        stage.GetPrimAtPath(MixedScenePath.FIRST), SceneTaxonomy.CLASS
+    )
+    labels.CreateLabelsAttr([SceneLabel.UNKNOWN])
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    child = world.get_body_by_name(MixedScenePath.CHILD.lstrip("/"))
+    [annotation] = [
+        annotation
+        for annotation in world.get_semantic_annotations_by_type(UsdSemanticLabels)
+        if annotation.root is child
+    ]
+
+    assert annotation.taxonomy == SceneTaxonomy.CLASS
+    assert annotation.labels == list(labels.GetLabelsAttr().Get())
+
+
+@pytest.mark.skipif(not USD_SEMANTICS_AVAILABLE, reason="USD label schemas unavailable")
+def test_scene_parser_preserves_unknown_labels_without_inventing_support_types() -> (
+    None
+):
+    """
+    Unknown vocabulary remains available without a guessed support annotation.
+    """
+    stage = build_labelled_scene(SceneLabel.UNKNOWN)
+    expected = (
+        UsdSemantics.LabelsAPI.Get(
+            stage.GetPrimAtPath(CollisionScenePath.OBJECT), SceneTaxonomy.CLASS
+        )
+        .GetLabelsAttr()
+        .Get()
+    )
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    [annotation] = world.get_semantic_annotations_by_type(UsdSemanticLabels)
+
+    assert annotation.labels == list(expected)
+    assert world.get_semantic_annotations_by_type(Floor) == []
+    assert world.get_semantic_annotations_by_type(Table) == []
+
+
+@pytest.mark.skipif(not USD_SEMANTICS_AVAILABLE, reason="USD label schemas unavailable")
+def test_scene_parser_uses_the_nearest_label_for_support_classification() -> None:
+    """
+    A link's own table label takes precedence over its ancestor's floor label.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    UsdSemantics.LabelsAPI.Apply(
+        stage.GetPrimAtPath(MixedScenePath.FIRST), SceneTaxonomy.CLASS
+    ).CreateLabelsAttr([SceneLabel.FLOOR])
+    UsdSemantics.LabelsAPI.Apply(
+        stage.GetPrimAtPath(MixedScenePath.CHILD), SceneTaxonomy.CLASS
+    ).CreateLabelsAttr([SceneLabel.TABLE])
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    child = world.get_body_by_name(MixedScenePath.CHILD.lstrip("/"))
+
+    [table] = [
+        annotation
+        for annotation in world.get_semantic_annotations_by_type(Table)
+        if annotation.root is child
+    ]
+    assert table.root is child
+    assert [
+        annotation
+        for annotation in world.get_semantic_annotations_by_type(Floor)
+        if annotation.root is child
+    ] == []
+
+
+@pytest.mark.skipif(not USD_SEMANTICS_AVAILABLE, reason="USD label schemas unavailable")
+def test_scene_parser_keeps_labelled_object_geometry_together_without_model_kind() -> (
+    None
+):
+    """
+    An authored object label owns visual and collision groups without model metadata.
+    """
+    stage = build_labelled_scene(SceneLabel.FLOOR)
+    Usd.ModelAPI(stage.GetPrimAtPath(CollisionScenePath.OBJECT)).SetKind("")
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    [body] = [body for body in world.bodies if body is not world.root]
+
+    assert body.name.name == CollisionScenePath.OBJECT.lstrip("/")
+    [visual] = body.visual.shapes
+    [collision] = body.collision.shapes
+    assert isinstance(visual, Sphere)
+    assert isinstance(collision, Box)
+
+
+@pytest.mark.skipif(not USD_SEMANTICS_AVAILABLE, reason="USD label schemas unavailable")
+def test_scene_parser_support_priority_does_not_depend_on_taxonomy_order() -> None:
+    """
+    A direct support label wins over an inherited label in another taxonomy.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    UsdSemantics.LabelsAPI.Apply(
+        stage.GetPrimAtPath(MixedScenePath.FIRST), SceneTaxonomy.CLASS
+    ).CreateLabelsAttr([SceneLabel.FLOOR])
+    child_prim = stage.GetPrimAtPath(MixedScenePath.CHILD)
+    UsdSemantics.LabelsAPI.Apply(child_prim, SceneTaxonomy.CLASS).CreateLabelsAttr(
+        [SceneLabel.UNKNOWN]
+    )
+    UsdSemantics.LabelsAPI.Apply(child_prim, SceneTaxonomy.CATEGORY).CreateLabelsAttr(
+        [SceneLabel.TABLE]
+    )
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    child = world.get_body_by_name(MixedScenePath.CHILD.lstrip("/"))
+
+    [table] = [
+        annotation
+        for annotation in world.get_semantic_annotations_by_type(Table)
+        if annotation.root is child
+    ]
+    assert table.root is child
+    assert [
+        annotation
+        for annotation in world.get_semantic_annotations_by_type(Floor)
+        if annotation.root is child
+    ] == []
+
+
+@pytest.mark.skipif(not USD_SEMANTICS_AVAILABLE, reason="USD label schemas unavailable")
+def test_scene_parser_support_vocabulary_is_configurable_and_case_insensitive() -> None:
+    """
+    A configured external label is matched without regard to authored case.
+    """
+    stage = build_labelled_scene(SceneLabel.UNKNOWN.upper())
+    semantics = UsdSceneSemantics(support_labels={SceneLabel.UNKNOWN: Floor})
+    world = usd_parser.USDSceneParser(stage=stage, semantics=semantics).parse()
+    [floor] = world.get_semantic_annotations_by_type(Floor)
+
+    assert floor.root.name.name == CollisionScenePath.OBJECT.lstrip("/")

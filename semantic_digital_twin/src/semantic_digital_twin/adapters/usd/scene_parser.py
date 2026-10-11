@@ -12,6 +12,7 @@ from semantic_digital_twin.adapters.usd.exceptions import (
     UsdScaledJointFrameError,
 )
 from semantic_digital_twin.adapters.usd.parser import USDParser
+from semantic_digital_twin.adapters.usd.semantics import UsdSceneSemantics
 from semantic_digital_twin.adapters.world_model_parser import JointDescription
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.spatial_types.spatial_types import (
@@ -55,6 +56,11 @@ class USDSceneParser(USDParser):
     """
     Import separate scene objects and tree-shaped articulations in stage coordinates.
     """
+
+    semantics: UsdSceneSemantics = field(
+        default_factory=UsdSceneSemantics, kw_only=True
+    )
+    """Interpretation of authored scene support labels."""
 
     _body_paths: set[str] = field(default_factory=set, init=False)
     """
@@ -119,6 +125,7 @@ class USDSceneParser(USDParser):
             model = usd.Usd.ModelAPI(ancestor)
             if (
                 str(ancestor.GetPath()) in self._joint_paths
+                or self._read_semantic_labels(ancestor)
                 or ancestor.HasAPI(usd.UsdPhysics.RigidBodyAPI)
                 or (
                     any(
@@ -326,3 +333,21 @@ class USDSceneParser(USDParser):
         raise UsdSceneTopologyError(
             file_path=self.source_description, prim_path=str(graph[child_index].name)
         )
+
+    # %% inherited scene labels
+
+    def _attach_semantic_labels(
+        self, world: World, prim: usd.Usd.Prim, body: Body
+    ) -> None:
+        """Attach labels from the object and its ancestors, nearest labels first."""
+        labels_by_taxonomy: dict[str, list[str]] = {}
+        support_type = None
+        while not prim.IsPseudoRoot():
+            direct_labels = self._read_semantic_labels(prim)
+            if support_type is None:
+                support_type = self.semantics.find_support_type(direct_labels)
+            for taxonomy, labels in direct_labels.items():
+                inherited = labels_by_taxonomy.setdefault(taxonomy, [])
+                inherited.extend(label for label in labels if label not in inherited)
+            prim = prim.GetParent()
+        self.semantics.apply(world, body, labels_by_taxonomy, support_type)

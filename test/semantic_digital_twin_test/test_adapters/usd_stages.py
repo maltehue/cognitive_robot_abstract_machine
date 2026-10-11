@@ -530,3 +530,38 @@ def write_composed_collision_scene(directory: Path) -> Path:
     component.GetPrim().GetPayloads().AddPayload(str(asset_path))
     scene.GetRootLayer().Save()
     return scene_path
+
+
+# %% scene support semantics
+
+
+class SceneTaxonomy(StrEnum):
+    """
+    Label taxonomy exercised by the synthetic scene fixtures.
+    """
+
+    CLASS = "class"
+    CATEGORY = "category"
+
+
+class SceneLabel(StrEnum):
+    """
+    Known support labels and an unknown label retained by the importer.
+    """
+
+    FLOOR = "floor"
+    TABLE = "table"
+    WORKBENCH = "workbench"
+    UNKNOWN = "unclassified_object"
+
+
+def build_labelled_scene(label: str) -> Usd.Stage:
+    """
+    Build an object labelled above separate visible and collision groups.
+    """
+    stage = build_collision_scene()
+    labels = UsdSemantics.LabelsAPI.Apply(
+        stage.GetPrimAtPath(CollisionScenePath.OBJECT), SceneTaxonomy.CLASS
+    )
+    labels.CreateLabelsAttr([label])
+    return stage
