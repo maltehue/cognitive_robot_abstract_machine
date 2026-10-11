@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from typing import List
@@ -48,6 +50,7 @@ from semantic_digital_twin.reasoning.robot_predicates import (
 )
 from semantic_digital_twin.robots.robot_parts import Camera, EndEffector, TCamera
 from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.robots.robot_part_mixins import HasFingers
 from semantic_digital_twin.spatial_types.spatial_types import Pose
 from semantic_digital_twin.testing import *
 from semantic_digital_twin.world import World
@@ -1465,3 +1468,126 @@ def test_grasp_confidence_excludes_the_grippers_own_finger_bodies(
     )
 
     assert is_body_in_gripper(thumb, samples.gripper, samples.sample_size) == 0.0
+
+
+# %% thumb-opposed finger sampling
+
+
+@dataclass(eq=False)
+class GraspFinger:
+    """
+    A finger path with real geometry and explicit body membership.
+    """
+
+    tip: Body
+    """
+    The body providing the fingertip geometry.
+    """
+
+    bodies: list[Body]
+    """
+    The bodies excluded from object-hit confidence.
+    """
+
+
+@dataclass(eq=False)
+class GraspThumb(GraspFinger):
+    """
+    The finger opposing every other finger in the hand.
+    """
+
+
+@dataclass(eq=False)
+class ThumbOpposedFingers(HasFingers[GraspThumb, GraspFinger]):
+    """
+    A general hand without the two-finger-only convenience property.
+    """
+
+    _world: World
+    """
+    The world supplying ray intersections and transforms.
+    """
+
+
+@pytest.fixture
+def thumb_opposed_fingers(grasp_ray_samples: GraspRaySamples) -> ThumbOpposedFingers:
+    """
+    Reuse public fingertip geometry for a hand with four opposing fingers.
+    """
+    samples = grasp_ray_samples
+    thumb = GraspThumb(samples.gripper.thumb.tip, list(samples.gripper.thumb.bodies))
+    fingers = [
+        GraspFinger(samples.gripper.finger.tip, list(samples.gripper.finger.bodies))
+        for _ in range(4)
+    ]
+    return ThumbOpposedFingers(_world=samples.gripper._world, fingers=[thumb, *fingers])
+
+
+def test_grasp_detection_samples_every_finger_opposing_the_thumb(
+    thumb_opposed_fingers: ThumbOpposedFingers, grasp_ray_samples: GraspRaySamples
+) -> None:
+    """
+    Each opposing finger contributes equally to the hand's grasp confidence.
+    """
+    samples = grasp_ray_samples
+    samples.ray_test.side_effect = [
+        (
+            np.zeros((samples.sample_size, 3)),
+            np.arange(samples.sample_size),
+            [samples.target_body] * samples.sample_size,
+        ),
+        (
+            np.zeros((samples.sample_size, 3)),
+            np.arange(samples.sample_size),
+            [samples.target_body] * samples.sample_size,
+        ),
+        (np.zeros((0, 3)), np.array([], dtype=int), []),
+        (np.zeros((0, 3)), np.array([], dtype=int), []),
+    ]
+
+    assert (
+        is_body_in_gripper(
+            samples.target_body, thumb_opposed_fingers, samples.sample_size
+        )
+        == 0.5
+    )
+    assert samples.ray_test.call_count == len(thumb_opposed_fingers.fingers) - 1
+
+
+def test_grasp_detection_keeps_ray_indices_distinct_across_finger_pairs(
+    thumb_opposed_fingers: ThumbOpposedFingers, grasp_ray_samples: GraspRaySamples
+) -> None:
+    """
+    A reused local ray index is a separate sample for every opposing finger.
+    """
+    samples = grasp_ray_samples
+    samples.ray_test.return_value = (
+        np.zeros((samples.sample_size, 3)),
+        np.arange(samples.sample_size),
+        [samples.target_body] * samples.sample_size,
+    )
+
+    assert (
+        is_body_in_gripper(
+            samples.target_body, thumb_opposed_fingers, samples.sample_size
+        )
+        == 1.0
+    )
+
+
+def test_grasp_detection_excludes_fingers_outside_the_current_ray_pair(
+    thumb_opposed_fingers: ThumbOpposedFingers, grasp_ray_samples: GraspRaySamples
+) -> None:
+    """
+    All hand fingers are excluded even when they intersect another pair's rays.
+    """
+    samples = grasp_ray_samples
+    other_finger_body = samples.gripper.root
+    thumb_opposed_fingers.fingers[-1].bodies = [other_finger_body]
+    samples.ray_test.return_value = (
+        np.zeros((samples.sample_size, 3)),
+        np.arange(samples.sample_size),
+        [other_finger_body] * samples.sample_size,
+    )
+
+    assert bodies_in_gripper(thumb_opposed_fingers, samples.sample_size) == []
