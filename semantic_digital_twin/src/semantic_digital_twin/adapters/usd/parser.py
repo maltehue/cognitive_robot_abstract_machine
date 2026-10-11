@@ -640,7 +640,9 @@ class USDParser(WorldModelParser):
         if root_prim is not None:
             world = World.create_with_root_body(root_prim.GetName(), self.prefix)
             root_body = world.root
-            shapes = self._shapes_in_subtree(root_prim)
+            shapes = self._shapes_in_subtree(
+                root_prim, self._resolve_rigid_world_transform(root_prim)
+            )
             shape_collection = ShapeCollection(shapes, reference_frame=root_body)
             shape_collection.transform_all_shapes_to_own_frame()
             root_body.visual = shape_collection
@@ -653,12 +655,18 @@ class USDParser(WorldModelParser):
         root_body = world.root
         with world.modify_world():
             for prim in self._top_level_prims():
-                body = self._create_link_body(prim)
+                world_pose = self._resolve_rigid_world_transform(prim)
+                body = self._create_link_body(prim, world_pose)
                 world.add_body(body)
                 self._attach_semantic_labels(world, prim, body)
                 world.add_connection(
                     Connection6DoF.create_with_dofs(
-                        world=world, parent=root_body, child=body
+                        world=world,
+                        parent=root_body,
+                        child=body,
+                        parent_T_connection_expression=HomogeneousTransformationMatrix(
+                            data=np.array(world_pose).T
+                        ),
                     )
                 )
         return world
@@ -846,16 +854,20 @@ class USDParser(WorldModelParser):
 
     # %% links and shapes
 
-    def _create_link_body(self, link_prim: Usd.Prim) -> Body:
+    def _create_link_body(
+        self, link_prim: Usd.Prim, link_to_world: Gf.Matrix4d | None = None
+    ) -> Body:
         """
         Creates the Body for one rigid link, with a Shape for every mesh/primitive in
         its USD subtree and its :class:`~pxr.UsdPhysics.MassAPI` inertial properties, if
         applied.
 
         :param link_prim: The link's root USD prim.
+        :param link_to_world: Geometry reference transform, or ``None`` to use the
+            authored link transform.
         :return: The created body, not yet added to a world.
         """
-        shapes = self._shapes_in_subtree(link_prim)
+        shapes = self._shapes_in_subtree(link_prim, link_to_world)
         shape_collection = ShapeCollection(shapes)
         body = Body(
             name=PrefixedName(link_prim.GetName(), self.prefix),
@@ -867,17 +879,38 @@ class USDParser(WorldModelParser):
             body.inertial = inertial
         return body
 
-    def _shapes_in_subtree(self, link_prim: Usd.Prim) -> List[Shape]:
+    @staticmethod
+    def _resolve_rigid_world_transform(prim: Usd.Prim) -> Gf.Matrix4d:
         """
-        Creates the Shape for every mesh/primitive prim in a link's subtree.
+        Resolve a prim's translation and rotation in stage coordinates, excluding scale
+        and shear.
 
-        :param link_prim: The link the shapes are positioned relative to, and the root
-            of the subtree to search for them.
-        :return: The created shapes.
+        :param prim: The prim whose rigid placement is requested.
+        :return: The rigid local-to-world transform.
         """
-        link_to_world = UsdGeom.Xformable(link_prim).ComputeLocalToWorldTransform(
-            Usd.TimeCode.Default()
+        transform = Gf.Transform(
+            UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
         )
+        pose = Gf.Matrix4d(1.0)
+        pose.SetRotate(transform.GetRotation().GetQuat())
+        pose.SetTranslateOnly(transform.GetTranslation())
+        return pose
+
+    def _shapes_in_subtree(
+        self, link_prim: Usd.Prim, link_to_world: Gf.Matrix4d | None = None
+    ) -> list[Shape]:
+        """
+        Build the link's shapes relative to the requested geometry frame.
+
+        :param link_prim: Root of the subtree containing the link's geometry.
+        :param link_to_world: Geometry reference transform, or ``None`` to use the
+            authored link transform.
+        :return: Shapes positioned relative to the geometry frame.
+        """
+        if link_to_world is None:
+            link_to_world = UsdGeom.Xformable(link_prim).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()
+            )
         shapes = []
         for prim in Usd.PrimRange(link_prim):
             shape = self._create_shape(prim, link_to_world)
