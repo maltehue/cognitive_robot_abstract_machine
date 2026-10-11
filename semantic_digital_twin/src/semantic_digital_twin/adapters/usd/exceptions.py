@@ -107,6 +107,57 @@ class UnsupportedUsdGeometryTypeError(ParsingError):
         return f"Use one of the supported types: {', '.join(sorted(self.supported_types))}."
 
 
+# %% scene topology
+
+
+@dataclass
+class UsdSceneTopologyError(ParsingError):
+    """
+    Raised when scene relationships cannot form a supported connection tree.
+    """
+
+    prim_path: str = field(kw_only=True)
+    """
+    The prim whose relationship cannot be represented.
+    """
+
+    def error_message(self) -> str:
+        """
+        Identify the unsupported scene relationship.
+        """
+        return f"Stage '{self.file_path}' has unsupported scene topology at '{self.prim_path}'."
+
+    def suggest_correction(self) -> str:
+        """
+        Describe the supported scene structure.
+        """
+        return "Use valid single-target joints forming a tree, without closed loops or multiple parents."
+
+
+@dataclass
+class UsdScaledJointFrameError(ParsingError):
+    """
+    Raised when a joint endpoint has scale or shear that its anchors cannot represent.
+    """
+
+    prim_path: str = field(kw_only=True)
+    """
+    The joint endpoint with a non-rigid world transform.
+    """
+
+    def error_message(self) -> str:
+        """
+        Identify the unsupported joint frame.
+        """
+        return f"Stage '{self.file_path}' has a scaled or sheared joint frame at '{self.prim_path}'."
+
+    def suggest_correction(self) -> str:
+        """
+        Describe how to make joint anchors representable.
+        """
+        return "Bake scale into geometry and author joints in unscaled rigid frames."
+
+
 # %% inferred mass properties
 
 
