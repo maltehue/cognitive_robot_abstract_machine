@@ -613,6 +613,8 @@ class Body(KinematicStructureEntity):
                 return True
         return False
 
+    # %% semantic membership
+
     def get_semantic_annotations_by_type(
         self, type_: Type[GenericSemanticAnnotation]
     ) -> List[GenericSemanticAnnotation]:
@@ -622,9 +624,13 @@ class Body(KinematicStructureEntity):
         :param type_: The type of semantic annotations to return.
         :returns: A list of semantic annotations of the given type.
         """
-        return list(
-            filter(lambda sem: isinstance(sem, type_), self._semantic_annotations)
-        )
+        if self._world is None:
+            return []
+        return [
+            annotation
+            for annotation in self._world.get_semantic_annotations_by_type(type_)
+            if self in annotation.kinematic_structure_entities
+        ]
 
     def copy_for_world(self, new_world: World) -> Self:
         return Body(
