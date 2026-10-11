@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing_extensions import TYPE_CHECKING, Type
 
 from semantic_digital_twin.exceptions import UsageError
+from semantic_digital_twin.world_description.world_entity import Body
 
 if TYPE_CHECKING:
     from semantic_digital_twin.robots.input_source import InputSource
@@ -273,3 +274,28 @@ class MissingDriveConnectionError(RobotPartValidationError):
             f"{type(self.robot_part).__name__} has no drive connection its pose could "
             f"be written into."
         )
+
+
+# %% mobile base clearance geometry
+
+
+@dataclass
+class MissingBaseCollisionGeometry(UsageError):
+    """
+    No collision geometry belongs to the base's rigid assembly.
+    """
+
+    root: Body
+    """The base frame whose rigid descendants were inspected."""
+
+    def error_message(self) -> str:
+        """
+        Identify the base without clearance geometry.
+        """
+        return f"No rigid collision geometry is attached below {self.root.name}."
+
+    def suggest_correction(self) -> str:
+        """
+        Describe the geometry required for clearance calculation.
+        """
+        return "Provide collision geometry on the base root or a fixed descendant."
