@@ -216,6 +216,102 @@ class TestDrainScale:
         assert restored.outflow_rate_constant == 1.0
 
 
+# %% an onset a controller can correct while it runs
+
+
+class TestReposeCorrection:
+    """
+    The repose angle carries an optional correction beside its value, so something
+    watching the pour can move the tilt the model expects it to start at without the
+    equation being rebuilt.
+    """
+
+    @staticmethod
+    def _equation(**kwargs) -> ArticulatedPouringEquation:
+        return ArticulatedPouringEquation(
+            container_height=0.1, container_width=0.08, repose_angle=0.3, **kwargs
+        )
+
+    def test_a_correction_moves_the_onset_by_its_value(self):
+        correction = 0.2
+        uncorrected = self._equation().onset_tilt(0.5).evaluate()[0]
+
+        corrected = (
+            self._equation(repose_correction=sm.Scalar(correction))
+            .onset_tilt(0.5)
+            .evaluate()[0]
+        )
+
+        assert corrected == pytest.approx(uncorrected + correction)
+
+    def test_a_free_variable_correction_stays_free_in_the_drain(self):
+        correction = FloatVariable("repose_correction")
+
+        velocity = self._equation(repose_correction=correction).symbolic_velocity(
+            SymbolicFillContext(sm.Scalar(1.2), sm.Scalar(0.8))
+        )
+
+        assert correction in velocity.free_variables()
+
+    def test_a_gated_drain_keeps_the_correction_it_was_given(self):
+        correction = FloatVariable("repose_correction")
+
+        gated = self._equation(repose_correction=correction).with_gate(sm.Scalar(1.0))
+
+        assert gated.repose_correction is correction
+
+    def test_the_fitted_repose_angle_is_what_survives_a_round_trip(self):
+        correction = FloatVariable("repose_correction")
+        equation = self._equation(repose_correction=correction)
+
+        restored = from_json(to_json(equation))
+
+        assert restored.repose_correction is None
+        assert restored.repose_angle == equation.repose_angle
+
+
+class TestDischargeScale:
+    """
+    The discharge coefficient carries an optional factor beside its value, so something
+    watching where the stream lands can move the predicted landing without the equation
+    being rebuilt.
+    """
+
+    @staticmethod
+    def _equation(**kwargs) -> ArticulatedPouringEquation:
+        return ArticulatedPouringEquation(
+            container_height=0.1, container_width=0.08, repose_angle=0.3, **kwargs
+        )
+
+    def test_a_scale_multiplies_the_exit_speed(self):
+        scale = 1.7
+        context = SymbolicFillContext(sm.Scalar(1.2), sm.Scalar(0.8))
+        unscaled = self._equation().exit_velocity(context).evaluate()[0]
+
+        scaled = (
+            self._equation(discharge_scale=sm.Scalar(scale))
+            .exit_velocity(context)
+            .evaluate()[0]
+        )
+
+        assert scaled == pytest.approx(unscaled * scale)
+
+    def test_a_gated_drain_keeps_the_scale_it_was_given(self):
+        scale = FloatVariable("discharge_scale")
+
+        gated = self._equation(discharge_scale=scale).with_gate(sm.Scalar(1.0))
+
+        assert gated.discharge_scale is scale
+
+    def test_the_fitted_discharge_coefficient_is_what_survives_a_round_trip(self):
+        equation = self._equation(discharge_scale=FloatVariable("discharge_scale"))
+
+        restored = from_json(to_json(equation))
+
+        assert restored.discharge_scale is None
+        assert restored.discharge_coefficient == equation.discharge_coefficient
+
+
 # %% the angle the contents hold before they move
 
 _REPOSE_ANGLE = 0.5

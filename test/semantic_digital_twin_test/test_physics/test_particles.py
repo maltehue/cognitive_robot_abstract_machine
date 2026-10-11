@@ -11,6 +11,7 @@ from datetime import timedelta
 import mujoco
 import numpy
 import pytest
+from typing_extensions import List, Tuple
 
 from ...pytest_environment import runs_in_continuous_integration
 
@@ -22,6 +23,7 @@ from semantic_digital_twin.exceptions import (
 )
 from semantic_digital_twin.physics.particles import (
     HollowCylinder,
+    SpoutedHollowCylinder,
     MeasuredCommittedFillLevel,
     MeasuredFillLevel,
     MeasuredInflowRate,
@@ -31,7 +33,7 @@ from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
     Point3,
 )
-from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
+from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel, HasSpout
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     FixedConnection,
@@ -379,6 +381,31 @@ def test_a_particle_moved_out_of_a_container_stops_counting_towards_it(
 
     assert fill.count_inside(container) == 11
     assert fill.fraction_inside(container) == pytest.approx(11 / 12)
+
+
+@pytestmark_physics
+def test_a_particle_moved_out_is_where_it_was_put_and_no_longer_inside(
+    cup_in_a_simulation,
+):
+    """
+    Each particle can be asked where it stands in the world and whether it is inside a
+    container, which is what tells a spill from what was poured.
+    """
+    world, container, simulation = cup_in_a_simulation
+    fill = CUP.fill_with_particles(
+        container=container,
+        world=world,
+        simulator=simulation.simulator,
+        particle_radius=PARTICLE_RADIUS,
+        count=12,
+    )
+    simulation.step_simulation(SETTLE)
+    away = numpy.array([1.0, 1.0, 1.0])
+    simulation.simulator.set_body_position(body_name=fill.names[0], position=away)
+    simulation.simulator.step()
+
+    assert fill.world_positions()[0] == pytest.approx(away, abs=1e-3)
+    assert list(fill.is_inside(container)) == [False] + [True] * 11
 
 
 @pytestmark_physics
@@ -1066,3 +1093,368 @@ def test_what_has_left_the_source_is_counted_before_it_lands(cup_in_a_simulation
     assert committed.measure() == pytest.approx(
         falling * fill.bulk_volume_per_particle / CUP.cavity_volume
     )
+
+
+# %% a container that pours through a spout
+
+SPOUTED_CUP = SpoutedHollowCylinder(inner_radius=0.035, height=0.06)
+"""
+A cup whose contents leave through an open ramp rather than over the rim.
+"""
+
+
+def _panels_facing_the_spout(geometry: SpoutedHollowCylinder) -> List[Box]:
+    """
+    :return: The wall panels whose centres lie within the slot's angular span.
+    """
+    panels = []
+    for shape in geometry.shapes():
+        if not isinstance(shape, Box):
+            continue
+        origin = shape.origin.to_np()
+        angle = math.atan2(origin[1, 3], origin[0, 3])
+        offset = math.atan2(
+            math.sin(angle - geometry.spout_azimuth),
+            math.cos(angle - geometry.spout_azimuth),
+        )
+        if abs(offset) < geometry.slot_half_angle:
+            panels.append(shape)
+    return panels
+
+
+def test_the_wall_is_open_above_the_slot_on_the_spout_side():
+    """
+    The contents reach the spout through a slot in the wall: on the spout's side the
+    panels end at the slot's bottom, everywhere else they still reach the rim.
+    """
+    facing = _panels_facing_the_spout(SPOUTED_CUP)
+    assert facing, "the slot opens at least one panel"
+    for panel in facing:
+        top = panel.origin.to_np()[2, 3] + panel.scale.z / 2
+        assert top == pytest.approx(SPOUTED_CUP.slot_bottom)
+    panels = [shape for shape in SPOUTED_CUP.shapes() if isinstance(shape, Box)]
+    assert len(panels) == SPOUTED_CUP.wall_segments
+    full_height = [panel for panel in panels if panel not in facing]
+    for panel in full_height:
+        top = panel.origin.to_np()[2, 3] + panel.scale.z / 2
+        assert top == pytest.approx(SPOUTED_CUP.height)
+
+
+def test_the_slot_is_wider_than_the_trough_it_feeds():
+    """
+    Nothing of the wall stands across the trough, so the contents enter it everywhere
+    along its width.
+    """
+    chord = 2 * SPOUTED_CUP.inner_radius * math.sin(SPOUTED_CUP.slot_half_angle)
+    assert chord >= SPOUTED_CUP.trough_width
+
+
+def test_the_outlet_stands_at_the_rim_at_the_end_of_the_ramp():
+    """
+    The ramp climbs from the slot's bottom to the rim's height, so its length and the
+    outlet's distance from the axis follow from the slot and the ramp's pitch.
+    """
+    outlet = SPOUTED_CUP.root_T_spout.to_np()[:3, 3]
+    rise = SPOUTED_CUP.height - SPOUTED_CUP.slot_bottom
+    expected_radius = SPOUTED_CUP.inner_radius + rise / math.tan(
+        SPOUTED_CUP.spout_pitch
+    )
+    assert outlet[2] == pytest.approx(SPOUTED_CUP.height)
+    assert math.hypot(outlet[0], outlet[1]) == pytest.approx(expected_radius)
+    assert math.atan2(outlet[1], outlet[0]) == pytest.approx(SPOUTED_CUP.spout_azimuth)
+
+
+def test_the_spout_frame_points_up_the_ramp():
+    """
+    The spout's ``z`` axis is the outflow, which leaves along the ramp.
+    """
+    outflow = SPOUTED_CUP.root_T_spout.to_np()[:3, 2]
+    pitch, azimuth = SPOUTED_CUP.spout_pitch, SPOUTED_CUP.spout_azimuth
+    assert outflow == pytest.approx(
+        [
+            math.cos(pitch) * math.cos(azimuth),
+            math.cos(pitch) * math.sin(azimuth),
+            math.sin(pitch),
+        ]
+    )
+
+
+def test_the_trough_floor_runs_from_the_slot_to_the_outlet():
+    """
+    The floor's upper face starts at the slot's bottom on the cavity's edge and ends at
+    the outlet, so what enters the slot slides out at the outlet.
+    """
+    [floor] = [
+        shape
+        for shape in SPOUTED_CUP.spout_shapes()
+        if shape.scale.y == pytest.approx(SPOUTED_CUP.trough_width)
+    ]
+    spout_T_floor = floor.origin.to_np()
+    upper_face_centre = spout_T_floor @ numpy.array([-floor.scale.x / 2, 0.0, 0.0, 1.0])
+    along = spout_T_floor[:3, 2] * floor.scale.z / 2
+    root_T_spout = SPOUTED_CUP.root_T_spout.to_np()
+    start = root_T_spout @ numpy.append(upper_face_centre[:3] - along, 1.0)
+    end = root_T_spout @ numpy.append(upper_face_centre[:3] + along, 1.0)
+    azimuth = SPOUTED_CUP.spout_azimuth
+    assert start[:3] == pytest.approx(
+        [
+            SPOUTED_CUP.inner_radius * math.cos(azimuth),
+            SPOUTED_CUP.inner_radius * math.sin(azimuth),
+            SPOUTED_CUP.slot_bottom,
+        ],
+        abs=1e-9,
+    )
+    assert end[:3] == pytest.approx(root_T_spout[:3, 3], abs=1e-9)
+
+
+def _points_in(
+    box: Box, frame_T_parent: numpy.ndarray, steps: int = 5
+) -> numpy.ndarray:
+    """
+    :return: A grid of points filling a box, in the frame ``frame_T_parent`` maps its
+        parent's frame into.
+    """
+    axis = numpy.linspace(-0.5, 0.5, steps)
+    grid = numpy.array(numpy.meshgrid(axis, axis, axis)).reshape(3, -1).T
+    local = grid * numpy.array([box.scale.x, box.scale.y, box.scale.z])
+    homogeneous = numpy.hstack([local, numpy.ones((len(local), 1))])
+    return (frame_T_parent @ box.origin.to_np() @ homogeneous.T).T[:, :3]
+
+
+def _covered(
+    point: numpy.ndarray, shapes: List[Box], frame_T_parent: numpy.ndarray
+) -> bool:
+    """
+    :return: Whether a point lies within any of the boxes, all given in the frame
+        ``frame_T_parent`` maps their parent's frame into.
+    """
+    for box in shapes:
+        box_T_point = numpy.linalg.inv(
+            frame_T_parent @ box.origin.to_np()
+        ) @ numpy.append(point, 1.0)
+        half = numpy.array([box.scale.x, box.scale.y, box.scale.z]) / 2
+        if numpy.all(numpy.abs(box_T_point[:3]) <= half + 1e-9):
+            return True
+    return False
+
+
+def test_nothing_of_the_trough_reaches_into_the_cavity():
+    """
+    The trough starts at the wall: no part of it stands inside the cylinder the
+    contents fill, where it would catch them before they reach the slot.
+    """
+    root_T_spout = SPOUTED_CUP.root_T_spout.to_np()
+    for shape in SPOUTED_CUP.spout_shapes():
+        points = _points_in(shape, root_T_spout)
+        radius = numpy.hypot(points[:, 0], points[:, 1])
+        within_depth = (points[:, 2] > SPOUTED_CUP.base_thickness) & (
+            points[:, 2] < SPOUTED_CUP.height
+        )
+        assert numpy.all(radius[within_depth] >= SPOUTED_CUP.inner_radius - 1e-9)
+
+
+def test_the_spout_ends_at_its_outlet():
+    """
+    Contents count as the spout's within its extent, so nothing of it reaches past the
+    outlet, where whatever leaves has left the cup.
+    """
+    furthest = max(
+        _points_in(shape, numpy.eye(4))[:, 2].max()
+        for shape in SPOUTED_CUP.spout_shapes()
+    )
+    assert furthest == pytest.approx(0.0, abs=1e-9)
+
+
+def test_the_slot_is_closed_beside_the_trough():
+    """
+    Where the slot is cut wider than the trough, the trough's sides close it, so the
+    wall leaves no ledge beside the trough for the contents to settle on.
+    """
+    root_T_spout = SPOUTED_CUP.root_T_spout.to_np()
+    boxes = [shape for shape in SPOUTED_CUP.shapes() if isinstance(shape, Box)]
+    spout_boxes = list(SPOUTED_CUP.spout_shapes())
+    middle_of_wall = SPOUTED_CUP.inner_radius + SPOUTED_CUP.wall_thickness / 2
+    beside = numpy.linspace(
+        SPOUTED_CUP.trough_width / 2 + SPOUTED_CUP.wall_thickness,
+        middle_of_wall * math.sin(SPOUTED_CUP.slot_half_angle),
+        5,
+    )
+    heights = numpy.linspace(SPOUTED_CUP.slot_bottom + 1e-3, SPOUTED_CUP.height, 5)
+    azimuth = SPOUTED_CUP.spout_azimuth
+    for side in (-1, 1):
+        for across in beside:
+            for height in heights:
+                along = math.sqrt(middle_of_wall**2 - across**2)
+                point = numpy.array(
+                    [
+                        along * math.cos(azimuth) - side * across * math.sin(azimuth),
+                        along * math.sin(azimuth) + side * across * math.cos(azimuth),
+                        height,
+                    ]
+                )
+                assert _covered(point, boxes, numpy.eye(4)) or _covered(
+                    point, spout_boxes, root_T_spout
+                )
+
+
+def _stand_spouted_container_in(world: World) -> Tuple[Body, Body]:
+    """
+    Add the spouted cup standing on a world's root, its spout fixed to it.
+
+    :return: The cup's body and the spout's.
+    """
+    container = _stand_container_in(world, geometry=SPOUTED_CUP)
+    spout = SPOUTED_CUP.spout_body(PrefixedName("spout"))
+    with world.modify_world():
+        world.add_kinematic_structure_entity(spout)
+        world.add_connection(
+            FixedConnection(
+                parent=container,
+                child=spout,
+                parent_T_connection_expression=SPOUTED_CUP.root_T_spout,
+            )
+        )
+    return container, spout
+
+
+@dataclass(eq=False)
+class SpoutedPourableContainer(HasSpout):
+    """
+    A spouted container carrying the fill level a controller reasons about.
+    """
+
+
+def test_a_spouted_cup_pours_at_its_outlet(world_with_ground):
+    """
+    Annotated as a spouted container, the cup's drain measures its head against the
+    outlet: the lip sits as far out and as high as the outlet does.
+    """
+    container, spout = _stand_spouted_container_in(world_with_ground)
+    annotation = SpoutedPourableContainer(
+        name=PrefixedName("contents"), root=container, spout=spout
+    )
+    equation = annotation.create_pouring_equation(
+        world_with_ground, outflow_rate_constant=1.0, discharge_coefficient=0.3
+    )
+    outlet = SPOUTED_CUP.root_T_spout.to_np()[:3, 3]
+    assert equation.lip_offset == pytest.approx(math.hypot(outlet[0], outlet[1]))
+    assert equation.container_height == pytest.approx(SPOUTED_CUP.height)
+
+
+@pytest.fixture
+def spouted_cup_in_a_simulation(world_with_ground):
+    """
+    The spouted cup standing in a world, and the simulation of that world, already
+    stepped so that every body has a pose.
+    """
+    container, spout = _stand_spouted_container_in(world_with_ground)
+    simulation = MujocoSim(world=world_with_ground, headless=True)
+    simulation.start_stepped_simulation()
+    simulation.step_simulation(SETTLE)
+    yield world_with_ground, container, spout, simulation
+    if simulation.is_running():
+        simulation.stop_simulation()
+
+
+def _particle_in_the_trough(world: World, container: Body) -> Point3:
+    """
+    :return: A point halfway up the ramp, a particle radius above its floor, in the
+        container's frame.
+    """
+    halfway = SPOUTED_CUP.root_T_spout.to_np() @ numpy.array(
+        [-PARTICLE_RADIUS - 0.002, 0.0, -SPOUTED_CUP.spout_length / 2, 1.0]
+    )
+    return Point3(*halfway[:3], reference_frame=container)
+
+
+@pytestmark_physics
+def test_contents_in_the_spout_count_towards_the_container_with_it(
+    spouted_cup_in_a_simulation,
+):
+    """
+    What stands in the spout has not been poured yet, so counting the spout with the
+    container keeps it in the container's contents; the container's box alone misses it.
+    """
+    world, container, spout, simulation = spouted_cup_in_a_simulation
+    fill = ParticleFill.spawn_in(
+        simulator=simulation.simulator,
+        container=container,
+        world_T_container=world.compute_forward_kinematics_np(world.root, container),
+        positions=[_particle_in_the_trough(world, container)],
+        particle_radius=PARTICLE_RADIUS,
+    )
+    simulation.step_simulation(SETTLE)
+
+    assert fill.count_inside(container) == 0
+    assert fill.count_inside(container, spout) == 1
+
+
+@pytestmark_physics
+def test_a_measurement_counts_what_stands_in_the_spout(spouted_cup_in_a_simulation):
+    """
+    A spouted container's level is what stands in it and in its spout.
+    """
+    world, container, spout, simulation = spouted_cup_in_a_simulation
+    annotation = SpoutedPourableContainer(
+        name=PrefixedName("contents"), root=container, spout=spout
+    )
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    fill = ParticleFill.spawn_in(
+        simulator=simulation.simulator,
+        container=container,
+        world_T_container=world.compute_forward_kinematics_np(world.root, container),
+        positions=[_particle_in_the_trough(world, container)],
+        particle_radius=PARTICLE_RADIUS,
+    )
+    simulation.step_simulation(SETTLE)
+
+    measurement = MeasuredFillLevel(
+        contents=fill,
+        container=container,
+        spout=spout,
+        capacity=SPOUTED_CUP.cavity_volume,
+        connection=annotation.fill_connection,
+        world=world,
+    )
+
+    assert measurement.measure() == pytest.approx(
+        fill.bulk_volume_per_particle / SPOUTED_CUP.cavity_volume
+    )
+
+
+@pytestmark_physics
+def test_contents_in_the_source_spout_are_not_on_their_way(
+    spouted_cup_in_a_simulation,
+):
+    """
+    A grain on the source's ramp stands above the receiver but has not left the source,
+    so it is not yet committed to the receiver.
+    """
+    world, container, spout, simulation = spouted_cup_in_a_simulation
+    annotation = PourableContainer(name=PrefixedName("contents"), root=container)
+    with world.modify_world():
+        world.add_semantic_annotation(annotation)
+    annotation.initialize_fill_level(world=world, initial_fill=0.0)
+    fill = ParticleFill.spawn_in(
+        simulator=simulation.simulator,
+        container=container,
+        world_T_container=world.compute_forward_kinematics_np(world.root, container),
+        positions=[_particle_in_the_trough(world, container)],
+        particle_radius=PARTICLE_RADIUS,
+    )
+    simulation.step_simulation(SETTLE)
+
+    committed = MeasuredCommittedFillLevel(
+        contents=fill,
+        container=container,
+        capacity=SPOUTED_CUP.cavity_volume,
+        connection=annotation.fill_connection,
+        world=world,
+        source=container,
+        source_spout=spout,
+        opening_height=-1.0,
+    )
+
+    assert committed.count_on_the_way() == 0

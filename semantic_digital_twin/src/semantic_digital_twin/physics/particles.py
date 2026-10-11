@@ -19,7 +19,7 @@ import mujoco
 import numpy
 from scipy.spatial.transform import Rotation
 
-from typing_extensions import ClassVar, List, Optional, Self
+from typing_extensions import ClassVar, List, Optional, Self, Tuple
 
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
@@ -142,7 +142,6 @@ class HollowCylinder:
         """
         :return: The panels standing in for the round wall, each tangent to the cavity.
         """
-        wall_height = self.height - self.base_thickness
         panel_width = (
             2
             * (self.inner_radius + self.wall_thickness)
@@ -152,6 +151,7 @@ class HollowCylinder:
         panels = []
         for segment in range(self.wall_segments):
             angle = 2 * math.pi * segment / self.wall_segments
+            wall_height = self._panel_top(angle) - self.base_thickness
             panels.append(
                 Box(
                     origin=HomogeneousTransformationMatrix.from_xyz_rpy(
@@ -165,6 +165,13 @@ class HollowCylinder:
                 )
             )
         return panels
+
+    def _panel_top(self, angle: float) -> float:
+        """
+        :param angle: Where around the axis a wall panel stands, in radians.
+        :return: How high that panel reaches above the container's origin.
+        """
+        return self.height
 
     def body(self, name: PrefixedName) -> Body:
         """
@@ -289,6 +296,269 @@ class HollowCylinder:
         return positions
 
 
+# %% a container with a spout
+
+
+@dataclass
+class SpoutedHollowCylinder(HollowCylinder):
+    """
+    A cylindrical container that pours through an open ramp rather than over its rim,
+    like a watering can whose spout is a trough instead of a tube.
+
+    The wall has a slot on one side from :attr:`slot_bottom` up to the rim. From the
+    slot's bottom a trough climbs outward at :attr:`spout_pitch` until it reaches the
+    rim's height, where the outlet is. The trough belongs to a body of its own, the
+    spout, whose origin is the outlet and whose ``z`` axis points along the outflow, as
+    :class:`~semantic_digital_twin.semantic_annotations.mixins.HasSpout` expects; the
+    container's own body keeps only the cup, so its extent still describes the cavity.
+    """
+
+    slot_bottom: float = 0.02
+    """
+    How high above the container's origin the slot in the wall starts, in metres.
+    """
+
+    spout_pitch: float = math.pi / 4
+    """
+    How steeply the trough climbs above the horizontal, in radians.
+    """
+
+    trough_width: float = 0.03
+    """
+    Inner width of the trough, in metres.
+    """
+
+    trough_wall_height: float = 0.025
+    """
+    How high the trough's side walls stand above its floor, in metres.
+    """
+
+    spout_azimuth: float = math.pi
+    """
+    The direction the spout leaves the container in, as an angle about the container's
+    ``z`` axis from its ``x`` axis, in radians.
+    """
+
+    @property
+    def slot_half_angle(self) -> float:
+        """
+        :return: Half the angle around the axis the slot spans: every panel that would
+            stand across the trough is cut down to the slot's bottom.
+        """
+        trough_half_angle = math.asin(self.trough_width / 2 / self.inner_radius)
+        return trough_half_angle + math.pi / self.wall_segments
+
+    @property
+    def spout_length(self) -> float:
+        """
+        :return: The length of the trough from the slot to the outlet, in metres.
+        """
+        return (self.height - self.slot_bottom) / math.sin(self.spout_pitch)
+
+    @property
+    def outlet_radius(self) -> float:
+        """
+        :return: How far the outlet stands from the container's axis, in metres.
+        """
+        return self.inner_radius + self.spout_length * math.cos(self.spout_pitch)
+
+    @property
+    def root_T_spout(self) -> HomogeneousTransformationMatrix:
+        """
+        :return: The spout's frame in the container's: at the outlet, ``z`` along the
+            outflow and ``x`` pointing away from the trough's floor.
+        """
+        return HomogeneousTransformationMatrix.from_xyz_rpy(
+            x=self.outlet_radius * math.cos(self.spout_azimuth),
+            y=self.outlet_radius * math.sin(self.spout_azimuth),
+            z=self.height,
+            pitch=math.pi / 2 - self.spout_pitch,
+            yaw=self.spout_azimuth,
+        )
+
+    def _panel_top(self, angle: float) -> float:
+        """
+        :param angle: Where around the axis a wall panel stands, in radians.
+        :return: The slot's bottom for a panel across the spout, the rim otherwise.
+        """
+        offset = math.atan2(
+            math.sin(angle - self.spout_azimuth), math.cos(angle - self.spout_azimuth)
+        )
+        if abs(offset) < self.slot_half_angle:
+            return self.slot_bottom
+        return self.height
+
+    def spout_shapes(self) -> ShapeCollection:
+        """
+        Build the trough: a floor from the slot's bottom to the outlet, a side wall
+        along either edge of it, and the parts of the cut wall panels that stand beside
+        the trough rather than across it.
+
+        A side wall stands on the floor as far as it stays outside the cavity and is
+        closed down to the slot by an upright block beside the wall, so nothing of the
+        trough stands inside the cup; the restored panels close the slot up to the
+        trough, so it opens only into the trough. Nothing reaches past the outlet.
+
+        :return: The shapes, in the spout's own frame.
+        """
+        half_length = self.spout_length / 2
+        floor = Box(
+            origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                x=self.wall_thickness / 2, z=-half_length
+            ),
+            scale=Scale(self.wall_thickness, self.trough_width, self.spout_length),
+            color=self.color,
+        )
+        start = self._side_wall_start
+        walls = [
+            Box(
+                origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    x=-self.trough_wall_height / 2,
+                    y=side * (self.trough_width + self.wall_thickness) / 2,
+                    z=start / 2,
+                ),
+                scale=Scale(self.trough_wall_height, self.wall_thickness, -start),
+                color=self.color,
+            )
+            for side in (-1, 1)
+        ]
+        spout_T_root = self.root_T_spout.inverse().to_np()
+        beside = [self._side_block(side) for side in (-1, 1)] + self._slot_cheeks()
+        return ShapeCollection(
+            [floor]
+            + walls
+            + [
+                Box(
+                    origin=HomogeneousTransformationMatrix(
+                        spout_T_root @ root_T_box.to_np()
+                    ),
+                    scale=scale,
+                    color=self.color,
+                )
+                for root_T_box, scale in beside
+            ]
+        )
+
+    @property
+    def _cavity_edge(self) -> float:
+        """
+        :return: How far from the axis the cavity reaches where the trough's edges meet
+            it, in metres.
+        """
+        return math.sqrt(self.inner_radius**2 - (self.trough_width / 2) ** 2)
+
+    @property
+    def _side_wall_start(self) -> float:
+        """
+        :return: Where along the spout's ``z`` axis a side wall starts, so that its top
+            edge stays outside the cavity, in metres; negative, the outlet being zero.
+        """
+        return (
+            self._cavity_edge
+            - self.outlet_radius
+            + self.trough_wall_height * math.sin(self.spout_pitch)
+        ) / math.cos(self.spout_pitch)
+
+    def _trough_frame(
+        self, along: float, across: float, z: float, yaw: float = 0.0
+    ) -> HomogeneousTransformationMatrix:
+        """
+        :param along: Distance from the axis towards the spout, in metres.
+        :param across: Distance to the side of the trough's centre line, in metres.
+        :param z: Height above the container's origin, in metres.
+        :param yaw: Turn about ``z`` relative to the spout's direction, in radians.
+        :return: That pose in the container's frame.
+        """
+        azimuth = self.spout_azimuth
+        return HomogeneousTransformationMatrix.from_xyz_rpy(
+            x=along * math.cos(azimuth) - across * math.sin(azimuth),
+            y=along * math.sin(azimuth) + across * math.cos(azimuth),
+            z=z,
+            yaw=azimuth + yaw,
+        )
+
+    def _side_block(self, side: int) -> Tuple[HomogeneousTransformationMatrix, Scale]:
+        """
+        :param side: Which side of the trough, ``-1`` or ``1``.
+        :return: The pose in the container's frame and the size of the upright block
+            that closes that side between the slot and where its side wall starts.
+        """
+        start = self._side_wall_start
+        far = self.outlet_radius + start * math.cos(self.spout_pitch)
+        top = (
+            self.height
+            + start * math.sin(self.spout_pitch)
+            + self.trough_wall_height * math.cos(self.spout_pitch)
+        )
+        return (
+            self._trough_frame(
+                along=(self._cavity_edge + far) / 2,
+                across=side * (self.trough_width + self.wall_thickness) / 2,
+                z=(self.slot_bottom + top) / 2,
+            ),
+            Scale(far - self._cavity_edge, self.wall_thickness, top - self.slot_bottom),
+        )
+
+    def _slot_cheeks(self) -> List[Tuple[HomogeneousTransformationMatrix, Scale]]:
+        """
+        :return: For every wall panel cut down to the slot's bottom, the part of it
+            beside the trough, from the slot's bottom to the rim, as its pose in the
+            container's frame and its size.
+        """
+        panel_width = (
+            2
+            * (self.inner_radius + self.wall_thickness)
+            * math.tan(math.pi / self.wall_segments)
+        )
+        cheeks = []
+        for segment in range(self.wall_segments):
+            angle = 2 * math.pi * segment / self.wall_segments
+            offset = math.atan2(
+                math.sin(angle - self.spout_azimuth),
+                math.cos(angle - self.spout_azimuth),
+            )
+            if abs(offset) >= self.slot_half_angle or math.isclose(offset, 0.0):
+                continue
+            side = math.copysign(1.0, offset)
+            inner_side = self.inner_radius * math.sin(abs(offset))
+            edge = (self.trough_width / 2 - inner_side) / math.cos(offset)
+            start, end = max(edge, -panel_width / 2), panel_width / 2
+            if end <= start:
+                continue
+            centre = (start + end) / 2
+            radius = self.inner_radius + self.wall_thickness / 2
+            cheeks.append(
+                (
+                    self._trough_frame(
+                        along=radius * math.cos(offset)
+                        - centre * math.sin(abs(offset)),
+                        across=side
+                        * (radius * math.sin(abs(offset)) + centre * math.cos(offset)),
+                        z=(self.slot_bottom + self.height) / 2,
+                        yaw=offset,
+                    ),
+                    Scale(
+                        self.wall_thickness,
+                        end - start,
+                        self.height - self.slot_bottom,
+                    ),
+                )
+            )
+        return cheeks
+
+    def spout_body(self, name: PrefixedName) -> Body:
+        """
+        Build the spout's body, for a caller to fix to the container at
+        :attr:`root_T_spout`.
+
+        :param name: Name of the spout's body.
+        :return: The spout's body, not yet in any world.
+        """
+        return Body.from_shape_collection(
+            name=name, shape_collection=self.spout_shapes()
+        )
+
+
 # %% the contents
 
 
@@ -360,14 +630,15 @@ class ParticleFill:
         """
         return 4 / 3 * math.pi * particle_radius**3 / cls.LOOSE_PACKING_FRACTION
 
-    def bulk_volume_in(self, container: Body) -> float:
+    def bulk_volume_in(self, container: Body, *parts: Body) -> float:
         """
         The volume the particles standing in a container take up, voids included.
 
         :param container: The container to measure in.
+        :param parts: Further bodies whose contents count as the container's.
         :return: The volume, in cubic metres.
         """
-        return self.count_inside(container) * self.bulk_volume_per_particle
+        return self.count_inside(container, *parts) * self.bulk_volume_per_particle
 
     def bulk_volume_per_particle_in(self, container: Body, capacity: float) -> float:
         """
@@ -526,17 +797,34 @@ class ParticleFill:
         stacked = numpy.array([world_P_particles[name] for name in self.names])
         return (stacked - world_P_container) @ world_R_container
 
-    def count_inside(self, container: Body) -> int:
+    def count_inside(self, container: Body, *parts: Body) -> int:
         """
-        How many particles stand within a container's own extent.
+        How many particles stand within a container's own extent, or within that of any
+        further part of it, such as a spout.
 
-        ..note:: A particle counts as inside when it is within the container's bounding
-            box, which also covers the volume the container's own walls occupy.
+        ..note:: A particle counts as inside when it is within a body's bounding box,
+            which also covers the volume the body's own walls occupy. A particle inside
+            several of the bodies counts once.
 
         :param container: The container to count in.
+        :param parts: Further bodies whose contents count as the container's.
         :return: The number of particles inside it.
         """
-        return int(self._inside(container).sum())
+        return int(self.is_inside(container, *parts).sum())
+
+    def is_inside(self, container: Body, *parts: Body) -> numpy.ndarray:
+        """
+        Which particles stand within a container's own extent, or within that of any
+        further part of it, as :meth:`count_inside` counts them.
+
+        :param container: The container to test against.
+        :param parts: Further bodies whose contents count as the container's.
+        :return: One boolean per particle, in the order they were packed.
+        """
+        inside = self._inside(container)
+        for part in parts:
+            inside = inside | self._inside(part)
+        return inside
 
     def fraction_inside(self, container: Body) -> float:
         """
@@ -584,10 +872,22 @@ class ParticleFill:
 
         :return: One height in metres per particle, in the order they were packed.
         """
+        return self.world_positions()[:, 2]
+
+    def world_positions(self) -> numpy.ndarray:
+        """
+        Where each particle stands in the world.
+
+        ..note:: A simulation computes a body's pose as it steps, so this reads zeros
+            until the first step has run.
+
+        :return: One row of x, y and z per particle, in metres, in the order they were
+            packed.
+        """
         if not self.names:
-            return numpy.empty(0)
+            return numpy.empty((0, 3))
         positions = self.simulator.get_bodies_positions(body_names=self.names).result
-        return numpy.array([positions[name][2] for name in self.names])
+        return numpy.array([positions[name] for name in self.names], dtype=float)
 
     def count_above(self, height: float) -> int:
         """
@@ -664,13 +964,28 @@ class MeasuredFillLevel:
     The world holding that fill level.
     """
 
+    spout: Optional[Body] = field(default=None, kw_only=True)
+    """
+    The container's spout, whose contents have not been poured yet and so count as the
+    container's, or ``None`` for a container without one.
+    """
+
+    @property
+    def container_parts(self) -> List[Body]:
+        """
+        :return: The bodies whose contents count as the container's.
+        """
+        return [self.container] + ([self.spout] if self.spout is not None else [])
+
     def measure(self) -> float:
         """
         How full the container currently is.
 
         :return: The share of its capacity the contents in it take up, in ``[0, 1]``.
         """
-        return min(1.0, self.contents.bulk_volume_in(self.container) / self.capacity)
+        return min(
+            1.0, self.contents.bulk_volume_in(*self.container_parts) / self.capacity
+        )
 
     def report(self) -> float:
         """
@@ -764,14 +1079,23 @@ class MeasuredCommittedFillLevel(MeasuredFillLevel):
     How high this container's opening stands in the world, in metres.
     """
 
+    source_spout: Optional[Body] = field(default=None, kw_only=True)
+    """
+    The source's spout, whose contents have not left the source yet, or ``None`` for a
+    source without one.
+    """
+
     def count_on_the_way(self) -> int:
         """
         :return: How many particles have left the source and not yet landed.
         """
+        source_parts = [self.source] + (
+            [self.source_spout] if self.source_spout is not None else []
+        )
         return max(
             0,
             self.contents.count_above(self.opening_height)
-            - self.contents.count_inside(self.source),
+            - self.contents.count_inside(*source_parts),
         )
 
     def measure(self) -> float:

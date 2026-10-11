@@ -281,6 +281,36 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
     behind. It describes the contents rather than the container.
     """
 
+    repose_correction: Optional[Scalar] = field(
+        default=None,
+        kw_only=True,
+        metadata=JSONMetadata(serialize=False).as_dict(),
+    )
+    """
+    An angle added to :attr:`repose_angle`, or ``None`` to start pouring at the repose
+    angle alone.
+
+    Where the repose angle is what the model was fitted to, this is what something
+    outside the model may correct it by while a controller runs: given a free variable,
+    the compiled expressions read its current value every cycle, so the tilt a pour is
+    expected to start at can follow where pouring is actually seen to start.
+    Symbols do not cross a process boundary, so this is never serialized.
+    """
+
+    discharge_scale: Optional[Scalar] = field(
+        default=None,
+        kw_only=True,
+        metadata=JSONMetadata(serialize=False).as_dict(),
+    )
+    """
+    A factor on :attr:`discharge_coefficient`, or ``None`` to leave the stream at the
+    coefficient alone.
+
+    Like :attr:`repose_correction`, a free variable here lets something watching where
+    the stream lands move the predicted landing while a controller runs. Never
+    serialized.
+    """
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.lip_offset is None:
@@ -346,6 +376,8 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
             repose_angle=self.repose_angle,
             capacity=self.capacity,
             outflow_scale=self.outflow_scale,
+            repose_correction=self.repose_correction,
+            discharge_scale=self.discharge_scale,
             gate=gate,
         )
 
@@ -381,7 +413,10 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         :return: Symbolic onset tilt.
         """
         dry_height = self.container_height * (1 - fill)
-        return sm.atan2(dry_height, self.lip_offset) + self.repose_angle
+        onset = sm.atan2(dry_height, self.lip_offset) + self.repose_angle
+        if self.repose_correction is None:
+            return onset
+        return onset + self.repose_correction
 
     def exit_velocity(self, context: FillContext) -> Scalar:
         """
@@ -395,7 +430,10 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         :return: Symbolic exit speed.
         """
         head = sm.max(sm.Scalar(MINIMUM_POUR_HEAD), self.head_above_lip(context))
-        return self.discharge_coefficient * sm.sqrt(2 * STANDARD_GRAVITY * head)
+        speed = self.discharge_coefficient * sm.sqrt(2 * STANDARD_GRAVITY * head)
+        if self.discharge_scale is None:
+            return speed
+        return speed * self.discharge_scale
 
     def symbolic_velocity(self, context: FillContext) -> Scalar:
         """
