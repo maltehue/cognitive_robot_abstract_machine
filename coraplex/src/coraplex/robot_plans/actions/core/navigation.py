@@ -224,9 +224,19 @@ class PathPlanningNavigateAction(ActionDescription):
     Expand clearance to the full posture as well as any carried objects.
     """
 
+    use_trajectory: bool = field(default=False, kw_only=True)
+    """
+    Execute simulated path legs continuously with collision checks when enabled.
+    """
+
     @property
     def _action_plan(self) -> PlanNode:
-        return sequential([MoveMotion(waypoint) for waypoint in self._path()])
+        return sequential(
+            [
+                MoveMotion(waypoint, use_trajectory=self.use_trajectory)
+                for waypoint in self._path()
+            ]
+        )
 
     @property
     def _floor(self) -> Floor:

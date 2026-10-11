@@ -1,4 +1,6 @@
 from copy import deepcopy
+from contextlib import ExitStack
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 import numpy as np
@@ -17,7 +19,10 @@ from coraplex.execution_environment import simulated_robot, real_robot
 from coraplex.plans.executables import MoveBranchExecutable
 from coraplex.plans.factories import sequential, execute_single
 from coraplex.plans.plan_node import MotionNode, ActionNode
-from coraplex.robot_plans.actions.core.navigation import NavigateAction
+from coraplex.robot_plans.actions.core.navigation import (
+    NavigateAction,
+    PathPlanningNavigateAction,
+)
 from coraplex.robot_plans.actions.core.pick_up import GraspingAction, PickUpAction
 from coraplex.robot_plans.actions.core.placing import PlaceAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
@@ -52,6 +57,9 @@ from giskardpy.motion_statechart.tasks.pointing import Pointing
 from krrood.entity_query_language.factories import evaluate_condition
 from semantic_digital_twin.robots.pr2 import PR2
 from semantic_digital_twin.world import World
+from semantic_digital_twin.callbacks.callback import StateChangeCallback
+from semantic_digital_twin.world_description.world_entity import Body
+from giskardpy.motion_statechart.monitors.overwrite_state_monitors import SetOdometry
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.datastructures.definitions import GripperState, TorsoState
 from semantic_digital_twin.grasping.grasp_candidates import GraspCandidate
@@ -970,3 +978,81 @@ def test_navigation_completion_accepts_standing_root(pr2_world_copy: World) -> N
     )
 
     assert evaluate_condition(condition) is True
+
+
+# %% continuous base motion
+
+
+@dataclass(eq=False)
+class TranslationSamples(StateChangeCallback):
+    """
+    Record the root translation observed during simulated motion.
+    """
+
+    root: Body = field(kw_only=True)
+    """
+    The moving root whose world translation is measured.
+    """
+
+    positions: list[float] = field(default_factory=list, init=False)
+    """
+    The observed world x coordinates.
+    """
+
+    def on_state_change(self, **kwargs) -> None:
+        """
+        Record the position after each state update.
+        """
+        self.positions.append(float(self.root.global_pose.x))
+
+
+def test_continuous_simulated_navigation_visits_intermediate_poses(pr2_world_copy):
+    """
+    Opt-in navigation advances through a trajectory instead of setting odometry.
+    """
+    world = pr2_world_copy
+    robot = world.get_semantic_annotations_by_type(PR2)[0]
+    start = float(robot.root.global_pose.x)
+    target = Pose.from_xyz_rpy(x=start + 0.2, reference_frame=world.root)
+    observer = TranslationSamples(_world=world, root=robot.root)
+    with ExitStack() as cleanup:
+        cleanup.callback(observer.stop)
+        motion = MoveMotion(target, use_trajectory=True)
+        plan = execute_single(motion, context=Context(world, robot))
+        with simulated_robot:
+            plan.perform()
+
+    assert any(start < position < float(target.x) for position in observer.positions)
+    assert float(robot.root.global_pose.x) == pytest.approx(float(target.x), abs=0.01)
+
+
+@pytest.mark.parametrize("environment", [simulated_robot, real_robot])
+def test_continuous_navigation_uses_cartesian_motion(environment, pr2_world_copy):
+    """
+    The trajectory option builds the same task for real and simulated motion.
+    """
+    world = pr2_world_copy
+    robot = world.get_semantic_annotations_by_type(PR2)[0]
+    motion = MoveMotion(Pose(reference_frame=world.root), use_trajectory=True)
+    execute_single(motion, context=Context(world, robot))
+
+    with environment:
+        assert isinstance(motion._motion_chart, CartesianPose)
+    with simulated_robot:
+        legacy = MoveMotion(motion.target)
+        execute_single(legacy, context=Context(world, robot))
+        assert isinstance(legacy._motion_chart, SetOdometry)
+
+
+def test_path_navigation_passes_the_trajectory_option(pr2_apartment_context):
+    """
+    Every path leg receives the requested execution policy.
+    """
+    world, robot, context = pr2_apartment_context
+    action = PathPlanningNavigateAction(
+        Pose.from_xyz_rpy(5, 1, 0, reference_frame=world.root), use_trajectory=True
+    )
+    execute_single(action, context=context)
+    motions = [node.designator for node in action._action_plan.children]
+
+    assert all(motion.use_trajectory for motion in motions)

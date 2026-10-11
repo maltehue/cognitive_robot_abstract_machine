@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from coraplex.datastructures.enums import ExecutionType
 from coraplex.plans.executables import GiskardExecutable
@@ -31,6 +31,11 @@ class MoveMotion(BaseMotion):
     Location to which the robot should be moved
     """
 
+    use_trajectory: bool = field(default=False, kw_only=True)
+    """
+    Execute intermediate simulated poses with the same task as real motion.
+    """
+
     def perform(self):
         return
 
@@ -42,6 +47,7 @@ class MoveMotion(BaseMotion):
                 odom_connection=self.robot.root.parent_connection,
             )
             if GiskardExecutable.execution_type == ExecutionType.SIMULATED
+            and not self.use_trajectory
             else CartesianPose(
                 root_link=self.world.root,
                 tip_link=self.robot.root,
