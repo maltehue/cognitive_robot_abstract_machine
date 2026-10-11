@@ -1,7 +1,10 @@
 import math
 
+import semantic_digital_twin.adapters.usd.exceptions as usd_exceptions
+
 import numpy as np
 import pytest
+from trimesh.triangles import mass_properties
 from PIL import Image
 
 from semantic_digital_twin.adapters.usd.exceptions import (
@@ -30,6 +33,8 @@ from .usd_stages import (
     build_jointless_stage_with_unsupported_geometry,
     build_single_joint_stage,
     build_single_joint_stage_with_mass,
+    build_closed_mass_stage,
+    InertialPrim,
     build_single_joint_stage_with_semantic_labels,
     build_stage_with_ambiguous_root_and_a_joint,
     build_stage_with_joint_missing_body1,
@@ -40,7 +45,7 @@ from .usd_stages import (
 )
 
 if PXR_AVAILABLE:
-    from pxr import Gf, UsdGeom
+    from pxr import Gf, UsdGeom, UsdPhysics
 
 pytestmark = pytest.mark.skipif(
     not PXR_AVAILABLE, reason="usd-core (pxr) not installed"
@@ -444,3 +449,80 @@ def test_triangulate_handles_multiple_faces_of_different_sizes():
     # A triangle followed by a quad, sharing no vertex indices.
     faces = UsdMeshShapeBuilder._triangulate([3, 4], [0, 1, 2, 3, 4, 5, 6])
     np.testing.assert_array_equal(faces, [[0, 1, 2], [3, 4, 5], [3, 5, 6]])
+
+
+# %% unspecified USD mass properties
+
+
+def test_mass_only_import_computes_finite_geometry_properties():
+    """
+    Schema defaults request geometry-derived properties rather than a zero quaternion.
+    """
+    stage = build_closed_mass_stage()
+    mass_api = UsdPhysics.MassAPI(stage.GetPrimAtPath(InertialPrim.CHILD))
+    mass_api.GetCenterOfMassAttr().Clear()
+    mass_api.GetDiagonalInertiaAttr().Clear()
+    mass_api.GetPrincipalAxesAttr().Clear()
+    world = parse(stage)
+    [body] = [body for body in world.bodies if body is not world.root]
+    properties = body.collision.combined_mesh.mass_properties
+
+    assert body.inertial.mass == mass_api.GetMassAttr().Get()
+    np.testing.assert_allclose(
+        body.inertial.center_of_mass.to_np()[:3], properties.center_mass
+    )
+    np.testing.assert_allclose(
+        body.inertial.inertia.data,
+        properties.inertia * body.inertial.mass / properties.mass,
+    )
+
+
+def test_unspecified_principal_axes_keep_authored_diagonal_inertia():
+    """
+    A default zero quaternion leaves explicit moments aligned with the body axes.
+    """
+    stage = build_single_joint_stage_with_mass()
+    prim = stage.GetPrimAtPath(InertialPrim.CHILD)
+    mass_api = UsdPhysics.MassAPI(prim)
+    mass_api.GetPrincipalAxesAttr().Clear()
+    body = Body(name=PrefixedName("inertial_body"))
+
+    inertial = USDParser._parse_inertial(prim, body)
+
+    np.testing.assert_allclose(
+        inertial.inertia.data, np.diag(mass_api.GetDiagonalInertiaAttr().Get())
+    )
+
+
+def test_computed_inertia_uses_an_authored_center_of_mass():
+    """
+    Geometry inference measures inertia about the specified centre.
+    """
+    stage = build_closed_mass_stage(center_of_mass=(0.1, 0.2, 0.3))
+    mass_api = UsdPhysics.MassAPI(stage.GetPrimAtPath(InertialPrim.CHILD))
+    mass_api.GetDiagonalInertiaAttr().Clear()
+    world = parse(stage)
+    [body] = [body for body in world.bodies if body is not world.root]
+    mesh = body.collision.combined_mesh
+    expected = mass_properties(
+        mesh.triangles,
+        density=mass_api.GetMassAttr().Get() / mesh.volume,
+        center_mass=np.asarray(mass_api.GetCenterOfMassAttr().Get()),
+    )
+
+    np.testing.assert_allclose(body.inertial.inertia.data, expected.inertia)
+
+
+def test_unspecified_mass_properties_require_closed_collision_geometry():
+    """
+    Missing geometry cannot supply unspecified centre and inertia values.
+    """
+    stage = build_single_joint_stage_with_mass()
+    prim = stage.GetPrimAtPath(InertialPrim.CHILD)
+    mass_api = UsdPhysics.MassAPI(prim)
+    mass_api.GetCenterOfMassAttr().Clear()
+    mass_api.GetDiagonalInertiaAttr().Clear()
+    body = Body(name=PrefixedName("inertial_body"))
+
+    with pytest.raises(usd_exceptions.UsdInertialGeometryError):
+        USDParser._parse_inertial(prim, body)

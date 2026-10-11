@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 try:
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
@@ -135,7 +137,8 @@ def build_stage_with_mesh_targeted_body0() -> Usd.Stage:
 
 def build_stage_with_textured_mesh(texture_file_path: str) -> Usd.Stage:
     """
-    A minimal in-memory stage with a single quad mesh, per-point ``st`` UV
+    A minimal in-memory stage with a single quad mesh, per-point ``st`` UV.
+
     coordinates, and a material whose ``diffuseColor`` is driven by a texture read
     from ``texture_file_path`` - the layout
     ``USDParser._diffuse_texture_path``/``_uv_coordinates`` read.
@@ -349,4 +352,31 @@ def build_single_joint_stage_with_semantic_labels() -> Usd.Stage:
         ["seating"]
     )
 
+    return stage
+
+
+# %% collision volume for inferred mass properties
+
+
+class InertialPrim(StrEnum):
+    """
+    Paths of a synthetic link and its closed geometry.
+    """
+
+    CHILD = "/object/child"
+    GEOMETRY = "/object/child/mesh"
+
+
+def build_closed_mass_stage(
+    *, center_of_mass: tuple[float, float, float] = (0.0, 0.0, 0.0)
+) -> Usd.Stage:
+    """
+    Build an offset closed solid with a positive authored mass.
+    """
+    stage = build_single_joint_stage_with_mass(center_of_mass=center_of_mass)
+    stage.RemovePrim(InertialPrim.GEOMETRY)
+    cube = UsdGeom.Cube.Define(stage, InertialPrim.GEOMETRY)
+    cube.CreateSizeAttr(1)
+    cube.AddTranslateOp().Set(Gf.Vec3d(0.25, 0.5, 0.75))
+    cube.AddScaleOp().Set(Gf.Vec3d(0.2, 0.4, 0.6))
     return stage
