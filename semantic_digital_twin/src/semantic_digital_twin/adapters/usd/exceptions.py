@@ -156,3 +156,30 @@ class UsdScaledJointFrameError(ParsingError):
         Describe how to make joint anchors representable.
         """
         return "Bake scale into geometry and author joints in unscaled rigid frames."
+
+
+# %% inferred mass properties
+
+
+@dataclass
+class UsdInertialGeometryError(ParsingError):
+    """
+    Raised when unspecified mass properties lack closed collision geometry.
+    """
+
+    prim_path: str = field(kw_only=True)
+    """
+    Prim requiring geometric mass-property inference.
+    """
+
+    def error_message(self) -> str:
+        """
+        Identify the prim whose mass properties cannot be inferred.
+        """
+        return f"Cannot infer unspecified mass properties at '{self.prim_path}' in '{self.file_path}'."
+
+    def suggest_correction(self) -> str:
+        """
+        Describe valid authored or geometric mass properties.
+        """
+        return "Author a finite centre and nonzero inertia, or provide closed collision geometry with positive volume."

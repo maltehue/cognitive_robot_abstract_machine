@@ -565,3 +565,30 @@ def build_labelled_scene(label: str) -> Usd.Stage:
     )
     labels.CreateLabelsAttr([label])
     return stage
+
+
+# %% collision volume for inferred mass properties
+
+
+class InertialPrim(StrEnum):
+    """
+    Paths of a synthetic link and its closed geometry.
+    """
+
+    CHILD = "/object/child"
+    GEOMETRY = "/object/child/mesh"
+
+
+def build_closed_mass_stage(
+    *, center_of_mass: tuple[float, float, float] = (0.0, 0.0, 0.0)
+) -> Usd.Stage:
+    """
+    Build an offset closed solid with a positive authored mass.
+    """
+    stage = build_single_joint_stage_with_mass(center_of_mass=center_of_mass)
+    stage.RemovePrim(InertialPrim.GEOMETRY)
+    cube = UsdGeom.Cube.Define(stage, InertialPrim.GEOMETRY)
+    cube.CreateSizeAttr(1)
+    cube.AddTranslateOp().Set(Gf.Vec3d(0.25, 0.5, 0.75))
+    cube.AddScaleOp().Set(Gf.Vec3d(0.2, 0.4, 0.6))
+    return stage
