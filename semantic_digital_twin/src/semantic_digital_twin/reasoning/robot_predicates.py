@@ -41,7 +41,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AllowSelfCollisions,
 )
 from semantic_digital_twin.reasoning.predicates import PlaceIsOccupied
-from semantic_digital_twin.robots.robot_part_mixins import HasTwoFingers
+from semantic_digital_twin.robots.robot_part_mixins import HasFingers
 from semantic_digital_twin.robots.robot_parts import (
     AbstractRobot,
     Camera,
@@ -176,24 +176,30 @@ class GripperRaySamples:
     """
 
     @classmethod
-    def sample(cls, gripper: HasTwoFingers, sample_size: int) -> Self:
+    def sample(cls, gripper: HasFingers, sample_size: int) -> Self:
         """
-        Sample rays between the opposing fingers and retain their hit indices.
+        Sample each thumb-opposed finger pair and retain distinct hit indices.
         """
         thumb_mesh = gripper.thumb.tip.collision.combined_mesh.copy()
-        finger_mesh = gripper.finger.tip.collision.combined_mesh.copy()
         thumb_mesh.apply_transform(gripper.thumb.tip.global_transform.to_np())
-        finger_mesh.apply_transform(gripper.finger.tip.global_transform.to_np())
-        finger_points = trimesh.sample.sample_surface(finger_mesh, sample_size)[0]
-        thumb_points = trimesh.sample.sample_surface(thumb_mesh, sample_size)[0]
+        opposing_fingers = [
+            finger for finger in gripper.fingers if finger is not gripper.thumb
+        ]
+        finger_bodies = {body for finger in gripper.fingers for body in finger.bodies}
+        samples = cls(sample_size=sample_size * len(opposing_fingers))
         ray_tracer = gripper._world.ray_tracer
         ray_tracer.update_scene()
-        _, ray_indices, bodies = ray_tracer.ray_test(finger_points, thumb_points)
-        finger_bodies = set(gripper.finger.bodies) | set(gripper.thumb.bodies)
-        samples = cls(sample_size=sample_size)
-        for ray_index, body in zip(ray_indices, bodies):
-            if body not in finger_bodies:
-                samples.hit_rays.setdefault(body, set()).add(int(ray_index))
+        for finger_index, finger in enumerate(opposing_fingers):
+            finger_mesh = finger.tip.collision.combined_mesh.copy()
+            finger_mesh.apply_transform(finger.tip.global_transform.to_np())
+            finger_points = trimesh.sample.sample_surface(finger_mesh, sample_size)[0]
+            thumb_points = trimesh.sample.sample_surface(thumb_mesh, sample_size)[0]
+            _, ray_indices, bodies = ray_tracer.ray_test(finger_points, thumb_points)
+            for ray_index, body in zip(ray_indices, bodies):
+                if body not in finger_bodies:
+                    samples.hit_rays.setdefault(body, set()).add(
+                        finger_index * sample_size + int(ray_index)
+                    )
         return samples
 
     def compute_fraction(self, body: Body) -> float:
@@ -204,12 +210,12 @@ class GripperRaySamples:
 
 
 @symbolic_function
-def bodies_in_gripper(gripper: HasTwoFingers, sample_size: int = 100) -> list[Body]:
+def bodies_in_gripper(gripper: HasFingers, sample_size: int = 100) -> list[Body]:
     """
     Return the distinct non-finger bodies intersecting rays between the fingers.
 
     :param gripper: The gripper to inspect.
-    :param sample_size: The number of rays to sample.
+    :param sample_size: The number of rays sampled per thumb-opposed finger pair.
     """
     return list(GripperRaySamples.sample(gripper, sample_size).hit_rays)
 
@@ -226,7 +232,7 @@ def is_body_in_gripper(
 
     :param body: The body for which the check should be done.
     :param gripper: The gripper for which the check should be done.
-    :param sample_size: The number of rays to sample.
+    :param sample_size: The number of rays sampled per thumb-opposed finger pair.
     :return: The percentage of rays between the fingers that hit the body.
     """
     return GripperRaySamples.sample(gripper, sample_size).compute_fraction(body)
@@ -243,7 +249,7 @@ def is_body_gripped(
     :param gripper: The gripper for which the check should be done.
     :param threshold: Minimum fraction of sampled rays that must hit ``body`` (see
         :func:`is_body_in_gripper`) for it to count as held.
-    :param sample_size: The number of rays to sample.
+    :param sample_size: The number of rays sampled per thumb-opposed finger pair.
     :return: Whether ``body`` is held by ``gripper``.
     """
     return is_body_in_gripper(body, gripper, sample_size) > threshold
