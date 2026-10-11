@@ -57,7 +57,7 @@ removed. Model components and rigid bodies own their internal geometry; otherwis
 the enclosing geometry prim's parent defines the object boundary.
 
 Grouping transforms and geometry scale are preserved. Coordinates remain in the
-stage's authored units and axes. Physics joints currently raise an explicit error.
+stage's authored units and axes. Fixed, revolute and prismatic physics joints retain their authored local anchors, axes and limits.
 `USDParser` retains its asset-import behavior.
 
 
@@ -65,3 +65,9 @@ stage's authored units and axes. Physics joints currently raise an explicit erro
 geometry. Guide colliders remain available for collision checks without becoming
 visible. When an object has no authored collider, its visible geometry is also
 used for collision. An explicitly disabled collider suppresses this fallback.
+
+
+Scene articulations start at zero joint position. Apply configured initial positions
+through the world's state API. Unsupported joints, invalid endpoints, multiple
+parents, closed loops and scaled joint frames raise explicit parsing errors.
+Joint endpoints remain separate bodies even within one model component.

@@ -3,6 +3,8 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
+from semantic_digital_twin.adapters.usd.parser import UsdAxis
+
 try:
     from pxr import Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
@@ -395,6 +397,17 @@ def build_stage_with_scaled_root() -> Usd.Stage:
 # %% scene object ownership
 
 
+class SceneJointType(StrEnum):
+    """
+    Joint types used to exercise scene articulation and diagnostics.
+    """
+
+    FIXED = "FixedJoint"
+    REVOLUTE = "RevoluteJoint"
+    PRISMATIC = "PrismaticJoint"
+    SPHERICAL = "SphericalJoint"
+
+
 class MixedScenePath(StrEnum):
     """
     Prims in a scene containing repeated object names and a movable link.
@@ -409,7 +422,7 @@ class MixedScenePath(StrEnum):
     OTHER_JOINT = "/scene/other_joint"
 
 
-def build_mixed_scene() -> Usd.Stage:
+def build_mixed_scene(joint_type: SceneJointType | None = None) -> Usd.Stage:
     """
     Build nested objects and optionally connect a child through a physics joint.
     """
@@ -424,6 +437,21 @@ def build_mixed_scene() -> Usd.Stage:
     UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.FIRST)).AddTranslateOp().Set(
         Gf.Vec3d(2, 0, 0)
     )
+    if joint_type is None:
+        return stage
+    joint_classes = {
+        SceneJointType.FIXED: UsdPhysics.FixedJoint,
+        SceneJointType.REVOLUTE: UsdPhysics.RevoluteJoint,
+        SceneJointType.PRISMATIC: UsdPhysics.PrismaticJoint,
+        SceneJointType.SPHERICAL: UsdPhysics.SphericalJoint,
+    }
+    joint = joint_classes[joint_type].Define(stage, MixedScenePath.JOINT)
+    joint.CreateBody0Rel().SetTargets([MixedScenePath.FIRST])
+    joint.CreateBody1Rel().SetTargets([MixedScenePath.CHILD])
+    if joint_type in (SceneJointType.REVOLUTE, SceneJointType.PRISMATIC):
+        joint.CreateAxisAttr(UsdAxis.Z)
+        joint.CreateLowerLimitAttr(-10)
+        joint.CreateUpperLimitAttr(20)
     return stage
 
 

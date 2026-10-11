@@ -1,5 +1,7 @@
 import math
 
+import semantic_digital_twin.adapters.usd.exceptions as usd_exceptions
+
 import semantic_digital_twin.adapters.usd.scene_parser as usd_parser
 
 import numpy as np
@@ -29,6 +31,7 @@ from semantic_digital_twin.world_description.geometry import Box, Cylinder, Mesh
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
+    SceneJointType,
     CollisionScenePath,
     build_collision_scene,
     write_composed_collision_scene,
@@ -56,7 +59,7 @@ from .usd_stages import (
 )
 
 if PXR_AVAILABLE:
-    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+    from pxr import Gf, Kind, Usd, UsdGeom, UsdPhysics
 
 pytestmark = pytest.mark.skipif(
     not PXR_AVAILABLE, reason="usd-core (pxr) not installed"
@@ -719,3 +722,147 @@ def test_scene_parser_preserves_collision_proxies_in_a_loaded_payload(tmp_path) 
     [collision] = body.collision.shapes
     assert isinstance(visual, Sphere)
     assert isinstance(collision, Box)
+
+
+# %% scene articulations
+
+
+@pytest.mark.parametrize(
+    "joint_type, connection_type",
+    [
+        (SceneJointType.FIXED, FixedConnection),
+        (SceneJointType.REVOLUTE, RevoluteConnection),
+        (SceneJointType.PRISMATIC, PrismaticConnection),
+    ],
+)
+def test_scene_parser_retains_joints_and_unrelated_objects(
+    joint_type: SceneJointType, connection_type: type
+) -> None:
+    """
+    A joint controls only its child while unrelated objects stay in the scene.
+    """
+    stage = build_mixed_scene(joint_type)
+    world = usd_parser.USDSceneParser(stage=stage, prefix="scene").parse()
+    child = world.get_body_by_name(MixedScenePath.CHILD.lstrip("/"))
+    parent = world.get_body_by_name(MixedScenePath.FIRST.lstrip("/"))
+    connection = next(
+        connection for connection in world.connections if connection.child is child
+    )
+    assert type(connection) is connection_type
+    assert connection.parent is parent
+    assert len(world.bodies) == 4
+    assert (
+        len(world.get_body_by_name(MixedScenePath.SECOND.lstrip("/")).visual.shapes)
+        == 1
+    )
+    if connection_type is not FixedConnection:
+        joint = (
+            UsdPhysics.RevoluteJoint(stage.GetPrimAtPath(MixedScenePath.JOINT))
+            if connection_type is RevoluteConnection
+            else UsdPhysics.PrismaticJoint(stage.GetPrimAtPath(MixedScenePath.JOINT))
+        )
+        lower = joint.GetLowerLimitAttr().Get()
+        upper = joint.GetUpperLimitAttr().Get()
+        if connection_type is RevoluteConnection:
+            lower, upper = math.radians(lower), math.radians(upper)
+        assert connection.raw_dof.limits.lower.position == pytest.approx(lower)
+        assert connection.raw_dof.limits.upper.position == pytest.approx(upper)
+        unrelated = world.get_body_by_name(MixedScenePath.SECOND.lstrip("/"))
+        initial = unrelated.global_transform.to_np().copy()
+        connection.position = upper
+        assert not np.allclose(
+            child.global_transform.to_np(), parent.global_transform.to_np()
+        )
+        np.testing.assert_allclose(unrelated.global_transform.to_np(), initial)
+
+
+def test_scene_parser_rejects_multiple_joints_for_one_child() -> None:
+    """
+    Two independent constraints cannot become one tree connection.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    joint = UsdPhysics.FixedJoint.Define(stage, MixedScenePath.OTHER_JOINT)
+    joint.CreateBody1Rel().SetTargets([MixedScenePath.CHILD])
+    with pytest.raises(usd_exceptions.UsdSceneTopologyError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_rejects_closed_joint_loops() -> None:
+    """
+    A joint back to an ancestor would close the scene's connection tree.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    joint = UsdPhysics.FixedJoint.Define(stage, MixedScenePath.OTHER_JOINT)
+    joint.CreateBody0Rel().SetTargets([MixedScenePath.CHILD])
+    joint.CreateBody1Rel().SetTargets([MixedScenePath.FIRST])
+    with pytest.raises(usd_exceptions.UsdSceneTopologyError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_rejects_unsupported_joint_types() -> None:
+    """
+    An unsupported joint is diagnosed instead of flattening its object.
+    """
+    stage = build_mixed_scene(SceneJointType.SPHERICAL)
+    with pytest.raises(UnsupportedUsdPhysicsJointTypeError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_rejects_scaled_joint_frames() -> None:
+    """
+    Joint anchors cannot silently lose an authored frame scale.
+    """
+    stage = build_mixed_scene(SceneJointType.REVOLUTE)
+    UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.GROUP)).AddScaleOp().Set(
+        Gf.Vec3f(2, 2, 2)
+    )
+    with pytest.raises(usd_exceptions.UsdScaledJointFrameError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+@pytest.mark.parametrize("targets", [[], [MixedScenePath.CHILD, MixedScenePath.SECOND]])
+def test_scene_parser_rejects_missing_or_ambiguous_joint_children(
+    targets: list[str],
+) -> None:
+    """
+    A child endpoint must select exactly one object.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    UsdPhysics.Joint(
+        stage.GetPrimAtPath(MixedScenePath.JOINT)
+    ).GetBody1Rel().SetTargets(targets)
+    expected_error = (
+        usd_exceptions.UsdSceneTopologyError
+        if targets
+        else UsdPhysicsJointMissingChildBodyError
+    )
+    with pytest.raises(expected_error):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_rejects_nonexistent_joint_targets() -> None:
+    """
+    A broken reference is diagnosed before creating scene connections.
+    """
+    stage = build_mixed_scene(SceneJointType.FIXED)
+    stage.RemovePrim(MixedScenePath.CHILD)
+    with pytest.raises(usd_exceptions.UsdSceneTopologyError):
+        usd_parser.USDSceneParser(stage=stage).parse()
+
+
+def test_scene_parser_keeps_joint_links_separate_inside_one_component() -> None:
+    """
+    Joint endpoints remain separate bodies within a larger model component.
+    """
+    stage = build_mixed_scene(SceneJointType.REVOLUTE)
+    Usd.ModelAPI(stage.GetPrimAtPath(MixedScenePath.FIRST)).SetKind(
+        Kind.Tokens.component
+    )
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    parent = world.get_body_by_name(MixedScenePath.FIRST.lstrip("/"))
+    child = world.get_body_by_name(MixedScenePath.CHILD.lstrip("/"))
+
+    assert child.parent_connection.parent is parent
+    assert isinstance(child.parent_connection, RevoluteConnection)
+    assert len(parent.visual.shapes) == 1
+    assert len(child.visual.shapes) == 1
