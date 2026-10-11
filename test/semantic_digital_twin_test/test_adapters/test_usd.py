@@ -1,5 +1,7 @@
 import math
 
+import semantic_digital_twin.adapters.usd.scene_parser as usd_parser
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -27,6 +29,10 @@ from semantic_digital_twin.world_description.geometry import Box, Cylinder, Mesh
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
+    MixedScenePath,
+    ComponentScenePath,
+    build_mixed_scene,
+    build_component_scene,
     ScenePrimPath,
     build_stage_with_placed_objects,
     build_stage_with_scaled_root,
@@ -555,3 +561,91 @@ def test_parse_places_scaled_mesh_vertices_in_the_authored_world_frame() -> None
     ).T[:, :3]
 
     np.testing.assert_allclose(world_vertices, expected_vertices, atol=1e-9)
+
+
+# %% scene object ownership
+
+
+def test_scene_parser_keeps_nested_objects_and_geometry_separate() -> None:
+    """
+    Grouping transforms place independently named bodies without copied geometry.
+    """
+    stage = build_mixed_scene()
+    world = usd_parser.USDSceneParser(stage=stage, prefix="scene").parse()
+
+    assert len(world.bodies) == 4
+    assert len({body.name for body in world.bodies}) == len(world.bodies)
+    for path in (MixedScenePath.FIRST, MixedScenePath.SECOND, MixedScenePath.CHILD):
+        body = world.get_body_by_name(path.lstrip("/"))
+        assert len(body.visual.shapes) == 1
+        expected = UsdGeom.Xformable(
+            stage.GetPrimAtPath(path)
+        ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        np.testing.assert_allclose(
+            body.global_transform.to_np(), np.array(expected).T, atol=1e-9
+        )
+    assert all(
+        isinstance(connection, FixedConnection) for connection in world.connections
+    )
+
+
+def test_scene_parser_preserves_scaled_world_geometry() -> None:
+    """
+    Grouping scale is baked into geometry while body frames remain rigid.
+    """
+    stage = build_mixed_scene()
+    UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.GROUP)).AddScaleOp().Set(
+        Gf.Vec3f(2, 3, 4)
+    )
+    world = usd_parser.USDSceneParser(stage=stage, prefix="scene").parse()
+    body = world.get_body_by_name(MixedScenePath.FIRST.lstrip("/"))
+    mesh_prim = next(
+        prim
+        for prim in stage.GetPrimAtPath(MixedScenePath.FIRST).GetChildren()
+        if prim.IsA(UsdGeom.Mesh)
+    )
+    expected_transform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()
+    )
+    expected = np.array(
+        [
+            expected_transform.Transform(Gf.Vec3d(point))
+            for point in UsdGeom.Mesh(mesh_prim).GetPointsAttr().Get()
+        ]
+    )
+    [mesh] = body.visual.shapes
+    vertices = np.column_stack(
+        (mesh.unscaled_mesh.vertices, np.ones(len(mesh.unscaled_mesh.vertices)))
+    )
+    actual = (body.global_transform.to_np() @ mesh.origin.to_np() @ vertices.T).T[:, :3]
+    np.testing.assert_allclose(actual, expected, atol=1e-9)
+
+
+def test_scene_parser_excludes_guide_geometry() -> None:
+    """
+    Guide geometry is absent from both collision and visual geometry.
+    """
+    stage = build_mixed_scene()
+    prim = next(
+        prim
+        for prim in stage.GetPrimAtPath(MixedScenePath.SECOND).GetChildren()
+        if prim.IsA(UsdGeom.Gprim)
+    )
+    UsdGeom.Imageable(prim).CreatePurposeAttr(UsdGeom.Tokens.guide)
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    assert {str(body.name.name) for body in world.bodies if body is not world.root} == {
+        MixedScenePath.FIRST.lstrip("/"),
+        MixedScenePath.CHILD.lstrip("/"),
+    }
+
+
+def test_scene_parser_keeps_component_geometry_groups_in_one_body() -> None:
+    """
+    A component owns geometry beneath its internal grouping transforms.
+    """
+    stage = build_component_scene()
+    world = usd_parser.USDSceneParser(stage=stage).parse()
+    [body] = [body for body in world.bodies if body is not world.root]
+
+    assert body.name.name == ComponentScenePath.OBJECT.lstrip("/")
+    assert len(body.visual.shapes) == 2
