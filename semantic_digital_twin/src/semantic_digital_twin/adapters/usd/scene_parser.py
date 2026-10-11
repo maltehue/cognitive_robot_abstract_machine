@@ -22,7 +22,11 @@ from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.geometry import Shape
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
-from typing_extensions import Iterator
+from typing_extensions import Iterator, Self
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from semantic_digital_twin.adapters.package_resolver import PathResolver
 from semantic_digital_twin.world_description.world_entity import Body
 
 # %% scene object ownership
@@ -62,6 +66,11 @@ class USDSceneParser(USDParser):
     )
     """Interpretation of authored scene support labels."""
 
+    world_T_scene: HomogeneousTransformationMatrix = field(
+        default_factory=HomogeneousTransformationMatrix, kw_only=True
+    )
+    """Rigid placement of authored stage coordinates in the world frame."""
+
     _body_paths: set[str] = field(default_factory=set, init=False)
     """
     Object boundaries excluded from an enclosing body's geometry traversal.
@@ -69,6 +78,28 @@ class USDSceneParser(USDParser):
 
     _joint_paths: set[str] = field(default_factory=set, init=False)
     """Explicit joint endpoints that remain separate within model components."""
+
+    # %% scene construction
+
+    @classmethod
+    def from_file(
+        cls,
+        file_path: str,
+        prefix: str | None = None,
+        path_resolver: PathResolver | None = None,
+        *,
+        world_T_scene: HomogeneousTransformationMatrix | None = None,
+        semantics: UsdSceneSemantics | None = None,
+    ) -> Self:
+        """Open a composed scene with an optional world placement and label vocabulary."""
+        parser = super().from_file(
+            file_path, prefix=prefix, path_resolver=path_resolver
+        )
+        if world_T_scene is not None:
+            parser.world_T_scene = world_T_scene
+        if semantics is not None:
+            parser.semantics = semantics
+        return parser
 
     def parse(self) -> World:
         """
@@ -96,6 +127,11 @@ class USDSceneParser(USDParser):
         ]
         self._complete_connections(world.root, object_prims, bodies, descriptions)
         self._validate_tree(world.root, descriptions)
+        for description in descriptions:
+            if description.parent is world.root:
+                description.parent_T_connection = (
+                    self.world_T_scene @ description.parent_T_connection
+                )
         with world.modify_world():
             for path, body in bodies.items():
                 world.add_body(body)

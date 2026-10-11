@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING
 from typing_extensions import Self
 
 from semantic_digital_twin.adapters.urdf import URDFParser
+from semantic_digital_twin.adapters.usd.scene_parser import USDSceneParser
+from semantic_digital_twin.adapters.usd.semantics import UsdSceneSemantics
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.adapters.world_model_parser import WorldModelParser
 from semantic_digital_twin.specifications.base import SpawnSpecification
 from semantic_digital_twin.specifications.robots import RobotSpecification
@@ -147,6 +150,43 @@ class WorldSpecification:
         )
         return cls(
             world_parser=world_parser,
+            robots=robots or [],
+            objects=objects or [],
+        )
+
+    @classmethod
+    def from_usd_scene(
+        cls,
+        file_path: str,
+        *,
+        prefix: str | None = None,
+        path_resolver: PathResolver | None = None,
+        world_T_scene: HomogeneousTransformationMatrix | None = None,
+        semantics: UsdSceneSemantics | None = None,
+        robots: list[RobotSpecification] | None = None,
+        objects: list[SpawnSpecification] | None = None,
+    ) -> Self:
+        """
+        Describe a composed USD environment and world-relative starting entities.
+
+        :param file_path: Path to the composed scene.
+        :param prefix: Optional environment name prefix.
+        :param path_resolver: Resolver for the stage file and referenced assets.
+        :param world_T_scene: Rigid placement of the authored stage frame; identity by
+            default.
+        :param semantics: Interpretation of scene support labels.
+        :param robots: Robots localized in the world frame.
+        :param objects: Starting objects placed in the world frame.
+        :return: The created specification.
+        """
+        return cls(
+            world_parser=USDSceneParser.from_file(
+                file_path,
+                prefix=prefix,
+                path_resolver=path_resolver,
+                world_T_scene=world_T_scene,
+                semantics=semantics,
+            ),
             robots=robots or [],
             objects=objects or [],
         )
