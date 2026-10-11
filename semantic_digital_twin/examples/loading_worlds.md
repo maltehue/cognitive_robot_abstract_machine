@@ -47,3 +47,15 @@ Supported file formates are:
 - urdf
 - mjcf
 - stl
+
+
+## Separate USD scene objects
+
+Use `USDSceneParser.from_file(path).parse()` to import static scene objects as
+separate bodies. Body names retain their full prim paths, with the initial slash
+removed. Model components and rigid bodies own their internal geometry; otherwise
+the enclosing geometry prim's parent defines the object boundary.
+
+Grouping transforms and geometry scale are preserved. Coordinates remain in the
+stage's authored units and axes. Physics joints currently raise an explicit error.
+`USDParser` retains its asset-import behavior.

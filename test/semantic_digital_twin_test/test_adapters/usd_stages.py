@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 try:
-    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
     PXR_AVAILABLE = True
 except ImportError:
@@ -388,4 +388,63 @@ def build_stage_with_scaled_root() -> Usd.Stage:
     root = UsdGeom.Xformable(stage.GetPrimAtPath(ScenePrimPath.ROOT))
     root.AddScaleOp().Set(Gf.Vec3f(2, 3, 4))
     UsdGeom.Cube.Define(stage, ScenePrimPath.CUBE)
+    return stage
+
+
+# %% scene object ownership
+
+
+class MixedScenePath(StrEnum):
+    """
+    Prims in a scene containing repeated object names and a movable link.
+    """
+
+    ROOT = "/scene"
+    GROUP = "/scene/group"
+    FIRST = "/scene/group/object"
+    SECOND = "/scene/object"
+    CHILD = "/scene/group/object/child"
+    JOINT = "/scene/joint"
+    OTHER_JOINT = "/scene/other_joint"
+
+
+def build_mixed_scene() -> Usd.Stage:
+    """
+    Build nested objects and optionally connect a child through a physics joint.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    root = UsdGeom.Xform.Define(stage, MixedScenePath.ROOT)
+    stage.SetDefaultPrim(root.GetPrim())
+    root.AddTranslateOp().Set(Gf.Vec3d(1, 2, 3))
+    group = UsdGeom.Xform.Define(stage, MixedScenePath.GROUP)
+    group.AddRotateZOp().Set(30)
+    for path in (MixedScenePath.FIRST, MixedScenePath.SECOND, MixedScenePath.CHILD):
+        _define_link(stage, path)
+    UsdGeom.Xformable(stage.GetPrimAtPath(MixedScenePath.FIRST)).AddTranslateOp().Set(
+        Gf.Vec3d(2, 0, 0)
+    )
+    return stage
+
+
+class ComponentScenePath(StrEnum):
+    """
+    A component containing geometry below separate grouping transforms.
+    """
+
+    ROOT = "/scene"
+    OBJECT = "/scene/component"
+    FIRST = "/scene/component/first"
+    SECOND = "/scene/component/second"
+
+
+def build_component_scene() -> Usd.Stage:
+    """
+    Build one component with geometry below two internal transforms.
+    """
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.Xform.Define(stage, ComponentScenePath.ROOT)
+    component = UsdGeom.Xform.Define(stage, ComponentScenePath.OBJECT)
+    Usd.ModelAPI(component).SetKind(Kind.Tokens.component)
+    for path in (ComponentScenePath.FIRST, ComponentScenePath.SECOND):
+        _define_link(stage, path)
     return stage
