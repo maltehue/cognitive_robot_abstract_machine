@@ -85,6 +85,7 @@ class PlaceAction(
                 MoveToolCenterPointMotion(
                     poses.retreat,
                     arm,
+                    allow_gripper_collision=self.allow_environment_contacts,
                     allowed_contacts=self.create_contact_rules(
                         arm.end_effector, self.object_designator.root
                     ),
@@ -95,6 +96,7 @@ class PlaceAction(
                 MoveToolCenterPointMotion(
                     poses.grasp,
                     arm,
+                    allow_gripper_collision=self.allow_environment_contacts,
                     allowed_contacts=self.create_contact_rules(
                         arm.end_effector, self.object_designator.root
                     ),
@@ -105,6 +107,7 @@ class PlaceAction(
                 MoveGripperMotion(
                     GripperState.OPEN,
                     arm.end_effector,
+                    allow_gripper_collision=self.allow_environment_contacts,
                     allowed_contacts=self.create_contact_rules(
                         arm.end_effector, self.object_designator.root
                     ),

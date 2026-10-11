@@ -71,10 +71,10 @@ class HasManipulationContacts:
         self, gripper: EndEffector, object_body: Body, *, include_supports: bool = True
     ) -> list[AllowCollisionRule]:
         """
-        Allow hand-object contact and, when requested, selected object-support pairs.
+        Build selected pairs when broad hand contact is disabled.
         """
         if self.allow_environment_contacts:
-            return [AllowCollisionForEndEffector(end_effector=gripper)]
+            return []
         rules = [
             AllowCollisionBetweenGroups(
                 body_group_a=gripper.bodies_with_collision, body_group_b=[object_body]
