@@ -1,21 +1,14 @@
 import math
-import threading
 import time
 from importlib.resources import files
 from pathlib import Path
 
-import rclpy
-from rclpy.executors import SingleThreadedExecutor
 
-from giskardpy.middleware.ros2.python_interface import GiskardWrapper
 from giskardpy.motion_statechart.data_types import DefaultWeights
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.graph_node import EndMotion
-from giskardpy.motion_statechart.monitors.monitors import LocalMinimumReached
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
-from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
-from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList
 from giskardpy.motion_statechart.tasks.pouring import (
     FillByTransferTask,
     KeepProjectileInReceiver,
@@ -35,6 +28,14 @@ from semantic_digital_twin.spatial_types import (
     HomogeneousTransformationMatrix,
     Vector3,
 )
+from tracy_pouring_setup import (
+    LEFT_TOOL_FRAME,
+    TABLE_SURFACE_Z,
+    connect_to_giskard,
+    move_left_tool_to,
+    park_arms,
+    upright_carry_pose,
+)
 from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     FixedConnection,
@@ -51,15 +52,40 @@ _JEROEN_CUP_STL = str(
     / "jeroen_cup.stl"
 )
 _JEROEN_CUP_SCALE = Scale(1, 1, 1)
-_TABLE_SURFACE_Z = 0.875 + 0.1
 IS_SIM = False
 
 # START_FILL = 0.8
 # GOAL_FILL_CONST = 0.7
-# START_YAW = 0.8
 START_FILL = 1.0
 GOAL_FILL_CONST = 0.7
-START_YAW = 0.1
+POUR_START_TILT_MARGIN = 0.05
+"""
+How far past the model's onset the cup is tilted before the transfer starts, in radians.
+
+Below the onset the model has neither flow nor a gradient for the fill task to act on,
+and the transfer never starts.
+"""
+
+REPOSE_ANGLE = 0.0
+"""
+Tilt past the geometric onset before the balls start to flow, in radians.
+
+Zero until the calibration ramps give a value. The July 2026 videos of full cups suggest
+57-60 degrees, but with this cup's geometry that puts the model's onset past 90 degrees
+once about 15 % has poured, and the transfer stalls.
+"""
+
+OUTFLOW_RATE_CONSTANT = 0.8
+"""
+How fast the source drains per unit of head above the lip; not yet calibrated for the
+styrofoam balls.
+"""
+
+DISCHARGE_COEFFICIENT = 0.2
+"""
+Scales the exit speed and with it how far the stream is thrown; not yet calibrated for
+the styrofoam balls.
+"""
 
 USE_LEARNED_HEAD = False
 """
@@ -103,6 +129,21 @@ def _learned_head_reference(source_cup: HasFillLevel) -> LearnedHeadModelReferen
     return reference
 
 
+def _analytic_drain(source_cup: HasFillLevel) -> ArticulatedPouringEquation:
+    """
+    :return: The source's drain with this demo's onset and outflow constants, on the
+        cup's own geometry.
+    """
+    equation = source_cup.fill_equation
+    return ArticulatedPouringEquation(
+        container_height=equation.container_height,
+        container_width=equation.container_width,
+        outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
+        discharge_coefficient=DISCHARGE_COEFFICIENT,
+        repose_angle=REPOSE_ANGLE,
+    )
+
+
 def _spawn_jeroen_cup_body(name: str) -> Body:
     """
     Create a Body with the Jeroen cup mesh geometry.
@@ -117,91 +158,18 @@ def _spawn_jeroen_cup_body(name: str) -> Body:
     )
 
 
-# --------------------------
-rclpy.init()
-
-# World with real robot:
-rclpy_node = rclpy.create_node("tracy_transfer_demo")
-
-executor = SingleThreadedExecutor()
-executor.add_node(rclpy_node)
-print(f"Executor started")
-thread = threading.Thread(
-    target=executor.spin,
-    daemon=True,
-    name="rclpy-executor",
-)
-thread.start()
-
-
-giskard = GiskardWrapper(rclpy_node)
+giskard = connect_to_giskard("tracy_transfer_demo")
 robot = giskard.robot
 world = giskard.world
 print(f"world root: {world.root.name.name}")
 
 # ----- Park arms -----
-_LEFT_ARM_JOINT_NAMES = [
-    "left_shoulder_pan_joint",
-    "left_shoulder_lift_joint",
-    "left_elbow_joint",
-    "left_wrist_1_joint",
-    "left_wrist_2_joint",
-    "left_wrist_3_joint",
-]
-_LEFT_ARM_PARK_POSITIONS = [2.62, -1.035, 1.13, -0.966, -0.88, 2.07]
-
-_RIGHT_ARM_JOINT_NAMES = [
-    "right_shoulder_pan_joint",
-    "right_shoulder_lift_joint",
-    "right_elbow_joint",
-    "right_wrist_1_joint",
-    "right_wrist_2_joint",
-    "right_wrist_3_joint",
-]
-_RIGHT_ARM_PARK_POSITIONS = [3.72, -2.07, -1.17, 4.0, 0.82, 0.75]
-
-park_state = JointState.from_mapping(
-    mapping={
-        world.get_connection_by_name(name): value
-        for name, value in zip(
-            _LEFT_ARM_JOINT_NAMES + _RIGHT_ARM_JOINT_NAMES,
-            _LEFT_ARM_PARK_POSITIONS + _RIGHT_ARM_PARK_POSITIONS,
-        )
-    }
-)
-msc_park = MotionStatechart()
-park_task = JointPositionList(goal_state=park_state)
-msc_park.add_node(park_task)
-msc_park.add_node(EndMotion.when_true(park_task))
-giskard.execute(msc_park)
+park_arms(giskard)
 
 # ------ Move the left gripper to the upright carry pose ----
-left_tool_frame = world.get_body_by_name("l_gripper_tool_frame")
-
-root_T_upright_pose = HomogeneousTransformationMatrix.from_xyz_quaternion(
-    pos_x=1,
-    pos_y=0.3,
-    pos_z=_TABLE_SURFACE_Z + 0.15,
-    quat_z=0.5,
-    quat_x=0.5,
-    quat_y=0.5,
-    quat_w=0.5,
-    reference_frame=world.root,
-)
-upright_pose_T_rotated = HomogeneousTransformationMatrix.from_xyz_rpy(yaw=START_YAW)
-upright_pose = (root_T_upright_pose @ upright_pose_T_rotated).to_pose()
-
-msc_cartesian = MotionStatechart()
-cartesian_task = CartesianPose(
-    root_link=world.root,
-    tip_link=left_tool_frame,
-    goal_pose=upright_pose,
-)
-msc_cartesian.add_node(cartesian_task)
-msc_cartesian.add_node(min_reached := LocalMinimumReached())
-msc_cartesian.add_node(EndMotion.when_true(min_reached))
-
-giskard.execute(msc_cartesian)
+left_tool_frame = world.get_body_by_name(LEFT_TOOL_FRAME)
+upright_pose = upright_carry_pose(giskard)
+move_left_tool_to(giskard, upright_pose)
 
 # ----- Set up the cups on the first run, reuse them on subsequent runs -----
 # Re-running the demo against an already-running Giskard process fetches a world that may still
@@ -235,16 +203,8 @@ if cups_already_present:
         )
     else:
         print("Re-coupling the transfer with the analytic head.")
-        equation = source_cup.fill_equation
         receiving_cup.recouple_outflow_from(
-            source=source_cup,
-            world=world,
-            fill_equation=ArticulatedPouringEquation(
-                container_height=equation.container_height,
-                container_width=equation.container_width,
-                outflow_rate_constant=equation.outflow_rate_constant,
-                discharge_coefficient=equation.discharge_coefficient,
-            ),
+            source=source_cup, world=world, fill_equation=_analytic_drain(source_cup)
         )
 else:
     # ----- Attach the source cup to the gripper -----
@@ -273,8 +233,8 @@ else:
     source_cup.initialize_fill_level(
         world=world,
         initial_fill=START_FILL,
-        outflow_rate_constant=0.8,
-        discharge_coefficient=0.2,
+        outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
+        discharge_coefficient=DISCHARGE_COEFFICIENT,
     )
 
     # ----- Place the receiving cup on the table -----
@@ -288,7 +248,7 @@ else:
                 receiving_cup_body,
                 name=PrefixedName("table_T_receiving_cup"),
                 parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    1.0, 0.099, _TABLE_SURFACE_Z
+                    1.0, 0.099, TABLE_SURFACE_Z
                 ),
             )
         )
@@ -309,12 +269,22 @@ else:
             receiving_cup, source_cup, world, _learned_head_reference(source_cup)
         )
     else:
-        receiving_cup.receive_outflow_from(source=source_cup, world=world)
+        # ``initialize_fill_level`` builds its drain without an onset angle; replacing it
+        # here gives the first run the same drain as every later one.
+        receiving_cup.recouple_outflow_from(
+            source=source_cup, world=world, fill_equation=_analytic_drain(source_cup)
+        )
 
 time.sleep(0.2)
 
 assert source_cup.fill_level == START_FILL
 assert receiving_cup.fill_level == 0.0
+
+# ----- Tilt to just past the model's onset -----
+onset = _analytic_drain(source_cup).onset_tilt(START_FILL)
+pour_start_tilt = float(onset.evaluate()[0]) + POUR_START_TILT_MARGIN
+print(f"Tilting to the pour start at {math.degrees(pour_start_tilt):.1f} deg.")
+move_left_tool_to(giskard, upright_carry_pose(giskard, tilt=pour_start_tilt))
 
 # ----- Transfer -----
 goal_fill = GOAL_FILL_CONST
@@ -384,14 +354,4 @@ print(f"receiving cup fill level: {receiving_cup.fill_level}")
 print(f"source cup fill level: {source_cup.fill_level}")
 
 
-msc_cartesian = MotionStatechart()
-cartesian_task = CartesianPose(
-    root_link=world.root,
-    tip_link=left_tool_frame,
-    goal_pose=upright_pose,
-)
-msc_cartesian.add_node(cartesian_task)
-msc_cartesian.add_node(min_reached := LocalMinimumReached())
-msc_cartesian.add_node(EndMotion.when_true(min_reached))
-
-giskard.execute(msc_cartesian)
+move_left_tool_to(giskard, upright_pose)
