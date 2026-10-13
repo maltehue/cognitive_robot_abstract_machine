@@ -27,6 +27,8 @@ from experiments.pouring_model_verification.records import (
     TrialRecord,
 )
 from experiments.pouring_model_verification.recovery import (
+    CAUTION_DRAIN_FACTOR,
+    DrainCorrectionValues,
     OnsetWriteBack,
     CautionSettings,
     CautiousStart,
@@ -55,6 +57,14 @@ from experiments.pouring_model_verification.sensor import (
     WristSensor,
 )
 from experiments.pouring_model_verification.transfer_trial import ModelBlend
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.connections import FixedConnection
+from semantic_digital_twin.world_description.geometry import Box, Scale
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
+from semantic_digital_twin.world_description.world_entity import Body
 
 BASELINES = Baselines(parameters={source: DEMO_PARAMETERS for source in SourceCup})
 
@@ -133,6 +143,136 @@ def test_without_a_camera_the_bank_knows_of_no_crossing():
 def test_the_bank_knows_the_noisy_camera_by_its_own_noise():
     knowledge = sensor_knowledge(SensorSet.NOISY_CAMERA, fall_time=0.15)
     assert knowledge.crossing_noise == CameraCondition.NOISY.model.noise
+
+
+def test_with_nothing_under_the_receiver_the_set_reads_the_wrist_and_the_noisy_camera():
+    sensors = SensorSet.WRIST_CAMERA
+    assert (sensors.receiver, sensors.wrist, sensors.camera) == (
+        None,
+        WristSensor.REALISTIC,
+        CameraCondition.NOISY,
+    )
+
+
+def test_with_nothing_under_the_receiver_the_bank_expects_no_receiver_reading():
+    knowledge = sensor_knowledge(SensorSet.WRIST_CAMERA, fall_time=0.15)
+    assert knowledge.receiver_noise is None
+
+
+def test_the_pole_camera_set_reads_the_wrist_and_the_pole_camera_and_no_receiver():
+    sensors = SensorSet.WRIST_POLE_CAMERA
+    assert (sensors.receiver, sensors.wrist, sensors.camera) == (
+        None,
+        WristSensor.REALISTIC,
+        CameraCondition.POLE,
+    )
+
+
+def test_the_bank_knows_the_pole_camera_by_its_own_noise():
+    knowledge = sensor_knowledge(SensorSet.WRIST_POLE_CAMERA, fall_time=0.15)
+    assert knowledge.crossing_noise == CameraCondition.POLE.model.noise
+
+
+def test_the_camera_alone_set_reads_neither_cup_and_the_counting_pole_camera():
+    sensors = SensorSet.POLE_CAMERA
+    assert (sensors.receiver, sensors.wrist, sensors.camera) == (
+        None,
+        None,
+        CameraCondition.POLE_COUNTING,
+    )
+
+
+def test_the_rough_camera_alone_set_reads_neither_cup_and_the_rough_counting_camera():
+    sensors = SensorSet.POLE_CAMERA_ROUGH
+    assert (sensors.receiver, sensors.wrist, sensors.camera) == (
+        None,
+        None,
+        CameraCondition.POLE_COUNTING_ROUGH,
+    )
+
+
+def test_with_the_camera_alone_the_bank_weighs_what_the_stream_shows():
+    knowledge = sensor_knowledge(SensorSet.POLE_CAMERA, fall_time=0.15)
+    camera = CameraCondition.POLE_COUNTING.model
+    assert (
+        knowledge.receiver_noise,
+        knowledge.source_noise,
+        knowledge.stream_dropout,
+        knowledge.count_noise,
+    ) == (None, None, camera.dropout, camera.count_noise)
+
+
+def test_other_cameras_leave_a_lost_stream_without_meaning():
+    knowledge = sensor_knowledge(SensorSet.WRIST_POLE_CAMERA, fall_time=0.15)
+    assert (knowledge.stream_dropout, knowledge.count_noise) == (None, None)
+
+
+# %% the drain corrections a hypothesis calls for
+
+BUILT = ModelPoint(
+    repose_angle=0.5, discharge_coefficient=0.3, outflow_rate_constant=2.0
+)
+
+
+def _cup_with_fill_level() -> tuple[World, HasFillLevel]:
+    world = World()
+    with world.modify_world():
+        world.add_body(Body(name=PrefixedName("map")))
+    body = Body(
+        name=PrefixedName("cup"),
+        collision=ShapeCollection(
+            [
+                Box(
+                    origin=HomogeneousTransformationMatrix(),
+                    scale=Scale(0.07, 0.07, 0.16),
+                )
+            ]
+        ),
+    )
+    with world.modify_world():
+        world.add_body(body)
+        world.add_connection(FixedConnection(parent=world.root, child=body))
+    cup = HasFillLevel(name=PrefixedName("cup"), root=body)
+    with world.modify_world():
+        world.add_semantic_annotation(cup)
+    cup.initialize_fill_level(world=world, initial_fill=1.0)
+    return world, cup
+
+
+def test_the_drain_as_built_needs_no_correction():
+    values = DrainCorrectionValues.between(BUILT, BUILT, cautious=False)
+    assert values == DrainCorrectionValues(
+        repose_correction=0.0, log_drain_scale=0.0, log_discharge_scale=0.0
+    )
+
+
+def test_a_hypothesis_is_corrected_towards_by_its_differences_from_the_drain_as_built():
+    point = ModelPoint(
+        repose_angle=0.7, discharge_coefficient=0.6, outflow_rate_constant=1.0
+    )
+    values = DrainCorrectionValues.between(point, BUILT, cautious=False)
+    assert (
+        values.repose_correction,
+        values.log_drain_scale,
+        values.log_discharge_scale,
+    ) == pytest.approx((0.2, math.log(0.5), math.log(2.0)))
+
+
+def test_a_cautious_pour_takes_the_drain_as_faster_by_the_caution_factor():
+    values = DrainCorrectionValues.between(BUILT, BUILT, cautious=True)
+    assert values.log_drain_scale == pytest.approx(math.log(CAUTION_DRAIN_FACTOR))
+
+
+def test_the_values_are_written_into_the_containers_corrections():
+    world, cup = _cup_with_fill_level()
+    values = DrainCorrectionValues(
+        repose_correction=0.2, log_drain_scale=-0.5, log_discharge_scale=0.3
+    )
+    values.write_to(world, cup.fill_connection.drain_correction)
+    assert [
+        connection.position
+        for connection in cup.fill_connection.drain_correction.connections_in(world)
+    ] == pytest.approx([0.2, -0.5, 0.3])
 
 
 # %% switching without flipping

@@ -2,6 +2,8 @@ import numpy
 import pytest
 
 from experiments.pouring_model_verification.sensor import (
+    CameraModel,
+    CrossingLog,
     SensorChannel,
     SensorCondition,
     SensorModel,
@@ -97,3 +99,41 @@ def test_a_realistic_wrist_carries_the_wrist_noise_and_delay():
     assert WristSensor.REALISTIC.model == SensorModel(
         noise=WRIST_NOISE, delay=WRIST_DELAY
     )
+
+
+# %% a camera watching the stream
+
+
+def test_a_late_camera_reports_only_the_crossings_seen_by_one_delay_ago():
+    log = CrossingLog()
+    for at in (0.0, 0.1, 0.2, 0.3):
+        log.record(at, numpy.array([at, 0.0]))
+    assert [crossing[0] for crossing in log.between(since=0.05, until=0.2)] == [
+        0.1,
+        0.2,
+    ]
+
+
+def test_without_an_end_the_camera_reports_every_crossing_since_the_start():
+    log = CrossingLog()
+    for at in (0.0, 0.1, 0.2):
+        log.record(at, numpy.array([at, 0.0]))
+    assert [crossing[0] for crossing in log.between(since=0.05)] == [0.1, 0.2]
+
+
+def test_a_camera_counting_grains_near_the_plane_reports_how_many_it_saw_per_look():
+    log = CrossingLog()
+    for at, grains in ((0.0, 1), (0.1, 2), (0.2, 0), (0.3, 3)):
+        log.look(at)
+        for _ in range(grains):
+            log.record(at, numpy.array([0.0, 0.0]))
+    assert log.grains_per_look(since=0.05, until=0.3) == pytest.approx(5 / 3)
+
+
+def test_a_camera_that_has_not_looked_yet_reports_no_grains():
+    assert CrossingLog().grains_per_look(since=0.0) == 0.0
+
+
+def test_a_camera_losing_the_stream_half_the_time_is_credited_with_the_grains_it_missed():
+    camera = CameraModel(noise=0.0, dropout=0.5, count_noise=0.0)
+    assert camera.grains_crossed(counted=10.0) == pytest.approx(20.0)

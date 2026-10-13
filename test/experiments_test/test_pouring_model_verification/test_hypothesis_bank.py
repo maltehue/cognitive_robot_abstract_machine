@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 
 from typing_extensions import Optional
 
@@ -219,12 +220,13 @@ def _bank(
         Hypothesis.COUPLED,
         Hypothesis.CATCH_ALL,
     ),
+    sensors: SensorKnowledge = EXACT_SENSORS,
 ) -> HypothesisBank:
     return HypothesisBank(
         hypotheses=hypotheses,
         geometry=GEOMETRY,
         base=GIVEN,
-        sensors=EXACT_SENSORS,
+        sensors=sensors,
         settings=BankSettings(),
         seed=0,
         onset=onset,
@@ -277,6 +279,132 @@ def test_the_settings_survive_a_round_trip_through_json():
 def test_a_model_point_survives_a_round_trip_through_json():
     point = GIVEN.with_values({FreeParameter.SLOT_HEIGHT: 0.02})
     assert ModelPoint.from_json(point.to_json()) == point
+
+
+# %% a pour with nothing under the receiver
+
+UNWEIGHED_RECEIVER_SENSORS = replace(EXACT_SENSORS, receiver_noise=None)
+
+OFF_TARGET_STREAM = replace(STREAM, centre_distance=1.0)
+"""
+A receiver so far from the lip that no stream the model throws reaches it.
+"""
+
+
+def _unweighed(readings: list, stream: Optional[StreamGeometry] = None) -> list:
+    """
+    The same readings as a robot with nothing under the receiver takes them.
+    """
+    return [
+        replace(reading, receiver_grains=None, stream=stream) for reading in readings
+    ]
+
+
+def test_without_a_receiver_reading_a_late_onset_is_blamed_on_the_onset():
+    bank = _bank(sensors=UNWEIGHED_RECEIVER_SENSORS)
+    late = GIVEN.with_values({FreeParameter.REPOSE_ANGLE: GIVEN.repose_angle + 0.25})
+    for reading in _unweighed(_poured_readings(late)):
+        bank.observe(reading)
+    concepts = ModelSwitch.concept_probabilities(bank.probabilities)
+    assert concepts[FreeParameter.REPOSE_ANGLE] > 0.9
+
+
+def test_without_a_receiver_reading_the_bank_estimates_what_the_receiver_holds():
+    readings = _poured_readings(GIVEN)
+    coupling = BankCoupling(bank=_bank(sensors=UNWEIGHED_RECEIVER_SENSORS))
+    for reading in _unweighed(readings):
+        coupling.observe(reading, poured_share=0.0)
+    assert coupling.received_grains == pytest.approx(
+        readings[-1].receiver_grains, abs=1.0
+    )
+
+
+def test_grains_the_stream_throws_past_the_receiver_are_not_counted_as_received():
+    readings = _poured_readings(GIVEN)
+    coupling = BankCoupling(bank=_bank(sensors=UNWEIGHED_RECEIVER_SENSORS))
+    for reading in _unweighed(readings, stream=OFF_TARGET_STREAM):
+        coupling.observe(reading, poured_share=0.0)
+    assert readings[-1].receiver_grains > 10.0
+    assert coupling.received_grains == pytest.approx(0.0, abs=1.0)
+
+
+# %% a pour only a camera watches
+
+CAMERA_ONLY_SENSORS = replace(
+    EXACT_SENSORS,
+    receiver_noise=None,
+    source_noise=None,
+    stream_dropout=0.05,
+    count_noise=0.2,
+)
+
+
+def _as_the_camera_sees(
+    readings: list, counts_grains: bool = True, clump: int = 1
+) -> list:
+    """
+    The same pour as a camera alone sees it: the stream there or not, and how many
+    grains it has counted crossing the opening, a clump at a time; the cups weighed only
+    at the start.
+    """
+    seen, counted = [], 0.0
+    for index, reading in enumerate(readings):
+        following = readings[min(index + 1, len(readings) - 1)]
+        flowing = following.receiver_grains > reading.receiver_grains
+        if index % clump == 0:
+            counted = reading.receiver_grains
+        seen.append(
+            replace(
+                reading,
+                receiver_grains=None,
+                source_grains=reading.source_grains if index == 0 else None,
+                stream_seen=flowing,
+                counted_grains=counted if counts_grains else None,
+            )
+        )
+    return seen
+
+
+LATE_ONSET = GIVEN.with_values({FreeParameter.REPOSE_ANGLE: GIVEN.repose_angle + 0.25})
+FLOWING = dict(tilt_rate=0.1, count=80)
+"""
+A pour that turns fast enough for the stream to carry 5-15 grains per second.
+"""
+
+
+def test_with_the_camera_alone_a_late_onset_is_blamed_on_the_onset():
+    bank = _bank(sensors=CAMERA_ONLY_SENSORS)
+    for reading in _as_the_camera_sees(_poured_readings(LATE_ONSET)):
+        bank.observe(reading)
+    concepts = ModelSwitch.concept_probabilities(bank.probabilities)
+    assert concepts[FreeParameter.REPOSE_ANGLE] > 0.9
+
+
+def test_a_stream_not_seen_where_the_model_pours_is_blamed_on_the_onset():
+    bank = _bank(sensors=replace(CAMERA_ONLY_SENSORS, count_noise=None))
+    readings = _as_the_camera_sees(_poured_readings(LATE_ONSET), counts_grains=False)
+    for reading in readings:
+        bank.observe(reading)
+    concepts = ModelSwitch.concept_probabilities(bank.probabilities)
+    assert concepts[FreeParameter.REPOSE_ANGLE] > 0.9
+
+
+def test_with_the_camera_alone_the_bank_estimates_what_both_cups_hold():
+    readings = _poured_readings(GIVEN, **FLOWING)
+    coupling = BankCoupling(bank=_bank(sensors=CAMERA_ONLY_SENSORS))
+    for reading in _as_the_camera_sees(readings):
+        coupling.observe(reading, poured_share=0.0)
+    assert (coupling.received_grains, coupling.source_grains) == (
+        pytest.approx(readings[-1].receiver_grains, abs=3.0),
+        pytest.approx(readings[-1].source_grains, abs=3.0),
+    )
+
+
+def test_a_pour_as_the_model_says_counted_in_clumps_is_not_blamed_on_anything():
+    bank = _bank(sensors=CAMERA_ONLY_SENSORS)
+    for reading in _as_the_camera_sees(_poured_readings(GIVEN, **FLOWING), clump=5):
+        bank.observe(reading)
+    assert bank.probabilities[Hypothesis.CATCH_ALL] < 0.5
 
 
 # %% a pour that ends before the first reading

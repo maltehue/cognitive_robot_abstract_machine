@@ -65,6 +65,7 @@ from semantic_digital_twin.world_description.connections import (
     FixedConnection,
     Connection6DoF,
     LiquidConnection,
+    DrainCorrectionConnection,
     OmniDrive,
     DifferentialDrive,
 )
@@ -1672,12 +1673,14 @@ class MultiSimBuilder(ABC):
         OmniDrive,
         DifferentialDrive,
         LiquidConnection,
+        DrainCorrectionConnection,
     )
     """
     A list of connection types to ignore when building connections in the simulator.
     FixedConnection is ignored because in MuJoCo, all bodies that are not connected by a joint are implicitly fixed to the parent body.
     OmniDrive and DifferentialDrive are ignored because in MuJoCo, those are controlled by the degree of freedom of the freejoints.
     LiquidConnection is ignored because its position is how full a container is, integrated from the pouring equations rather than moved by the physics.
+    DrainCorrectionConnection is ignored because its position corrects a container's drain and is set from outside the physics; the frame it carries is left out too, so the built model is the same with the corrections as without.
     """
 
     def build_world(self, world: World, file_path: str):
@@ -1727,6 +1730,8 @@ class MultiSimBuilder(ABC):
         self._start_build(file_path=file_path)
 
         for body in world.bodies_topologically_sorted:
+            if isinstance(body.parent_connection, DrainCorrectionConnection):
+                continue
             self.build_body(body=body)
 
         for region in world.regions:
@@ -2738,6 +2743,18 @@ class LiquidConnectionSpawner(ConnectionSpawner, ABC):
 
 
 @dataclass
+class DrainCorrectionConnectionSpawner(ConnectionSpawner, ABC):
+    """
+    A spawner to spawn a DrainCorrectionConnection object in the simulator.
+    """
+
+    entity_type: ClassVar[Type[Connection]] = DrainCorrectionConnection
+    """
+    The type of the entity to spawn.
+    """
+
+
+@dataclass
 class Connection1DOFSpawner(ConnectionSpawner, ABC):
     """
     A spawner to spawn an ActiveConnection1DOF object in the simulator.
@@ -2941,6 +2958,22 @@ class MujocoLiquidConnectionSpawner(MujocoEntitySpawner, LiquidConnectionSpawner
     This spawner does nothing. How full a container is has no joint in the physics: its
     position is integrated from the pouring equations, as
     :attr:`MultiSimBuilder._ignore_connection_types` leaves it out of the built model.
+    """
+
+    def _spawn_connection(
+        self, simulator: MujocoSimulator, connection: Connection
+    ) -> bool:
+        return True
+
+
+@dataclass
+class MujocoDrainCorrectionConnectionSpawner(
+    MujocoEntitySpawner, DrainCorrectionConnectionSpawner
+):
+    """
+    This spawner does nothing. A correction of a container's drain has no joint in the
+    physics: it is set from outside, as :attr:`MultiSimBuilder._ignore_connection_types`
+    leaves it out of the built model.
     """
 
     def _spawn_connection(

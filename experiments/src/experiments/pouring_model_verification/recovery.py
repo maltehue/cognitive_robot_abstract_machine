@@ -35,6 +35,9 @@ from experiments.pouring_model_verification.parameters import (
 )
 from experiments.pouring_model_verification.scene import SourceCup
 from experiments.pouring_model_verification.sensor import SensorSet
+from semantic_digital_twin.datastructures.joint_state import JointState
+from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.connections import DrainCorrection
 
 # %% which hypotheses a cup is weighed against
 
@@ -94,21 +97,37 @@ def sensor_knowledge(
     :param camera_noise: The camera's noise to assume, or ``None`` for its own.
     :return: What the bank knows about those sensors.
     """
-    receiver, wrist, camera = (
-        sensors.receiver.model,
-        sensors.wrist.model,
-        sensors.camera.model,
-    )
+    camera = sensors.camera.model
     if camera is not None and camera_noise is None:
         camera_noise = camera.noise
+    counts = camera is not None and camera.count_noise is not None
+    stream = dict(
+        crossing_noise=None if camera is None else camera_noise,
+        stream_dropout=camera.dropout if counts else None,
+        count_noise=camera.count_noise if counts else None,
+    )
+    wrist = None if sensors.wrist is None else sensors.wrist.model
+    source = dict(
+        source_noise=None if wrist is None else wrist.noise,
+        source_delay=0.0 if wrist is None else wrist.delay,
+    )
+    if sensors.receiver is None:
+        return SensorKnowledge(
+            receiver_noise=None,
+            receiver_delay=0.0,
+            counts_falling_grains=False,
+            fall_time=fall_time,
+            **source,
+            **stream,
+        )
+    receiver = sensors.receiver.model
     return SensorKnowledge(
         receiver_noise=receiver.noise,
         receiver_delay=receiver.delay,
         counts_falling_grains=receiver.counts_falling_grains,
         fall_time=fall_time,
-        source_noise=wrist.noise,
-        source_delay=wrist.delay,
-        crossing_noise=None if camera is None else camera_noise,
+        **source,
+        **stream,
     )
 
 
@@ -130,6 +149,76 @@ CAUTION_MARGIN_FACTOR = 2.0
 """
 How much further short of the goal a pour stops while no hypothesis explains it.
 """
+
+# %% the drain corrections a hypothesis calls for
+
+CAUTION_DRAIN_FACTOR = 2.0
+"""
+What the drain is scaled by while no hypothesis explains the pour: the controller takes
+the grains to flow twice as fast as its model says, so it tilts less and pours slowly.
+"""
+
+
+@dataclass(frozen=True)
+class DrainCorrectionValues:
+    """
+    What a container's drain corrections hold so that the drain built with one set of
+    parameters pours as a hypothesis says.
+    """
+
+    repose_correction: float
+    """
+    The angle added to the repose angle, in radians.
+    """
+
+    log_drain_scale: float
+    """
+    The logarithm of the factor on the drain rate.
+    """
+
+    log_discharge_scale: float
+    """
+    The logarithm of the factor on the exit speed.
+    """
+
+    @classmethod
+    def between(
+        cls, point: ModelPoint, built: ModelPoint, cautious: bool
+    ) -> DrainCorrectionValues:
+        """
+        :param point: The parameters to pour with.
+        :param built: The parameters the drain was built with.
+        :param cautious: Whether the pour is finished slowly, taking the grains to flow
+            faster than the model says.
+        :return: The corrections that turn the one into the other.
+        """
+        return cls(
+            repose_correction=point.repose_angle - built.repose_angle,
+            log_drain_scale=math.log(
+                point.outflow_rate_constant
+                / built.outflow_rate_constant
+                * (CAUTION_DRAIN_FACTOR if cautious else 1.0)
+            ),
+            log_discharge_scale=math.log(
+                point.discharge_coefficient / built.discharge_coefficient
+            ),
+        )
+
+    def write_to(self, world: World, drain_correction: DrainCorrection) -> None:
+        """
+        :param world: The world holding the container.
+        :param drain_correction: The container's drain corrections.
+        """
+        JointState.from_mapping(
+            {
+                drain_correction.repose_connection_in(world): self.repose_correction,
+                drain_correction.drain_scale_connection_in(world): self.log_drain_scale,
+                drain_correction.discharge_scale_connection_in(
+                    world
+                ): self.log_discharge_scale,
+            }
+        ).apply_to(world)
+
 
 # %% the controller's model after each reading
 
@@ -273,6 +362,22 @@ class BankCoupling:
             }
         )
         return commit
+
+    @property
+    def source_grains(self) -> float:
+        """
+        :return: The grains still in the source, as the hypothesis the controller runs on
+            estimates them.
+        """
+        return self.bank.filters[self.active].source_grains
+
+    @property
+    def received_grains(self) -> float:
+        """
+        :return: The grains the receiver holds or has falling into it, as the hypothesis
+            the controller runs on estimates them.
+        """
+        return self.bank.filters[self.active].received_grains
 
     @property
     def vetoed(self) -> frozenset[FreeParameter]:

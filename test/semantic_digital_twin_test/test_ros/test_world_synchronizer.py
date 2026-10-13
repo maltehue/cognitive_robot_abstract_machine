@@ -65,7 +65,10 @@ from semantic_digital_twin.world_description.connections import (
     PrismaticConnection,
 )
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
-from semantic_digital_twin.world_description.geometry import Scale
+from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from semantic_digital_twin.world_description.geometry import Box, Scale
+from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import (
     Body,
     SemanticAnnotation,
@@ -1938,6 +1941,113 @@ def test_connection_referencing_a_still_buffered_parent_body_resolves(rclpy_node
 
     synced_connection = world_2.get_connection_by_name(connection.name)
     assert synced_connection.parent.name == parent_body.name
+
+    world_synchronizer_1.close()
+    world_synchronizer_2.close()
+
+
+def test_a_fill_level_reaches_the_other_world_with_its_drain_corrections(rclpy_node):
+    """
+    A container that gets a fill level in one world arrives in the other with its fill
+    connection and the connections holding its drain corrections, which the other world
+    can resolve by name.
+    """
+    world_1 = World(name="fill_level_w1")
+    world_2 = World(name="fill_level_w2")
+    world_synchronizer_1 = WorldSynchronizer(node=rclpy_node, _world=world_1)
+    world_synchronizer_2 = WorldSynchronizer(node=rclpy_node, _world=world_2)
+
+    with world_1.modify_world():
+        world_1.add_body(Body(name=PrefixedName("fill_level_map")))
+    cup_body = Body(
+        name=PrefixedName("fill_level_cup"),
+        collision=ShapeCollection(
+            [
+                Box(
+                    origin=HomogeneousTransformationMatrix(),
+                    scale=Scale(0.07, 0.07, 0.16),
+                )
+            ]
+        ),
+    )
+    with world_1.modify_world():
+        world_1.add_body(cup_body)
+        world_1.add_connection(FixedConnection(parent=world_1.root, child=cup_body))
+    cup = HasFillLevel(name=PrefixedName("fill_level_cup"), root=cup_body)
+    with world_1.modify_world():
+        world_1.add_semantic_annotation(cup)
+    time.sleep(0.2)
+    cup.initialize_fill_level(world=world_1, initial_fill=1.0)
+    time.sleep(0.5)
+
+    synced = world_2.get_semantic_annotation_by_name("fill_level_cup")
+    synced_connection = world_2.get_connection(
+        synced.fill_connection.parent, synced.fill_connection.child
+    )
+    assert [
+        connection.name
+        for connection in synced_connection.drain_correction.connections_in(world_2)
+    ] == [
+        connection.name
+        for connection in cup.fill_connection.drain_correction.connections_in(world_1)
+    ]
+
+    world_synchronizer_1.close()
+    world_synchronizer_2.close()
+
+
+def test_a_coupled_transfer_reaches_a_world_that_defers_its_updates(rclpy_node):
+    """
+    Two containers with fill levels, the receiver coupled to the source's drain, built
+    while the other world buffers every update as a running controller does, arrive
+    there once it applies them.
+    """
+    world_1 = World(name="transfer_w1")
+    world_2 = World(name="transfer_w2")
+    world_synchronizer_1 = WorldSynchronizer(node=rclpy_node, _world=world_1)
+    world_synchronizer_2 = WorldSynchronizer(
+        node=rclpy_node, _world=world_2, defer_incoming_updates=True
+    )
+    with world_1.modify_world():
+        world_1.add_body(Body(name=PrefixedName("transfer_map")))
+    cups = []
+    for name, height in (("transfer_source", 0.4), ("transfer_receiver", 0.0)):
+        body = Body(
+            name=PrefixedName(name),
+            collision=ShapeCollection(
+                [
+                    Box(
+                        origin=HomogeneousTransformationMatrix(),
+                        scale=Scale(0.07, 0.07, 0.16),
+                    )
+                ]
+            ),
+        )
+        with world_1.modify_world():
+            world_1.add_body(body)
+            world_1.add_connection(
+                Connection6DoF.create_with_dofs(
+                    world_1,
+                    world_1.root,
+                    body,
+                    parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        z=height
+                    ),
+                )
+            )
+        cup = HasFillLevel(name=PrefixedName(name), root=body)
+        with world_1.modify_world():
+            world_1.add_semantic_annotation(cup)
+        cup.initialize_fill_level(world=world_1, initial_fill=1.0 if height else 0.0)
+        cups.append(cup)
+    source, receiver = cups
+    receiver.receive_outflow_from(source=source, world=world_1)
+    time.sleep(0.5)
+
+    world_synchronizer_2.apply_missed_messages()
+
+    synced = world_2.get_semantic_annotation_by_name("transfer_receiver")
+    assert synced.inflow_coupling == receiver.inflow_coupling
 
     world_synchronizer_1.close()
     world_synchronizer_2.close()

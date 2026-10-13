@@ -30,6 +30,7 @@ from experiments.pouring_model_verification.transfer_trial import (
     CautionWithoutBankError,
     DrainRateSpreadMissingError,
     PourFault,
+    UnweighedReceiverWithoutBankError,
 )
 from experiments.pouring_model_verification.hypothesis_bank import (
     BankSettings,
@@ -237,6 +238,46 @@ def test_a_cautious_pour_is_named_after_its_caution():
 def test_a_cautious_start_is_refused_without_a_bank_to_confirm_the_aim():
     with pytest.raises(CautionWithoutBankError):
         _trial(caution=CAUTION)
+
+
+# %% nothing under the receiver
+
+
+def _unweighed_bank_trial(**variant) -> TransferTrial:
+    sensors = SensorSet.WRIST_CAMERA
+    return _trial(
+        **{
+            "sensor_set": sensors,
+            "sensor": sensors.receiver,
+            "wrist_sensor": sensors.wrist,
+            **variant,
+        }
+    )
+
+
+def test_a_receiver_nothing_weighs_is_refused_without_a_bank_to_estimate_it():
+    with pytest.raises(UnweighedReceiverWithoutBankError):
+        _unweighed_bank_trial()
+
+
+def test_a_pour_with_nothing_under_the_receiver_is_named_after_its_sensor_set():
+    trial = _unweighed_bank_trial(bank=BankSettings())
+    assert trial.name.endswith(
+        f"_{LoopMode.FILL_FEEDBACK}_{BankSettings().label}_{SensorSet.WRIST_CAMERA}_seed2"
+    )
+
+
+def test_a_pour_only_a_camera_watches_is_named_after_its_sensor_set():
+    sensors = SensorSet.POLE_CAMERA
+    trial = _trial(
+        bank=BankSettings(),
+        sensor_set=sensors,
+        sensor=sensors.receiver,
+        wrist_sensor=sensors.wrist,
+    )
+    assert trial.name.endswith(
+        f"_{LoopMode.FILL_FEEDBACK}_{BankSettings().label}_{SensorSet.POLE_CAMERA}_seed2"
+    )
 
 
 # %% a fault outside the closed world

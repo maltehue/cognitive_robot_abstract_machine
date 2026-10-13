@@ -75,7 +75,11 @@ class SecondLipPouringEquation(ArticulatedPouringEquation):
         surface = context.fill_position * self.container_height
         dry = self.slot_height - surface
         reach = sm.sqrt(dry**2 + self.slot_offset**2)
-        onset = sm.atan2(dry, sm.Scalar(self.slot_offset)) + self._repose()
+        onset = (
+            sm.atan2(dry, sm.Scalar(self.slot_offset))
+            + self._repose()
+            + context.repose_correction
+        )
         over_slot = sm.max(
             sm.Scalar(0.0), reach * sm.sin(context.tilt_expression - onset)
         )

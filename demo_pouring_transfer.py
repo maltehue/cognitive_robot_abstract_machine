@@ -1,3 +1,4 @@
+import json
 import math
 import time
 from importlib.resources import files
@@ -5,11 +6,20 @@ from pathlib import Path
 
 
 from giskardpy.middleware.ros2.particle_weighing import (
+    FULL_CUP_MASS_GRAMS,
     WEIGHED_PARTICLES_FILE_NAME,
     WeighedParticles,
 )
 from giskardpy.middleware.ros2.rosbag_recording import RosbagRecording
+from experiments.pouring_model_verification.hypothesis_bank import (
+    BankSettings,
+    ModelPoint,
+)
+from experiments.pouring_model_verification.sensor import CameraCondition
+from experiments.real_pouring.live_bank import LiveBank
+from experiments.real_pouring.live_bank_listener import LiveBankListener
 from giskardpy.motion_statechart.data_types import DefaultWeights
+from krrood.adapters.json_serializer import to_json
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
@@ -71,25 +81,44 @@ Below the onset the model has neither flow nor a gradient for the fill task to a
 and the transfer never starts.
 """
 
-REPOSE_ANGLE = 0.0
+REPOSE_ANGLE = math.radians(27.0)
 """
 Tilt past the geometric onset before the balls start to flow, in radians.
 
-Zero until the calibration ramps give a value. The July 2026 videos of full cups suggest
-57-60 degrees, but with this cup's geometry that puts the model's onset past 90 degrees
-once about 15 % has poured, and the transfer stalls.
+Fitted with :attr:`OUTFLOW_RATE_CONSTANT` to the 2026-10-12 session on Tracy (five full-
+cup calibration ramps and five weighed demo pours). The bulk stream starts later than
+this, at about 70-75 degrees, but stops at the fill this angle predicts; one angle
+cannot capture both.
 """
 
-OUTFLOW_RATE_CONSTANT = 0.8
+OUTFLOW_RATE_CONSTANT = 2.03
 """
-How fast the source drains per unit of head above the lip; not yet calibrated for the
-styrofoam balls.
+How fast the source drains per unit of head above the lip; fitted together with
+:attr:`REPOSE_ANGLE`.
 """
 
 DISCHARGE_COEFFICIENT = 0.2
 """
 Scales the exit speed and with it how far the stream is thrown; not yet calibrated for
 the styrofoam balls.
+"""
+
+USE_LIVE_BANK = False
+"""
+Let the hypothesis bank watch the pour through the camera and correct the controller's
+drain while it runs.
+
+Needs ``stream_detector_node.py`` running and calibrated.
+"""
+
+LIVE_BANK_TRACE_FILE_NAME = "live_bank_trace.json"
+"""
+Name the bank's trace gets inside the bag.
+"""
+
+GRAINS_PER_FILL = 100.0
+"""
+How many of the bank's grains fill the source cup: one grain is a percent of the cup.
 """
 
 USE_LEARNED_HEAD = False
@@ -340,8 +369,36 @@ extended_motion = Parallel([transfer_task, no_spill, keep_above, keep_plane])
 msc = MotionStatechart()
 msc.add_node(extended_motion)
 msc.add_node(EndMotion.when_true(extended_motion))
+live_bank_listener = None
+if USE_LIVE_BANK:
+    live_bank_listener = LiveBankListener(
+        node=giskard.node_handle,
+        bank=LiveBank.for_cups(
+            source=source_cup,
+            receiver=receiving_cup,
+            world=world,
+            built=ModelPoint(
+                repose_angle=REPOSE_ANGLE,
+                discharge_coefficient=DISCHARGE_COEFFICIENT,
+                outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
+            ),
+            settings=BankSettings(),
+            camera=CameraCondition.POLE_COUNTING.model,
+            grains_per_fill=GRAINS_PER_FILL,
+            loaded_grains=START_FILL * GRAINS_PER_FILL,
+            goal_grains=goal_fill
+            * GRAINS_PER_FILL
+            * receiving_cup.capacity
+            / source_cup.capacity,
+            opening_radius=receiving_cup.opening_radius,
+            prediction_window=transfer_task.prediction_duration,
+        ),
+    )
+    live_bank_listener.start()
 print("Start transfer.")
 giskard.execute(msc)
+if live_bank_listener is not None:
+    live_bank_listener.stop()
 
 
 # ``giskard.execute`` returns on the action result, but the final fill levels are synchronized
@@ -370,6 +427,22 @@ recording.stop()
 # ----- Record what the pour actually delivered and spilled, measured on a scale -----
 weighed_particles = WeighedParticles.ask()
 recording.add_file(WEIGHED_PARTICLES_FILE_NAME, weighed_particles.as_json_text())
+if live_bank_listener is not None:
+    weighed_grains = (
+        (weighed_particles.received_mass_grams + weighed_particles.spilled_mass_grams)
+        / FULL_CUP_MASS_GRAMS
+        * GRAINS_PER_FILL
+    )
+    print(
+        "Camera count against the scale: multiply PIXEL_SECONDS_PER_GRAIN in "
+        "pouring_perception.py by "
+        f"{live_bank_listener.bank.count_calibration_factor(weighed_grains):.2f} "
+        "to make them agree."
+    )
+    recording.add_file(
+        LIVE_BANK_TRACE_FILE_NAME,
+        json.dumps([to_json(step) for step in live_bank_listener.bank.trace]),
+    )
 print(f"Measured fill level: {weighed_particles.received_fill_level:.3f}")
 print(f"Spilled: {weighed_particles.spilled_mass_grams} g")
 print(f"Recorded {recording.bag_path}.")

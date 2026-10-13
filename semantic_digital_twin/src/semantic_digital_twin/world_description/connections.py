@@ -6,9 +6,10 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 import numpy as np
-from typing_extensions import TYPE_CHECKING, Any, Dict, Optional, Self, Union
+from typing_extensions import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Self, Union
 
 from krrood.adapters.json_serializer import from_json, to_json, SubclassJSONSerializer
+import krrood.symbolic_math.symbolic_math as sm
 from krrood.symbolic_math.symbolic_math import Scalar
 from semantic_digital_twin.physics.equations.pouring_equations import (
     DEFAULT_GATE_SHARPNESS,
@@ -1280,6 +1281,116 @@ class LiquidTransferCoupling(SubclassJSONSerializer):
 
 
 @dataclass(eq=False)
+class DrainCorrectionConnection(PrismaticConnection):
+    """
+    Prismatic connection whose degree of freedom holds one correction of a container's
+    drain, set from outside the pouring model while a controller runs.
+
+    The degree of freedom is passive: it is never commanded and nothing integrates it.
+    Being world state, a value written in one process reaches every synchronized world,
+    and the child frame's offset along the axis shows the value in the frame tree.
+    """
+
+    @property
+    def active_dofs(self) -> list[DegreeOfFreedom]:
+        """
+        :return: Empty list, so no controller commands the correction.
+        """
+        return []
+
+    @property
+    def passive_dofs(self) -> list[DegreeOfFreedom]:
+        """
+        :return: List containing the single correction DOF.
+        """
+        return [self.raw_dof]
+
+
+@dataclass(frozen=True)
+class DrainCorrection(SubclassJSONSerializer):
+    """
+    The three corrections of a container's drain, each held by a
+    :class:`DrainCorrectionConnection` and named so another world can resolve its own.
+
+    Every correction is neutral at zero: the repose angle is shifted by the first, and
+    the drain rate and the exit speed are scaled by the exponential of the other two.
+    """
+
+    NEUTRAL: ClassVar[float] = 0.0
+    """
+    The value at which a correction leaves the drain as the model gives it.
+    """
+
+    repose_connection_name: PrefixedName
+    """
+    The connection holding the angle added to the repose angle, in radians.
+    """
+
+    drain_scale_connection_name: PrefixedName
+    """
+    The connection holding the logarithm of the factor on the drain rate.
+    """
+
+    discharge_scale_connection_name: PrefixedName
+    """
+    The connection holding the logarithm of the factor on the exit speed.
+    """
+
+    def repose_connection_in(self, world: World) -> DrainCorrectionConnection:
+        """
+        :param world: The world to resolve the connection in.
+        :return: The connection holding the repose correction there.
+        """
+        return world.get_connection_by_name(self.repose_connection_name)
+
+    def drain_scale_connection_in(self, world: World) -> DrainCorrectionConnection:
+        """
+        :param world: The world to resolve the connection in.
+        :return: The connection holding the logarithm of the drain-rate factor there.
+        """
+        return world.get_connection_by_name(self.drain_scale_connection_name)
+
+    def discharge_scale_connection_in(self, world: World) -> DrainCorrectionConnection:
+        """
+        :param world: The world to resolve the connection in.
+        :return: The connection holding the logarithm of the exit-speed factor there.
+        """
+        return world.get_connection_by_name(self.discharge_scale_connection_name)
+
+    def connections_in(self, world: World) -> list[DrainCorrectionConnection]:
+        """
+        :param world: The world to resolve the connections in.
+        :return: The repose, drain-scale and discharge-scale connections there.
+        """
+        return [
+            self.repose_connection_in(world),
+            self.drain_scale_connection_in(world),
+            self.discharge_scale_connection_in(world),
+        ]
+
+    def to_json(self) -> Dict[str, Any]:
+        result = super().to_json()
+        result["repose_connection_name"] = to_json(self.repose_connection_name)
+        result["drain_scale_connection_name"] = to_json(
+            self.drain_scale_connection_name
+        )
+        result["discharge_scale_connection_name"] = to_json(
+            self.discharge_scale_connection_name
+        )
+        return result
+
+    @classmethod
+    def _from_json(cls, data: Dict[str, Any], **kwargs) -> DrainCorrection:
+        return cls(
+            repose_connection_name=from_json(data["repose_connection_name"]),
+            drain_scale_connection_name=from_json(data["drain_scale_connection_name"]),
+            discharge_scale_connection_name=from_json(
+                data["discharge_scale_connection_name"]
+            ),
+        )
+
+
+@dataclass(eq=False)
 class LiquidConnection(PrismaticConnection, HasUpdateState):
     """
     Prismatic connection whose degree of freedom is the normalized fill level of a
@@ -1303,6 +1414,14 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
     )
     """
     ODE governing how liquid enters this container from an external source.
+    """
+
+    drain_correction: Optional[DrainCorrection] = field(
+        default=None, kw_only=True, init=False
+    )
+    """
+    The connections holding the corrections of :attr:`outflow_equation`, or ``None`` to
+    drain as the equation gives it.
     """
 
     coupled_source_equation_json: Optional[Dict[str, Any]] = field(
@@ -1353,6 +1472,11 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
             if self.outflow_equation is not None
             else None
         )
+        result["drain_correction"] = (
+            to_json(self.drain_correction)
+            if self.drain_correction is not None
+            else None
+        )
         return result
 
     @classmethod
@@ -1361,6 +1485,9 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
         raw_outflow = data.get("outflow_equation")
         if raw_outflow is not None:
             instance.outflow_equation = from_json(raw_outflow)
+        raw_correction = data.get("drain_correction")
+        if raw_correction is not None:
+            instance.drain_correction = from_json(raw_correction)
         return instance
 
     def copy_for_world(self, world: World) -> LiquidConnection:
@@ -1373,7 +1500,46 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
         copy = super().copy_for_world(world)
         copy.outflow_equation = self.outflow_equation
         copy.inflow_equation = self.inflow_equation
+        copy.drain_correction = self.drain_correction
         return copy
+
+    @property
+    def repose_correction(self) -> Scalar:
+        """
+        Symbolic angle added to the repose angle of :attr:`outflow_equation`, in
+        radians.
+        """
+        if self.drain_correction is None:
+            return sm.Scalar(DrainCorrection.NEUTRAL)
+        return self.drain_correction.repose_connection_in(
+            self._world
+        ).dof.variables.position
+
+    @property
+    def drain_scale(self) -> Scalar:
+        """
+        Symbolic factor on the drain rate of :attr:`outflow_equation`.
+        """
+        if self.drain_correction is None:
+            return sm.exp(sm.Scalar(DrainCorrection.NEUTRAL))
+        return sm.exp(
+            self.drain_correction.drain_scale_connection_in(
+                self._world
+            ).dof.variables.position
+        )
+
+    @property
+    def discharge_scale(self) -> Scalar:
+        """
+        Symbolic factor on the exit speed of :attr:`outflow_equation`.
+        """
+        if self.drain_correction is None:
+            return sm.exp(sm.Scalar(DrainCorrection.NEUTRAL))
+        return sm.exp(
+            self.drain_correction.discharge_scale_connection_in(
+                self._world
+            ).dof.variables.position
+        )
 
     @property
     def tilt_expression(self) -> Scalar:

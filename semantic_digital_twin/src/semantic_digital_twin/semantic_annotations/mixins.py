@@ -74,6 +74,8 @@ from semantic_digital_twin.spatial_types import (
     Vector3,
 )
 from semantic_digital_twin.world_description.connections import (
+    DrainCorrection,
+    DrainCorrectionConnection,
     FixedConnection,
     LiquidConnection,
     LiquidTransferCoupling,
@@ -1468,6 +1470,12 @@ class LiquidSource(ABC):
 
 # %% fill-level container
 
+DRAIN_CORRECTION_LIMIT = 3.0
+"""
+How far a drain correction may move from neutral: three radians on the repose angle, or
+a factor between exp(-3) and exp(3) on the drain rate and the exit speed.
+"""
+
 
 @dataclass(eq=False)
 class HasFillLevel(HasRootBody, LiquidSource):
@@ -1597,12 +1605,50 @@ class HasFillLevel(HasRootBody, LiquidSource):
                 ),
             )
             connection.outflow_equation = fill_equation
+            connection.drain_correction = self._add_drain_correction(world, phantom)
             world.add_connection(connection)
             self.set_fill_connection(connection)
             self.add_fill_equation(fill_equation)
 
         with world.modify_world():
             JointState.from_mapping({connection: initial_fill}).apply_to(world)
+
+    def _add_drain_correction(self, world: World, phantom: Body) -> DrainCorrection:
+        """
+        Add the connections that hold the corrections of this container's drain, each on a
+        frame of its own below the fill-level phantom, all at their neutral value.
+
+        :param world: The world to add them to, inside an open modification.
+        :param phantom: The fill-level phantom they hang from.
+        :return: The names another world resolves them by.
+        """
+        names = []
+        for correction in (
+            "repose_correction",
+            "log_drain_scale",
+            "log_discharge_scale",
+        ):
+            body = Body(name=PrefixedName(f"{self.root.name.name}_{correction}"))
+            world.add_body(body)
+            correction_connection = DrainCorrectionConnection.create_with_dofs(
+                world=world,
+                parent=phantom,
+                child=body,
+                axis=Vector3.Z(),
+                dof_limits=DegreeOfFreedomLimits(
+                    lower=DerivativeMap(
+                        position=-DRAIN_CORRECTION_LIMIT, velocity=-1.0
+                    ),
+                    upper=DerivativeMap(position=DRAIN_CORRECTION_LIMIT, velocity=1.0),
+                ),
+            )
+            world.add_connection(correction_connection)
+            names.append(correction_connection.name)
+        return DrainCorrection(
+            repose_connection_name=names[0],
+            drain_scale_connection_name=names[1],
+            discharge_scale_connection_name=names[2],
+        )
 
     def receive_outflow_from(
         self,

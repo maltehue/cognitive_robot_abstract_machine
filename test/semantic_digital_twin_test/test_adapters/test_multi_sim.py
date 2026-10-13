@@ -1679,6 +1679,34 @@ def test_the_builder_leaves_a_containers_fill_level_out_of_the_physics(tmp_path)
     }
 
 
+def test_the_builder_leaves_the_drain_corrections_out_of_the_physics(tmp_path):
+    """
+    The corrections of a container's drain hang on frames of their own, which carry no
+    shape and nothing the physics acts on, so the built model has the same bodies with
+    them as without.
+    """
+    world = World()
+    with world.modify_world():
+        world.add_body(Body(name=PrefixedName("map")))
+    with world.modify_world():
+        cup = TiltingContainer.create_with_new_body_in_world(
+            name="cup",
+            world=world,
+            parent_connection_specification=TiltingContainer.parent_connection_specification(),
+            scale=Scale(0.1, 0.1, 0.2),
+        )
+    cup.initialize_fill_level(world=world, initial_fill=1.0, outflow_rate_constant=1.0)
+    correction_frames = {
+        connection.child.name.name
+        for connection in cup.fill_connection.drain_correction.connections_in(world)
+    }
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    assert {body.name for body in builder.spec.bodies} & correction_frames == set()
+
+
 # %% what the sync resolves once and what it must resolve again
 
 

@@ -530,6 +530,33 @@ class TestPouringTask:
         assert isinstance(constraint, TerminalStatePredictionConstraint)
         assert constraint.prediction_duration == pouring_task.prediction_duration
 
+    def test_the_predicted_fill_velocity_follows_the_drain_correction(
+        self, world_with_cup
+    ) -> None:
+        """
+        A correction of the cup's drain written into the world while the task runs
+        reaches the fill velocity the task predicts with.
+        """
+        world, cup = world_with_cup
+        pouring_task = PouringTask(
+            fill_equation=cup.fill_equation,
+            fill_connection=cup.fill_connection,
+            root_link=world.root,
+            tip_link=cup.root,
+            goal_value=0.6,
+            fill_level_tolerance=0.05,
+        )
+        pouring_task.build(_pouring_context(world))
+        uncorrected = pouring_task.fill_velocity_expression.evaluate()[0]
+        drain_scale = cup.fill_connection.drain_correction.drain_scale_connection_in(
+            world
+        )
+        JointState.from_mapping({drain_scale: math.log(2.0)}).apply_to(world)
+        assert uncorrected < 0.0
+        assert pouring_task.fill_velocity_expression.evaluate()[0] == pytest.approx(
+            2.0 * uncorrected
+        )
+
     def test_build_rejects_non_world_root_link(self, world_with_cup) -> None:
         """
         The cup tilt is derived from the world root, so building with any other root

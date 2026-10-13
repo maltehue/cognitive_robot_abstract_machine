@@ -56,6 +56,7 @@ from semantic_digital_twin.spatial_types import (
 from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
+    DrainCorrection,
     FixedConnection,
     LiquidConnection,
     RevoluteConnection,
@@ -969,6 +970,86 @@ class TestReceiveOutflowGuard:
             receiver.receive_outflow_from(source=second_source, world=world)
         assert error_info.value.receiver is receiver
         assert receiver.fill_connection.inflow_equation is first_inflow_equation
+
+
+# %% drain corrections as world state
+
+
+class TestDrainCorrection:
+    """
+    The corrections something outside the pouring model applies to a container's drain
+    while a controller runs, held as passive degrees of freedom of the world.
+    """
+
+    def _tilted_source(self, tilt: float) -> tuple[World, HasFillLevel]:
+        world, source, _ = _build_world(
+            source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0), couple=False
+        )
+        _set_source_offset(world, source, tilt)
+        return world, source
+
+    @staticmethod
+    def _drain(source: HasFillLevel) -> float:
+        return source.fill_equation.symbolic_velocity(
+            source.fill_connection
+        ).evaluate()[0]
+
+    @staticmethod
+    def _correct(world: World, connection, value: float) -> None:
+        JointState.from_mapping({connection: value}).apply_to(world)
+
+    def test_a_new_fill_level_starts_with_its_drain_uncorrected(self):
+        world, source = self._tilted_source(0.0)
+        correction = source.fill_connection.drain_correction
+        assert [
+            connection.position for connection in correction.connections_in(world)
+        ] == [DrainCorrection.NEUTRAL] * 3
+
+    def test_raising_the_repose_correction_stops_a_pour_that_had_begun(self):
+        world, source = self._tilted_source(0.6)
+        poured_before = self._drain(source)
+        correction = source.fill_connection.drain_correction
+        self._correct(world, correction.repose_connection_in(world), 0.6)
+        assert poured_before < 0.0
+        assert self._drain(source) == 0.0
+
+    def test_the_drain_scale_scales_the_drain(self):
+        world, source = self._tilted_source(0.6)
+        uncorrected = self._drain(source)
+        correction = source.fill_connection.drain_correction
+        self._correct(world, correction.drain_scale_connection_in(world), math.log(2.0))
+        assert self._drain(source) == pytest.approx(2.0 * uncorrected)
+
+    def test_the_discharge_scale_scales_the_exit_speed(self):
+        world, source = self._tilted_source(0.6)
+        uncorrected = source.current_outflow_velocity(world).evaluate()[0]
+        correction = source.fill_connection.drain_correction
+        self._correct(
+            world, correction.discharge_scale_connection_in(world), math.log(3.0)
+        )
+        assert source.current_outflow_velocity(world).evaluate()[0] == pytest.approx(
+            3.0 * uncorrected
+        )
+
+    def test_the_corrections_survive_the_fill_connection_crossing_to_another_process(
+        self,
+    ):
+        world, source = self._tilted_source(0.6)
+        tracker = WorldEntityWithIDKwargsTracker.from_world(world)
+        restored = LiquidConnection.from_json(
+            source.fill_connection.to_json(), **tracker.create_kwargs()
+        )
+        assert restored.drain_correction == source.fill_connection.drain_correction
+
+    def test_the_gated_drain_carries_the_corrections(self):
+        world, source, receiver = _build_world(
+            source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
+        )
+        _set_source_offset(world, source, 0.6)
+        uncorrected = self._drain(source)
+        correction = source.fill_connection.drain_correction
+        self._correct(world, correction.drain_scale_connection_in(world), math.log(2.0))
+        assert self._drain(source) == pytest.approx(2.0 * uncorrected)
 
 
 # %% fill-level initialization guard

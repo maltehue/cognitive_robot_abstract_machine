@@ -223,7 +223,7 @@ class HasLearnedHead:
         """
         if self._l4casadi_head is None:
             self._l4casadi_head = self._materialize_head_model()
-        tilt_sx = context.tilt_expression.casadi_sx
+        tilt_sx = (context.tilt_expression - context.repose_correction).casadi_sx
         fill_sx = context.fill_position.casadi_sx
         head_sx = self._l4casadi_head(casadi.horzcat(tilt_sx, fill_sx))
         return sm.max(sm.Scalar(0.0), sm.Scalar(head_sx[0, 0]))

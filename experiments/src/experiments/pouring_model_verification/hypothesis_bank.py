@@ -503,9 +503,10 @@ class Reading:
     The cup's tilt then, in radians.
     """
 
-    receiver_grains: float
+    receiver_grains: Optional[float]
     """
-    What the receiver's sensor reported, in grains.
+    What the receiver's sensor reported, in grains, or ``None`` with nothing under the
+    receiver.
     """
 
     source_grains: Optional[float]
@@ -524,6 +525,18 @@ class Reading:
     How the stream leaves the lip now, or ``None`` where it is not known.
     """
 
+    stream_seen: Optional[bool] = None
+    """
+    Whether the camera saw a stream cross the opening plane, or ``None`` where a lost
+    stream tells nothing.
+    """
+
+    counted_grains: Optional[float] = None
+    """
+    How many grains the camera has counted crossing the opening plane since the pour
+    began, or ``None`` if it counts none.
+    """
+
 
 @dataclass(frozen=True)
 class SensorKnowledge:
@@ -531,9 +544,10 @@ class SensorKnowledge:
     What the bank knows about the sensors it reads: how noisy and how late each is.
     """
 
-    receiver_noise: float
+    receiver_noise: Optional[float]
     """
-    Standard deviation of the receiver's reading, in grains.
+    Standard deviation of the receiver's reading, in grains, or ``None`` with nothing
+    under the receiver.
     """
 
     receiver_delay: float
@@ -568,9 +582,32 @@ class SensorKnowledge:
     without a camera.
     """
 
+    stream_dropout: Optional[float] = None
+    """
+    The share of readings in which the camera misses a stream that is there, or
+    ``None`` if a reading without a stream is not weighed at all.
+    """
+
+    count_noise: Optional[float] = None
+    """
+    Relative standard deviation of the grains the camera counts crossing over a pour,
+    or ``None`` if it counts none.
+    """
+
     def to_json(self) -> Dict[str, Any]:
         return dict(self.__dict__)
 
+
+STREAM_FALSE_SIGHTING = 0.01
+"""
+The share of readings in which a camera sees a stream where none falls.
+"""
+
+COUNT_FLOOR = 2.0
+"""
+The least standard deviation, in grains, a camera's count of crossed grains is trusted
+to.
+"""
 
 # %% the twin's values as they vary from pour to pour
 
@@ -1095,11 +1132,17 @@ class HypothesisFilter:
             self.sensors.source_noise or 0.0, self.settings.reading_floor
         )
         self.source = numpy.maximum(0.0, source + self.random.normal(0, spread, count))
-        self.committed = numpy.full(count, reading.receiver_grains)
+        received = reading.receiver_grains
+        if received is None:
+            received = 0.0
+        self.committed = numpy.full(count, received)
         self.spilled = numpy.zeros(count)
         self.log_weights = numpy.full(count, -math.log(count))
         self._last_tilt = reading.tilt
         self._last_head = numpy.zeros(count)
+        self._last_rate = numpy.zeros(count)
+        self._last_interval = 0.0
+        self._loaded = self.source.copy()
         self._remember(reading.time)
 
     def _remember(self, at: float) -> None:
@@ -1174,6 +1217,8 @@ class HypothesisFilter:
                 self.settings.stream_spread,
             )
         )
+        self._last_rate = outflow / interval
+        self._last_interval = interval
         self.source = self.source - outflow
         self.committed = self.committed + outflow * inside
         self.spilled = self.spilled + outflow * (1 - inside)
@@ -1233,9 +1278,14 @@ class HypothesisFilter:
         :return: The log likelihood of it under each particle.
         """
         floor, inflation = self.settings.reading_floor, self.inflation
-        receiver = self.receiver_reading_at(reading.time)
-        spread = inflation * math.hypot(self.sensors.receiver_noise, floor)
-        result = _log_normal(reading.receiver_grains, receiver, spread)
+        result = numpy.zeros(len(self.source))
+        if (
+            reading.receiver_grains is not None
+            and self.sensors.receiver_noise is not None
+        ):
+            receiver = self.receiver_reading_at(reading.time)
+            spread = inflation * math.hypot(self.sensors.receiver_noise, floor)
+            result = result + _log_normal(reading.receiver_grains, receiver, spread)
         if reading.source_grains is not None and self.sensors.source_noise is not None:
             source = self._state_at(
                 self._sources, reading.time - self.sensors.source_delay
@@ -1254,6 +1304,33 @@ class HypothesisFilter:
                 self.sensors.crossing_noise, self.settings.crossing_floor
             )
             result = result + _log_normal(reading.crossing_distance, predicted, spread)
+        return result + self._stream_log_likelihoods(reading)
+
+    def _stream_log_likelihoods(self, reading: Reading) -> numpy.ndarray:
+        """
+        :param reading: The reading just taken.
+        :return: The log likelihood under each particle of whether the camera saw a
+            stream, and of how many grains it has counted crossing, missing those that
+            fall while it loses the stream.
+        """
+        result = numpy.zeros(len(self.source))
+        dropout = self.sensors.stream_dropout
+        if reading.stream_seen is not None and dropout is not None:
+            some_grain = 1.0 - numpy.exp(-self._last_rate * self._last_interval)
+            seen = (
+                STREAM_FALSE_SIGHTING
+                + (1.0 - STREAM_FALSE_SIGHTING) * (1.0 - dropout) * some_grain
+            )
+            result = result + numpy.log(seen if reading.stream_seen else 1.0 - seen)
+        if reading.counted_grains is not None and self.sensors.count_noise is not None:
+            left = self._loaded - self._state_at(
+                self._sources, reading.time - self.sensors.fall_time
+            )
+            counted = (1.0 - (dropout or 0.0)) * left
+            spread = self.inflation * numpy.hypot(
+                self.sensors.count_noise * counted, COUNT_FLOOR
+            )
+            result = result + _log_normal(reading.counted_grains, counted, spread)
         return result
 
     def update(self, reading: Reading) -> float:
@@ -1399,6 +1476,21 @@ class HypothesisFilter:
         at_bound = (column <= low + tolerance) | (column >= high - tolerance)
         return float(numpy.sum(self.weights * at_bound))
 
+    @property
+    def source_grains(self) -> float:
+        """
+        :return: The posterior mean of the grains still in the source.
+        """
+        return float(numpy.average(self.source, weights=self.weights))
+
+    @property
+    def received_grains(self) -> float:
+        """
+        :return: The posterior mean of the grains that have reached the receiver or are
+            falling into it; without a receiver reading, counted from this pour's start.
+        """
+        return float(numpy.average(self.committed, weights=self.weights))
+
     def final_fill_spread(self, tilt: float) -> float:
         """
         :param tilt: The cup's tilt now, in radians.
@@ -1416,12 +1508,13 @@ class HypothesisFilter:
 
 
 def _log_normal(
-    observed: float, predicted: numpy.ndarray, spread: float
+    observed: float, predicted: numpy.ndarray, spread: float | numpy.ndarray
 ) -> numpy.ndarray:
     """
-    :return: The log density of a normal distribution around each prediction.
+    :return: The log density of a normal distribution around each prediction, with one
+        spread for all or one per prediction.
     """
-    return -0.5 * ((observed - predicted) / spread) ** 2 - math.log(
+    return -0.5 * ((observed - predicted) / spread) ** 2 - numpy.log(
         spread * math.sqrt(2 * math.pi)
     )
 

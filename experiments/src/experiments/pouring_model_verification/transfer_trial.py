@@ -89,11 +89,13 @@ from experiments.pouring_model_verification.pid import (
 from experiments.pouring_model_verification.recovery import (
     NORMAL_TILT_RATE,
     BankCoupling,
+    DrainCorrectionValues,
     CautionSettings,
     CautiousStart,
     hypotheses_for,
     sensor_knowledge,
 )
+from experiments.pouring_model_verification.poured_stream import PouredStream
 from experiments.pouring_model_verification.second_lip import SecondLipPouringEquation
 from experiments.pouring_model_verification.records import (
     Outcome,
@@ -117,6 +119,7 @@ from experiments.pouring_model_verification.scene import (
 from experiments.pouring_model_verification.sensor import (
     DELAY_TOLERANCE,
     CameraCondition,
+    CrossingLog,
     SensorChannel,
     SensorCondition,
     SensorSet,
@@ -405,6 +408,19 @@ class CautionWithoutBankError(Exception):
         )
 
 
+class UnweighedReceiverWithoutBankError(Exception):
+    """
+    Raised when nothing weighs the receiver and no hypothesis bank is there to estimate
+    what it holds.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "With nothing under the receiver, the controller learns what it holds only "
+            "from a hypothesis bank's estimate, so it needs one."
+        )
+
+
 class OnsetSpreadMissingError(Exception):
     """
     Raised when a bank is to carry the twin's spread of the repose angle but the twin
@@ -435,12 +451,6 @@ UNCAPPED_TILT_RATE = 10.0
 """
 The tilt speed limit while the cap is released, in radians per second: far above any
 speed a pour turns at.
-"""
-
-CAUTION_DRAIN_FACTOR = 2.0
-"""
-What the drain is scaled by while no hypothesis explains the pour: the controller takes
-the grains to flow twice as fast as its model says, so it tilts less and pours slowly.
 """
 
 
@@ -854,8 +864,8 @@ class TransferScene:
         slot_open: Optional[float] = None,
     ) -> None:
         """
-        Switch the source's drain to the parameters of a hypothesis, through the
-        variables its compiled expressions read.
+        Switch the source's drain to the parameters of a hypothesis, through the drain
+        corrections its compiled expressions read from the world state.
 
         :param point: The parameters to pour with.
         :param built: The parameters the drain was built with.
@@ -865,20 +875,8 @@ class TransferScene:
             ``None`` for fully where the point has a slot edge and not at all otherwise.
         """
         variables = self.variables
-        if self.repose_correction is not None:
-            variables.set_value(
-                self.repose_correction, point.repose_angle - built.repose_angle
-            )
-        if self.discharge_scale is not None:
-            variables.set_value(
-                self.discharge_scale,
-                point.discharge_coefficient / built.discharge_coefficient,
-            )
-        variables.set_value(
-            self.drain_scale,
-            point.outflow_rate_constant
-            / built.outflow_rate_constant
-            * (CAUTION_DRAIN_FACTOR if cautious else 1.0),
+        DrainCorrectionValues.between(point, built, cautious).write_to(
+            self.world, self.source.fill_connection.drain_correction
         )
         if self.slot_open is not None:
             if slot_open is None:
@@ -951,11 +949,15 @@ class TransferScene:
     def repose_correction_value(self) -> float:
         """
         :return: The angle the source's repose angle is currently corrected by, in
-            radians; nothing for a drain whose repose angle stays as fitted.
+            radians: by the drain correction a hypothesis bank switches, and by the
+            onset rule's revision where the drain has one.
         """
+        corrected = self.source.fill_connection.drain_correction.repose_connection_in(
+            self.world
+        ).position
         if self.repose_correction is None:
-            return 0.0
-        return float(self.variables.get_value(self.repose_correction))
+            return corrected
+        return corrected + float(self.variables.get_value(self.repose_correction))
 
     @property
     def repose_angle(self) -> float:
@@ -969,7 +971,11 @@ class TransferScene:
         """
         :return: The discharge coefficient the source's stream currently leaves with.
         """
-        coefficient = self.source.fill_equation.discharge_coefficient
+        coefficient = self.source.fill_equation.discharge_coefficient * math.exp(
+            self.source.fill_connection.drain_correction.discharge_scale_connection_in(
+                self.world
+            ).position
+        )
         if self.discharge_scale is None:
             return coefficient
         return coefficient * float(self.variables.get_value(self.discharge_scale))
@@ -1178,9 +1184,10 @@ class Perception:
     How much of what is measured the controller acts on.
     """
 
-    sensor: SensorCondition
+    sensor: Optional[SensorCondition]
     """
-    What reports the fill levels to the controller.
+    What reports the fill levels to the controller, or ``None`` if nothing weighs the
+    receiver and the controller is told an estimate of it instead.
     """
 
     seed: int
@@ -1191,7 +1198,8 @@ class Perception:
     wrist: Optional[WristSensor] = None
     """
     The force-torque sensor weighing the source at the wrist, or ``None`` to read the
-    source with the same sensor as the receiver.
+    source with the same sensor as the receiver, or not at all where nothing weighs the
+    receiver either.
     """
 
     source_level: MeasuredFillLevel = field(init=False)
@@ -1214,14 +1222,22 @@ class Perception:
     What rescales the drain to the measured inflow.
     """
 
-    source_channel: SensorChannel = field(init=False)
+    source_channel: Optional[SensorChannel] = field(init=False)
     """
-    The source's fill level as the sensor reports it.
+    The source's fill level as the wrist reports it, or ``None`` if nothing weighs the
+    source once the pour has started.
     """
 
-    receiver_channel: SensorChannel = field(init=False)
+    receiver_channel: Optional[SensorChannel] = field(init=False)
     """
-    The receiver's fill level as the sensor reports it.
+    The receiver's fill level as the sensor reports it, or ``None`` if nothing weighs
+    the receiver.
+    """
+
+    initial_receiver_fill: float = field(init=False, default=0.0)
+    """
+    The receiver's fill level when the pour started, which an estimate of what the pour
+    delivers is added to.
     """
 
     reported_source_fill: float = field(init=False, default=0.0)
@@ -1249,17 +1265,25 @@ class Perception:
 
     def __post_init__(self) -> None:
         scene = self.scene
-        model = self.sensor.model
         grain_volume = self.contents.bulk_volume_per_particle
-        self.source_channel = SensorChannel(
-            model=model if self.wrist is None else self.wrist.model,
-            grain_share=grain_volume / scene.source.capacity,
-            random=numpy.random.default_rng([self.seed, 0]),
+        source_sensor = self.wrist if self.wrist is not None else self.sensor
+        self.source_channel = (
+            None
+            if source_sensor is None
+            else SensorChannel(
+                model=source_sensor.model,
+                grain_share=grain_volume / scene.source.capacity,
+                random=numpy.random.default_rng([self.seed, 0]),
+            )
         )
-        self.receiver_channel = SensorChannel(
-            model=model,
-            grain_share=grain_volume / scene.receiver.capacity,
-            random=numpy.random.default_rng([self.seed, 1]),
+        self.receiver_channel = (
+            None
+            if self.sensor is None
+            else SensorChannel(
+                model=self.sensor.model,
+                grain_share=grain_volume / scene.receiver.capacity,
+                random=numpy.random.default_rng([self.seed, 1]),
+            )
         )
         self.source_level = MeasuredFillLevel(
             contents=self.contents,
@@ -1302,6 +1326,9 @@ class Perception:
         """
         self.source_level.report()
         self.committed_receiver_level.report()
+        self.initial_receiver_fill = self.committed_receiver_level.measure()
+        self.reported_receiver_fill = self.initial_receiver_fill
+        self.reported_source_fill = self.source_level.measure()
 
     @property
     def predicted_receiver_inflow(self) -> float:
@@ -1356,31 +1383,93 @@ class Perception:
         """
         if not self.loop_mode.reports_fill_levels:
             return
-        source_fill = self.source_channel.read(self.source_level.measure(), at)
+        if self.source_channel is not None:
+            source_fill = self.source_channel.read(self.source_level.measure(), at)
+            self.reported_source_fill = source_fill
+            JointState.from_mapping(
+                {self.scene.source.fill_connection: source_fill}
+            ).apply_to(self.scene.world)
+        if self.receiver_channel is None:
+            return
         receiver_level = (
             self.committed_receiver_level
             if self.sensor.model.counts_falling_grains
             else self.receiver_level
         )
         receiver_fill = self.receiver_channel.read(receiver_level.measure(), at)
-        shortfall = (
+        JointState.from_mapping(
+            {
+                self.scene.receiver.fill_connection: min(
+                    1.0, receiver_fill + self._shortfall
+                ),
+            }
+        ).apply_to(self.scene.world)
+        self.reported_receiver_fill = receiver_fill
+        measured_inflow = self._reported_inflow(receiver_fill, at)
+        if self.loop_mode.calibrates_drain:
+            self.calibration.calibrate(measured_inflow=measured_inflow)
+
+    @property
+    def weighs_source(self) -> bool:
+        """
+        :return: Whether a sensor reports the source's fill level while pouring.
+        """
+        return self.source_channel is not None
+
+    def report_source_estimate(self, grains: float) -> None:
+        """
+        Tell the controller what the source holds where nothing weighs it.
+
+        :param grains: The grains the source is estimated to hold.
+        """
+        source_fill = (
+            grains * self.contents.bulk_volume_per_particle / self.scene.source.capacity
+        )
+        JointState.from_mapping(
+            {self.scene.source.fill_connection: source_fill}
+        ).apply_to(self.scene.world)
+        self.reported_source_fill = source_fill
+
+    @property
+    def weighs_receiver(self) -> bool:
+        """
+        :return: Whether a sensor reports the receiver's fill level.
+        """
+        return self.receiver_channel is not None
+
+    @property
+    def _shortfall(self) -> float:
+        """
+        :return: How far short of the goal the controller is made to stop, as a fill
+            level of the receiver.
+        """
+        return (
             self.stop_short
+            * self.contents.bulk_volume_per_particle
+            / self.scene.receiver.capacity
+        )
+
+    def report_received_estimate(self, delivered_grains: float) -> None:
+        """
+        Tell the controller what the receiver holds where nothing weighs it: what it
+        held at the start and what the pour is estimated to have delivered since.
+
+        :param delivered_grains: The grains the pour is estimated to have delivered.
+        """
+        receiver_fill = (
+            self.initial_receiver_fill
+            + delivered_grains
             * self.contents.bulk_volume_per_particle
             / self.scene.receiver.capacity
         )
         JointState.from_mapping(
             {
-                self.scene.source.fill_connection: source_fill,
                 self.scene.receiver.fill_connection: min(
-                    1.0, receiver_fill + shortfall
-                ),
+                    1.0, receiver_fill + self._shortfall
+                )
             }
         ).apply_to(self.scene.world)
         self.reported_receiver_fill = receiver_fill
-        self.reported_source_fill = source_fill
-        measured_inflow = self._reported_inflow(receiver_fill, at)
-        if self.loop_mode.calibrates_drain:
-            self.calibration.calibrate(measured_inflow=measured_inflow)
 
     def _reported_inflow(self, receiver_fill: float, at: float) -> float:
         """
@@ -1681,16 +1770,9 @@ class StreamCamera:
     those that miss it.
     """
 
-    _times: List[float] = field(init=False, default_factory=list, repr=False)
+    _log: CrossingLog = field(init=False, default_factory=CrossingLog, repr=False)
     """
-    When each crossing was seen, in seconds.
-    """
-
-    _crossings: List[numpy.ndarray] = field(
-        init=False, default_factory=list, repr=False
-    )
-    """
-    Where each grain seen crossing stood, horizontally, in metres.
+    Every grain seen crossing the opening plane, with when it was seen.
     """
 
     def record(self, at: float) -> None:
@@ -1700,6 +1782,7 @@ class StreamCamera:
         :param at: The time now, in seconds.
         """
         scene = self.scene
+        self._log.look(at)
         positions = self.contents.world_positions()
         if not len(positions):
             return
@@ -1710,42 +1793,52 @@ class StreamCamera:
             numpy.abs(positions[:, 2] - scene.receiver_opening_height) <= CROSSING_BAND
         )
         for crossing in positions[outside & near_plane, :2]:
-            self._times.append(at)
-            self._crossings.append(crossing)
+            self._log.record(at, crossing)
 
-    def observed_distance(self, since: float) -> Optional[float]:
+    def observed_distance(
+        self, since: float, until: Optional[float] = None
+    ) -> Optional[float]:
         """
         :param since: The earliest time to count, in seconds.
+        :param until: The latest time to count, or ``None`` for up to now.
         :return: How far from the lip, along the stream's horizontal direction, the
-            grains seen since then crossed the opening plane on average, in metres, or
-            ``None`` if none were seen.
+            grains seen in that time crossed the opening plane on average, in metres,
+            or ``None`` if none were seen.
         """
-        seen = [
-            crossing
-            for at, crossing in zip(self._times, self._crossings)
-            if at >= since
-        ]
+        seen = self._log.between(since, until)
         if not seen:
             return None
-        exit_point, velocity = self._exit_state()
-        direction = velocity[:2] / max(numpy.linalg.norm(velocity[:2]), 1e-9)
-        return float(
-            numpy.mean([(crossing - exit_point[:2]) @ direction for crossing in seen])
+        return self.stream.distance_from_lip(seen)
+
+    def observed_rate(self, since: float, until: Optional[float] = None) -> float:
+        """
+        :param since: The earliest time to count, in seconds.
+        :param until: The latest time to count, or ``None`` for up to now.
+        :return: How many grains per second crossed the opening plane in that time: the
+            grains seen near it per look, over the time a grain falling at the stream's
+            speed there takes to pass the band they are seen in.
+        """
+        launch = self.launch()
+        vertical = launch.speed * launch.vertical_share
+        speed = math.sqrt(vertical**2 + 2 * STANDARD_GRAVITY * launch.drop)
+        return self._log.grains_per_look(since, until) * speed / (2 * CROSSING_BAND)
+
+    @property
+    def stream(self) -> PouredStream:
+        """
+        :return: The stream the model throws from the source's lip into the receiver.
+        """
+        return PouredStream(
+            source=self.scene.source,
+            receiver=self.scene.receiver,
+            world=self.scene.world,
         )
 
     def launch(self) -> Launch:
         """
         :return: The stream as the model predicts it leaves the lip now.
         """
-        exit_point, velocity = self._exit_state()
-        speed = float(numpy.linalg.norm(velocity))
-        return Launch(
-            speed=speed,
-            horizontal_share=float(numpy.linalg.norm(velocity[:2])) / max(speed, 1e-9),
-            vertical_share=float(velocity[2]) / max(speed, 1e-9),
-            drop=max(0.0, float(exit_point[2]) - self.scene.receiver_opening_height),
-            gravity=STANDARD_GRAVITY,
-        )
+        return self.stream.launch()
 
     def stream_geometry(self, opening_radius: float) -> StreamGeometry:
         """
@@ -1753,37 +1846,7 @@ class StreamCamera:
         :return: How the model says the stream leaves the lip now, and where the
             receiver's centre lies from there.
         """
-        exit_point, velocity = self._exit_state()
-        speed = max(float(numpy.linalg.norm(velocity)), 1e-9)
-        horizontal = float(numpy.linalg.norm(velocity[:2]))
-        direction = velocity[:2] / max(horizontal, 1e-9)
-        centre = numpy.asarray(
-            self.scene.world.compute_forward_kinematics_np(
-                self.scene.world.root, self.scene.receiver.root
-            )[:2, 3],
-            dtype=float,
-        )
-        return StreamGeometry(
-            horizontal_share=horizontal / speed,
-            vertical_share=float(velocity[2]) / speed,
-            drop=max(0.0, float(exit_point[2]) - self.scene.receiver_opening_height),
-            centre_distance=float((centre - exit_point[:2]) @ direction),
-            opening_radius=opening_radius,
-        )
-
-    def _exit_state(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
-        """
-        :return: Where the model says the stream leaves the lip now, and with which
-            velocity, in the world frame.
-        """
-        source, world = self.scene.source, self.scene.world
-        speed = source.current_outflow_velocity(world)
-        exit_point = source.liquid_exit_point(world)
-        velocity = source.liquid_exit_velocity(world, speed)
-        return (
-            numpy.asarray(exit_point.evaluate(), dtype=float).ravel()[:3],
-            numpy.asarray(velocity.evaluate(), dtype=float).ravel()[:3],
-        )
+        return self.stream.geometry(opening_radius)
 
 
 SWITCH_TIME_CONSTANT = 0.5
@@ -1865,6 +1928,8 @@ class BankReadingKey(StrEnum):
     CROSSING = "crossing"
     TRUE_CROSSING = "true_crossing"
     STREAM = "stream"
+    STREAM_SEEN = "stream_seen"
+    COUNTED_GRAINS = "counted_grains"
 
 
 @dataclass
@@ -1940,23 +2005,54 @@ class BankSteering(TransferSteering):
     The model the controller runs on, moving towards the one the bank calls for.
     """
 
+    _crossed: float = field(init=False, default=0.0)
+    """
+    How many grains truly crossed the opening plane while the camera saw the stream.
+    """
+
+    _count_scale: float = field(init=False, default=1.0)
+    """
+    How far off the camera's count is over this pour: its calibration error, drawn once.
+    """
+
     def steer(self, at: float) -> None:
         """
         :param at: The time of the measurement, in seconds.
         """
         scene, perception = self.scene, self.perception
         tilt = scene.cup_tilt
-        true_crossing = self.camera.observed_distance(
-            since=at - 1.0 / PERCEPTION_FREQUENCY + DELAY_TOLERANCE
-        )
+        model = self.camera_condition.model
+        delay = 0.0 if model is None else model.delay
+        since = at - delay - 1.0 / PERCEPTION_FREQUENCY + DELAY_TOLERANCE
+        true_crossing = self.camera.observed_distance(since=since, until=at - delay)
         stream = self.camera.stream_geometry(self.opening_radius)
+        crossing = self._seen(true_crossing)
+        counts = model is not None and model.count_noise is not None
+        if counts and not self.handed:
+            self._count_scale = max(
+                0.0, 1.0 + self.random.normal(0.0, model.count_noise)
+            )
+        if counts and crossing is not None:
+            self._crossed += self.camera.observed_rate(since, until=at - delay) * (
+                1.0 / PERCEPTION_FREQUENCY
+            )
         reading = Reading(
             time=at,
             tilt=tilt,
-            receiver_grains=perception.reported_receiver_grains,
-            source_grains=perception.reported_source_grains,
-            crossing_distance=self._seen(true_crossing),
+            receiver_grains=(
+                perception.reported_receiver_grains
+                if perception.weighs_receiver
+                else None
+            ),
+            source_grains=(
+                perception.reported_source_grains
+                if perception.weighs_source or not self.handed
+                else None
+            ),
+            crossing_distance=crossing,
             stream=stream,
+            stream_seen=crossing is not None if counts else None,
+            counted_grains=self._crossed * self._count_scale if counts else None,
         )
         self.handed.append(reading)
         self.coupling.observe(
@@ -1964,10 +2060,21 @@ class BankSteering(TransferSteering):
             perception.committed_receiver_grains / GOAL_GRAINS,
             trickle=min(
                 self.coupling.bank.settings.trickle,
-                (GOAL_GRAINS - reading.receiver_grains - self.coupling.margin)
+                (
+                    GOAL_GRAINS
+                    - perception.reported_receiver_grains
+                    - self.coupling.margin
+                )
                 / (2 * FILL_PREDICTION_WINDOW),
             ),
         )
+        if not perception.weighs_receiver:
+            perception.report_received_estimate(self.coupling.received_grains)
+        if not perception.weighs_source:
+            perception.report_source_estimate(
+                self.handed[0].source_grains
+                - model.grains_crossed(reading.counted_grains)
+            )
         if self.caution is not None:
             capped = self.caution.observe(
                 at,
@@ -1996,6 +2103,8 @@ class BankSteering(TransferSteering):
                 BankReadingKey.CROSSING: reading.crossing_distance,
                 BankReadingKey.TRUE_CROSSING: true_crossing,
                 BankReadingKey.STREAM: stream.to_json(),
+                BankReadingKey.STREAM_SEEN: reading.stream_seen,
+                BankReadingKey.COUNTED_GRAINS: reading.counted_grains,
             }
         )
 
@@ -2196,9 +2305,10 @@ class TransferTrial:
     What decides how far the cup is tilted.
     """
 
-    sensor: SensorCondition = SensorCondition.IDEAL
+    sensor: Optional[SensorCondition] = SensorCondition.IDEAL
     """
-    What reports the fill levels to the controller.
+    What reports the fill levels to the controller, or ``None`` if nothing weighs the
+    receiver and a hypothesis bank estimates it from the wrist and the camera.
     """
 
     gains: Optional[PidGains] = None
@@ -2361,6 +2471,8 @@ class TransferTrial:
             raise BankWithoutSensorSetError()
         if self.caution is not None and self.bank is None:
             raise CautionWithoutBankError()
+        if self.sensor is None and self.bank is None:
+            raise UnweighedReceiverWithoutBankError()
 
     @property
     def revises_repose_angle(self) -> bool:
@@ -2417,7 +2529,9 @@ class TransferTrial:
             model-predictive trial with an ideal sensor keeps the name it was first
             recorded under.
         """
-        sensor = "" if self.sensor is SensorCondition.IDEAL else f"_{self.sensor}"
+        sensor = (
+            "" if self.sensor in (SensorCondition.IDEAL, None) else f"_{self.sensor}"
+        )
         if not self.controller.uses_pouring_model:
             variant = (
                 "" if self.pid_variant is PidVariant.PLAIN else f"_{self.pid_variant}"
@@ -2892,7 +3006,11 @@ class TransferTrial:
         bank = steering.coupling.bank
         onset_filter = bank.filters.get(Hypothesis.ONSET)
         consistency = None
-        if self.bank.checks_consistency and bank.started:
+        if (
+            self.bank.checks_consistency
+            and bank.started
+            and self.sensor_set.wrist is not None
+        ):
             explanation = bank.filters[steering.coupling.active]
             consistency = ConsistencyCheck(
                 geometry=bank.geometry,

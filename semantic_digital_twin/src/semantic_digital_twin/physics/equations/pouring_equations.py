@@ -85,6 +85,21 @@ class FillContext(Protocol):
     Symbolic normalized fill level in ``[0, 1]`` (the fill DOF position).
     """
 
+    repose_correction: Scalar
+    """
+    Symbolic angle added to the repose angle while a controller runs, in radians.
+    """
+
+    drain_scale: Scalar
+    """
+    Symbolic factor on the drain rate while a controller runs.
+    """
+
+    discharge_scale: Scalar
+    """
+    Symbolic factor on the exit speed while a controller runs.
+    """
+
 
 @dataclass
 class SymbolicFillContext:
@@ -101,6 +116,21 @@ class SymbolicFillContext:
     fill_position: Scalar
     """
     Symbolic normalized fill level in ``[0, 1]``.
+    """
+
+    repose_correction: Scalar = field(default_factory=lambda: Scalar(0.0))
+    """
+    Symbolic angle added to the repose angle, in radians; none by default.
+    """
+
+    drain_scale: Scalar = field(default_factory=lambda: Scalar(1.0))
+    """
+    Symbolic factor on the drain rate; one by default.
+    """
+
+    discharge_scale: Scalar = field(default_factory=lambda: Scalar(1.0))
+    """
+    Symbolic factor on the exit speed; one by default.
     """
 
 
@@ -395,10 +425,10 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         height = self.container_height
         liquid_height = context.fill_position * height
         lip_distance = sm.sqrt((height - liquid_height) ** 2 + self.lip_offset**2)
+        onset = self.onset_tilt(context.fill_position) + context.repose_correction
         return sm.max(
             sm.Scalar(0.0),
-            lip_distance
-            * sm.sin(context.tilt_expression - self.onset_tilt(context.fill_position)),
+            lip_distance * sm.sin(context.tilt_expression - onset),
         )
 
     def onset_tilt(self, fill: sm.ScalarData) -> Scalar:
@@ -430,7 +460,11 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         :return: Symbolic exit speed.
         """
         head = sm.max(sm.Scalar(MINIMUM_POUR_HEAD), self.head_above_lip(context))
-        speed = self.discharge_coefficient * sm.sqrt(2 * STANDARD_GRAVITY * head)
+        speed = (
+            self.discharge_coefficient
+            * context.discharge_scale
+            * sm.sqrt(2 * STANDARD_GRAVITY * head)
+        )
         if self.discharge_scale is None:
             return speed
         return speed * self.discharge_scale
@@ -442,6 +476,7 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         """
         drain = (
             -self.outflow_rate_constant
+            * context.drain_scale
             * self.head_above_lip(context)
             / self.container_height
         )

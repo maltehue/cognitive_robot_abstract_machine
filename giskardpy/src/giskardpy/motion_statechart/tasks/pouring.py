@@ -244,6 +244,9 @@ class PouringTask(TerminalFillConstraintTask):
             SymbolicFillContext(
                 tilt_expression=tilt_expression,
                 fill_position=self.fill_connection.dof.variables.position,
+                repose_correction=self.fill_connection.repose_correction,
+                drain_scale=self.fill_connection.drain_scale,
+                discharge_scale=self.fill_connection.discharge_scale,
             )
         )
 
