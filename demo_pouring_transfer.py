@@ -4,6 +4,11 @@ from importlib.resources import files
 from pathlib import Path
 
 
+from giskardpy.middleware.ros2.particle_weighing import (
+    WEIGHED_PARTICLES_FILE_NAME,
+    WeighedParticles,
+)
+from giskardpy.middleware.ros2.rosbag_recording import RosbagRecording
 from giskardpy.motion_statechart.data_types import DefaultWeights
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.graph_node import EndMotion
@@ -158,13 +163,17 @@ def _spawn_jeroen_cup_body(name: str) -> Body:
     )
 
 
+# ----- Record the run; the bag is closed again at the end of the script -----
+recording = RosbagRecording()
+print(f"Recording into {recording.start()}.")
+
 giskard = connect_to_giskard("tracy_transfer_demo")
 robot = giskard.robot
 world = giskard.world
 print(f"world root: {world.root.name.name}")
 
 # ----- Park arms -----
-park_arms(giskard)
+# park_arms(giskard)
 
 # ------ Move the left gripper to the upright carry pose ----
 left_tool_frame = world.get_body_by_name(LEFT_TOOL_FRAME)
@@ -220,7 +229,7 @@ else:
                 child=source_cup_body,
                 name=PrefixedName("l_gripper_T_source_cup"),
                 parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    roll=-math.pi / 2.0, y=-0.05
+                    roll=-math.pi / 2.0, y=-0.00
                 ),
             )
         )
@@ -355,3 +364,12 @@ print(f"source cup fill level: {source_cup.fill_level}")
 
 
 move_left_tool_to(giskard, upright_pose)
+
+recording.stop()
+
+# ----- Record what the pour actually delivered and spilled, measured on a scale -----
+weighed_particles = WeighedParticles.ask()
+recording.add_file(WEIGHED_PARTICLES_FILE_NAME, weighed_particles.as_json_text())
+print(f"Measured fill level: {weighed_particles.received_fill_level:.3f}")
+print(f"Spilled: {weighed_particles.spilled_mass_grams} g")
+print(f"Recorded {recording.bag_path}.")

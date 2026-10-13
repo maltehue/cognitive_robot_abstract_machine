@@ -19,13 +19,8 @@ pouring model predicted with what the robot did.
 
 def main():
     rospy.init_node("giskard")
-    try:
-        rospy.get_node().declare_parameters(
-            namespace="", parameters=[("robot_description", Parameter.Type.STRING)]
-        )
-        robot_description = rospy.get_node().get_parameter_or("robot_description").value
-    except ParameterUninitializedException as e:
-        robot_description = load_xacro(
+
+    robot_description = load_xacro(
             "package://iai_tracy_description/urdf/tracy.urdf.xacro"
         )
     records_control_cycles = (

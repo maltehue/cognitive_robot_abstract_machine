@@ -21,7 +21,7 @@ from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix,
 
 # %% robot and table
 
-TABLE_SURFACE_Z = 0.875 + 0.1
+TABLE_SURFACE_Z = 0.875 + 0.05
 """
 Height of the table top in the world root, in metres.
 """
