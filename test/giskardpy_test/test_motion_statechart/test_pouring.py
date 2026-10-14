@@ -530,6 +530,30 @@ class TestPouringTask:
         assert isinstance(constraint, TerminalStatePredictionConstraint)
         assert constraint.prediction_duration == pouring_task.prediction_duration
 
+    def test_build_hands_the_stopping_velocity_to_the_constraint(
+        self, world_with_cup
+    ) -> None:
+        """
+        How fast the task may take back an overshoot is the task's to decide, apart from
+        how fast it pours.
+        """
+        world, cup = world_with_cup
+        pouring_task = PouringTask(
+            fill_equation=cup.fill_equation,
+            fill_connection=cup.fill_connection,
+            root_link=world.root,
+            tip_link=cup.root,
+            goal_value=0.6,
+            fill_level_tolerance=0.05,
+            reference_velocity=0.03,
+            stopping_velocity=0.09,
+        )
+
+        artifacts = pouring_task.build(_pouring_context(world))
+
+        [constraint] = artifacts.constraints.equality_constraints
+        assert constraint.stopping_velocity == pouring_task.stopping_velocity
+
     def test_the_predicted_fill_velocity_follows_the_drain_correction(
         self, world_with_cup
     ) -> None:

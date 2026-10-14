@@ -70,6 +70,13 @@ class TerminalFillConstraintTask(Task, ABC):
     Desired rate of change of the normalized fill level.
     """
 
+    stopping_velocity: Optional[float] = field(default=None, kw_only=True)
+    """
+    How fast the controller may take back fill that is predicted to arrive beyond the
+    goal, in normalized fill per second; ``None`` stops no faster than
+    :attr:`reference_velocity` pours.
+    """
+
     weight: float = field(
         default=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE, kw_only=True
     )
@@ -169,6 +176,7 @@ class TerminalFillConstraintTask(Task, ABC):
             quadratic_weight=self.weight,
             reference_velocity=self.reference_velocity,
             prediction_duration=self.prediction_duration,
+            stopping_velocity=self.stopping_velocity,
         )
         return artifacts
 

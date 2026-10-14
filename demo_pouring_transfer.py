@@ -124,6 +124,19 @@ DISCHARGE_COEFFICIENT = DRAIN.discharge_coefficient
 Scales the exit speed and with it how far the stream is thrown.
 """
 
+POURING_VELOCITY = 0.03
+"""
+How fast the transfer may raise the predicted fill of the receiver, in fill per second.
+"""
+
+STOPPING_VELOCITY = 0.09
+"""
+How fast the transfer may take back fill predicted beyond the goal, in fill per second:
+
+faster than it pours, so the cup is turned back before the grains still coming overfill
+the receiver.
+"""
+
 USE_LIVE_BANK = False
 """
 Let the hypothesis bank watch the pour through the camera and correct the controller's
@@ -353,7 +366,8 @@ transfer_task = FillByTransferTask(
     receiver=receiving_cup,
     goal_value=goal_fill,
     fill_level_tolerance=tolerance,
-    reference_velocity=0.03,
+    reference_velocity=POURING_VELOCITY,
+    stopping_velocity=STOPPING_VELOCITY,
 )
 # Keep the liquid's projectile landing in the receiver so the optimizer repositions the gripper
 # upstream as the source tilts and the arc reaches forward.

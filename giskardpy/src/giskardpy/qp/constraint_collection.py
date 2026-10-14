@@ -334,6 +334,7 @@ class ConstraintCollection:
         reference_velocity: sm.ScalarData,
         name: Optional[str] = None,
         prediction_duration: float | None = None,
+        stopping_velocity: float | None = None,
     ) -> None:
         """
         Add a terminal-state prediction constraint using a linearized first-order ODE.
@@ -361,6 +362,8 @@ class ConstraintCollection:
         :param name: Optional constraint name for debugging.
         :param prediction_duration: Length of the prediction window in seconds; the
             control horizon when ``None``.
+        :param stopping_velocity: How fast the state may be brought back against the
+            change it makes on its own; ``reference_velocity`` when ``None``.
         """
         constraint = TerminalStatePredictionConstraint(
             name=name,
@@ -372,5 +375,6 @@ class ConstraintCollection:
             state_variable=state_variable,
             goal_value=goal_value,
             prediction_duration=prediction_duration,
+            stopping_velocity=stopping_velocity,
         )
         self.add_constraint(constraint)

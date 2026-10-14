@@ -128,6 +128,8 @@ def _terminal_constraint(
     state_degree_of_freedom: DegreeOfFreedom,
     goal_value: float = _GOAL_VALUE,
     prediction_duration: float | None = None,
+    normalization_factor: float = 1.0,
+    stopping_velocity: float | None = None,
 ) -> TerminalStatePredictionConstraint:
     """
     Builds a terminal constraint over the linear state rate of the two DOFs.
@@ -139,11 +141,12 @@ def _terminal_constraint(
         name=name,
         expression=state_velocity,
         quadratic_weight=1.0,
-        normalization_factor=1.0,
+        normalization_factor=normalization_factor,
         enforcement_strategy=TerminalStatePredictionStrategy,
         state_variable=state_degree_of_freedom.variables.position,
         goal_value=goal_value,
         prediction_duration=prediction_duration,
+        stopping_velocity=stopping_velocity,
     )
 
 
@@ -441,6 +444,129 @@ class TestPredictionWindow:
             constraint.normalization_factor
             * config.model_predictive_control_time_step
             * strategy._state_model.prediction_steps
+        )
+
+
+# %% stopping the state's own change
+
+
+_SLOW_REFERENCE_VELOCITY = 0.01
+"""
+A reference velocity whose cap is far below how much the state changes on its own within
+the control window.
+"""
+
+_FAST_STOPPING_VELOCITY = 1.0
+"""
+A stopping velocity whose reach covers the whole change the state makes on its own.
+"""
+
+_MODERATE_STOPPING_VELOCITY = 0.1
+"""
+A stopping velocity whose reach lies between the cap and the state's own change.
+"""
+
+
+class TestStoppingTheStatesOwnChange:
+    """
+    The reference velocity caps how fast the controller drives the state; a stopping
+    velocity caps, separately, how fast it brings the state back against the change the
+    state makes on its own, so a pour can be stopped faster than it was started.
+    """
+
+    def _bound(
+        self,
+        setup: LinearStateRateSetup,
+        goal_value: float,
+        stopping_velocity: float | None,
+    ) -> tuple[float, TerminalStatePredictionStrategy]:
+        """
+        :return: The capped bound, and the strategy that computed it.
+        """
+        constraint = _terminal_constraint(
+            "slow_goal",
+            setup.joint_degree_of_freedom,
+            setup.state_degree_of_freedom,
+            goal_value=goal_value,
+            normalization_factor=_SLOW_REFERENCE_VELOCITY,
+            stopping_velocity=stopping_velocity,
+        )
+        strategy = _strategy([constraint], setup.joint_degree_of_freedom)
+        return strategy.create_equality_bounds().evaluate()[0], strategy
+
+    def _reach(
+        self,
+        velocity: float,
+        setup: LinearStateRateSetup,
+        strategy: TerminalStatePredictionStrategy,
+    ) -> float:
+        """
+        :return: How far a velocity moves the state within the prediction window.
+        """
+        return (
+            velocity
+            * setup.config.model_predictive_control_time_step
+            * strategy._state_model.prediction_steps
+        )
+
+    def _free_change(self, strategy: TerminalStatePredictionStrategy) -> float:
+        """
+        :return: How far the state moves on its own within the prediction window.
+        """
+        return strategy._state_model.free_response().evaluate()[0] - _STATE_POSITION
+
+    def test_the_setup_changes_on_its_own_by_more_than_a_moderate_stop_reaches(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        _, strategy = self._bound(
+            linear_state_rate_setup, _STATE_POSITION, _MODERATE_STOPPING_VELOCITY
+        )
+        assert self._free_change(strategy) < -self._reach(
+            _MODERATE_STOPPING_VELOCITY, linear_state_rate_setup, strategy
+        )
+
+    def test_without_a_stopping_velocity_stopping_is_capped_like_driving(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        bound, strategy = self._bound(linear_state_rate_setup, _STATE_POSITION, None)
+        assert bound == pytest.approx(
+            self._reach(_SLOW_REFERENCE_VELOCITY, linear_state_rate_setup, strategy)
+        )
+
+    def test_a_stop_within_reach_undoes_the_states_whole_change(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        bound, strategy = self._bound(
+            linear_state_rate_setup, _STATE_POSITION, _FAST_STOPPING_VELOCITY
+        )
+        assert bound == pytest.approx(-self._free_change(strategy))
+
+    def test_a_stop_beyond_reach_is_capped_by_the_stopping_velocity(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        bound, strategy = self._bound(
+            linear_state_rate_setup, _STATE_POSITION, _MODERATE_STOPPING_VELOCITY
+        )
+        assert bound == pytest.approx(
+            self._reach(_MODERATE_STOPPING_VELOCITY, linear_state_rate_setup, strategy)
+        )
+
+    def test_a_goal_behind_the_state_asks_at_once_only_to_stop_it(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        bound, strategy = self._bound(
+            linear_state_rate_setup, 5.0, _FAST_STOPPING_VELOCITY
+        )
+        assert bound == pytest.approx(-self._free_change(strategy))
+
+    def test_driving_the_state_further_its_own_way_keeps_the_reference_cap(
+        self, linear_state_rate_setup: LinearStateRateSetup
+    ) -> None:
+        bound, strategy = self._bound(
+            linear_state_rate_setup, -5.0, _FAST_STOPPING_VELOCITY
+        )
+        assert bound == pytest.approx(
+            -self._reach(_SLOW_REFERENCE_VELOCITY, linear_state_rate_setup, strategy)
         )
 
 

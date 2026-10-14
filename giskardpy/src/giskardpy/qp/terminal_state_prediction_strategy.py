@@ -199,6 +199,13 @@ class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
     ``None`` predicts to the end of the control horizon.
     """
 
+    stopping_velocity: float | None = field(default=None, kw_only=True)
+    """
+    How fast the state may be brought back against the change it makes on its own, in
+    state units per second; ``None`` brings it back no faster than the normalization
+    factor drives it.
+    """
+
     bound: Scalar = field(default_factory=lambda: sm.Scalar(0.0), kw_only=True)
     """Unused inherited equality bound; the strategy computes the terminal bound ``goal − x_free`` instead."""
 
@@ -303,22 +310,35 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
         Computes the capped equality bound ``goal − x_free``.
 
         ``x_free`` is the predicted terminal state under zero joint velocity, so the bound is the
-        terminal prediction error the QP drives to zero. It is capped to the state change
-        reachable within the prediction window.
+        terminal prediction error the QP drives to zero. Driving the state is capped to the
+        change the normalization factor reaches within the prediction window. Against the change
+        the state makes on its own, ``x_free − x₀``, the bound may undo that change up to what
+        the constraint's stopping velocity reaches within the window, so a state can be stopped
+        faster than it is driven.
 
         .. note:: This relies on a prediction window long enough for ``x_free`` to span the
             terminal overshoot; with a very short window the prediction is too myopic to ease off
             in time and the state overshoots the goal.
         """
         constraint = self._constraint
-        bound = sm.Scalar(constraint.goal_value) - self._state_model.free_response()
-        capped = self.capped_bound(
-            bound,
-            self.qp_controller_config.model_predictive_control_time_step,
-            constraint.normalization_factor,
-            self._prediction_steps,
+        free_response = self._state_model.free_response()
+        bound = sm.Scalar(constraint.goal_value) - free_response
+        window = (
+            self.qp_controller_config.model_predictive_control_time_step
+            * self._prediction_steps
         )
-        return sm.Vector([capped])
+        cap = sm.Scalar(constraint.normalization_factor * window)
+        stopping_velocity = (
+            constraint.normalization_factor
+            if constraint.stopping_velocity is None
+            else constraint.stopping_velocity
+        )
+        stopping_cap = sm.Scalar(stopping_velocity * window)
+        free_change = free_response - self._state_model.state_value
+        stopping_reach = sm.max(sm.min(abs(free_change), stopping_cap), cap)
+        lower = sm.if_less(free_change, sm.Scalar(0.0), -cap, -stopping_reach)
+        upper = sm.if_less(free_change, sm.Scalar(0.0), stopping_reach, cap)
+        return sm.Vector([sm.limit(bound, lower, upper)])
 
     def create_slack_variables(self) -> DirectLimits:
         """

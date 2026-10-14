@@ -164,11 +164,14 @@ for i, im in enumerate(o["images"]):
             counted=round(step.counted_grains, 1),
             received=round(step.received_grains, 1),
             told=round(told, 1),
+            repose_correction=round(
+                math.degrees(step.corrections.repose_correction), 1
+            ),
             probabilities={h: round(p, 2) for h, p in step.probabilities.items()},
         )
     )
     print(
-        f"{seen.stamp:5.1f} tilt {math.degrees(step.tilt):5.1f} count {step.counted_grains:5.1f} recv {step.received_grains:5.1f} told {told:5.1f} act {step.active} "
+        f"{seen.stamp:5.1f} tilt {math.degrees(step.tilt):5.1f} count {step.counted_grains:5.1f} recv {step.received_grains:5.1f} told {told:5.1f} rep {math.degrees(step.corrections.repose_correction):5.1f} act {step.active} "
         + " ".join(f"{h}:{p:.2f}" for h, p in step.probabilities.items()),
         flush=True,
     )

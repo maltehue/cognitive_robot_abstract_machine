@@ -1,11 +1,12 @@
 """
-Compare the 2026-10-14 pours (open loop with the fitted drain, and the live bank) with
-the 2026-10-12 demo pours, and refit the 2026-10-12 drain with them added.
+Compare the 2026-10-14 pours with the 2026-10-12 demo pours, and refit the 2026-10-12
+drain with them added.
 
 Usage: python live_pours.py <2026-10-12 folder holding demo/, ramps/ and onset.json>
-<open-loop bag folder> <live-bank bag folder> Each bag folder needs the kin.pkl of
-../analysis_2026-10-12/kinematics.py (run extract.py first). Writes live_pours.json next
-to this script.
+<label>::<drain>::<bag folder> ... Each bag folder needs the kin.pkl of
+../analysis_2026-10-12/kinematics.py (run extract.py first); a bag with a
+live_bank_trace.json also gets its bank trace. Writes live_pours.json next to this
+script.
 """
 
 import glob, json, os, pickle, sys
@@ -15,7 +16,11 @@ from scipy.optimize import least_squares
 
 HERE = Path(__file__).parent
 MONDAY_ANALYSIS = HERE.parent / "analysis_2026-10-12"
-monday, open_loop, live_bank = (Path(p).resolve() for p in sys.argv[1:4])
+monday = Path(sys.argv[1]).resolve()
+pours_of_the_day = [argument.split("::") for argument in sys.argv[2:]]
+pours_of_the_day = [
+    (label, drain, Path(path).resolve()) for label, drain, path in pours_of_the_day
+]
 os.chdir(monday)
 sys.path.insert(0, str(MONDAY_ANALYSIS))
 import fit  # noqa: E402  (reads onset.json and the bags from the working directory)
@@ -35,14 +40,38 @@ def load(bag):
     return t - t[start], tilt, source, receiver, weighed
 
 
+def bank_trace(bag):
+    trace = json.load(open(bag / "live_bank_trace.json"))
+    t0 = trace[0]["time"]
+    return [
+        dict(
+            time=round(s["time"] - t0, 2),
+            tilt=round(np.degrees(s["tilt"]), 1),
+            seen=s["stream_seen"],
+            counted=round(s["counted_grains"], 1),
+            received=round(s["received_grains"], 1),
+            active=s["active"],
+            probabilities={h: round(p, 3) for h, p in s["probabilities"].items()},
+            repose_correction=round(
+                np.degrees(s["corrections"]["repose_correction"]), 1
+            ),
+            drain_scale=round(float(np.exp(s["corrections"]["log_drain_scale"])), 2),
+        )
+        for s in trace
+    ]
+
+
 pours = {}
-for name, bag in [
-    (Path(d).name, Path(d)) for d in sorted(glob.glob(str(monday / "demo" / "*")))
-] + [("open loop, fitted drain", open_loop), ("live bank, fitted drain", live_bank)]:
+for name, drain, bag in [
+    (Path(d).name, "demo", Path(d))
+    for d in sorted(glob.glob(str(monday / "demo" / "*")))
+] + pours_of_the_day:
     t, tilt, source, receiver, weighed = load(bag)
     keep = (t > -2) & (t < 30)
     left = (weighed["received_mass_grams"] + weighed["spilled_mass_grams"]) / fit.FULL
     pours[name] = dict(
+        drain=drain,
+        bank=bank_trace(bag) if (bag / "live_bank_trace.json").exists() else None,
         time=np.round(t[keep][::5], 2).tolist(),
         tilt=np.round(np.degrees(tilt[keep][::5]), 1).tolist(),
         believed_receiver=np.round(receiver[keep][::5], 3).tolist(),
@@ -68,24 +97,7 @@ for name, bag in [
         name, {k: round(v, 3) for k, v in pours[name].items() if isinstance(v, float)}
     )
 
-trace = json.load(open(live_bank / "live_bank_trace.json"))
-t0 = trace[0]["time"]
-bank = [
-    dict(
-        time=round(s["time"] - t0, 2),
-        tilt=round(np.degrees(s["tilt"]), 1),
-        seen=s["stream_seen"],
-        counted=round(s["counted_grains"], 1),
-        received=round(s["received_grains"], 1),
-        active=s["active"],
-        probabilities={h: round(p, 3) for h, p in s["probabilities"].items()},
-        repose_correction=round(np.degrees(s["corrections"]["repose_correction"]), 1),
-        drain_scale=round(float(np.exp(s["corrections"]["log_drain_scale"])), 2),
-    )
-    for s in trace
-]
-
-for name, bag in (("open loop", open_loop), ("live bank", live_bank)):
+for name, _, bag in pours_of_the_day:
     t, tilt, _, _, weighed = load(bag)
     fit.demos.append(
         (
@@ -121,6 +133,4 @@ for hysteresis, p0 in (
         },
     )
     print(refits)
-json.dump(
-    dict(pours=pours, bank=bank, refits=refits), open(HERE / "live_pours.json", "w")
-)
+json.dump(dict(pours=pours, refits=refits), open(HERE / "live_pours.json", "w"))
