@@ -183,6 +183,40 @@ def test_the_catch_all_wins_over_every_concept_when_probable_enough():
     )
 
 
+def test_a_hypothesis_the_readings_rule_out_hands_over_to_the_most_probable_one():
+    """
+    The shape of the 2026-10-14 overpour: the burst rules the late onset out, the
+    nominal model and the aim share what is left, and neither reaches the threshold.
+    """
+    switch = ModelSwitch(threshold=0.9, active=Hypothesis.ONSET)
+    chosen = switch.decide(
+        {
+            Hypothesis.NOMINAL: 0.47,
+            Hypothesis.ONSET: 0.0,
+            Hypothesis.AIM: 0.52,
+            Hypothesis.COUPLED: 0.0,
+            Hypothesis.CATCH_ALL: 0.01,
+        }
+    )
+    assert chosen is Hypothesis.AIM
+
+
+def test_a_hypothesis_still_in_play_keeps_the_controller_on_it():
+    switch = ModelSwitch(threshold=0.9, active=Hypothesis.ONSET)
+    assert (
+        switch.decide(
+            {
+                Hypothesis.NOMINAL: 0.4,
+                Hypothesis.ONSET: 0.2,
+                Hypothesis.AIM: 0.4,
+                Hypothesis.CATCH_ALL: 0.0,
+            }
+        )
+        is None
+    )
+    assert switch.active is Hypothesis.ONSET
+
+
 # %% the bank
 
 

@@ -1794,7 +1794,9 @@ class ModelSwitch:
         """
         A concept the controller already treats as wrong stays wrong until it is
         probably right, so the controller does not flip between hypotheses on the
-        margin of the threshold.
+        margin of the threshold. A hypothesis the readings have ruled out, as improbable
+        as a concept has to be to count as right, hands the controller over to the most
+        probable one even when no concept is probable enough to switch on.
 
         :param probabilities: How probable each hypothesis is now.
         :param vetoed: Concepts that may not be newly held wrong, however probable.
@@ -1834,7 +1836,29 @@ class ModelSwitch:
                 return chosen, min(concepts[concept] for concept in wrong)
         if probabilities.get(Hypothesis.NOMINAL, 0.0) >= self.threshold:
             return Hypothesis.NOMINAL, probabilities[Hypothesis.NOMINAL]
+        if probabilities.get(self.active, 0.0) <= 1.0 - self.threshold:
+            return self._most_probable_allowed(probabilities, vetoed)
         return None, 0.0
+
+    def _most_probable_allowed(
+        self,
+        probabilities: Dict[Hypothesis, float],
+        vetoed: frozenset[FreeParameter],
+    ) -> Tuple[Hypothesis, float]:
+        """
+        :param probabilities: How probable each hypothesis is now.
+        :param vetoed: Concepts that may not be newly held wrong.
+        :return: The most probable hypothesis that holds no vetoed concept wrong the
+            controller does not already treat as wrong, with its probability.
+        """
+        newly_vetoed = vetoed - self.active.concepts
+        allowed = [
+            hypothesis
+            for hypothesis in probabilities
+            if not hypothesis.concepts & newly_vetoed
+        ]
+        chosen = max(allowed, key=lambda hypothesis: probabilities[hypothesis])
+        return chosen, probabilities[chosen]
 
     def decide(
         self,
