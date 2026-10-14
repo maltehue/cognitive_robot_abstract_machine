@@ -1,0 +1,137 @@
+{
+ "15-35-41": {
+  "first_stream": [
+   5.5,
+   66
+  ],
+  "commits": [
+   [
+    "H1",
+    3.0,
+    19
+   ],
+   [
+    "H2",
+    7.5,
+    91
+   ],
+   [
+    "H0",
+    11.8,
+    73
+   ]
+  ],
+  "active": "H0",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 1.0,
+  "counted": 33.1,
+  "received_estimate": 40.6,
+  "weighed": 35.8
+ },
+ "15-38-01": {
+  "first_stream": [
+   12.4,
+   69
+  ],
+  "commits": [
+   [
+    "H1",
+    9.8,
+    20
+   ],
+   [
+    "H0",
+    16.6,
+    74
+   ]
+  ],
+  "active": "H0",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 1.0,
+  "counted": 30.3,
+  "received_estimate": 37.2,
+  "weighed": 33.2
+ },
+ "15-40-29": {
+  "first_stream": [
+   12.6,
+   55
+  ],
+  "commits": [
+   [
+    "H1",
+    10.8,
+    20
+   ],
+   [
+    "H2",
+    15.1,
+    91
+   ]
+  ],
+  "active": "H2",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 0.46,
+  "counted": 34.8,
+  "received_estimate": 42.6,
+  "weighed": 33.6
+ },
+ "15-42-23": {
+  "first_stream": [
+   12.8,
+   66
+  ],
+  "commits": [
+   [
+    "H1",
+    10.4,
+    20
+   ],
+   [
+    "H2",
+    14.6,
+    91
+   ],
+   [
+    "H0",
+    18.1,
+    73
+   ]
+  ],
+  "active": "H0",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 1.0,
+  "counted": 33.4,
+  "received_estimate": 40.4,
+  "weighed": 32.8
+ },
+ "15-44-51": {
+  "first_stream": [
+   12.9,
+   62
+  ],
+  "commits": [
+   [
+    "H1",
+    10.6,
+    17
+   ],
+   [
+    "H2",
+    19.2,
+    73
+   ]
+  ],
+  "active": "H2",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 0.53,
+  "counted": 38.7,
+  "received_estimate": 44.4,
+  "weighed": 34.7
+ }
+}

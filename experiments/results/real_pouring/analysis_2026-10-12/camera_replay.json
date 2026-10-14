@@ -1,0 +1,312 @@
+{
+ "demo/2026-10-12_15-35-41": {
+  "first_stream": 4.9,
+  "first_stream_tilt": 67.8,
+  "commits": [
+   [
+    "H1",
+    3.3,
+    38.5
+   ],
+   [
+    "H2",
+    11.6,
+    72.9
+   ],
+   [
+    "H6",
+    13.1,
+    68.4
+   ]
+  ],
+  "onset_estimate_deg": 42.2,
+  "received_estimate": 35.9,
+  "source_estimate": 65.9,
+  "final_probabilities": {
+   "H0": 0.0,
+   "H1": 0.0,
+   "H2": 0.0,
+   "H3": 0.0,
+   "H5": 0.0,
+   "H6": 0.999
+  },
+  "weighed": 35.8,
+  "camera_total": 35.0
+ },
+ "demo/2026-10-12_15-38-01": {
+  "first_stream": 4.6,
+  "first_stream_tilt": 62.9,
+  "commits": [
+   [
+    "H1",
+    3.3,
+    38.6
+   ],
+   [
+    "H2",
+    12.7,
+    72.7
+   ]
+  ],
+  "onset_estimate_deg": 45.8,
+  "received_estimate": 42.7,
+  "source_estimate": 58.7,
+  "final_probabilities": {
+   "H0": 0.002,
+   "H1": 0.0,
+   "H2": 0.996,
+   "H3": 0.0,
+   "H5": 0.0,
+   "H6": 0.002
+  },
+  "weighed": 33.2,
+  "camera_total": 32.3
+ },
+ "demo/2026-10-12_15-40-29": {
+  "first_stream": 4.3,
+  "first_stream_tilt": 57.7,
+  "commits": [
+   [
+    "H1",
+    3.4,
+    40.6
+   ],
+   [
+    "H6",
+    13.5,
+    61.6
+   ]
+  ],
+  "onset_estimate_deg": 39.0,
+  "received_estimate": 31.9,
+  "source_estimate": 68.0,
+  "final_probabilities": {
+   "H0": 0.001,
+   "H1": 0.0,
+   "H2": 0.0,
+   "H3": 0.0,
+   "H5": 0.0,
+   "H6": 0.999
+  },
+  "weighed": 33.6,
+  "camera_total": 34.0
+ },
+ "demo/2026-10-12_15-42-23": {
+  "first_stream": 4.9,
+  "first_stream_tilt": 67.9,
+  "commits": [
+   [
+    "H1",
+    3.3,
+    38.5
+   ],
+   [
+    "H2",
+    10.6,
+    72.9
+   ],
+   [
+    "H6",
+    13.6,
+    58.9
+   ]
+  ],
+  "onset_estimate_deg": 33.9,
+  "received_estimate": 27.8,
+  "source_estimate": 70.8,
+  "final_probabilities": {
+   "H0": 0.0,
+   "H1": 0.0,
+   "H2": 0.003,
+   "H3": 0.0,
+   "H5": 0.0,
+   "H6": 0.996
+  },
+  "weighed": 32.8,
+  "camera_total": 31.6
+ },
+ "demo/2026-10-12_15-44-51": {
+  "first_stream": 4.6,
+  "first_stream_tilt": 64.0,
+  "commits": [
+   [
+    "H1",
+    3.2,
+    37.8
+   ],
+   [
+    "H6",
+    12.4,
+    72.7
+   ]
+  ],
+  "onset_estimate_deg": 32.0,
+  "received_estimate": 37.4,
+  "source_estimate": 63.2,
+  "final_probabilities": {
+   "H0": 0.0,
+   "H1": 0.0,
+   "H2": 0.001,
+   "H3": 0.0,
+   "H5": 0.0,
+   "H6": 0.999
+  },
+  "weighed": 34.7,
+  "camera_total": 37.5
+ },
+ "ramps/2026-10-12_16-05-06": {
+  "first_stream": 4.4,
+  "first_stream_tilt": 45.6,
+  "commits": [
+   [
+    "H1",
+    2.6,
+    27.6
+   ]
+  ],
+  "onset_estimate_deg": 26.5,
+  "received_estimate": 99.7,
+  "source_estimate": 0.4,
+  "final_probabilities": {
+   "H0": 0.699,
+   "H1": 0.013,
+   "H2": 0.216,
+   "H3": 0.066,
+   "H5": 0.006,
+   "H6": 0.0
+  },
+  "weighed": 100.0,
+  "camera_total": 104.7
+ },
+ "ramps/2026-10-12_16-08-32": {
+  "first_stream": 13.8,
+  "first_stream_tilt": 70.5,
+  "commits": [
+   [
+    "H1",
+    3.5,
+    19.0
+   ],
+   [
+    "H5",
+    17.8,
+    90.5
+   ],
+   [
+    "H2",
+    20.9,
+    106.0
+   ],
+   [
+    "H5",
+    28.8,
+    61.9
+   ]
+  ],
+  "onset_estimate_deg": 47.9,
+  "received_estimate": 101.6,
+  "source_estimate": 0.0,
+  "final_probabilities": {
+   "H0": 0.001,
+   "H1": 0.0,
+   "H2": 0.001,
+   "H3": 0.0,
+   "H5": 0.998,
+   "H6": 0.0
+  },
+  "weighed": 100.0,
+  "camera_total": 111.2
+ },
+ "ramps/2026-10-12_16-11-09": {
+  "first_stream": 7.7,
+  "first_stream_tilt": 40.0,
+  "commits": [
+   [
+    "H1",
+    3.5,
+    19.0
+   ],
+   [
+    "H5",
+    19.3,
+    89.9
+   ],
+   [
+    "H6",
+    21.1,
+    89.9
+   ]
+  ],
+  "onset_estimate_deg": 42.5,
+  "received_estimate": 31.1,
+  "source_estimate": 70.8,
+  "final_probabilities": {
+   "H0": 0.0,
+   "H1": 0.0,
+   "H2": 0.0,
+   "H3": 0.0,
+   "H5": 0.0,
+   "H6": 1.0
+  },
+  "weighed": 31.7,
+  "camera_total": 28.7
+ },
+ "ramps/2026-10-12_16-13-49": {
+  "first_stream": 5.8,
+  "first_stream_tilt": 59.5,
+  "commits": [
+   [
+    "H1",
+    2.7,
+    28.5
+   ],
+   [
+    "H0",
+    11.7,
+    89.9
+   ]
+  ],
+  "onset_estimate_deg": 36.3,
+  "received_estimate": 44.6,
+  "source_estimate": 56.3,
+  "final_probabilities": {
+   "H0": 0.987,
+   "H1": 0.0,
+   "H2": 0.013,
+   "H3": 0.0,
+   "H5": 0.0,
+   "H6": 0.0
+  },
+  "weighed": 39.2,
+  "camera_total": 38.1
+ },
+ "ramps/2026-10-12_16-15-51": {
+  "first_stream": 4.8,
+  "first_stream_tilt": 56.8,
+  "commits": [
+   [
+    "H1",
+    2.1,
+    29.8
+   ],
+   [
+    "H5",
+    13.4,
+    99.9
+   ]
+  ],
+  "onset_estimate_deg": 38.8,
+  "received_estimate": 101.0,
+  "source_estimate": 0.0,
+  "final_probabilities": {
+   "H0": 0.016,
+   "H1": 0.0,
+   "H2": 0.017,
+   "H3": 0.0,
+   "H5": 0.967,
+   "H6": 0.0
+  },
+  "weighed": 86.0,
+  "camera_total": 83.7
+ }
+}

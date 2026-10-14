@@ -81,26 +81,47 @@ Below the onset the model has neither flow nor a gradient for the fill task to a
 and the transfer never starts.
 """
 
-REPOSE_ANGLE = math.radians(27.0)
+UNCALIBRATED_DRAIN = ModelPoint(
+    repose_angle=0.0, discharge_coefficient=0.2, outflow_rate_constant=0.8
+)
+"""
+The drain the 2026-10-12 demo pours ran with, before any calibration: it delivered about
+0.33 of a cup against 0.7 believed.
+"""
+
+FITTED_DRAIN = ModelPoint(
+    repose_angle=math.radians(27.0),
+    discharge_coefficient=0.2,
+    outflow_rate_constant=2.03,
+)
+"""
+Repose angle and drain rate fitted to the 2026-10-12 session on Tracy (five full-cup
+calibration ramps and five weighed demo pours); the discharge coefficient is not
+calibrated.
+
+The bulk stream starts later than this angle, at about 70-75 degrees, but stops at the
+fill it predicts; one angle cannot capture both. Open loop it tilts to about 106 degrees
+and empties the cup.
+"""
+
+DRAIN = FITTED_DRAIN
+"""
+The drain the controller and the hypothesis bank start from.
+"""
+
+REPOSE_ANGLE = DRAIN.repose_angle
 """
 Tilt past the geometric onset before the balls start to flow, in radians.
-
-Fitted with :attr:`OUTFLOW_RATE_CONSTANT` to the 2026-10-12 session on Tracy (five full-
-cup calibration ramps and five weighed demo pours). The bulk stream starts later than
-this, at about 70-75 degrees, but stops at the fill this angle predicts; one angle
-cannot capture both.
 """
 
-OUTFLOW_RATE_CONSTANT = 2.03
+OUTFLOW_RATE_CONSTANT = DRAIN.outflow_rate_constant
 """
-How fast the source drains per unit of head above the lip; fitted together with
-:attr:`REPOSE_ANGLE`.
+How fast the source drains per unit of head above the lip.
 """
 
-DISCHARGE_COEFFICIENT = 0.2
+DISCHARGE_COEFFICIENT = DRAIN.discharge_coefficient
 """
-Scales the exit speed and with it how far the stream is thrown; not yet calibrated for
-the styrofoam balls.
+Scales the exit speed and with it how far the stream is thrown.
 """
 
 USE_LIVE_BANK = False
@@ -108,7 +129,7 @@ USE_LIVE_BANK = False
 Let the hypothesis bank watch the pour through the camera and correct the controller's
 drain while it runs.
 
-Needs ``stream_detector_node.py`` running and calibrated.
+Needs ``pouring_perception.py`` running and calibrated.
 """
 
 LIVE_BANK_TRACE_FILE_NAME = "live_bank_trace.json"
@@ -377,11 +398,7 @@ if USE_LIVE_BANK:
             source=source_cup,
             receiver=receiving_cup,
             world=world,
-            built=ModelPoint(
-                repose_angle=REPOSE_ANGLE,
-                discharge_coefficient=DISCHARGE_COEFFICIENT,
-                outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
-            ),
+            built=DRAIN,
             settings=BankSettings(),
             camera=CameraCondition.POLE_COUNTING.model,
             grains_per_fill=GRAINS_PER_FILL,

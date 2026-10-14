@@ -1,0 +1,127 @@
+{
+ "15-35-41": {
+  "first_stream": [
+   5.5,
+   66
+  ],
+  "commits": [
+   [
+    "H1",
+    3.0,
+    19
+   ],
+   [
+    "H0",
+    13.5,
+    73
+   ]
+  ],
+  "active": "H0",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 1.0,
+  "counted": 33.1,
+  "received_estimate": 39.7,
+  "weighed": 35.8
+ },
+ "15-38-01": {
+  "first_stream": [
+   12.4,
+   69
+  ],
+  "commits": [
+   [
+    "H1",
+    9.8,
+    20
+   ],
+   [
+    "H2",
+    18.2,
+    73
+   ],
+   [
+    "H0",
+    20.0,
+    73
+   ]
+  ],
+  "active": "H0",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 1.0,
+  "counted": 30.3,
+  "received_estimate": 36.0,
+  "weighed": 33.2
+ },
+ "15-40-29": {
+  "first_stream": [
+   12.6,
+   55
+  ],
+  "commits": [
+   [
+    "H1",
+    10.8,
+    20
+   ],
+   [
+    "H0",
+    17.8,
+    74
+   ]
+  ],
+  "active": "H0",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 1.0,
+  "counted": 34.8,
+  "received_estimate": 42.3,
+  "weighed": 33.6
+ },
+ "15-42-23": {
+  "first_stream": [
+   12.8,
+   66
+  ],
+  "commits": [
+   [
+    "H1",
+    10.4,
+    20
+   ]
+  ],
+  "active": "H1",
+  "repose_correction_deg": 0.3,
+  "drain_scale": 1.0,
+  "discharge_scale": 1.0,
+  "counted": 33.4,
+  "received_estimate": 21.0,
+  "weighed": 32.8
+ },
+ "15-44-51": {
+  "first_stream": [
+   12.9,
+   62
+  ],
+  "commits": [
+   [
+    "H1",
+    10.6,
+    17
+   ],
+   [
+    "H2",
+    20.1,
+    73
+   ]
+  ],
+  "active": "H2",
+  "repose_correction_deg": 0.0,
+  "drain_scale": 1.0,
+  "discharge_scale": 2.15,
+  "counted": 38.7,
+  "received_estimate": 39.3,
+  "weighed": 34.7
+ }
+}
