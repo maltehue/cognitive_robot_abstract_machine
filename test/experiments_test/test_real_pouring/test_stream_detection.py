@@ -7,6 +7,7 @@ from experiments.real_pouring.stream_detection import (
     CameraView,
     ChangeSegmentation,
     GrainSegmentation,
+    HueBandSegmentation,
     OpeningRegion,
     StreamDetector,
     WhiteSegmentation,
@@ -231,5 +232,47 @@ def test_a_change_smaller_than_the_threshold_is_not_a_grain():
     barely_changed = tuple(30 + segmentation.minimum_difference // 3 for _ in range(3))
     reading = _detector(segmentation).observe(
         _image_with_square(*CENTRE, barely_changed), stamp=0.0
+    )
+    assert not reading.stream_seen
+
+
+# %% grains told apart by their hue
+
+
+CORN_HUES = HueBandSegmentation(
+    minimum_hue=8, maximum_hue=35, minimum_saturation=80, minimum_value=60
+)
+"""
+A hue band from orange-brown to yellow, as for corn kernels.
+"""
+
+DARK_TROUSERS = (35, 30, 30)
+"""
+Dark clothing passing behind the receiver, BGR.
+"""
+
+WHITE_SHOE = (235, 235, 235)
+"""
+A white shoe passing behind the receiver, BGR.
+"""
+
+GREY_SHADOW = (90, 90, 90)
+"""
+A shadow falling on the grey table behind the receiver, BGR.
+"""
+
+
+@pytest.mark.parametrize("colour", [YELLOW_KERNEL, BROWN_KERNEL])
+def test_a_grain_within_the_hue_band_is_counted(colour):
+    reading = _detector(CORN_HUES).observe(
+        _image_with_square(*CENTRE, colour), stamp=0.0
+    )
+    assert (reading.stream_seen, reading.counted_grains) == (True, pytest.approx(1.0))
+
+
+@pytest.mark.parametrize("colour", [DARK_TROUSERS, WHITE_SHOE, GREY_SHADOW])
+def test_a_change_outside_the_hue_band_is_not_a_grain(colour):
+    reading = _detector(CORN_HUES).observe(
+        _image_with_square(*CENTRE, colour), stamp=0.0
     )
     assert not reading.stream_seen

@@ -6,7 +6,7 @@ from experiments.real_pouring.poured_material import (
     PouredMaterial,
 )
 from experiments.real_pouring.stream_detection import (
-    ChangeSegmentation,
+    HueBandSegmentation,
     WhiteSegmentation,
 )
 from giskardpy.middleware.ros2.particle_weighing import FULL_CUP_MASS_GRAMS
@@ -16,8 +16,8 @@ def test_styrofoam_is_seen_by_its_whiteness():
     assert isinstance(PouredMaterial.STYROFOAM.segmentation, WhiteSegmentation)
 
 
-def test_corn_is_seen_by_how_it_changes_the_empty_view():
-    assert isinstance(PouredMaterial.CORN.segmentation, ChangeSegmentation)
+def test_corn_is_seen_by_its_hue():
+    assert isinstance(PouredMaterial.CORN.segmentation, HueBandSegmentation)
 
 
 def test_a_full_cup_of_styrofoam_weighs_what_the_scale_said():

@@ -215,6 +215,46 @@ class ChangeSegmentation(GrainSegmentation):
         return self.changed(image, background)
 
 
+@dataclass(frozen=True)
+class HueBandSegmentation(GrainSegmentation):
+    """
+    Grains are pixels that differ from what the same pixel showed before the pour and
+    whose colour lies in a band of hues, saturated and bright enough for the hue to mean
+    something: coloured grains such as corn kernels, which grey, black or white things
+    moving behind the receiver do not pass for.
+    """
+
+    minimum_hue: int = field(kw_only=True)
+    """
+    The lowest hue of a grain pixel, on OpenCV's scale from 0 to 179.
+    """
+
+    maximum_hue: int = field(kw_only=True)
+    """
+    The highest hue of a grain pixel, on OpenCV's scale from 0 to 179.
+    """
+
+    minimum_saturation: int = field(kw_only=True)
+    """
+    The least saturation a grain pixel has, from 0 to 255.
+    """
+
+    minimum_value: int = field(kw_only=True)
+    """
+    The least brightness a grain pixel has, from 0 to 255.
+    """
+
+    def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        return (
+            (hsv[..., 0] >= self.minimum_hue)
+            & (hsv[..., 0] <= self.maximum_hue)
+            & (hsv[..., 1] >= self.minimum_saturation)
+            & (hsv[..., 2] >= self.minimum_value)
+            & self.changed(image, background)
+        )
+
+
 # %% what the camera reports
 
 

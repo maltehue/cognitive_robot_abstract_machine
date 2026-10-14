@@ -12,8 +12,8 @@ from typing_extensions import Optional
 from giskardpy.middleware.ros2.particle_weighing import FULL_CUP_MASS_GRAMS
 
 from experiments.real_pouring.stream_detection import (
-    ChangeSegmentation,
     GrainSegmentation,
+    HueBandSegmentation,
     WhiteSegmentation,
 )
 
@@ -32,11 +32,26 @@ of them has been weighed. Weighed on 2026-10-14 as the received, spilled and lef
 masses of one pour: 50.24 + 4.77 + 306.82 g.
 """
 
-CORN_PIXEL_SECONDS_PER_GRAIN = 173.0
+CORN_PIXEL_SECONDS_PER_GRAIN = 9.5
 """
-How much changed area, times the time it shows, one of the live bank's grains of corn
-adds: the styrofoam value times 5.93, the factor between the camera's count and the
-scale in the first corn pour on 2026-10-14.
+How much corn-coloured changed area, times the time it shows, one of the live bank's
+grains of corn adds.
+
+.. warning:: Approximate: from the one weighed corn pour of 2026-10-14, 137 pixel-seconds
+    for 15.2 grains. The second corn pour, which emptied the cup into the receiver,
+    counted three times as much per grain, presumably kernels heaped up into the opening.
+    The value counts on the high side, so a wrong one stops a pour early.
+"""
+
+
+CORN_HUES = HueBandSegmentation(
+    minimum_hue=8, maximum_hue=35, minimum_saturation=80, minimum_value=60
+)
+"""
+The corn kernels' colours, orange-brown to yellow: chosen on the 2026-10-14 corn bags,
+where they keep the kernels and leave out the dark clothes and white shoe of someone
+passing behind the receiver. Dark, shaded kernels fall below the band; the count's
+calibration covers the share they make up.
 """
 
 
@@ -84,7 +99,7 @@ class PouredMaterial(StrEnum):
             case PouredMaterial.STYROFOAM:
                 return WhiteSegmentation()
             case PouredMaterial.CORN:
-                return ChangeSegmentation()
+                return CORN_HUES
 
     @property
     def pixel_seconds_per_grain(self) -> float:
