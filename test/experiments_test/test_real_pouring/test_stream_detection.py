@@ -5,6 +5,8 @@ from krrood.adapters.json_serializer import from_json, to_json
 
 from experiments.real_pouring.stream_detection import (
     CameraView,
+    ChangeSegmentation,
+    GrainSegmentation,
     OpeningRegion,
     StreamDetector,
     WhiteSegmentation,
@@ -77,11 +79,13 @@ What one grain adds while it shows for one frame.
 """
 
 
-def _detector() -> StreamDetector:
+def _detector(
+    segmentation: GrainSegmentation = WhiteSegmentation(),
+) -> StreamDetector:
     detector = StreamDetector(
         view=_looking_down(),
         opening=OPENING,
-        segmentation=WhiteSegmentation(),
+        segmentation=segmentation,
         pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
         frame_period=FRAME_PERIOD,
     )
@@ -177,3 +181,55 @@ def test_a_reading_survives_a_round_trip_through_json():
     )
     restored = from_json(to_json(reading))
     assert restored == reading
+
+
+# %% grains that are not white
+
+
+YELLOW_KERNEL = (60, 170, 220)
+"""
+A yellow corn kernel's colour, BGR: bright but strongly saturated.
+"""
+
+BROWN_KERNEL = (40, 90, 140)
+"""
+A brownish corn kernel's colour, BGR: saturated and darker than a white grain.
+"""
+
+
+def _image_with_square(row: int, column: int, colour: tuple[int, int, int]):
+    """
+    A dark image with one coloured square of a grain's size.
+    """
+    image = _dark_image()
+    image[row : row + GRAIN_SIZE, column : column + GRAIN_SIZE] = colour
+    return image
+
+
+CENTRE = (IMAGE_SIZE[0] // 2 - 3, IMAGE_SIZE[1] // 2 - 3)
+"""
+Where a grain's square sits so that it lies inside the opening.
+"""
+
+
+@pytest.mark.parametrize("colour", [YELLOW_KERNEL, BROWN_KERNEL])
+def test_whiteness_does_not_see_a_coloured_grain(colour):
+    reading = _detector().observe(_image_with_square(*CENTRE, colour), stamp=0.0)
+    assert not reading.stream_seen
+
+
+@pytest.mark.parametrize("colour", [YELLOW_KERNEL, BROWN_KERNEL])
+def test_a_change_from_the_empty_view_counts_a_grain_of_any_colour(colour):
+    reading = _detector(ChangeSegmentation()).observe(
+        _image_with_square(*CENTRE, colour), stamp=0.0
+    )
+    assert (reading.stream_seen, reading.counted_grains) == (True, pytest.approx(1.0))
+
+
+def test_a_change_smaller_than_the_threshold_is_not_a_grain():
+    segmentation = ChangeSegmentation()
+    barely_changed = tuple(30 + segmentation.minimum_difference // 3 for _ in range(3))
+    reading = _detector(segmentation).observe(
+        _image_with_square(*CENTRE, barely_changed), stamp=0.0
+    )
+    assert not reading.stream_seen

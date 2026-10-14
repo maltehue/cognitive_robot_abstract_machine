@@ -9,3 +9,8 @@ both new bags, then `live_pours.py <2026-10-12 folder> <open-loop bag> <live-ban
 Result: `live_pours.json` (tilt and believed fills of all seven demo pours, what the fitted drain
 predicts on each, the bank trace, and the 2026-10-12 fits redone with both new pours added);
 written up as section Q of the pouring model verification page.
+
+`segmentation_comparison.py <bag dir> ...` counts recorded pours with both grain segmentations
+(whiteness, and any change from the empty view as meant for corn) and writes
+`segmentation_comparison.json`.
+`replay_bank.py <bag dir> <uncalibrated|fitted>` replays a live-bank bag through the bank offline.

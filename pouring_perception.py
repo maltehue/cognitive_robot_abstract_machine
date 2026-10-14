@@ -6,6 +6,8 @@ Start it once, after the robot and camera drivers and next to ``tracy_velocity.p
 leave it running: ``demo_pouring_transfer.py`` with ``USE_LIVE_BANK = True`` asks it to
 learn the empty view before every pour, which also restarts its count, and its live bank
 reads what it publishes. No arguments are needed; the settings below are the defaults.
+Set :data:`MATERIAL` to what the demo pours, or start it with
+``--ros-args -p material:=corn``.
 
 The camera's pose and the receiver's opening come from the transforms, so the camera has
 to be calibrated. Readings go out as JSON on ``/stream_detector/reading``.
@@ -27,11 +29,11 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 
+from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.stream_detection import (
     CameraView,
     OpeningRegion,
     StreamDetector,
-    WhiteSegmentation,
 )
 from krrood.adapters.json_serializer import to_json
 
@@ -49,25 +51,15 @@ class Parameter(StrEnum):
     RECEIVER_FRAME = "receiver_frame"
     OPENING_HEIGHT = "opening_height"
     OPENING_RADIUS = "opening_radius"
-    PIXEL_SECONDS_PER_GRAIN = "pixel_seconds_per_grain"
+    MATERIAL = "material"
     FRAME_PERIOD = "frame_period"
     BACKGROUND_FRAMES = "background_frames"
 
 
-STYROFOAM_PIXEL_SECONDS_PER_GRAIN = 29.15
+MATERIAL = PouredMaterial.STYROFOAM
 """
-How much stream area, times the time it shows, one of the live bank's grains (a percent
-of a full Jeroen cup) adds for the styrofoam balls: 1100 pixel-seconds per gram in the
-five demo pours of 2026-10-12, times 2.65 g per full cup over 100 grains.
-
-Another substance needs its own value: the demo prints the factor to correct it by after
-every weighed pour.
-"""
-
-PIXEL_SECONDS_PER_GRAIN = STYROFOAM_PIXEL_SECONDS_PER_GRAIN
-"""
-The count calibration in use: change it when pouring another substance, by the factor
-the demo prints after a weighed pour.
+What the demo pours, which sets how grains are told from the empty view and how much
+image area one counts for.
 """
 
 DEFAULTS = {
@@ -77,7 +69,7 @@ DEFAULTS = {
     Parameter.RECEIVER_FRAME: "receiving_cup",
     Parameter.OPENING_HEIGHT: 0.16,
     Parameter.OPENING_RADIUS: 0.035,
-    Parameter.PIXEL_SECONDS_PER_GRAIN: PIXEL_SECONDS_PER_GRAIN,
+    Parameter.MATERIAL: MATERIAL.value,
     Parameter.FRAME_PERIOD: 1 / 30,
     Parameter.BACKGROUND_FRAMES: 15,
 }
@@ -191,6 +183,7 @@ class StreamDetectorNode(Node):
         opening_centre = world_T_receiver[:3, 3] + world_T_receiver[
             :3, 2
         ] * self._value(Parameter.OPENING_HEIGHT)
+        material = PouredMaterial(self._value(Parameter.MATERIAL))
         detector = StreamDetector(
             view=CameraView(
                 intrinsics=numpy.array(self.camera_info.k).reshape(3, 3),
@@ -199,15 +192,16 @@ class StreamDetectorNode(Node):
             opening=OpeningRegion(
                 centre=opening_centre, radius=self._value(Parameter.OPENING_RADIUS)
             ),
-            segmentation=WhiteSegmentation(),
-            pixel_seconds_per_grain=self._value(Parameter.PIXEL_SECONDS_PER_GRAIN),
+            segmentation=material.segmentation,
+            pixel_seconds_per_grain=material.pixel_seconds_per_grain,
             frame_period=self._value(Parameter.FRAME_PERIOD),
         )
         detector.learn_background(self.background)
         self.detector = detector
         self.background = []
         self.get_logger().info(
-            f"watching the opening at {numpy.round(opening_centre, 3).tolist()}"
+            f"watching the opening at {numpy.round(opening_centre, 3).tolist()} "
+            f"for {material}"
         )
 
 

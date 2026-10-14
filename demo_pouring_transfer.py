@@ -6,7 +6,6 @@ from pathlib import Path
 
 
 from giskardpy.middleware.ros2.particle_weighing import (
-    FULL_CUP_MASS_GRAMS,
     WEIGHED_PARTICLES_FILE_NAME,
     WeighedParticles,
 )
@@ -18,6 +17,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
 from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank
 from experiments.real_pouring.live_bank_listener import LiveBankListener
+from experiments.real_pouring.poured_material import PouredMaterial
 from giskardpy.motion_statechart.data_types import DefaultWeights
 from krrood.adapters.json_serializer import to_json
 from giskardpy.motion_statechart.goals.templates import Parallel
@@ -124,6 +124,17 @@ DISCHARGE_COEFFICIENT = DRAIN.discharge_coefficient
 Scales the exit speed and with it how far the stream is thrown.
 """
 
+MATERIAL = PouredMaterial.STYROFOAM
+"""
+What the source cup is filled with; ``pouring_perception.py`` has to watch for the same.
+"""
+
+FULL_CUP_MASS_GRAMS = MATERIAL.full_cup_mass_grams
+"""
+What a full cup of the material weighs, read before the robot moves so a material nobody
+weighed stops the demo here rather than after the pour.
+"""
+
 POURING_VELOCITY = 0.03
 """
 How fast the transfer may raise the predicted fill of the receiver, in fill per second.
@@ -142,7 +153,7 @@ USE_LIVE_BANK = False
 Let the hypothesis bank watch the pour through the camera and correct the controller's
 drain while it runs.
 
-Needs ``pouring_perception.py`` running and calibrated.
+Needs ``pouring_perception.py`` running for :attr:`MATERIAL`.
 """
 
 LIVE_BANK_TRACE_FILE_NAME = "live_bank_trace.json"
@@ -456,7 +467,7 @@ move_left_tool_to(giskard, upright_pose)
 recording.stop()
 
 # ----- Record what the pour actually delivered and spilled, measured on a scale -----
-weighed_particles = WeighedParticles.ask()
+weighed_particles = WeighedParticles.ask(full_cup_mass_grams=FULL_CUP_MASS_GRAMS)
 recording.add_file(WEIGHED_PARTICLES_FILE_NAME, weighed_particles.as_json_text())
 if live_bank_listener is not None:
     weighed_grains = (
@@ -465,8 +476,8 @@ if live_bank_listener is not None:
         * GRAINS_PER_FILL
     )
     print(
-        "Camera count against the scale: multiply PIXEL_SECONDS_PER_GRAIN in "
-        "pouring_perception.py by "
+        "Camera count against the scale: multiply the pixel seconds per grain of "
+        f"{MATERIAL} in experiments/real_pouring/poured_material.py by "
         f"{live_bank_listener.bank.count_calibration_factor(weighed_grains):.2f} "
         "to make them agree."
     )

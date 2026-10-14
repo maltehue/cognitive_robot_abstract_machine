@@ -12,6 +12,7 @@ has to be calibrated; nothing here depends on ROS.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing_extensions import Any, Dict, List, Optional, Tuple
 
@@ -133,11 +134,54 @@ class OpeningRegion:
 # %% telling grains from what stood there
 
 
+MINIMUM_BACKGROUND_DIFFERENCE = 80
+"""
+How far a grain pixel's colour has to differ from what the pixel showed before the pour,
+summed over the three channels, from 0 to 765.
+"""
+
+
 @dataclass(frozen=True)
-class WhiteSegmentation:
+class GrainSegmentation(ABC):
     """
-    Picks out pixels showing grains: bright, unsaturated, and different from what the
-    same pixel showed before the pour.
+    Picks out the pixels of an image that show grains.
+    """
+
+    minimum_difference: int = MINIMUM_BACKGROUND_DIFFERENCE
+    """
+    How far a grain pixel's colour has to differ from the background's, summed over the
+    three channels.
+    """
+
+    def changed(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :param background: What the same view showed before the pour, BGR.
+        :return: Which pixels differ from the background by at least
+            :attr:`minimum_difference`.
+        """
+        return (
+            numpy.abs(image.astype(numpy.int16) - background.astype(numpy.int16)).sum(
+                axis=2
+            )
+            > self.minimum_difference
+        )
+
+    @abstractmethod
+    def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :param background: What the same view showed before the pour, BGR.
+        :return: Which pixels show grains.
+        """
+
+
+@dataclass(frozen=True)
+class WhiteSegmentation(GrainSegmentation):
+    """
+    Grains are bright, unsaturated pixels that differ from what the same pixel showed
+    before the pour: white grains such as styrofoam balls or rice, which a shadow or a
+    coloured object passing by does not pass for.
     """
 
     minimum_value: int = 150
@@ -150,30 +194,25 @@ class WhiteSegmentation:
     The most saturation a grain pixel has, from 0 to 255; white grains have little.
     """
 
-    minimum_difference: int = 80
-    """
-    How far a grain pixel's colour has to differ from the background's, summed over the
-    three channels.
-    """
-
     def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
-        """
-        :param image: A colour image, BGR.
-        :param background: What the same view showed before the pour, BGR.
-        :return: Which pixels show grains.
-        """
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        changed = (
-            numpy.abs(image.astype(numpy.int16) - background.astype(numpy.int16)).sum(
-                axis=2
-            )
-            > self.minimum_difference
-        )
         return (
             (hsv[..., 2] > self.minimum_value)
             & (hsv[..., 1] < self.maximum_saturation)
-            & changed
+            & self.changed(image, background)
         )
+
+
+@dataclass(frozen=True)
+class ChangeSegmentation(GrainSegmentation):
+    """
+    Grains are pixels that differ from what the same pixel showed before the pour,
+    whatever their colour: for grains such as corn kernels, yellow to brown, that no
+    single colour picks out. Anything else moving through the opening counts as well.
+    """
+
+    def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+        return self.changed(image, background)
 
 
 # %% what the camera reports
@@ -251,7 +290,7 @@ class StreamDetector:
     The receiver's opening.
     """
 
-    segmentation: WhiteSegmentation
+    segmentation: GrainSegmentation
     """
     How grain pixels are picked out.
     """

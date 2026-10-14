@@ -1,0 +1,70 @@
+{
+ "2026-10-14_15-56-28": {
+  "white": {
+   "seen": 112,
+   "frames": 391,
+   "first_seen": 4.03,
+   "before_white_first": null,
+   "counted": 90.3
+  },
+  "change": {
+   "seen": 119,
+   "frames": 391,
+   "first_seen": 1.73,
+   "before_white_first": 1.1,
+   "counted": 118.2
+  },
+  "weighed_out": 83.0
+ },
+ "2026-10-14_14-49-47": {
+  "white": {
+   "seen": 133,
+   "frames": 541,
+   "first_seen": 3.8,
+   "before_white_first": null,
+   "counted": 107.8
+  },
+  "change": {
+   "seen": 138,
+   "frames": 541,
+   "first_seen": 3.8,
+   "before_white_first": 0.6,
+   "counted": 146.2
+  },
+  "weighed_out": 93.6
+ },
+ "2026-10-14_13-44-40": {
+  "white": {
+   "seen": 136,
+   "frames": 420,
+   "first_seen": 4.73,
+   "before_white_first": null,
+   "counted": 79.7
+  },
+  "change": {
+   "seen": 139,
+   "frames": 420,
+   "first_seen": 4.73,
+   "before_white_first": 0.4,
+   "counted": 105.9
+  },
+  "weighed_out": 68.3
+ },
+ "2026-10-14_13-52-37": {
+  "white": {
+   "seen": 567,
+   "frames": 1186,
+   "first_seen": 19.73,
+   "before_white_first": null,
+   "counted": 174.5
+  },
+  "change": {
+   "seen": 569,
+   "frames": 1186,
+   "first_seen": 19.73,
+   "before_white_first": 0.8,
+   "counted": 245.3
+  },
+  "weighed_out": 99.2
+ }
+}

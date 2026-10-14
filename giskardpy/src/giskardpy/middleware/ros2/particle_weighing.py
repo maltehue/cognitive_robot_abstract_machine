@@ -71,6 +71,11 @@ class WeighedParticlesJSONKey(StrEnum):
     The fill level the received mass amounts to.
     """
 
+    FULL_CUP_MASS_GRAMS = "full_cup_mass_grams"
+    """
+    The mass of a full cup the fill level is measured against.
+    """
+
 
 # %% the measurements
 
@@ -94,26 +99,37 @@ class WeighedParticles(SubclassJSONSerializer):
     Mass of the particles that landed outside the receiving cup, in grams.
     """
 
+    full_cup_mass_grams: float = FULL_CUP_MASS_GRAMS
+    """
+    Mass of the material poured when it fills the cup, in grams.
+    """
+
     @property
     def received_fill_level(self) -> float:
         """
         :return: The received mass as a fraction of a full cup, comparable to the fill
             level the pour aimed at.
         """
-        return self.received_mass_grams / FULL_CUP_MASS_GRAMS
+        return self.received_mass_grams / self.full_cup_mass_grams
 
     @classmethod
-    def ask(cls, answer_prompt: Callable[[str], str] = input) -> Self:
+    def ask(
+        cls,
+        answer_prompt: Callable[[str], str] = input,
+        full_cup_mass_grams: float = FULL_CUP_MASS_GRAMS,
+    ) -> Self:
         """
         Ask for both masses on the scale.
 
         :param answer_prompt: Puts a question to the experimenter and returns the
             answer.
+        :param full_cup_mass_grams: Mass of the material poured when it fills the cup.
         :return: The measurements given.
         """
         return cls(
             received_mass_grams=ask_for_mass(answer_prompt, RECEIVED_MASS_PROMPT),
             spilled_mass_grams=ask_for_mass(answer_prompt, SPILLED_MASS_PROMPT),
+            full_cup_mass_grams=full_cup_mass_grams,
         )
 
     def as_json_text(self) -> str:
@@ -128,6 +144,7 @@ class WeighedParticles(SubclassJSONSerializer):
             WeighedParticlesJSONKey.RECEIVED_MASS_GRAMS: self.received_mass_grams,
             WeighedParticlesJSONKey.SPILLED_MASS_GRAMS: self.spilled_mass_grams,
             WeighedParticlesJSONKey.RECEIVED_FILL_LEVEL: self.received_fill_level,
+            WeighedParticlesJSONKey.FULL_CUP_MASS_GRAMS: self.full_cup_mass_grams,
         }
 
     @classmethod
@@ -135,6 +152,9 @@ class WeighedParticles(SubclassJSONSerializer):
         return cls(
             received_mass_grams=data[WeighedParticlesJSONKey.RECEIVED_MASS_GRAMS],
             spilled_mass_grams=data[WeighedParticlesJSONKey.SPILLED_MASS_GRAMS],
+            full_cup_mass_grams=data.get(
+                WeighedParticlesJSONKey.FULL_CUP_MASS_GRAMS, FULL_CUP_MASS_GRAMS
+            ),
         )
 
 
