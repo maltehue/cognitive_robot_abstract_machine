@@ -32,15 +32,15 @@ of them has been weighed. Weighed on 2026-10-14 as the received, spilled and lef
 masses of one pour: 50.24 + 4.77 + 306.82 g.
 """
 
-CORN_PIXEL_SECONDS_PER_GRAIN = 9.5
+CORN_PIXEL_SECONDS_PER_GRAIN = 34.0
 """
 How much corn-coloured changed area, times the time it shows, one of the live bank's
 grains of corn adds.
 
-.. warning:: Approximate: from the one weighed corn pour of 2026-10-14, 137 pixel-seconds
-    for 15.2 grains. The second corn pour, which emptied the cup into the receiver,
-    counted three times as much per grain, presumably kernels heaped up into the opening.
-    The value counts on the high side, so a wrong one stops a pour early.
+From the corn pour of 2026-10-14 17:50, whose count at 9.5 was 269.3 grains where 79.5
+left the cup: 33.9. The pour that emptied the cup before it puts it at 29 or more; the
+first corn pour, with someone walking behind the receiver and only 15 grains poured, at
+9.5. A value too high counts too few grains and lets a pour run on.
 """
 
 
