@@ -686,6 +686,33 @@ class TestCurrentOutflowVelocity:
         )
         assert cup.fill_equation.discharge_coefficient == 0.5
 
+    def test_initialize_fill_level_threads_repose_angle(self):
+        """
+        The repose angle passed to ``initialize_fill_level`` reaches the drain the fill
+        connection integrates.
+        """
+        world = World()
+        with world.modify_world():
+            world.add_body(Body(name=PrefixedName("map")))
+        with world.modify_world():
+            cup = _TiltingContainer.create_with_new_body_in_world(
+                name="cup",
+                world=world,
+                parent_connection_specification=_TiltingContainer.parent_connection_specification(
+                    axis=Vector3(0, 1, 0),
+                    dof_limits=DegreeOfFreedomLimits(
+                        lower=DerivativeMap(position=-2.0, velocity=-1.0),
+                        upper=DerivativeMap(position=2.0, velocity=1.0),
+                    ),
+                ),
+                scale=Scale(0.1, 0.1, 0.2),
+            )
+        repose_angle = 0.4
+        cup.initialize_fill_level(
+            world=world, initial_fill=1.0, repose_angle=repose_angle
+        )
+        assert cup.fill_connection.outflow_equation.repose_angle == repose_angle
+
 
 # %% liquid exit point
 

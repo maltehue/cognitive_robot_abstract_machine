@@ -273,6 +273,7 @@ else:
         initial_fill=START_FILL,
         outflow_rate_constant=OUTFLOW_RATE_CONSTANT,
         discharge_coefficient=DISCHARGE_COEFFICIENT,
+        repose_angle=REPOSE_ANGLE,
     )
 
     # ----- Place the receiving cup on the table -----
@@ -307,11 +308,10 @@ else:
             receiving_cup, source_cup, world, _learned_head_reference(source_cup)
         )
     else:
-        # ``initialize_fill_level`` builds its drain without an onset angle; replacing it
-        # here gives the first run the same drain as every later one.
-        receiving_cup.recouple_outflow_from(
-            source=source_cup, world=world, fill_equation=_analytic_drain(source_cup)
-        )
+        # The source already has its calibrated drain: Giskard integrates the drain a cup
+        # was created with until a pouring task rebuilds the coupling, so swapping it in
+        # here would leave the tilt to the pour start draining by the old one.
+        receiving_cup.receive_outflow_from(source=source_cup, world=world)
 
 time.sleep(0.2)
 

@@ -746,16 +746,16 @@ class WorldSynchronizer(Synchronizer, ModelChangeCallback, StateChangeCallback):
         """
         if self._world.world_is_being_modified:
             raise ApplyMissedMessagesWhileWorldIsBeingModifiedError()
-        with self._missed_message_lock:
-            pending_messages = self.missed_messages[:count]
-            if not pending_messages:
-                return
-            # Mutate in place instead of rebinding: the subscription thread appends to
-            # the same list and its message must survive the drain.
-            del self.missed_messages[: len(pending_messages)]
-        # Hold the world lock across the whole batch so the buffered messages apply atomically: a
-        # concurrent modify_world on another thread serializes behind it instead of interleaving.
+        # Take the world lock before leaving the buffer: an incoming message resolves its
+        # references against the buffer and the world under this lock, so the entities of
+        # the batch must not be in neither while it waits. Held across the whole batch, it
+        # also lets a concurrent modify_world serialize behind it instead of interleaving.
         with self._world._world_lock:
+            with self._missed_message_lock:
+                pending_messages = self.missed_messages[:count]
+                # Mutate in place instead of rebinding: the subscription thread appends
+                # to the same list and its message must survive the drain.
+                del self.missed_messages[: len(pending_messages)]
             for message in pending_messages:
                 self.apply_message(message)
 

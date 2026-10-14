@@ -1574,6 +1574,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         initial_fill: float = 1.0,
         outflow_rate_constant: float = 1.0,
         discharge_coefficient: float = DEFAULT_DISCHARGE_COEFFICIENT,
+        repose_angle: float = 0.0,
     ) -> None:
         """
         Create the virtual fill-level DOF, attach it to the world, and wire up the pouring equation.
@@ -1584,6 +1585,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         :param initial_fill: Starting fill level in [0, 1].
         :param outflow_rate_constant: Outflow rate constant for the articulated pouring equation.
         :param discharge_coefficient: Scales the Torricelli exit speed to a realistic pour range.
+        :param repose_angle: Tilt past the geometric onset before the contents flow, in radians.
         :raises FillLevelAlreadyInitializedError: if this container's fill level is already initialized.
         """
         if self.fill_connection is not None:
@@ -1591,6 +1593,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         fill_equation = self.create_pouring_equation(
             world, outflow_rate_constant, discharge_coefficient
         )
+        fill_equation.repose_angle = repose_angle
         phantom = Body(name=PrefixedName(f"{self.root.name.name}_fill_level_phantom"))
         with world.modify_world():
             world.add_body(phantom)

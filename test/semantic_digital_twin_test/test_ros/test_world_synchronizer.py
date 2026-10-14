@@ -1946,6 +1946,58 @@ def test_connection_referencing_a_still_buffered_parent_body_resolves(rclpy_node
     world_synchronizer_2.close()
 
 
+def test_an_update_arriving_while_the_buffer_is_being_applied_resolves_its_references(
+    rclpy_node,
+):
+    """
+    While a deferring synchronizer applies its buffer, a message that refers to an entity
+    one of the buffered messages adds must still resolve: the entity has to stay
+    findable, in the buffer or in the world, for the whole time it is being applied.
+    """
+    world_1 = World(name="applying_buffer_w1")
+    world_2 = World(name="applying_buffer_w2")
+    world_synchronizer_1 = WorldSynchronizer(node=rclpy_node, _world=world_1)
+    world_synchronizer_2 = WorldSynchronizer(
+        node=rclpy_node, _world=world_2, defer_incoming_updates=True
+    )
+    try:
+        parent_body = Body(name=PrefixedName("applying_buffer_parent"))
+        with world_1.modify_world():
+            world_1.add_body(parent_body)
+        child_body = Body(name=PrefixedName("applying_buffer_child"))
+        with world_1.modify_world():
+            world_1.add_body(child_body)
+            connection = FixedConnection.create_with_dofs(
+                world=world_1,
+                parent=parent_body,
+                child=child_body,
+                name=PrefixedName("applying_buffer_connection"),
+            )
+            world_1.add_connection(connection)
+        time.sleep(0.3)
+        assert len(world_synchronizer_2.missed_messages) == 2
+        referencing_message = world_synchronizer_2.missed_messages.pop()
+
+        with world_2._world_lock:
+            applying = threading.Thread(
+                target=world_synchronizer_2.apply_missed_messages,
+                name="applying-buffer",
+            )
+            applying.start()
+            time.sleep(0.2)
+            world_synchronizer_2.subscription_callback(
+                std_msgs.msg.String(data=json.dumps(to_json(referencing_message)))
+            )
+        applying.join(timeout=5.0)
+        world_synchronizer_2.apply_missed_messages()
+
+        synced_connection = world_2.get_connection_by_name(connection.name)
+        assert synced_connection.parent.name == parent_body.name
+    finally:
+        world_synchronizer_1.close()
+        world_synchronizer_2.close()
+
+
 def test_a_fill_level_reaches_the_other_world_with_its_drain_corrections(rclpy_node):
     """
     A container that gets a fill level in one world arrives in the other with its fill
@@ -1994,6 +2046,52 @@ def test_a_fill_level_reaches_the_other_world_with_its_drain_corrections(rclpy_n
 
     world_synchronizer_1.close()
     world_synchronizer_2.close()
+
+
+def test_a_fill_level_reaches_the_other_world_with_its_repose_angle(rclpy_node):
+    """
+    The drain a container gets its fill level with is the one the other world
+    integrates, so a calibrated onset holds there before any transfer is built.
+    """
+    world_1 = World(name="repose_angle_w1")
+    world_2 = World(name="repose_angle_w2")
+    world_synchronizer_1 = WorldSynchronizer(node=rclpy_node, _world=world_1)
+    world_synchronizer_2 = WorldSynchronizer(node=rclpy_node, _world=world_2)
+    try:
+        with world_1.modify_world():
+            world_1.add_body(Body(name=PrefixedName("repose_angle_map")))
+        cup_body = Body(
+            name=PrefixedName("repose_angle_cup"),
+            collision=ShapeCollection(
+                [
+                    Box(
+                        origin=HomogeneousTransformationMatrix(),
+                        scale=Scale(0.07, 0.07, 0.16),
+                    )
+                ]
+            ),
+        )
+        with world_1.modify_world():
+            world_1.add_body(cup_body)
+            world_1.add_connection(FixedConnection(parent=world_1.root, child=cup_body))
+        cup = HasFillLevel(name=PrefixedName("repose_angle_cup"), root=cup_body)
+        with world_1.modify_world():
+            world_1.add_semantic_annotation(cup)
+        time.sleep(0.2)
+        repose_angle = 0.47
+        cup.initialize_fill_level(
+            world=world_1, initial_fill=1.0, repose_angle=repose_angle
+        )
+        time.sleep(0.5)
+
+        synced = world_2.get_semantic_annotation_by_name("repose_angle_cup")
+        synced_connection = world_2.get_connection(
+            synced.fill_connection.parent, synced.fill_connection.child
+        )
+        assert synced_connection.outflow_equation.repose_angle == repose_angle
+    finally:
+        world_synchronizer_1.close()
+        world_synchronizer_2.close()
 
 
 def test_a_coupled_transfer_reaches_a_world_that_defers_its_updates(rclpy_node):
