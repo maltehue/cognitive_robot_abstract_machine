@@ -1,0 +1,11 @@
+source,perturbation,mode,n,within,misplaced,spilled,peak_tilt,duration,endings
+cup,nominal,concept,8,8,4.3 (1.6-5.6),0.0,85.3,14.2,reached_goal 8
+cup,nominal,tracked,8,8,3.5 (0.4-6.6),0.0,85.9,13.1,reached_goal 8
+cup,rho x0.5,concept,8,8,3.5 (0.6-6.6),0.0,84.5,22.7,reached_goal 8
+cup,rho x0.5,tracked,8,7,3.9 (0.4-8.6),0.0,83.5,23.1,reached_goal 8
+cup,rho x1.25,concept,8,5,6.2 (0.6-23.4),0.2,86.8,8.5,reached_goal 8
+cup,rho x1.25,tracked,8,7,4.4 (1.6-8.6),0.4,84.0,15.1,reached_goal 8
+spouted_cup,nominal,concept,8,8,3.9 (1.4-6.6),0.5,54.7,3.9,reached_goal 8
+spouted_cup,nominal,tracked,8,6,5.2 (0.4-10.6),1.1,50.0,16.2,"reached_goal 7, timed_out 1"
+spouted_cup,rho x0.5,concept,8,8,3.4 (0.6-5.6),0.0,52.1,17.6,"reached_goal 7, timed_out 1"
+spouted_cup,rho x0.5,tracked,8,7,4.2 (2.4-8.6),0.0,52.3,13.8,reached_goal 8

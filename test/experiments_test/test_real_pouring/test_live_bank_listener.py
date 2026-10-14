@@ -11,8 +11,10 @@ from experiments.real_pouring.live_bank_listener import (
     DetectorInterface,
     DetectorNotRunningError,
     LiveBankListener,
+    MaterialMismatchError,
     READING_PERIOD,
 )
+from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.stream_detection import StreamReading
 from krrood.adapters.json_serializer import to_json
 
@@ -72,3 +74,56 @@ def test_starting_without_a_detector_says_so(rclpy_node):
     )
     with pytest.raises(DetectorNotRunningError):
         listener.start()
+
+
+# %% the detector watching for the material poured
+
+
+def _detector_reporting(rclpy_node, material: PouredMaterial) -> None:
+    """
+    A detector whose background service reports which material it counts, and which
+    sends readings once asked to learn the background.
+    """
+
+    def learn_background(request, response):
+        response.success = True
+        response.message = material.value
+        return response
+
+    rclpy_node.create_service(
+        Trigger, DetectorInterface.LEARN_BACKGROUND_SERVICE.value, learn_background
+    )
+    publisher = rclpy_node.create_publisher(
+        String, DetectorInterface.READING_TOPIC.value, 10
+    )
+
+    def publish_readings():
+        time.sleep(0.3)
+        reading = StreamReading(
+            stamp=0.0, stream_seen=False, counted_grains=0.0, crossing=None
+        )
+        publisher.publish(String(data=json.dumps(to_json(reading))))
+
+    threading.Thread(target=publish_readings).start()
+
+
+def test_a_detector_counting_another_material_is_refused(rclpy_node):
+    _detector_reporting(rclpy_node, PouredMaterial.CORN)
+    listener = LiveBankListener(
+        node=rclpy_node,
+        bank=live_bank_tilted(tilt=1.0),
+        material=PouredMaterial.STYROFOAM,
+    )
+    with pytest.raises(MaterialMismatchError) as error_info:
+        listener.start()
+    assert error_info.value.reported == PouredMaterial.CORN.value
+
+
+def test_a_detector_counting_the_material_poured_is_listened_to(rclpy_node):
+    _detector_reporting(rclpy_node, PouredMaterial.CORN)
+    listener = LiveBankListener(
+        node=rclpy_node, bank=live_bank_tilted(tilt=1.0), material=PouredMaterial.CORN
+    )
+    listener.start()
+    listener.stop()
+    assert listener.bank.trace

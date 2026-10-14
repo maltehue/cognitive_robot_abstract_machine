@@ -7,9 +7,12 @@ The controller is not in the loop, so the cup follows the recorded tilt whatever
 bank decides; what the replay shows is which hypothesis the bank runs on and what it
 tells the controller the receiver holds, reading by reading.
 
-Usage: python replay_bank.py <bag dir> <uncalibrated|fitted> The bag dir needs
-extracted.pkl and kin.pkl (see README.md). Prints one line per reading and writes
-replay_<bag>_<drain>.json next to this script.
+Usage: python replay_bank.py <bag dir> <uncalibrated|fitted> [<styrofoam|corn>
+[<concept|tracked>]] The bag dir needs extracted.pkl and kin.pkl (see README.md). The
+material sets how the camera counts (styrofoam by default); ``tracked`` lets every
+hypothesis estimate the onset (``BankSettings.tracks_onset``) instead of only the onset
+hypotheses. Prints one line per reading and writes
+replay_<bag>_<drain>[_<material>_<onset>].json next to this script.
 """
 
 import json, math, pickle, sys
@@ -17,15 +20,16 @@ from pathlib import Path
 import cv2, numpy
 from experiments.pouring_model_verification.hypothesis_bank import (
     BankSettings,
+    FreeParameter,
     ModelPoint,
 )
 from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank
+from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.stream_detection import (
     CameraView,
     OpeningRegion,
     StreamDetector,
-    WhiteSegmentation,
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
@@ -47,10 +51,15 @@ DRAINS = {
         outflow_rate_constant=2.03,
     ),
 }
-PIXEL_SECONDS_PER_GRAIN = 29.15  # the node's styrofoam default
 GRAINS, GOAL_GRAINS, TOLERANCE_GRAINS = 100.0, 70.0, 5.0
 bag, drain_name = Path(sys.argv[1]), sys.argv[2]
 drain = DRAINS[drain_name]
+material = (
+    PouredMaterial(sys.argv[3]) if len(sys.argv) > 3 else PouredMaterial.STYROFOAM
+)
+onset_mode = sys.argv[4] if len(sys.argv) > 4 else "concept"
+settings = BankSettings(tracks_onset=onset_mode == "tracked")
+suffix = f"_{material}_{onset_mode}" if len(sys.argv) > 3 else ""
 
 
 def cup(world, name):
@@ -118,8 +127,8 @@ cam_T_map[:3, 3] = r0["map_to_cam_p"]
 detector = StreamDetector(
     view=CameraView(intrinsics=k["K"], world_T_camera=numpy.linalg.inv(cam_T_map)),
     opening=OpeningRegion(centre=rows[0]["receiver_p"] + [0, 0, 0.16], radius=0.035),
-    segmentation=WhiteSegmentation(),
-    pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+    segmentation=material.segmentation,
+    pixel_seconds_per_grain=material.pixel_seconds_per_grain,
     frame_period=1 / 30,
 )
 start = trace[0]["time"]
@@ -129,7 +138,7 @@ bank = LiveBank.for_cups(
     receiver=receiver,
     world=world,
     built=drain,
-    settings=BankSettings(),
+    settings=settings,
     camera=CameraCondition.POLE_COUNTING.model,
     grains_per_fill=GRAINS,
     loaded_grains=GRAINS,
@@ -149,6 +158,8 @@ for i, im in enumerate(o["images"]):
     place(world, source_joint, r["cup_p"], r["cup_R"])
     step = bank.observe(seen)
     told = step.received_grains + bank.coupling.margin
+    active_filter = bank.coupling.bank.filters[bank.coupling.active]
+    estimates_onset = FreeParameter.REPOSE_ANGLE in active_filter.free
     if stop is None and told >= GOAL_GRAINS - TOLERANCE_GRAINS:
         stop = dict(
             time=round(seen.stamp, 2),
@@ -167,6 +178,20 @@ for i, im in enumerate(o["images"]):
             repose_correction=round(
                 math.degrees(step.corrections.repose_correction), 1
             ),
+            stream_seen=seen.stream_seen,
+            controller_repose=round(
+                math.degrees(drain.repose_angle + step.corrections.repose_correction), 1
+            ),
+            active_repose_mean=(
+                round(math.degrees(active_filter.mean().repose_angle), 1)
+                if estimates_onset
+                else None
+            ),
+            active_repose_spread=(
+                round(math.degrees(active_filter.spread(FreeParameter.REPOSE_ANGLE)), 1)
+                if estimates_onset
+                else None
+            ),
             probabilities={h: round(p, 2) for h, p in step.probabilities.items()},
         )
     )
@@ -178,5 +203,5 @@ for i, im in enumerate(o["images"]):
 print("would stop at", stop)
 json.dump(
     dict(stop=stop, steps=steps),
-    open(Path(__file__).parent / f"replay_{bag.name}_{drain_name}.json", "w"),
+    open(Path(__file__).parent / f"replay_{bag.name}_{drain_name}{suffix}.json", "w"),
 )

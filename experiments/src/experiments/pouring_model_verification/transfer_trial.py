@@ -2961,6 +2961,7 @@ class TransferTrial:
                 self.scene.source,
                 self.forces_second_lip,
                 outflow_capacity=self.bank.outflow_capacity,
+                tracks_onset=self.bank.tracks_onset,
             ),
             geometry=self._drain_geometry(scene, contents),
             base=base,

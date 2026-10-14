@@ -150,6 +150,27 @@ class NonPositiveClearanceError(NodeInitializationError):
 
 
 @dataclass
+class NonPositiveTiltRateError(NodeInitializationError):
+    """
+    Raised when a tilt pacing task is given a rate that could not turn the cup.
+    """
+
+    rate: float
+    """
+    The rejected rate, in radians per second.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f'every rate of node "{self.node.name}" must be positive to turn the cup, '
+            f"got {self.rate}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Choose rates above zero."
+
+
+@dataclass
 class EmptyMotionStatechartError(MotionStatechartError):
     """
     Raised when a motion statechart without any node is executed.

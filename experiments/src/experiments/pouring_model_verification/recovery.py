@@ -43,7 +43,10 @@ from semantic_digital_twin.world_description.connections import DrainCorrection
 
 
 def hypotheses_for(
-    source: SourceCup, forces_second_lip: bool = False, outflow_capacity: bool = False
+    source: SourceCup,
+    forces_second_lip: bool = False,
+    outflow_capacity: bool = False,
+    tracks_onset: bool = False,
 ) -> Tuple[Hypothesis, ...]:
     """
     :param source: The cup poured from.
@@ -51,6 +54,8 @@ def hypotheses_for(
         a slot, as a negative control.
     :param outflow_capacity: Whether the twin has the concept of how much can pass the
         lip.
+    :param tracks_onset: Whether every hypothesis estimates the onset, which leaves
+        nothing to the hypotheses that only add the onset to another.
     :return: The hypotheses built from the concepts the twin has for that cup: the
         second lip only where the cup has a slot edge.
     """
@@ -60,6 +65,8 @@ def hypotheses_for(
         left_out.add(Hypothesis.SECOND_LIP)
     if not outflow_capacity:
         left_out.add(Hypothesis.OUTFLOW_CAPACITY)
+    if tracks_onset:
+        left_out |= {Hypothesis.ONSET, Hypothesis.COUPLED}
     return tuple(hypothesis for hypothesis in Hypothesis if hypothesis not in left_out)
 
 
@@ -298,7 +305,9 @@ class BankCoupling:
             return self.bank.base
         active = self.bank.filters[self.active]
         if not self.active.revises and not (
-            active.adapts_onset or active.adapts_drain_rate
+            active.adapts_onset
+            or active.adapts_drain_rate
+            or self.bank.settings.tracks_onset
         ):
             return self.bank.base
         return active.controller_point(self._tilt, self._trickle)
@@ -378,6 +387,14 @@ class BankCoupling:
             the controller runs on estimates them.
         """
         return self.bank.filters[self.active].received_grains
+
+    @property
+    def inside_share(self) -> float:
+        """
+        :return: The share of what left the source that landed in the receiver, as the
+            hypothesis the controller runs on estimates it.
+        """
+        return self.bank.filters[self.active].inside_share
 
     @property
     def vetoed(self) -> frozenset[FreeParameter]:

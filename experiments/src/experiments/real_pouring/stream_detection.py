@@ -391,15 +391,31 @@ class StreamDetector:
         self._counted = 0.0
         self._last_stamp = None
 
+    def grain_mask(self, image: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: An image of the view, BGR.
+        :return: Which of its pixels show grains in the opening, over the whole image.
+        """
+        mask = numpy.zeros(image.shape[:2], dtype=bool)
+        mask[self._window] = self._grains_in_window(image)
+        return mask
+
+    def _grains_in_window(self, image: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: An image of the view, BGR.
+        :return: Which pixels of the window around the opening show grains in it.
+        """
+        return (
+            self.segmentation.grains(image[self._window], self._background) & self._mask
+        )
+
     def observe(self, image: numpy.ndarray, stamp: float) -> StreamReading:
         """
         :param image: The latest image, BGR.
         :param stamp: When it was taken, in seconds.
         :return: What it shows of the stream.
         """
-        grains = (
-            self.segmentation.grains(image[self._window], self._background) & self._mask
-        )
+        grains = self._grains_in_window(image)
         pixels = int(grains.sum())
         shown_for = (
             self.frame_period if self._last_stamp is None else stamp - self._last_stamp

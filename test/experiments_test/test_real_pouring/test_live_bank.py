@@ -5,7 +5,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
     FreeParameter,
     ModelPoint,
 )
-from experiments.real_pouring.live_bank import LiveBank
+from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
 from experiments.real_pouring.stream_detection import StreamReading
 from experiments.pouring_model_verification.sensor import CameraCondition
 
@@ -17,7 +17,7 @@ How many grains the source was loaded with: the count of a full cup.
 """
 
 
-def live_bank_tilted(tilt: float) -> LiveBank:
+def live_bank_tilted(tilt: float, settings: BankSettings = BankSettings()) -> LiveBank:
     stream = tilted_source_above_receiver(tilt=tilt)
     equation = stream.source.fill_equation
     return LiveBank.for_cups(
@@ -29,7 +29,7 @@ def live_bank_tilted(tilt: float) -> LiveBank:
             discharge_coefficient=equation.discharge_coefficient,
             outflow_rate_constant=equation.outflow_rate_constant,
         ),
-        settings=BankSettings(),
+        settings=settings,
         camera=CameraCondition.POLE_COUNTING.model,
         grains_per_fill=LOADED,
         loaded_grains=LOADED,
@@ -71,6 +71,20 @@ def test_a_stream_long_missing_where_the_model_pours_moves_the_onset_later():
     assert correction.repose_connection_in(bank.world).position > 0.0
 
 
+def test_the_step_records_what_the_receiver_was_told_to_hold():
+    bank = live_bank_tilted(tilt=1.0)
+    bank.observe(_no_stream(0.0))
+    bank.observe(
+        StreamReading(stamp=0.1, stream_seen=True, counted_grains=19.0, crossing=None)
+    )
+    assert bank.trace[-1].told_grains == pytest.approx(
+        bank.coupling.received_grains + bank.coupling.margin
+    )
+    assert bank.receiver.fill_level == pytest.approx(
+        bank.trace[-1].told_grains / LOADED
+    )
+
+
 def test_every_reading_is_kept_in_the_trace():
     bank = live_bank_tilted(tilt=1.0)
     for step in range(3):
@@ -86,3 +100,130 @@ def test_a_camera_that_counted_too_much_calls_for_more_area_per_grain():
     )
     weighed = 0.5 * bank.camera.grains_crossed(38.0)
     assert bank.count_calibration_factor(weighed_grains=weighed) == pytest.approx(2.0)
+
+
+# %% the onset tracked by every hypothesis
+
+
+TRACKING_THE_ONSET = BankSettings(tracks_onset=True)
+"""
+A bank in which every hypothesis estimates the onset.
+"""
+
+
+def _stream(at: float, counted: float, seen: bool = True) -> StreamReading:
+    return StreamReading(
+        stamp=at, stream_seen=seen, counted_grains=counted, crossing=None
+    )
+
+
+def test_with_the_onset_tracked_every_hypothesis_learns_a_late_onset():
+    bank = live_bank_tilted(tilt=1.0, settings=TRACKING_THE_ONSET)
+    for step in range(60):
+        bank.observe(_no_stream(0.1 * step))
+    learned = {}
+    for hypothesis in bank.coupling.bank.hypotheses:
+        bank.coupling.switch.active = hypothesis
+        learned[hypothesis] = bank.coupling.point.repose_angle
+    assert all(angle > bank.built.repose_angle for angle in learned.values())
+
+
+SMALL_STREAM = 0.25
+"""
+Grains a reading counts while the stream runs: few enough that the cup stays nearly
+full, so only the material, not the emptying cup, can stop the stream.
+"""
+
+
+def test_a_stream_that_stops_where_the_model_pours_raises_the_onset_again():
+    bank = live_bank_tilted(tilt=1.0, settings=TRACKING_THE_ONSET)
+    for step in range(20):
+        bank.observe(_stream(0.1 * step, counted=SMALL_STREAM * step))
+    while_flowing = bank.coupling.point.repose_angle
+    for step in range(20, 60):
+        bank.observe(_stream(0.1 * step, counted=SMALL_STREAM * 19, seen=False))
+    assert bank.coupling.point.repose_angle > while_flowing
+
+
+# %% the receiver reported from the count
+
+STOP_LEAD_TIME = 1.0
+"""
+How long grains keep arriving after the controller stops, in seconds, as the tests hand
+it to the bank.
+"""
+
+
+def live_bank_from_count(tilt: float) -> LiveBank:
+    stream = tilted_source_above_receiver(tilt=tilt)
+    equation = stream.source.fill_equation
+    return LiveBank.for_cups(
+        source=stream.source,
+        receiver=stream.receiver,
+        world=stream.world,
+        built=ModelPoint(
+            repose_angle=equation.repose_angle,
+            discharge_coefficient=equation.discharge_coefficient,
+            outflow_rate_constant=equation.outflow_rate_constant,
+        ),
+        settings=BankSettings(),
+        camera=CameraCondition.POLE_COUNTING.model,
+        grains_per_fill=LOADED,
+        loaded_grains=LOADED,
+        goal_grains=0.7 * LOADED,
+        opening_radius=OPENING_RADIUS,
+        prediction_window=1.5,
+        receiver_from_count=True,
+        stop_lead_time=STOP_LEAD_TIME,
+    )
+
+
+def test_the_receiver_is_reported_as_what_crossed_plus_what_is_still_in_flight():
+    bank = live_bank_from_count(tilt=1.0)
+    counts = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+    for step, counted in enumerate(counts):
+        bank.observe(_stream(0.1 * step, counted=counted))
+    crossed = bank.camera.grains_crossed(counts[-1])
+    rate = bank.camera.grains_crossed(counts[-1] - counts[-6]) / 0.5
+    expected = crossed * bank.coupling.inside_share + rate * STOP_LEAD_TIME
+    assert bank.trace[-1].in_flight_grains == pytest.approx(rate * STOP_LEAD_TIME)
+    assert bank.trace[-1].told_grains == pytest.approx(expected)
+    assert bank.receiver.fill_level == pytest.approx(expected / LOADED)
+
+
+def test_nothing_is_in_flight_while_the_count_stands_still():
+    bank = live_bank_from_count(tilt=1.0)
+    for step in range(8):
+        bank.observe(_stream(0.1 * step, counted=5.0, seen=False))
+    assert bank.trace[-1].in_flight_grains == 0.0
+    assert bank.receiver.fill_level == pytest.approx(
+        bank.camera.grains_crossed(5.0) * bank.coupling.inside_share / LOADED
+    )
+
+
+def test_the_step_keeps_what_was_in_flight_through_json():
+    bank = live_bank_from_count(tilt=1.0)
+    for step, counted in enumerate([0.0, 3.0, 6.0, 9.0, 12.0, 15.0]):
+        bank.observe(_stream(0.1 * step, counted=counted))
+    step = bank.trace[-1]
+    assert step.in_flight_grains > 0.0
+    assert LiveBankStep.from_json(step.to_json()) == step
+
+
+# %% the controller's onset without a trickle
+
+NO_TRICKLE = BankSettings(trickle=0.0)
+"""
+A bank that does not hold the controller's onset below the tilt.
+"""
+
+
+def test_without_a_trickle_the_controller_runs_on_the_onset_quantile():
+    bank = live_bank_tilted(tilt=1.0, settings=NO_TRICKLE)
+    for step in range(30):
+        bank.observe(_no_stream(0.1 * step))
+    active = bank.coupling.bank.filters[bank.coupling.active]
+    assert FreeParameter.REPOSE_ANGLE in active.free
+    assert bank.coupling.point.repose_angle == active.quantile(
+        FreeParameter.REPOSE_ANGLE, NO_TRICKLE.onset_quantile
+    )

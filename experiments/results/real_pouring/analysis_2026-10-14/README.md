@@ -14,3 +14,7 @@ written up as section Q of the pouring model verification page.
 (whiteness, and any change from the empty view as meant for corn) and writes
 `segmentation_comparison.json`.
 `replay_bank.py <bag dir> <uncalibrated|fitted>` replays a live-bank bag through the bank offline.
+
+The onset tracked by every hypothesis (`BankSettings.tracks_onset`): `replay_bank.py <bag> <drain> <material>
+<concept|tracked>` on the six bank bags writes `replay_<bag>_<drain>_<material>_<mode>.json`;
+`onset_check.py replay_*.json` reports how far the controller's repose angle moves once the stream shows.

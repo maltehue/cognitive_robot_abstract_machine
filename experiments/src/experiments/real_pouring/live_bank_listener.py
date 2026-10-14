@@ -18,6 +18,7 @@ from std_srvs.srv import Trigger
 from typing_extensions import Optional
 
 from experiments.real_pouring.live_bank import LiveBank
+from experiments.real_pouring.poured_material import PouredMaterial
 from krrood.adapters.json_serializer import from_json
 
 # %% the detector's interface
@@ -67,6 +68,29 @@ class DetectorNotRunningError(Exception):
         )
 
 
+@dataclass
+class MaterialMismatchError(Exception):
+    """
+    Raised when the detector counts for another material than the one poured.
+    """
+
+    expected: PouredMaterial
+    """
+    The material poured.
+    """
+
+    reported: str
+    """
+    The material the detector reported counting for.
+    """
+
+    def __str__(self) -> str:
+        return (
+            f"The demo pours {self.expected} but pouring_perception.py counts for "
+            f"'{self.reported}': restart it with --ros-args -p material:={self.expected}."
+        )
+
+
 class DetectorSendsNothingError(Exception):
     """
     Raised when the stream detector answers but sends no readings.
@@ -110,6 +134,11 @@ class LiveBankListener:
     How long to wait for the detector's first reading, in seconds.
     """
 
+    material: Optional[PouredMaterial] = None
+    """
+    The material poured, which the detector has to count for, or ``None`` to not check.
+    """
+
     _subscription: Optional[object] = field(init=False, default=None, repr=False)
     """
     The subscription to the detector's readings while listening.
@@ -126,6 +155,8 @@ class LiveBankListener:
         once the bank has weighed the first reading.
 
         :raises DetectorNotRunningError: If the detector does not answer.
+        :raises MaterialMismatchError: If it counts for another material than
+            :attr:`material`.
         :raises DetectorSendsNothingError: If it answers but sends no reading.
         """
         client = self.node.create_client(
@@ -139,6 +170,9 @@ class LiveBankListener:
             if time.monotonic() > deadline:
                 raise DetectorNotRunningError()
             time.sleep(WAIT_POLL_INTERVAL)
+        reported = relearned.result().message
+        if self.material is not None and reported != self.material.value:
+            raise MaterialMismatchError(expected=self.material, reported=reported)
         self._subscription = self.node.create_subscription(
             String, DetectorInterface.READING_TOPIC.value, self._on_reading, 10
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
@@ -31,6 +32,7 @@ from giskardpy.motion_statechart.exceptions import (
     MissingExitSpeedError,
     MissingInflowEquationError,
     NonPositiveClearanceError,
+    NonPositiveTiltRateError,
     RootLinkNotWorldRootError,
 )
 from giskardpy.motion_statechart.graph_node import (
@@ -586,5 +588,147 @@ class KeepSourceRimAboveReceiverRim(Task):
         artifacts.observation = sm.logic_and(
             sm.if_less_eq(clearance, self.maximum_clearance, 1, 0),
             sm.if_greater_eq(clearance, self.minimum_clearance, 1, 0),
+        )
+        return artifacts
+
+
+CAP_NORMALIZATION_SHARE = 0.1
+"""
+The share of a tilt rate cap its QP row is normalized by.
+
+A row's slack weight is its weight over the square of its normalization, so a cap
+normalized by the cap itself would only trade off against a fill task's row (weight over
+the square of its reference velocity); normalized by a tenth of the cap it outweighs
+that row a hundred times over and holds.
+"""
+
+
+@dataclass(eq=False, repr=False)
+class TiltPacing(Task):
+    """
+    Paces the source cup's tilt: kept turning at :attr:`approach_rate` while nothing
+    else moves it, never faster than :attr:`maximum_rate` tilting further or
+    :attr:`maximum_return_rate` tilting back, and never past :attr:`maximum_tilt`.
+
+    The approach is a weak preference the fill task overrides as soon as its model
+    predicts flow, and it stops once :attr:`receiver` holds :attr:`approach_until_fill`;
+    the caps and the ceiling hold against every other task. Below
+    :attr:`fast_until_tilt` the cup may turn at :attr:`fast_rate` instead, which covers
+    the tilts at which nothing can leave the cup yet.
+    """
+
+    source: HasFillLevel
+    """
+    The cup whose tilt is paced.
+    """
+
+    approach_rate: float
+    """
+    How fast the cup keeps turning while no other task moves it, in radians per second.
+    """
+
+    maximum_rate: float
+    """
+    The fastest the cup may tilt further, in radians per second.
+    """
+
+    maximum_tilt: float
+    """
+    The tilt the cup is not turned past, in radians.
+    """
+
+    maximum_return_rate: float = field(default=math.radians(30.0), kw_only=True)
+    """
+    The fastest the cup may tilt back, in radians per second.
+    """
+
+    fast_rate: Optional[float] = field(default=None, kw_only=True)
+    """
+    The rate the cup approaches and may tilt at below :attr:`fast_until_tilt`, in
+    radians per second, or ``None`` to pace the whole motion alike.
+    """
+
+    fast_until_tilt: float = field(default=0.0, kw_only=True)
+    """
+    The tilt below which :attr:`fast_rate` applies, in radians.
+    """
+
+    receiver: Optional[HasFillLevel] = field(default=None, kw_only=True)
+    """
+    The cup poured into, whose fill ends the approach, or ``None`` to approach until the
+    ceiling.
+    """
+
+    approach_until_fill: float = field(default=1.0, kw_only=True)
+    """
+    The fill of :attr:`receiver` from which on the approach no longer turns the cup:
+
+    once the receiver holds what was to be poured, nothing but the fill task may tilt it
+    further.
+    """
+
+    cap_weight: float = field(default=DefaultWeights.WEIGHT_MAXIMUM, kw_only=True)
+    """
+    QP weight of the rate caps and the ceiling.
+    """
+
+    approach_weight: float = field(
+        default=DefaultWeights.WEIGHT_BELOW_COLLISION_AVOIDANCE, kw_only=True
+    )
+    """
+    QP weight of the approach preference: low, so any task with a reason to turn the cup
+    otherwise wins.
+    """
+
+    @property
+    def rates(self) -> tuple[float, ...]:
+        """
+        :return: Every rate this task is configured with.
+        """
+        rates = (self.approach_rate, self.maximum_rate, self.maximum_return_rate)
+        if self.fast_rate is None:
+            return rates
+        return rates + (self.fast_rate,)
+
+    def build(self, context: MotionStatechartContext) -> NodeArtifacts:
+        """
+        :param context: The build context.
+        :return: Two rows on the tilt's speed: the caps and the ceiling, and the approach
+            preference. The task never holds the motion open.
+        """
+        for rate in self.rates:
+            if rate <= 0.0:
+                raise NonPositiveTiltRateError(node=self, rate=rate)
+        tilt = self.source.pour_tilt_expression
+        cap, approach = sm.Scalar(self.maximum_rate), sm.Scalar(self.approach_rate)
+        if self.fast_rate is not None:
+            fast = sm.Scalar(self.fast_rate)
+            cap = sm.if_less(tilt, sm.Scalar(self.fast_until_tilt), fast, cap)
+            approach = sm.if_less(tilt, sm.Scalar(self.fast_until_tilt), fast, approach)
+        below_ceiling = sm.if_less(
+            tilt, sm.Scalar(self.maximum_tilt), sm.Scalar(1.0), sm.Scalar(0.0)
+        )
+        if self.receiver is not None:
+            approach = sm.if_less(
+                self.receiver.fill_connection.dof.variables.position,
+                sm.Scalar(self.approach_until_fill),
+                approach,
+                sm.Scalar(0.0),
+            )
+        artifacts = NodeArtifacts(observation=sm.Scalar.const_true())
+        artifacts.constraints.add_velocity_constraint(
+            lower_velocity_limit=-self.maximum_return_rate,
+            upper_velocity_limit=cap * below_ceiling,
+            quadratic_weight=self.cap_weight,
+            task_expression=tilt,
+            velocity_limit=self.maximum_rate * CAP_NORMALIZATION_SHARE,
+            name=f"{self.name}_tilt_rate_cap",
+        )
+        artifacts.constraints.add_velocity_eq_constraint(
+            velocity_goal=approach * below_ceiling,
+            quadratic_weight=self.approach_weight,
+            task_expression=tilt,
+            velocity_limit=self.approach_rate,
+            name=f"{self.name}_tilt_approach",
         )
         return artifacts

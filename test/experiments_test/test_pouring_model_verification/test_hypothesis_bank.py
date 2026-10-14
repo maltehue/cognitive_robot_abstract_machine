@@ -217,6 +217,35 @@ def test_a_hypothesis_still_in_play_keeps_the_controller_on_it():
     assert switch.active is Hypothesis.ONSET
 
 
+# %% the onset tracked by every hypothesis
+
+
+def _bank_tracking_the_onset() -> HypothesisBank:
+    return HypothesisBank(
+        hypotheses=hypotheses_for(SourceCup.CUP, tracks_onset=True),
+        geometry=GEOMETRY,
+        base=GIVEN,
+        sensors=EXACT_SENSORS,
+        settings=BankSettings(tracks_onset=True),
+        seed=0,
+    )
+
+
+def test_with_the_onset_tracked_every_hypothesis_estimates_it():
+    bank = _bank_tracking_the_onset()
+    assert all(
+        FreeParameter.REPOSE_ANGLE in bank.filters[hypothesis].free
+        for hypothesis in bank.hypotheses
+    )
+
+
+def test_a_tracked_onset_drifts_with_the_readings():
+    bank = _bank_tracking_the_onset()
+    assert not any(
+        bank.filters[hypothesis].keeps_onset_static for hypothesis in bank.hypotheses
+    )
+
+
 # %% the bank
 
 
@@ -703,3 +732,25 @@ def test_the_first_reading_starts_the_switch_from_the_model_the_controller_ran_o
         random=None,
     )
     assert steering.model_at(readings[1].time) == coupling.bank.base
+
+
+# %% the share of what left that the receiver got
+
+
+def test_the_inside_share_is_what_the_particles_committed_of_what_left():
+    bank = _bank(sensors=UNWEIGHED_RECEIVER_SENSORS)
+    for reading in _unweighed(_poured_readings(GIVEN), OFF_TARGET_STREAM):
+        bank.observe(reading)
+    for hypothesis_filter in bank.filters.values():
+        left = hypothesis_filter.committed + hypothesis_filter.spilled
+        share = numpy.where(left > 0.0, hypothesis_filter.committed / left, 1.0)
+        assert hypothesis_filter.inside_share == pytest.approx(
+            float(numpy.average(share, weights=hypothesis_filter.weights))
+        )
+        assert hypothesis_filter.inside_share < 1.0
+
+
+def test_a_filter_that_saw_nothing_leave_takes_everything_to_land_inside():
+    bank = _bank(sensors=UNWEIGHED_RECEIVER_SENSORS)
+    bank.observe(_unweighed(_poured_readings(GIVEN, count=1))[0])
+    assert bank.filters[Hypothesis.NOMINAL].inside_share == 1.0

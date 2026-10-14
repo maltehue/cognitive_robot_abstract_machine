@@ -1,3 +1,24 @@
+"""
+Pour from the cup in Tracy's left gripper into the receiving cup on the table.
+
+How to run it on the robot:
+
+1. Start the robot and camera drivers, then ``tracy_velocity.py`` (it can keep running).
+2. Start the perception once, for the material in the cup, and leave it running::
+
+       python pouring_perception.py --ros-args -p material:=styrofoam   # or corn
+
+3. Set the three switches below (:data:`MATERIAL`, :data:`DRAIN`, :data:`USE_LIVE_BANK`)
+   and run this script for every pour. It prints what it runs with before the robot
+   moves, refuses to start the live bank against a perception watching for another
+   material, and records a bag with the bank's trace and the weighed result.
+4. After the pour, weigh what reached the receiver and what landed beside it when asked;
+   also weigh what is left in the source cup (note it down), which checks the full cup's
+   mass.
+
+Watch the stop button while the cup is above about 90 degrees.
+"""
+
 import json
 import math
 import time
@@ -25,6 +46,7 @@ from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.motion_statechart.tasks.pouring import (
+    TiltPacing,
     FillByTransferTask,
     KeepProjectileInReceiver,
     KeepSourceRimAboveReceiverRim,
@@ -104,7 +126,7 @@ fill it predicts; one angle cannot capture both. Open loop it tilts to about 106
 and empties the cup.
 """
 
-DRAIN = FITTED_DRAIN
+DRAIN = UNCALIBRATED_DRAIN
 """
 The drain the controller and the hypothesis bank start from.
 """
@@ -148,12 +170,73 @@ faster than it pours, so the cup is turned back before the grains still coming o
 the receiver.
 """
 
-USE_LIVE_BANK = False
+USE_LIVE_BANK = True
 """
 Let the hypothesis bank watch the pour through the camera and correct the controller's
 drain while it runs.
 
 Needs ``pouring_perception.py`` running for :attr:`MATERIAL`.
+"""
+
+BANK_SETTINGS = BankSettings(tracks_onset=True, trickle=0.0)
+"""
+How the live bank weighs the pour: every hypothesis estimates the onset, so a hand-over
+keeps what the pour showed of it and a stream that stops where the model pours moves it
+again; the controller runs on the onset the bank estimates, not on one held just below
+the tilt, since the tilt pacing turns the cup at :data:`APPROACH_TILT_RATE` where the
+model pours nothing.
+"""
+
+RECEIVER_FROM_COUNT = True
+"""
+Report the receiver's fill to the controller from what the camera counted crossing, with
+the grains still in flight added, instead of from the bank's lagging estimate.
+"""
+
+STOP_LEAD_TIME = 1.0
+"""
+How long grains keep arriving once the cup stops turning, in seconds: the count's rate
+over this time is reported as already received, so the controller stops that much short
+of the goal.
+
+The ramps of 2026-10-12 relaxed within one to two seconds of reaching their tilt.
+"""
+
+APPROACH_TILT_RATE = math.radians(3.0)
+"""
+How fast the cup keeps turning where the model predicts no flow, in radians per second:
+
+slow enough for the camera and the bank to stop the pour within the degree or two the
+delivered amount changes by five percent of a cup over.
+"""
+
+MAXIMUM_TILT_RATE = math.radians(3.0)
+"""
+The fastest the fill task may tilt the cup further, in radians per second.
+"""
+
+FAST_TILT_RATE = math.radians(10.0)
+"""
+How fast the cup turns below :data:`FAST_UNTIL_TILT`, in radians per second: the rate
+the calibration ramps ran at.
+"""
+
+FAST_UNTIL_TILT = math.radians(60.0)
+"""
+The tilt below which nothing but stray heap grains has left the cup in any recorded pour
+(first bulk stream at 66 to 80 degrees), in radians.
+"""
+
+MAXIMUM_TILT = math.radians(110.0)
+"""
+The tilt the cup is never turned past, in radians: the calibration ramps emptied it
+completely there.
+"""
+
+MAXIMUM_RETURN_TILT_RATE = math.radians(30.0)
+"""
+The fastest the cup may tilt back, in radians per second: the return rate of the
+calibration ramps.
 """
 
 LIVE_BANK_TRACE_FILE_NAME = "live_bank_trace.json"
@@ -240,6 +323,14 @@ def _spawn_jeroen_cup_body(name: str) -> Body:
 # ----- Record the run; the bag is closed again at the end of the script -----
 recording = RosbagRecording()
 print(f"Recording into {recording.start()}.")
+print(
+    f"Pouring {MATERIAL} (a full cup weighs {FULL_CUP_MASS_GRAMS} g) to a fill of "
+    f"{GOAL_FILL_CONST}; drain repose {math.degrees(REPOSE_ANGLE):.0f} deg, rate "
+    f"{OUTFLOW_RATE_CONSTANT}; live bank {'on' if USE_LIVE_BANK else 'off'}; tilt "
+    f"{math.degrees(FAST_TILT_RATE):.0f} deg/s up to {math.degrees(FAST_UNTIL_TILT):.0f} "
+    f"deg, then at most {math.degrees(MAXIMUM_TILT_RATE):.0f} deg/s, never past "
+    f"{math.degrees(MAXIMUM_TILT):.0f} deg."
+)
 
 giskard = connect_to_giskard("tracy_transfer_demo")
 robot = giskard.robot
@@ -411,7 +502,23 @@ keep_plane = AlignPlanes(
 # msc_transfer.add_node(EndMotion.when_true(motion))
 # giskard.execute(msc_transfer)
 
-extended_motion = Parallel([transfer_task, no_spill, keep_above, keep_plane])
+# Pace the tilt: keep the cup turning where the model predicts no flow until the receiver
+# holds the goal, never faster than the cap once it does, and never past the tilt that
+# empties it.
+tilt_pacing = TiltPacing(
+    source=source_cup,
+    approach_rate=APPROACH_TILT_RATE,
+    maximum_rate=MAXIMUM_TILT_RATE,
+    maximum_tilt=MAXIMUM_TILT,
+    maximum_return_rate=MAXIMUM_RETURN_TILT_RATE,
+    fast_rate=FAST_TILT_RATE,
+    fast_until_tilt=FAST_UNTIL_TILT,
+    receiver=receiving_cup,
+    approach_until_fill=goal_fill,
+)
+extended_motion = Parallel(
+    [transfer_task, no_spill, keep_above, keep_plane, tilt_pacing]
+)
 msc = MotionStatechart()
 msc.add_node(extended_motion)
 msc.add_node(EndMotion.when_true(extended_motion))
@@ -419,12 +526,13 @@ live_bank_listener = None
 if USE_LIVE_BANK:
     live_bank_listener = LiveBankListener(
         node=giskard.node_handle,
+        material=MATERIAL,
         bank=LiveBank.for_cups(
             source=source_cup,
             receiver=receiving_cup,
             world=world,
             built=DRAIN,
-            settings=BankSettings(),
+            settings=BANK_SETTINGS,
             camera=CameraCondition.POLE_COUNTING.model,
             grains_per_fill=GRAINS_PER_FILL,
             loaded_grains=START_FILL * GRAINS_PER_FILL,
@@ -434,6 +542,8 @@ if USE_LIVE_BANK:
             / source_cup.capacity,
             opening_radius=receiving_cup.opening_radius,
             prediction_window=transfer_task.prediction_duration,
+            receiver_from_count=RECEIVER_FROM_COUNT,
+            stop_lead_time=STOP_LEAD_TIME,
         ),
     )
     live_bank_listener.start()

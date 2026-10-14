@@ -868,6 +868,13 @@ class BankSettings:
     it.
     """
 
+    tracks_onset: bool = False
+    """
+    Whether every hypothesis estimates the repose angle as part of the pour's state,
+    drifting from reading to reading, so the onset is no concept to switch on and a
+    hand-over keeps what the pour showed of it.
+    """
+
     def to_json(self) -> Dict[str, Any]:
         return {
             name: value
@@ -1032,7 +1039,9 @@ class HypothesisFilter:
             pour's own too.
         """
         free = self.hypothesis.free_parameters(self.settings.frees_rate)
-        if self.adapts_onset:
+        if (
+            self.adapts_onset or self.settings.tracks_onset
+        ) and FreeParameter.REPOSE_ANGLE not in free:
             free = (FreeParameter.REPOSE_ANGLE,) + free
         if self.adapts_drain_rate and FreeParameter.OUTFLOW_RATE_CONSTANT not in free:
             free = free + (FreeParameter.OUTFLOW_RATE_CONSTANT,)
@@ -1045,6 +1054,8 @@ class HypothesisFilter:
             the twin's spread, or held wrong by the onset or coupled hypothesis under a
             static onset.
         """
+        if self.settings.tracks_onset:
+            return False
         return self.adapts_onset or (
             self.settings.static_onset
             and self.hypothesis in (Hypothesis.ONSET, Hypothesis.COUPLED)
@@ -1490,6 +1501,18 @@ class HypothesisFilter:
             falling into it; without a receiver reading, counted from this pour's start.
         """
         return float(numpy.average(self.committed, weights=self.weights))
+
+    @property
+    def inside_share(self) -> float:
+        """
+        :return: The posterior mean of the share of what left the source that landed in
+            the receiver; one while nothing has left.
+        """
+        left = self.committed + self.spilled
+        share = numpy.where(
+            left > 0.0, self.committed / numpy.maximum(left, 1e-12), 1.0
+        )
+        return float(numpy.average(share, weights=self.weights))
 
     def final_fill_spread(self, tilt: float) -> float:
         """

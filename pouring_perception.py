@@ -134,7 +134,7 @@ class StreamDetectorNode(Node):
         self.detector = None
         self.background = []
         response.success = True
-        response.message = "learning the background from the next images"
+        response.message = self._value(Parameter.MATERIAL)
         return response
 
     def _on_image(self, message: CompressedImage) -> None:

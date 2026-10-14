@@ -88,6 +88,18 @@ class LiveBankStep(SubclassJSONSerializer):
     How many grains the bank estimates reached the receiver.
     """
 
+    in_flight_grains: float = 0.0
+    """
+    How many grains the controller was told are still to arrive after a stop; zero where
+    the receiver is reported from the bank's estimate instead.
+    """
+
+    told_grains: float = 0.0
+    """
+    How many grains the controller was told the receiver holds, in flight or margin
+    included.
+    """
+
     def to_json(self) -> Dict[str, Any]:
         return {
             **super().to_json(),
@@ -99,6 +111,8 @@ class LiveBankStep(SubclassJSONSerializer):
             "probabilities": self.probabilities,
             "corrections": vars(self.corrections),
             "received_grains": self.received_grains,
+            "in_flight_grains": self.in_flight_grains,
+            "told_grains": self.told_grains,
         }
 
     @classmethod
@@ -112,10 +126,19 @@ class LiveBankStep(SubclassJSONSerializer):
             probabilities=data["probabilities"],
             corrections=DrainCorrectionValues(**data["corrections"]),
             received_grains=data["received_grains"],
+            in_flight_grains=data.get("in_flight_grains", 0.0),
+            told_grains=data.get("told_grains", data["received_grains"]),
         )
 
 
 # %% the bank on the robot
+
+COUNT_RATE_WINDOW = 0.5
+"""
+Over how many seconds the camera's count is differenced for the rate the grains arrive
+at: long enough to smooth the frame-by-frame steps of the count at ten readings a
+second.
+"""
 
 
 @dataclass
@@ -180,6 +203,20 @@ class LiveBank:
     How far ahead the fill task predicts, in seconds.
     """
 
+    receiver_from_count: bool = field(default=False, kw_only=True)
+    """
+    Whether the receiver's fill is reported from what the camera counted crossing, with
+    the grains still in flight added, rather than from the bank's estimate with its
+    margin.
+    """
+
+    stop_lead_time: float = field(default=0.0, kw_only=True)
+    """
+    How long grains keep arriving once the controller stops, in seconds: the count's
+    rate over this time is reported as already in the receiver, so the controller stops
+    that much short of the goal.
+    """
+
     trace: List[LiveBankStep] = field(default_factory=list)
     """
     Every step the bank took, in order.
@@ -205,6 +242,8 @@ class LiveBank:
         opening_radius: float,
         prediction_window: float,
         seed: int = 0,
+        receiver_from_count: bool = False,
+        stop_lead_time: float = 0.0,
     ) -> LiveBank:
         """
         :return: A bank over the hypotheses a plain cup is weighed against, reading only
@@ -213,7 +252,9 @@ class LiveBank:
         equation = source.fill_equation
         bank = HypothesisBank(
             hypotheses=hypotheses_for(
-                SourceCup.CUP, outflow_capacity=settings.outflow_capacity
+                SourceCup.CUP,
+                outflow_capacity=settings.outflow_capacity,
+                tracks_onset=settings.tracks_onset,
             ),
             geometry=DrainGeometry(
                 container_height=equation.container_height,
@@ -248,6 +289,8 @@ class LiveBank:
             goal_grains=goal_grains,
             opening_radius=opening_radius,
             prediction_window=prediction_window,
+            receiver_from_count=receiver_from_count,
+            stop_lead_time=stop_lead_time,
         )
 
     @property
@@ -299,7 +342,8 @@ class LiveBank:
             self._blended(seen.stamp), self.built, self.coupling.cautious
         )
         corrections.write_to(self.world, self.source.fill_connection.drain_correction)
-        self._write_fill_levels(seen.counted_grains)
+        in_flight = self._in_flight_grains(seen)
+        told = self._write_fill_levels(seen.counted_grains, in_flight)
         step = LiveBankStep(
             time=seen.stamp,
             tilt=tilt,
@@ -312,6 +356,8 @@ class LiveBank:
             },
             corrections=corrections,
             received_grains=self.coupling.received_grains,
+            in_flight_grains=in_flight,
+            told_grains=told,
         )
         self.trace.append(step)
         return step
@@ -336,16 +382,46 @@ class LiveBank:
             self._blend = ModelBlend(point=self.coupling.bank.base, time=at)
         return self._blend.towards(self.coupling.point, at)
 
-    def _write_fill_levels(self, counted_grains: float) -> None:
+    def _in_flight_grains(self, seen: StreamReading) -> float:
+        """
+        :param seen: The reading just taken.
+        :return: How many grains are still to arrive after a stop now: the rate the
+            camera's count rose at over :data:`COUNT_RATE_WINDOW`, held for
+            :attr:`stop_lead_time`; zero where the receiver is reported from the bank.
+        """
+        if not self.receiver_from_count:
+            return 0.0
+        earlier = [
+            step for step in self.trace if step.time <= seen.stamp - COUNT_RATE_WINDOW
+        ]
+        if not earlier:
+            return 0.0
+        reference = earlier[-1]
+        interval = seen.stamp - reference.time
+        if interval <= 0.0:
+            return 0.0
+        rate = (
+            self.camera.grains_crossed(seen.counted_grains - reference.counted_grains)
+            / interval
+        )
+        return max(0.0, rate) * self.stop_lead_time
+
+    def _write_fill_levels(self, counted_grains: float, in_flight: float) -> float:
         """
         Tell the controller what both cups hold: the source what was loaded less what
-        the camera counted leaving, the receiver what the bank estimates arrived, with
-        the margin it stops short by.
+        the camera counted leaving; the receiver what crossed and is still in flight, or
+        what the bank estimates arrived with the margin it stops short by.
 
         :param counted_grains: How many grains the camera has counted crossing.
+        :param in_flight: How many grains are still to arrive after a stop now.
+        :return: How many grains the receiver was told to hold.
         """
-        source_grains = self.loaded_grains - self.camera.grains_crossed(counted_grains)
-        receiver_grains = self.coupling.received_grains + self.coupling.margin
+        crossed = self.camera.grains_crossed(counted_grains)
+        source_grains = self.loaded_grains - crossed
+        if self.receiver_from_count:
+            receiver_grains = crossed * self.coupling.inside_share + in_flight
+        else:
+            receiver_grains = self.coupling.received_grains + self.coupling.margin
         capacity_ratio = self.source.capacity / self.receiver.capacity
         JointState.from_mapping(
             {
@@ -356,3 +432,4 @@ class LiveBank:
                 ),
             }
         ).apply_to(self.world)
+        return receiver_grains

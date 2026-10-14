@@ -23,18 +23,20 @@ from giskardpy.motion_statechart.data_types import (
     LifeCycleValues,
 )
 from giskardpy.motion_statechart.exceptions import (
+    NonPositiveTiltRateError,
     MissingExitSpeedError,
     MissingInflowEquationError,
     NonPositiveClearanceError,
     RootLinkNotWorldRootError,
 )
-from giskardpy.motion_statechart.graph_node import EndMotion
+from giskardpy.motion_statechart.graph_node import EndMotion, Task
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import (
     CartesianPose,
     CartesianPosition,
 )
 from giskardpy.motion_statechart.tasks.pouring import (
+    TiltPacing,
     FillByTransferTask,
     KeepProjectileInReceiver,
     KeepSourceRimAboveReceiverRim,
@@ -49,7 +51,10 @@ from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
 )
 from semantic_digital_twin.datastructures.definitions import StaticJointState
 from semantic_digital_twin.datastructures.joint_state import JointState
-from semantic_digital_twin.physics.equations.pouring_equations import InflowEquation
+from semantic_digital_twin.physics.equations.pouring_equations import (
+    ArticulatedPouringEquation,
+    InflowEquation,
+)
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.tracy import Tracy
 from semantic_digital_twin.spatial_types import (
@@ -79,6 +84,7 @@ from semantic_digital_twin.world_description.geometry import (
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 from dataclasses import dataclass
+from typing_extensions import Sequence
 
 _JEROEN_CUP_STL = str(
     Path(files("semantic_digital_twin")).parent.parent
@@ -349,6 +355,7 @@ def _build_transfer_motion(
     no_spill_weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
     no_spill_reference_velocity: float = 0.2,
     fill_level_tolerance: float = 0.05,
+    extra_tasks: Sequence[Task] = (),
 ) -> TransferMotion:
     """
     Build the cup-to-cup transfer motion the transfer tests share.
@@ -366,6 +373,7 @@ def _build_transfer_motion(
     :param no_spill_reference_velocity: Reference velocity of the competing pour-aiming
         task.
     :param fill_level_tolerance: Tolerance around the fill goal handed to the fill task.
+    :param extra_tasks: Further tasks run alongside the transfer.
     :return: The built motion.
     """
     world, source_cup, receiving_cup, left_tool_frame = tracy_transfer_world
@@ -393,7 +401,9 @@ def _build_transfer_motion(
         goal_normal=Vector3.X(reference_frame=world.root),
         tip_normal=Vector3.Z(reference_frame=left_tool_frame),
     )
-    motion = Parallel([transfer_task, no_spill, keep_above, keep_plane])
+    motion = Parallel(
+        [transfer_task, no_spill, keep_above, keep_plane] + list(extra_tasks)
+    )
     transfer_task.start_condition = no_spill.observation_variable
     transfer_statechart = MotionStatechart()
     transfer_statechart.add_node(motion)
@@ -1752,3 +1762,233 @@ class TestFillingFromAFaucet:
         assert can.fill_level == pytest.approx(goal_fill, abs=tolerance)
         assert max(opening_history) > 0.2, "the valve was never opened"
         assert opening_history[-1] < 0.05, "the valve was not shut again"
+
+
+# %% pacing the tilt
+
+PACED_APPROACH_RATE = math.radians(3.0)
+"""
+The approach rate the pacing tests hand the task, in radians per second.
+"""
+
+PACED_TILT_CAP = math.radians(1.0)
+"""
+A cap well below the rate the fill task turns the cup at on its own.
+"""
+
+NO_FLOW_REPOSE_ANGLE = math.radians(85.0)
+"""
+A repose angle far above the fixture's start tilt, so the model pours nothing and the
+fill task has no gradient to turn the cup with.
+"""
+
+PACING_TICKS = 240
+"""
+How many control cycles the pacing tests run: three seconds at the pouring frequency.
+"""
+
+
+def _no_flow_drain(source_cup: PourableContainer) -> ArticulatedPouringEquation:
+    equation = source_cup.fill_equation
+    return ArticulatedPouringEquation(
+        container_height=equation.container_height,
+        container_width=equation.container_width,
+        outflow_rate_constant=equation.outflow_rate_constant,
+        repose_angle=NO_FLOW_REPOSE_ANGLE,
+    )
+
+
+def _tilt_history(transfer: TransferMotion, ticks: int) -> list[float]:
+    """
+    Run the motion for at most ``ticks`` cycles and record the source cup's tilt after
+    each, in radians.
+    """
+    executor = Executor(
+        _pouring_context(transfer.world), pacer=SimulationPacer(real_time_factor=1)
+    )
+    executor.compile(motion_statechart=transfer.motion_statechart)
+    tilt = transfer.source_cup.pour_tilt_expression
+    history = []
+    try:
+        for _ in range(ticks):
+            executor.tick()
+            history.append(float(tilt.evaluate()[0]))
+            if executor.motion_statechart.is_end_motion():
+                break
+    finally:
+        state = executor.context.world.state
+        state.velocities[:] = 0
+        state.accelerations[:] = 0
+        state.jerks[:] = 0
+        executor.motion_statechart.cleanup_nodes(context=executor.context)
+        executor.context.cleanup()
+    return history
+
+
+def _rates(history: list[float]) -> np.ndarray:
+    return np.diff(history) * _POURING_TARGET_FREQUENCY
+
+
+class TestTiltPacing:
+    """
+    The pacing task keeps the cup turning at the approach rate where the model pours
+    nothing, never faster than the cap, and never past the ceiling.
+    """
+
+    def test_the_tilt_advances_at_the_approach_rate_where_the_model_pours_nothing(
+        self, tracy_transfer_world
+    ) -> None:
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        receiving_cup.recouple_outflow_from(
+            source=source_cup, world=world, fill_equation=_no_flow_drain(source_cup)
+        )
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+        )
+        history = _tilt_history(
+            _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+            PACING_TICKS,
+        )
+        settled = _rates(history)[len(history) // 2 :]
+        assert np.mean(settled) == pytest.approx(PACED_APPROACH_RATE, rel=0.2)
+        assert settled.max() <= PACED_APPROACH_RATE * 1.1
+
+    def test_the_approach_stops_once_the_receiver_holds_the_goal(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        A cup whose model pours nothing more, with the receiver already past the goal (a
+        camera that counted too much, a source the bank takes for empty), is not turned
+        on by the approach once the other tasks have settled its pose.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        receiving_cup.recouple_outflow_from(
+            source=source_cup, world=world, fill_equation=_no_flow_drain(source_cup)
+        )
+        goal = 0.7
+        JointState.from_mapping({receiving_cup.fill_connection: goal + 0.1}).apply_to(
+            world
+        )
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+            receiver=receiving_cup,
+            approach_until_fill=goal,
+        )
+        history = _tilt_history(
+            _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+            PACING_TICKS,
+        )
+        settled = history[len(history) // 2 :]
+        assert settled[-1] - settled[0] < math.radians(0.5)
+
+    def test_the_cap_holds_the_fill_task_below_the_rate_it_would_turn_at(
+        self, tracy_transfer_world
+    ) -> None:
+        world, source_cup, _, _ = tracy_transfer_world
+        uncapped = _rates(
+            _tilt_history(_build_transfer_motion(tracy_transfer_world), PACING_TICKS)
+        )
+        assert uncapped.max() > PACED_TILT_CAP
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_TILT_CAP,
+            maximum_rate=PACED_TILT_CAP,
+            maximum_tilt=math.radians(110.0),
+        )
+        capped = _rates(
+            _tilt_history(
+                _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+                PACING_TICKS,
+            )
+        )
+        assert capped.max() <= PACED_TILT_CAP * 1.1
+
+    def test_the_tilt_stops_at_the_ceiling(self, tracy_transfer_world) -> None:
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        receiving_cup.recouple_outflow_from(
+            source=source_cup, world=world, fill_equation=_no_flow_drain(source_cup)
+        )
+        start_tilt = float(source_cup.pour_tilt_expression.evaluate()[0])
+        ceiling = start_tilt + math.radians(2.0)
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=ceiling,
+        )
+        history = _tilt_history(
+            _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+            PACING_TICKS,
+        )
+        assert history[-1] == pytest.approx(ceiling, abs=math.radians(0.3))
+
+    def test_a_fast_phase_turns_faster_below_its_tilt(
+        self, tracy_transfer_world
+    ) -> None:
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        receiving_cup.recouple_outflow_from(
+            source=source_cup, world=world, fill_equation=_no_flow_drain(source_cup)
+        )
+        start_tilt = float(source_cup.pour_tilt_expression.evaluate()[0])
+        fast_rate = 2 * PACED_APPROACH_RATE
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+            fast_rate=fast_rate,
+            fast_until_tilt=start_tilt + math.radians(4.0),
+        )
+        history = np.array(
+            _tilt_history(
+                _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+                PACING_TICKS,
+            )
+        )
+        rates = _rates(list(history))
+        below = rates[(history[1:] < pacing.fast_until_tilt - math.radians(0.5))][20:]
+        above = rates[history[1:] > pacing.fast_until_tilt + math.radians(0.5)]
+        assert np.mean(below) == pytest.approx(fast_rate, rel=0.2)
+        assert np.mean(above) == pytest.approx(PACED_APPROACH_RATE, rel=0.2)
+
+    def test_non_positive_rates_are_rejected(self, tracy_transfer_world) -> None:
+        world, source_cup, _, _ = tracy_transfer_world
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=0.0,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+        )
+        with pytest.raises(NonPositiveTiltRateError) as error_info:
+            pacing.build(_pouring_context(world))
+        assert error_info.value.rate == 0.0
+
+    def test_the_paced_motion_is_json_serializable(self, tracy_transfer_world) -> None:
+        world, source_cup, _, _ = tracy_transfer_world
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+        )
+        transfer = _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing])
+        tracker = WorldEntityWithIDKwargsTracker.from_world(transfer.world)
+        restored = MotionStatechart.from_json(
+            json.loads(json.dumps(transfer.motion_statechart.to_json())),
+            world=transfer.world,
+            **tracker.create_kwargs(),
+        )
+        [restored_motion] = [
+            node for node in restored.nodes if isinstance(node, Parallel)
+        ]
+        [restored_pacing] = [
+            node for node in restored_motion.nodes if isinstance(node, TiltPacing)
+        ]
+        assert restored_pacing.approach_rate == pacing.approach_rate
+        assert restored_pacing.maximum_tilt == pacing.maximum_tilt

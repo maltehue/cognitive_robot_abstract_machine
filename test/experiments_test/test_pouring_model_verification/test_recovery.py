@@ -76,6 +76,14 @@ def test_only_a_cup_with_a_slot_edge_is_weighed_for_a_second_lip():
     assert Hypothesis.SECOND_LIP not in hypotheses_for(SourceCup.CUP)
 
 
+def test_with_the_onset_tracked_no_hypothesis_is_named_for_it_alone():
+    assert hypotheses_for(SourceCup.CUP, tracks_onset=True) == (
+        Hypothesis.NOMINAL,
+        Hypothesis.AIM,
+        Hypothesis.CATCH_ALL,
+    )
+
+
 def test_the_second_lip_can_be_forced_into_the_bank_of_a_plain_cup():
     assert Hypothesis.SECOND_LIP in hypotheses_for(SourceCup.CUP, True)
 
