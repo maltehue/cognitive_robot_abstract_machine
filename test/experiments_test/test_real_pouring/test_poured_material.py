@@ -35,3 +35,10 @@ def test_a_full_cup_of_corn_weighs_what_was_set_for_it():
         PouredMaterial.CORN.full_cup_mass_grams
         == poured_material.CORN_FULL_CUP_MASS_GRAMS
     )
+
+
+def test_corn_is_counted_with_its_own_calibration():
+    assert (
+        PouredMaterial.CORN.pixel_seconds_per_grain
+        == poured_material.CORN_PIXEL_SECONDS_PER_GRAIN
+    )

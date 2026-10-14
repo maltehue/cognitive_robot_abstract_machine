@@ -25,13 +25,18 @@ five demo pours of 2026-10-12, times 2.65 g per full cup over 100 grains.
 """
 
 
-CORN_FULL_CUP_MASS_GRAMS: Optional[float] = 300.0
+CORN_FULL_CUP_MASS_GRAMS: Optional[float] = 361.83
 """
 What the corn kernels weigh when they fill the cup, in grams; ``None`` until a full cup
-of them has been weighed.
+of them has been weighed. Weighed on 2026-10-14 as the received, spilled and left-over
+masses of one pour: 50.24 + 4.77 + 306.82 g.
+"""
 
-.. warning:: 300 g is assumed, not weighed. Replace it with received + spilled + what is
-    left in the source after a pour.
+CORN_PIXEL_SECONDS_PER_GRAIN = 173.0
+"""
+How much changed area, times the time it shows, one of the live bank's grains of corn
+adds: the styrofoam value times 5.93, the factor between the camera's count and the
+scale in the first corn pour on 2026-10-14.
 """
 
 
@@ -85,13 +90,14 @@ class PouredMaterial(StrEnum):
     def pixel_seconds_per_grain(self) -> float:
         """
         :return: How much stream area, times the time it shows, one of the live bank's
-            grains of this material adds. Corn has no calibration yet and starts from
-            the styrofoam value: the demo prints the factor to correct it by after a
-            weighed pour.
+            grains of this material adds; the demo prints the factor to correct it by
+            after a weighed pour.
         """
         match self:
-            case PouredMaterial.STYROFOAM | PouredMaterial.CORN:
+            case PouredMaterial.STYROFOAM:
                 return STYROFOAM_PIXEL_SECONDS_PER_GRAIN
+            case PouredMaterial.CORN:
+                return CORN_PIXEL_SECONDS_PER_GRAIN
 
     @property
     def full_cup_mass_grams(self) -> float:
