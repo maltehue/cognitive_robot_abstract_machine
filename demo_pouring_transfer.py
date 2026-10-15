@@ -163,12 +163,12 @@ POURING_VELOCITY = 0.03
 How fast the transfer may raise the predicted fill of the receiver, in fill per second.
 """
 
-STOPPING_VELOCITY = 0.09
+STOPPING_VELOCITY = 1.0
 """
 How fast the transfer may take back fill predicted beyond the goal, in fill per second:
 
-faster than it pours, so the cup is turned back before the grains still coming overfill
-the receiver.
+a whole cup, so it never limits how fast the cup is turned back once the model predicts
+an overshoot; :data:`MAXIMUM_RETURN_TILT_RATE` does.
 """
 
 USE_LIVE_BANK = True
@@ -179,13 +179,16 @@ drain while it runs.
 Needs ``pouring_perception.py`` running for :attr:`MATERIAL`.
 """
 
-BANK_SETTINGS = BankSettings(tracks_onset=True, trickle=0.0)
+BANK_SETTINGS = BankSettings(tracks_onset=True, trickle=0.0, tracks_trickle=True)
 """
 How the live bank weighs the pour: every hypothesis estimates the onset, so a hand-over
 keeps what the pour showed of it and a stream that stops where the model pours moves it
 again; the controller runs on the onset the bank estimates, not on one held just below
 the tilt, since the tilt pacing turns the cup at :data:`APPROACH_TILT_RATE` where the
 model pours nothing.
+
+Every hypothesis also estimates the trickle of single grains below the onset, so a
+trickle neither moves the onset nor counts as the contents flowing.
 """
 
 RECEIVER_FROM_COUNT = True
@@ -346,7 +349,9 @@ print(f"Recording into {recording.start()}.")
 print(
     f"Pouring {MATERIAL} (a full cup weighs {FULL_CUP_MASS_GRAMS} g) to a fill of "
     f"{GOAL_FILL_CONST}; drain repose {math.degrees(REPOSE_ANGLE):.0f} deg, rate "
-    f"{OUTFLOW_RATE_CONSTANT}; live bank {'on' if USE_LIVE_BANK else 'off'}; tilt "
+    f"{OUTFLOW_RATE_CONSTANT}, flowing down to "
+    f"{math.degrees(MATERIAL.repose_hysteresis):.0f} deg below the repose angle; "
+    f"live bank {'on' if USE_LIVE_BANK else 'off'}; tilt "
     f"{math.degrees(FAST_TILT_RATE):.0f} deg/s up to {math.degrees(FAST_UNTIL_TILT):.0f} "
     f"deg, then at most {math.degrees(MAXIMUM_TILT_RATE):.0f} deg/s, never past "
     f"{math.degrees(MAXIMUM_TILT):.0f} deg."
@@ -560,7 +565,7 @@ if USE_LIVE_BANK:
             source=source_cup,
             receiver=receiving_cup,
             world=world,
-            built=DRAIN,
+            built=MATERIAL.drain_of(DRAIN),
             settings=BANK_SETTINGS,
             camera=CameraCondition.POLE_COUNTING.model,
             grains_per_fill=GRAINS_PER_FILL,

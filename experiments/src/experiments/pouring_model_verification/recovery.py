@@ -299,7 +299,8 @@ class BankCoupling:
         """
         :return: The parameters the controller runs on: those the active hypothesis
             gives, or the model as given for a hypothesis that neither revises it nor
-            adapts its repose angle or drain rate to the pour.
+            adapts its repose angle or drain rate to the pour, with its repose angle
+            lowered where the contents flow.
         """
         if not self.bank.started:
             return self.bank.base
@@ -309,7 +310,13 @@ class BankCoupling:
             or active.adapts_drain_rate
             or self.bank.settings.tracks_onset
         ):
-            return self.bank.base
+            return self.bank.base.with_values(
+                {
+                    FreeParameter.REPOSE_ANGLE: active.repose_angle_now(
+                        self.bank.settings.onset_quantile
+                    )
+                }
+            )
         return active.controller_point(self._tilt, self._trickle)
 
     @property

@@ -54,12 +54,30 @@ class FreeParameter(StrEnum):
     How high above the cup's floor the slot edge of a spouted cup stands, in metres.
     """
 
+    TRICKLE_RATE = "trickle_rate"
+    """
+    How many grains per second roll over the lip while the contents as a whole still
+    hold.
+    """
+
+
+class FixedParameter(StrEnum):
+    """
+    A parameter of the pouring model the bank takes as given rather than estimating.
+    """
+
+    REPOSE_HYSTERESIS = "repose_hysteresis"
+    """
+    How far below the repose angle contents that flow keep flowing, in radians.
+    """
+
 
 PARAMETER_ORDER = (
     FreeParameter.REPOSE_ANGLE,
     FreeParameter.DISCHARGE_COEFFICIENT,
     FreeParameter.OUTFLOW_RATE_CONSTANT,
     FreeParameter.SLOT_HEIGHT,
+    FreeParameter.TRICKLE_RATE,
 )
 """
 The column each parameter takes in a filter's particles.
@@ -212,6 +230,26 @@ class ModelPoint:
     that pours over its one lip only.
     """
 
+    trickle_rate: float = 0.0
+    """
+    How many grains per second roll over the lip while the contents as a whole still
+    hold, as single grains of a granular material do below its repose angle.
+    """
+
+    repose_hysteresis: float = 0.0
+    """
+    How far below the repose angle the contents keep flowing once they flow, in
+    radians: the static less the dynamic angle of repose of a granular material, zero
+    for a liquid.
+    """
+
+    def while_flowing(self) -> ModelPoint:
+        """
+        :return: This point as it pours while the contents flow: its repose angle lowered
+            by the hysteresis.
+        """
+        return replace(self, repose_angle=self.repose_angle - self.repose_hysteresis)
+
     def value_of(self, parameter: FreeParameter) -> float:
         """
         :param parameter: The parameter to read.
@@ -226,6 +264,8 @@ class ModelPoint:
                 return self.outflow_rate_constant
             case FreeParameter.SLOT_HEIGHT:
                 return math.nan if self.slot_height is None else self.slot_height
+            case FreeParameter.TRICKLE_RATE:
+                return self.trickle_rate
 
     def with_values(self, values: Dict[FreeParameter, float]) -> ModelPoint:
         """
@@ -237,17 +277,26 @@ class ModelPoint:
 
     def to_json(self) -> Dict[str, Any]:
         return {
-            parameter.value: self.value_of(parameter) for parameter in FreeParameter
+            **{
+                parameter.value: self.value_of(parameter) for parameter in FreeParameter
+            },
+            FixedParameter.REPOSE_HYSTERESIS.value: self.repose_hysteresis,
         }
 
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> ModelPoint:
+        """
+        :param data: A point as :meth:`to_json` wrote it; one written before the
+            trickle and the hysteresis were known has neither.
+        """
         slot = data[FreeParameter.SLOT_HEIGHT]
         return cls(
             repose_angle=data[FreeParameter.REPOSE_ANGLE],
             discharge_coefficient=data[FreeParameter.DISCHARGE_COEFFICIENT],
             outflow_rate_constant=data[FreeParameter.OUTFLOW_RATE_CONSTANT],
             slot_height=None if slot is None or math.isnan(slot) else slot,
+            trickle_rate=data.get(FreeParameter.TRICKLE_RATE, 0.0),
+            repose_hysteresis=data.get(FixedParameter.REPOSE_HYSTERESIS, 0.0),
         )
 
 
@@ -264,6 +313,13 @@ DISCHARGE_COEFFICIENT_BOUNDS = (0.03, 1.0)
 """
 The discharge coefficients the bank considers: a stream cannot leave faster than a free
 fall from the head gives it.
+"""
+
+TRICKLE_RATE_BOUNDS = (0.0, 5.0)
+"""
+The trickle rates the bank considers, in grains per second: a few times the 1 to 2
+grains per second corn trickled at on 2026-10-15 before its bulk came, and a quarter of
+the bulk's 20.
 """
 
 RATE_FACTOR_BOUNDS = (0.1, 10.0)
@@ -305,6 +361,8 @@ class ParameterBounds:
                 )
             case FreeParameter.SLOT_HEIGHT:
                 return (0.0, self.container_height)
+            case FreeParameter.TRICKLE_RATE:
+                return TRICKLE_RATE_BOUNDS
 
     @staticmethod
     def is_logarithmic(parameter: FreeParameter) -> bool:
@@ -784,6 +842,11 @@ class BankSettings:
     How far the slot edge's height may drift between readings, in metres.
     """
 
+    trickle_walk: float = 0.1
+    """
+    How far the trickle rate may drift between readings, in grains per second.
+    """
+
     switching_probability: float = 0.01
     """
     The chance per reading that the pour moves from one hypothesis to another.
@@ -873,6 +936,12 @@ class BankSettings:
     Whether every hypothesis estimates the repose angle as part of the pour's state,
     drifting from reading to reading, so the onset is no concept to switch on and a
     hand-over keeps what the pour showed of it.
+    """
+
+    tracks_trickle: bool = False
+    """
+    Whether every hypothesis estimates the trickle rate as part of the pour's state,
+    drifting from reading to reading, so grains seen below the onset need not move it.
     """
 
     def to_json(self) -> Dict[str, Any]:
@@ -991,6 +1060,12 @@ class HypothesisFilter:
     The particles' normalised log weights.
     """
 
+    flowing: numpy.ndarray = field(init=False)
+    """
+    Whether the contents flow, per particle: they keep flowing down to the repose angle
+    less the hysteresis.
+    """
+
     clipped: int = field(init=False, default=0)
     """
     How many times a parameter of a particle was held at its bound.
@@ -1045,6 +1120,8 @@ class HypothesisFilter:
             free = (FreeParameter.REPOSE_ANGLE,) + free
         if self.adapts_drain_rate and FreeParameter.OUTFLOW_RATE_CONSTANT not in free:
             free = free + (FreeParameter.OUTFLOW_RATE_CONSTANT,)
+        if self.settings.tracks_trickle:
+            free = free + (FreeParameter.TRICKLE_RATE,)
         return free
 
     @property
@@ -1149,6 +1226,7 @@ class HypothesisFilter:
         self.committed = numpy.full(count, received)
         self.spilled = numpy.zeros(count)
         self.log_weights = numpy.full(count, -math.log(count))
+        self.flowing = numpy.zeros(count, dtype=bool)
         self._last_tilt = reading.tilt
         self._last_head = numpy.zeros(count)
         self._last_rate = numpy.zeros(count)
@@ -1203,9 +1281,10 @@ class HypothesisFilter:
         for index in range(steps):
             share = (index + 0.5) / steps
             tilt = (1 - share) * self._last_tilt + share * reading.tilt
-            head = self.geometry.head(tilt, source, self.parameters)
+            head = self._flowing_head(tilt, source)
+            trickle = numpy.where(self.flowing, 0.0, self._trickle_rates)
             flow = numpy.minimum(
-                source, self.geometry.outflow(head, self.parameters) * step
+                source, (self.geometry.outflow(head, self.parameters) + trickle) * step
             )
             source = source - flow
             drained = drained + flow
@@ -1237,6 +1316,47 @@ class HypothesisFilter:
         self._last_head = head
         self._remember(reading.time)
 
+    def _flowing_head(self, tilt: float, source: numpy.ndarray) -> numpy.ndarray:
+        """
+        Start the contents of each particle flowing past its onset, and stop them where
+        the tilt falls below the onset lowered by the hysteresis.
+
+        :param tilt: The cup's tilt, in radians.
+        :param source: The grains in the source, per particle.
+        :return: The head each particle pours with, in metres.
+        """
+        starting = self.geometry.head(tilt, source, self.parameters)
+        continuing = self.geometry.head(
+            tilt, source, self._lowered_by(self.base.repose_hysteresis)
+        )
+        self.flowing = (starting > 0.0) | (self.flowing & (continuing > 0.0))
+        return numpy.where(self.flowing, continuing, 0.0)
+
+    def _lowered_by(self, drop: numpy.ndarray | float) -> numpy.ndarray:
+        """
+        :param drop: How far to lower the repose angle, in radians, for all particles
+            or per particle.
+        :return: The particles' parameters with their repose angle lowered by it.
+        """
+        lowered = self.parameters.copy()
+        lowered[:, PARAMETER_ORDER.index(FreeParameter.REPOSE_ANGLE)] -= drop
+        return lowered
+
+    @property
+    def _trickle_rates(self) -> numpy.ndarray:
+        """
+        :return: How many grains per second trickle over the lip, per particle.
+        """
+        return self.parameters[:, PARAMETER_ORDER.index(FreeParameter.TRICKLE_RATE)]
+
+    @property
+    def _pouring_parameters(self) -> numpy.ndarray:
+        """
+        :return: The parameters each particle pours with now: the repose angle lowered
+            by the hysteresis where its contents flow.
+        """
+        return self._lowered_by(self.base.repose_hysteresis * self.flowing)
+
     def _walk(self) -> None:
         """
         Let each free parameter drift a little, held within its bounds. A value drawn
@@ -1258,6 +1378,10 @@ class HypothesisFilter:
                 case FreeParameter.SLOT_HEIGHT:
                     values = values + self.random.normal(
                         0, self.settings.slot_walk, len(values)
+                    )
+                case FreeParameter.TRICKLE_RATE:
+                    values = values + self.random.normal(
+                        0, self.settings.trickle_walk, len(values)
                     )
                 case _:
                     values = values * numpy.exp(
@@ -1380,6 +1504,7 @@ class HypothesisFilter:
         self.source = self.source[chosen]
         self.committed = self.committed[chosen]
         self.spilled = self.spilled[chosen]
+        self.flowing = self.flowing[chosen]
         self._last_head = self._last_head[chosen]
         self._sources = [states[chosen] for states in self._sources]
         self._committed = [states[chosen] for states in self._committed]
@@ -1430,6 +1555,20 @@ class HypothesisFilter:
         index = min(int(numpy.searchsorted(cumulative, share)), len(column) - 1)
         return float(column[order][index])
 
+    def repose_angle_now(self, share: float) -> float:
+        """
+        :param share: The share of the posterior below the value asked for.
+        :return: That quantile of the repose angle each particle pours with now: lowered
+            by the hysteresis where its contents flow.
+        """
+        pouring = self._pouring_parameters[
+            :, PARAMETER_ORDER.index(FreeParameter.REPOSE_ANGLE)
+        ]
+        order = numpy.argsort(pouring)
+        cumulative = numpy.cumsum(self.weights[order])
+        index = min(int(numpy.searchsorted(cumulative, share)), len(pouring) - 1)
+        return float(pouring[order][index])
+
     def controller_point(self, tilt: float, trickle: float) -> ModelPoint:
         """
         :param tilt: The cup's tilt now, in radians.
@@ -1438,15 +1577,17 @@ class HypothesisFilter:
             stopped.
         :return: The parameters a controller runs on under this hypothesis: the
             posterior mean, with the concepts that set where flow starts at a low
-            quantile, and the onset held no further than a margin below the tilt.
+            quantile, the repose angle lowered where the contents flow, and the onset
+            held no further than a margin below the tilt.
         """
-        point = self.mean().with_values(
-            {
-                parameter: self.quantile(parameter, self.settings.onset_quantile)
-                for parameter in self.free
-                if parameter in (FreeParameter.REPOSE_ANGLE, FreeParameter.SLOT_HEIGHT)
-            }
-        )
+        share = self.settings.onset_quantile
+        values = {
+            parameter: self.quantile(parameter, share)
+            for parameter in self.free
+            if parameter is FreeParameter.SLOT_HEIGHT
+        }
+        values[FreeParameter.REPOSE_ANGLE] = self.repose_angle_now(share)
+        point = self.mean().with_values(values)
         if FreeParameter.REPOSE_ANGLE not in self.free or trickle <= 0.0:
             return point
         grains = float(numpy.average(self.source, weights=self.weights))
@@ -1520,7 +1661,7 @@ class HypothesisFilter:
         :return: The standard deviation, over the particles, of the grains the receiver
             is predicted to hold once what is leaving now has arrived.
         """
-        head = self.geometry.head(tilt, self.source, self.parameters)
+        head = self.geometry.head(tilt, self.source, self._pouring_parameters)
         final = self.committed + MARGIN_HORIZON * self.geometry.outflow(
             head, self.parameters
         )

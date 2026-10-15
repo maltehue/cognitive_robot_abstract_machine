@@ -23,6 +23,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
     FreeParameter,
     Hypothesis,
     HypothesisBank,
+    HypothesisFilter,
     ModelPoint,
     ModelSwitch,
     Reading,
@@ -754,3 +755,237 @@ def test_a_filter_that_saw_nothing_leave_takes_everything_to_land_inside():
     bank = _bank(sensors=UNWEIGHED_RECEIVER_SENSORS)
     bank.observe(_unweighed(_poured_readings(GIVEN, count=1))[0])
     assert bank.filters[Hypothesis.NOMINAL].inside_share == 1.0
+
+
+# %% contents that keep flowing below the tilt they started at
+
+HYSTERESIS = 0.3
+"""
+How far below the repose angle the contents of the tests keep flowing once they flow.
+"""
+
+FLOWING_CONTENTS = replace(GIVEN, repose_hysteresis=HYSTERESIS)
+
+
+def _filter_of(base: ModelPoint) -> HypothesisFilter:
+    """
+    A filter whose particles drain exactly as the model says.
+    """
+    return HypothesisFilter(
+        hypothesis=Hypothesis.NOMINAL,
+        geometry=GEOMETRY,
+        base=base,
+        sensors=EXACT_SENSORS,
+        settings=BankSettings(rate_noise=0.0, stall_probability=0.0),
+        random=numpy.random.default_rng(0),
+    )
+
+
+def _at_tilt(time: float, tilt: float) -> Reading:
+    """
+    A reading that tells the filter nothing but the tilt.
+    """
+    return Reading(time=time, tilt=tilt, receiver_grains=None, source_grains=None)
+
+
+def _between_the_onsets(hypothesis_filter: HypothesisFilter) -> float:
+    """
+    :return: A tilt below where the contents of every particle start to flow and above
+        where those of every particle that flows stop.
+    """
+    starting = min(
+        GEOMETRY.onset_tilt(grains, FLOWING_CONTENTS)
+        for grains in hypothesis_filter.source
+    )
+    stopping = max(
+        GEOMETRY.onset_tilt(grains, FLOWING_CONTENTS.while_flowing())
+        for grains in hypothesis_filter.source
+    )
+    assert stopping < starting
+    return 0.5 * (starting + stopping)
+
+
+def _poured_then_tilted_back(base: ModelPoint) -> HypothesisFilter:
+    """
+    A filter carried through a pour past the onset, then back to a tilt between the
+    onset and the onset its contents keep flowing down to.
+    """
+    hypothesis_filter = _filter_of(base)
+    hypothesis_filter.start(_at_tilt(0.0, 0.5))
+    hypothesis_filter.predict(_at_tilt(1.0, 0.9))
+    between = _between_the_onsets(hypothesis_filter)
+    hypothesis_filter.predict(_at_tilt(1.5, between))
+    hypothesis_filter.predict(_at_tilt(1.6, between))
+    return hypothesis_filter
+
+
+def test_flowing_contents_keep_flowing_below_the_tilt_they_started_at():
+    hypothesis_filter = _poured_then_tilted_back(FLOWING_CONTENTS)
+    before = hypothesis_filter.source_grains
+    hypothesis_filter.predict(_at_tilt(2.6, hypothesis_filter._last_tilt))
+    assert hypothesis_filter.source_grains < before
+
+
+def test_without_hysteresis_the_contents_stop_where_they_started():
+    hypothesis_filter = _poured_then_tilted_back(GIVEN)
+    before = hypothesis_filter.source_grains
+    hypothesis_filter.predict(_at_tilt(2.6, hypothesis_filter._last_tilt))
+    assert hypothesis_filter.source_grains == before
+
+
+def test_contents_that_never_flowed_wait_for_the_repose_angle():
+    hypothesis_filter = _filter_of(FLOWING_CONTENTS)
+    full = GEOMETRY.grains_per_fill
+    below_onset = GEOMETRY.onset_tilt(full, FLOWING_CONTENTS) - HYSTERESIS / 2
+    hypothesis_filter.start(_at_tilt(0.0, below_onset))
+    before = hypothesis_filter.source_grains
+    hypothesis_filter.predict(_at_tilt(2.0, below_onset))
+    assert hypothesis_filter.source_grains == before
+
+
+def test_contents_that_stopped_wait_for_the_repose_angle_again():
+    hypothesis_filter = _poured_then_tilted_back(FLOWING_CONTENTS)
+    hypothesis_filter.predict(_at_tilt(3.0, 0.0))
+    between = _between_the_onsets(hypothesis_filter)
+    hypothesis_filter.predict(_at_tilt(4.0, between))
+    before = hypothesis_filter.source_grains
+    hypothesis_filter.predict(_at_tilt(5.0, between))
+    assert hypothesis_filter.source_grains == before
+
+
+def _coupling_through_a_pour(
+    base: ModelPoint, settings: BankSettings, hypotheses: tuple
+) -> BankCoupling:
+    coupling = BankCoupling(
+        bank=HypothesisBank(
+            hypotheses=hypotheses,
+            geometry=GEOMETRY,
+            base=base,
+            sensors=EXACT_SENSORS,
+            settings=settings,
+            seed=0,
+        )
+    )
+    for index, tilt in enumerate(numpy.linspace(0.5, 0.9, 11)):
+        coupling.observe(_at_tilt(0.1 * index, float(tilt)), poured_share=0.0)
+    return coupling
+
+
+def test_the_controller_runs_on_the_lowered_repose_angle_once_the_contents_flow():
+    coupling = _coupling_through_a_pour(
+        FLOWING_CONTENTS, BankSettings(), (Hypothesis.NOMINAL,)
+    )
+    assert coupling.point.repose_angle == FLOWING_CONTENTS.repose_angle - HYSTERESIS
+
+
+def test_the_controller_runs_on_the_repose_angle_before_the_contents_flow():
+    coupling = BankCoupling(
+        bank=HypothesisBank(
+            hypotheses=(Hypothesis.NOMINAL,),
+            geometry=GEOMETRY,
+            base=FLOWING_CONTENTS,
+            sensors=EXACT_SENSORS,
+            settings=BankSettings(),
+            seed=0,
+        )
+    )
+    coupling.observe(_at_tilt(0.0, 0.1), poured_share=0.0)
+    coupling.observe(_at_tilt(0.1, 0.1), poured_share=0.0)
+    assert coupling.point == FLOWING_CONTENTS
+
+
+def test_a_tracked_onset_is_lowered_once_the_contents_flow():
+    settings = BankSettings(tracks_onset=True, trickle=0.0)
+    coupling = _coupling_through_a_pour(
+        FLOWING_CONTENTS,
+        settings,
+        hypotheses_for(SourceCup.CUP, tracks_onset=True),
+    )
+    active = coupling.bank.filters[coupling.active]
+    assert (
+        coupling.point.repose_angle
+        == active.quantile(FreeParameter.REPOSE_ANGLE, settings.onset_quantile)
+        - HYSTERESIS
+    )
+
+
+def test_a_model_point_with_hysteresis_survives_a_round_trip_through_json():
+    assert ModelPoint.from_json(FLOWING_CONTENTS.to_json()) == FLOWING_CONTENTS
+
+
+# %% grains that trickle over the lip below the onset
+
+TRICKLE_RATE = 1.5
+"""
+How many grains per second trickle over the lip in the tests.
+"""
+
+TRICKLING = replace(GIVEN, trickle_rate=TRICKLE_RATE)
+
+
+def test_with_the_trickle_tracked_every_hypothesis_estimates_it():
+    bank = HypothesisBank(
+        hypotheses=hypotheses_for(SourceCup.CUP, tracks_onset=True),
+        geometry=GEOMETRY,
+        base=GIVEN,
+        sensors=EXACT_SENSORS,
+        settings=BankSettings(tracks_onset=True, tracks_trickle=True),
+        seed=0,
+    )
+    assert all(
+        FreeParameter.TRICKLE_RATE in bank.filters[hypothesis].free
+        for hypothesis in bank.hypotheses
+    )
+
+
+def test_grains_trickle_below_the_onset_without_the_contents_flowing():
+    hypothesis_filter = _filter_of(TRICKLING)
+    below_onset = GEOMETRY.onset_tilt(GEOMETRY.grains_per_fill, TRICKLING) - 0.1
+    hypothesis_filter.start(_at_tilt(0.0, below_onset))
+    loaded = hypothesis_filter.source_grains
+    hypothesis_filter.predict(_at_tilt(2.0, below_onset))
+    assert (
+        loaded - hypothesis_filter.source_grains,
+        bool(hypothesis_filter.flowing.any()),
+    ) == (pytest.approx(TRICKLE_RATE * 2.0), False)
+
+
+def test_flowing_contents_pour_without_a_trickle_on_top():
+    poured = []
+    for base in (GIVEN, TRICKLING):
+        hypothesis_filter = _filter_of(base)
+        hypothesis_filter.start(_at_tilt(0.0, 0.9))
+        hypothesis_filter.predict(_at_tilt(1.0, 0.9))
+        poured.append(hypothesis_filter.source_grains)
+    assert poured[0] == poured[1]
+
+
+def test_a_trickle_the_camera_counts_below_the_onset_is_estimated_as_one():
+    settings = BankSettings(tracks_trickle=True)
+    bank = HypothesisBank(
+        hypotheses=(Hypothesis.NOMINAL,),
+        geometry=GEOMETRY,
+        base=GIVEN,
+        sensors=replace(CAMERA_ONLY_SENSORS, stream_dropout=None),
+        settings=settings,
+        seed=0,
+    )
+    step, counted = 0.1, 0.0
+    for index in range(100):
+        time = index * step
+        trickling = time >= 2.0
+        bank.observe(
+            Reading(
+                time=time,
+                tilt=0.3,
+                receiver_grains=None,
+                source_grains=GEOMETRY.grains_per_fill if index == 0 else None,
+                stream_seen=trickling,
+                counted_grains=counted,
+            )
+        )
+        counted += TRICKLE_RATE * step if trickling else 0.0
+    hypothesis_filter = bank.filters[Hypothesis.NOMINAL]
+    assert hypothesis_filter.mean().trickle_rate == pytest.approx(
+        TRICKLE_RATE / (1.0 - settings.stall_probability), abs=0.5
+    )

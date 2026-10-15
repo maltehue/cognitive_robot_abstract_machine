@@ -1,4 +1,8 @@
+from dataclasses import replace
+
 import pytest
+
+from experiments.pouring_model_verification.hypothesis_bank import ModelPoint
 
 from experiments.real_pouring import poured_material
 from experiments.real_pouring.poured_material import (
@@ -49,4 +53,27 @@ def test_corn_reads_its_heap_on_its_own_scale():
     assert (
         PouredMaterial.CORN.heap_pixels_per_share
         == poured_material.CORN_HEAP_PIXELS_PER_SHARE
+    )
+
+
+def test_styrofoam_keeps_flowing_below_its_repose_angle_by_its_own_hysteresis():
+    assert (
+        PouredMaterial.STYROFOAM.repose_hysteresis
+        == poured_material.STYROFOAM_REPOSE_HYSTERESIS
+    )
+
+
+def test_corn_keeps_flowing_below_its_repose_angle_by_its_own_hysteresis():
+    assert (
+        PouredMaterial.CORN.repose_hysteresis == poured_material.CORN_REPOSE_HYSTERESIS
+    )
+
+
+@pytest.mark.parametrize("material", list(PouredMaterial))
+def test_a_drain_poured_with_a_material_takes_on_its_hysteresis(material):
+    drain = ModelPoint(
+        repose_angle=0.1, discharge_coefficient=0.2, outflow_rate_constant=0.8
+    )
+    assert material.drain_of(drain) == replace(
+        drain, repose_hysteresis=material.repose_hysteresis
     )

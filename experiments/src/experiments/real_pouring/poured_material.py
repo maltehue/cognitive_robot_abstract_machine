@@ -4,13 +4,15 @@ What is poured, and what the camera and the scale need to know about it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from typing_extensions import Optional
 
 from giskardpy.middleware.ros2.particle_weighing import FULL_CUP_MASS_GRAMS
 
+from experiments.pouring_model_verification.hypothesis_bank import ModelPoint
 from experiments.real_pouring.stream_detection import (
     GrainSegmentation,
     MovingGrainSegmentation,
@@ -60,6 +62,24 @@ receiver, for the heap gauge: from the corn pour of 2026-10-14 17:50, which ende
 fill of 0.69, near the goal. The brim-full pour of 2026-10-15 gives 2806, so above the
 goal the gauge reads up to 0.07 too full and stops a pour early rather than late
 (experiments/results/real_pouring/analysis_2026-10-15/heap_calibration.py).
+"""
+
+STYROFOAM_REPOSE_HYSTERESIS = math.radians(60.0)
+"""
+How far below the repose angle the styrofoam balls keep flowing once they flow: the
+bulk starts at about 70 degrees with the cup full and stops on the way back at 74, 82
+and 90 degrees with 32, 17 and 6 % left (2026-10-14 13:44, 15:56, 14:49), which the
+model's lip geometry puts 67, 59 and 53 degrees below the starting angle
+(experiments/results/real_pouring/analysis_2026-10-15/stop_angles.py).
+"""
+
+CORN_REPOSE_HYSTERESIS = math.radians(45.0)
+"""
+How far below the repose angle the corn keeps flowing once it flows: the bulk starts at
+about 66 degrees with the cup full and stops on the way back at 92 degrees with 20 % left
+(2026-10-14 17:50), 45 degrees below the starting angle in the model's lip geometry; with
+85 % left (17:14) only 27 below, but a pour to the goal ends near a fifth left
+(experiments/results/real_pouring/analysis_2026-10-15/stop_angles.py).
 """
 
 
@@ -133,6 +153,25 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_HEAP_PIXELS_PER_SHARE
             case PouredMaterial.CORN:
                 return CORN_HEAP_PIXELS_PER_SHARE
+
+    @property
+    def repose_hysteresis(self) -> float:
+        """
+        :return: How far below the repose angle this material keeps flowing once it
+            flows, in radians.
+        """
+        match self:
+            case PouredMaterial.STYROFOAM:
+                return STYROFOAM_REPOSE_HYSTERESIS
+            case PouredMaterial.CORN:
+                return CORN_REPOSE_HYSTERESIS
+
+    def drain_of(self, drain: ModelPoint) -> ModelPoint:
+        """
+        :param drain: A drain's parameters.
+        :return: The drain as it pours this material: with its hysteresis.
+        """
+        return replace(drain, repose_hysteresis=self.repose_hysteresis)
 
     @property
     def full_cup_mass_grams(self) -> float:
