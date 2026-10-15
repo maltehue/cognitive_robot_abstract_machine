@@ -7,6 +7,8 @@ from experiments.pouring_model_verification.hypothesis_bank import (
     ModelPoint,
 )
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.receiving_cup import ReceivingCup
+from experiments.real_pouring.stream_detection import ReceiverNotFoundError
 from experiments.real_pouring.pour_replay import (
     CameraFrame,
     CupPose,
@@ -156,3 +158,14 @@ def test_the_bag_is_the_folder_holding_the_recording(tmp_path):
 def test_a_folder_without_a_recording_says_so(tmp_path):
     with pytest.raises(NoRecordingFoundError):
         bag_folder_in(tmp_path)
+
+
+def test_a_pour_into_the_translucent_cup_is_replayed_looking_for_it_on_its_mat():
+    with pytest.raises(ReceiverNotFoundError):
+        PourReplay.of(
+            _recording(),
+            material=PouredMaterial.CORN,
+            drain=DRAIN,
+            settings=BankSettings(tracks_onset=True),
+            receiver=ReceivingCup.TRANSLUCENT_CUP,
+        )

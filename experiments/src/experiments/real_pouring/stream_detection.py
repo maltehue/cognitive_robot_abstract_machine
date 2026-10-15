@@ -14,13 +14,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing_extensions import Any, Dict, List, Optional, Tuple
+from typing_extensions import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy
 
 from experiments.real_pouring.receiver_heap import HeapGauge
 from krrood.adapters.json_serializer import SubclassJSONSerializer
+
+if TYPE_CHECKING:
+    from experiments.real_pouring.receiver_wall import CupOnMat, WallGauge
 
 # %% the camera
 
@@ -581,6 +584,34 @@ of a few millimetres, at the pole camera's millimetre per pixel.
 
 
 @dataclass
+class TwoReceiverGaugesError(Exception):
+    """
+    Raised when a detector is given both the heap gauge of an opaque receiver and the
+    wall gauge of a translucent one: a receiver is one or the other.
+    """
+
+    def __str__(self) -> str:
+        return (
+            "A stream detector reads the receiver with the heap gauge of an opaque cup "
+            "or the wall gauge of a translucent one, not both."
+        )
+
+
+@dataclass
+class CupOnMatWithoutWallGaugeError(Exception):
+    """
+    Raised when a detector is to find a translucent receiver on its mat without the wall
+    gauge that knows where the receiver projects.
+    """
+
+    def __str__(self) -> str:
+        return (
+            "A stream detector finds a translucent receiver on its mat only with the "
+            "wall gauge that reads it."
+        )
+
+
+@dataclass
 class StreamDetector:
     """
     Turns the images of a fixed camera into readings of the stream crossing the
@@ -620,12 +651,26 @@ class StreamDetector:
     to keep the opening where it projects.
     """
 
+    cup_on_mat: Optional[CupOnMat] = None
+    """
+    The mat a translucent receiver is found standing on in the empty view, the opening
+    moved with it, or ``None``.
+
+    Needs :attr:`wall_gauge`, which knows where the receiver projects.
+    """
+
     heap_gauge: Optional[HeapGauge] = None
     """
     What the heap seen lying in the receiver says of its fill, or ``None`` not to read
     the heap.
 
     Needs :attr:`outline`, which tells the receiver's inside from the rest.
+    """
+
+    wall_gauge: Optional[WallGauge] = None
+    """
+    What the contents seen lying in a translucent receiver say of its fill, or ``None``
+    not to read them.
     """
 
     _background: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
@@ -676,18 +721,50 @@ class StreamDetector:
     first.
     """
 
+    _wall_window: Tuple[slice, slice] = field(init=False, default=(slice(0), slice(0)))
+    """
+    The rows and columns of the smallest image window holding the translucent receiver.
+    """
+
+    _wall_region: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
+    """
+    Which pixels of the wall window show the translucent receiver, or ``None`` without a
+    wall gauge.
+    """
+
+    _wall_background: Optional[numpy.ndarray] = field(
+        init=False, default=None, repr=False
+    )
+    """
+    What the wall window showed before the pour.
+    """
+
+    _wall_still_frames: Optional[numpy.ndarray] = field(
+        init=False, default=None, repr=False
+    )
+    """
+    For every pixel of the wall window, how many frames in a row it has shown the
+    contents.
+    """
+
+    def __post_init__(self) -> None:
+        if self.heap_gauge is not None and self.wall_gauge is not None:
+            raise TwoReceiverGaugesError()
+        if self.cup_on_mat is not None and self.wall_gauge is None:
+            raise CupOnMatWithoutWallGaugeError()
+
     def learn_background(self, images: List[numpy.ndarray]) -> None:
         """
         Remember what the view shows before the pour, and start counting from nothing.
 
         :param images: Images taken before any grain leaves the source, BGR.
         """
-        mask = self.opening.mask_in(self.view, images[0].shape[:2])
-        self._opening_offset = NO_OFFSET
-        if self.outline is not None:
-            empty_view = numpy.median(numpy.stack(images), axis=0).astype(numpy.uint8)
-            self._opening_offset = self.outline.offset(mask, empty_view)
-            mask = self._opening_offset.applied_to(mask)
+        image_size = images[0].shape[:2]
+        mask = self.opening.mask_in(self.view, image_size)
+        empty_view = numpy.median(numpy.stack(images), axis=0).astype(numpy.uint8)
+        self._opening_offset = self._offset_of(mask, empty_view)
+        mask = self._opening_offset.applied_to(mask)
+        self._learn_wall(empty_view)
         rows, columns = numpy.nonzero(mask)
         self._window = (
             slice(rows.min(), rows.max() + 1),
@@ -706,6 +783,65 @@ class StreamDetector:
             else self._mask & self.outline.shows_cup(self._background)
         )
         self._still_frames = numpy.zeros(self._mask.shape, dtype=int)
+
+    def _offset_of(
+        self, opening: numpy.ndarray, empty_view: numpy.ndarray
+    ) -> PixelOffset:
+        """
+        :param opening: Which pixels the opening projects to.
+        :param empty_view: What the camera showed before the pour, BGR.
+        :return: How far the camera's pose error moves the opening in the image: found
+            from the receiver's outline, from the gap it makes in its mat, or none.
+        """
+        if self.outline is not None:
+            return self.outline.offset(opening, empty_view)
+        if self.cup_on_mat is not None:
+            return self.cup_on_mat.offset(
+                self.wall_gauge.region_in(empty_view.shape[:2], NO_OFFSET), empty_view
+            )
+        return NO_OFFSET
+
+    def _learn_wall(self, empty_view: numpy.ndarray) -> None:
+        """
+        Remember what the translucent receiver looks like empty, where there is a wall
+        gauge to read it with.
+
+        :param empty_view: What the camera showed before the pour, BGR.
+        """
+        if self.wall_gauge is None:
+            return
+        region = self.wall_gauge.region_in(empty_view.shape[:2], self._opening_offset)
+        rows, columns = numpy.nonzero(region)
+        self._wall_window = (
+            slice(rows.min(), rows.max() + 1),
+            slice(columns.min(), columns.max() + 1),
+        )
+        self._wall_region = region[self._wall_window]
+        self._wall_background = empty_view[self._wall_window]
+        self._wall_still_frames = numpy.zeros(self._wall_region.shape, dtype=int)
+
+    def _watch_wall(self, image: numpy.ndarray) -> Optional[float]:
+        """
+        Count, for every pixel of the translucent receiver, how long it has shown the
+        contents.
+
+        :param image: The latest image, BGR.
+        :return: The fill the contents lying still show, or ``None`` without a wall
+            gauge or with too few of them to tell.
+        """
+        if self.wall_gauge is None:
+            return None
+        contents = (
+            self.wall_gauge.shows_contents(
+                image[self._wall_window], self._wall_background
+            )
+            & self._wall_region
+        )
+        self._wall_still_frames = numpy.where(contents, self._wall_still_frames + 1, 0)
+        still_for = round(HEAP_STILL_SECONDS / self.frame_period)
+        return self.wall_gauge.fill_for(
+            int((self._wall_still_frames >= still_for).sum())
+        )
 
     @property
     def heap_pixels(self) -> int:
@@ -777,7 +913,7 @@ class StreamDetector:
         self._previous = window
         self._watch_heap(window)
         heap_fill = (
-            None
+            self._watch_wall(image)
             if self.heap_gauge is None
             else self.heap_gauge.fill_for(self.heap_pixels)
         )

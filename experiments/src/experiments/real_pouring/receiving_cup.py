@@ -1,0 +1,224 @@
+"""
+The cups the robot pours into, and what the camera and the model need to know of each.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from enum import StrEnum
+
+import numpy
+
+from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.receiver_heap import HeapGauge
+from experiments.real_pouring.receiver_wall import BLUE_MAT, WallGauge
+from experiments.real_pouring.stream_detection import (
+    BLUE_CUP_OUTLINE,
+    CameraView,
+    OpeningRegion,
+    StreamDetector,
+)
+
+JEROEN_CUP_HEIGHT = 0.16
+"""
+The Jeroen cup's height, from its bottom to its rim, in metres.
+"""
+
+JEROEN_CUP_RADIUS = 0.035
+"""
+The Jeroen cup's opening radius, in metres.
+"""
+
+TRANSLUCENT_CUP_HEIGHT = 0.155
+"""
+The translucent cup's height, from its bottom to its rim, in metres.
+"""
+
+TRANSLUCENT_CUP_RADIUS = 0.045
+"""
+The translucent cup's inner radius, in metres: 9 cm across.
+"""
+
+TRANSLUCENT_CUP_CORN_MASS_GRAMS = 722.0
+"""
+What the corn kernels weigh when they fill the translucent cup to the brim, in grams.
+"""
+
+
+@dataclass
+class ReceiverFullMassUnknownError(Exception):
+    """
+    Raised when a receiving cup's capacity is needed for a material nobody has filled it
+    with on the scale.
+    """
+
+    cup: ReceivingCup
+    """
+    The cup not weighed full.
+    """
+
+    material: PouredMaterial
+    """
+    The material it was not weighed full of.
+    """
+
+    def __str__(self) -> str:
+        return (
+            f"Nobody has weighed the {self.cup} full of {self.material} yet: fill it to "
+            f"the brim, weigh what is in it, and set the mass in "
+            f"experiments/real_pouring/receiving_cup.py."
+        )
+
+
+@dataclass
+class ReceivingCupChangedError(Exception):
+    """
+    Raised when the controller still holds the receiving cup of an earlier pour into
+    another cup: its size and capacity would be the old cup's.
+    """
+
+    cup: ReceivingCup
+    """
+    The cup poured into now.
+    """
+
+    def __str__(self) -> str:
+        return (
+            f"The controller still holds the receiving cup of an earlier pour into "
+            f"another cup than the {self.cup}: restart Giskard so the demo creates the "
+            f"cups anew."
+        )
+
+
+CAPACITY_TOLERANCE = 1e-6
+"""
+How far, relatively, two capacities may differ and still be the same cup's.
+"""
+
+
+class ReceivingCup(StrEnum):
+    """
+    A cup the robot pours into.
+    """
+
+    JEROEN_CUP = "jeroen_cup"
+    """
+    The blue Jeroen cup the robot also pours from: opaque, so the camera sees its
+    contents only over the rim.
+    """
+
+    TRANSLUCENT_CUP = "translucent_cup"
+    """
+    A frosted plastic cup, 9 cm across inside and 15.5 cm high: the camera sees its
+    contents through the wall.
+    """
+
+    @property
+    def height(self) -> float:
+        """
+        :return: The cup's height, from its bottom to its rim, in metres.
+        """
+        match self:
+            case ReceivingCup.JEROEN_CUP:
+                return JEROEN_CUP_HEIGHT
+            case ReceivingCup.TRANSLUCENT_CUP:
+                return TRANSLUCENT_CUP_HEIGHT
+
+    @property
+    def inner_radius(self) -> float:
+        """
+        :return: The radius of the cup's opening, in metres.
+        """
+        match self:
+            case ReceivingCup.JEROEN_CUP:
+                return JEROEN_CUP_RADIUS
+            case ReceivingCup.TRANSLUCENT_CUP:
+                return TRANSLUCENT_CUP_RADIUS
+
+    def full_mass_grams(self, material: PouredMaterial) -> float:
+        """
+        :param material: What fills the cup.
+        :return: What that much of the material weighs, in grams.
+        :raises ReceiverFullMassUnknownError: If nobody weighed the cup full of it.
+        """
+        match self, material:
+            case ReceivingCup.JEROEN_CUP, _:
+                return material.full_cup_mass_grams
+            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
+                return TRANSLUCENT_CUP_CORN_MASS_GRAMS
+        raise ReceiverFullMassUnknownError(cup=self, material=material)
+
+    def source_cups_held(self, material: PouredMaterial) -> float:
+        """
+        :param material: What is poured.
+        :return: How many full Jeroen cups, the cup poured from, this cup holds.
+        """
+        return self.full_mass_grams(material) / material.full_cup_mass_grams
+
+    def check_reused(
+        self,
+        receiver_capacity: float,
+        source_capacity: float,
+        material: PouredMaterial,
+    ) -> None:
+        """
+        :param receiver_capacity: The capacity of the receiver an earlier pour left.
+        :param source_capacity: The capacity of the cup poured from.
+        :param material: What is poured.
+        :raises ReceivingCupChangedError: If that receiver was another cup.
+        """
+        expected = source_capacity * self.source_cups_held(material)
+        if not math.isclose(receiver_capacity, expected, rel_tol=CAPACITY_TOLERANCE):
+            raise ReceivingCupChangedError(cup=self)
+
+    def detector_for(
+        self,
+        material: PouredMaterial,
+        view: CameraView,
+        opening_centre: numpy.ndarray,
+        frame_period: float,
+    ) -> StreamDetector:
+        """
+        :param material: What is poured.
+        :param view: The camera's calibration.
+        :param opening_centre: The centre of the cup's opening, in the world.
+        :param frame_period: How long apart the camera takes its images, in seconds.
+        :return: A detector watching this cup's opening for the material, reading the
+            cup's fill the way the cup lets the camera see it.
+        :raises MaterialNotSeenThroughWallError: For a translucent cup and a material
+            its wall hides.
+        """
+        opening = OpeningRegion(centre=opening_centre, radius=self.inner_radius)
+        common = dict(
+            view=view,
+            opening=opening,
+            segmentation=material.segmentation,
+            pixel_seconds_per_grain=material.pixel_seconds_per_grain,
+            frame_period=frame_period,
+        )
+        match self:
+            case ReceivingCup.JEROEN_CUP:
+                return StreamDetector(
+                    **common,
+                    outline=BLUE_CUP_OUTLINE,
+                    heap_gauge=HeapGauge.for_receiver(
+                        camera_position=view.world_T_camera[:3, 3],
+                        opening_centre=opening_centre,
+                        height=self.height,
+                        radius=self.inner_radius,
+                        pixels_per_share=material.heap_pixels_per_share,
+                    ),
+                )
+            case ReceivingCup.TRANSLUCENT_CUP:
+                return StreamDetector(
+                    **common,
+                    cup_on_mat=BLUE_MAT,
+                    wall_gauge=WallGauge.for_receiver(
+                        view=view,
+                        opening_centre=opening_centre,
+                        height=self.height,
+                        radius=self.inner_radius,
+                        detected_share=material.wall_detected_share,
+                    ),
+                )

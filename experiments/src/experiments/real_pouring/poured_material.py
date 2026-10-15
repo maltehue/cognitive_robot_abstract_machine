@@ -82,6 +82,32 @@ about 66 degrees with the cup full and stops on the way back at 92 degrees with 
 (experiments/results/real_pouring/analysis_2026-10-15/stop_angles.py).
 """
 
+CORN_WALL_DETECTED_SHARE = 1.0
+"""
+The share of the corn's projected area the pole camera picks out through the frosted
+wall of the translucent receiving cup: not calibrated yet, so the whole area; the first
+weighed pour into that cup sets it.
+"""
+
+
+@dataclass
+class MaterialNotSeenThroughWallError(Exception):
+    """
+    Raised when a material is to be read through a translucent receiver's frosted wall
+    that does not show through it as a change of colour.
+    """
+
+    material: PouredMaterial
+    """
+    The material that does not show through the wall.
+    """
+
+    def __str__(self) -> str:
+        return (
+            f"{self.material} does not turn the translucent cup's frosted wall yellow, "
+            f"so its fill cannot be read through it: pour it into the Jeroen cup."
+        )
+
 
 @dataclass
 class FullCupMassUnknownError(Exception):
@@ -172,6 +198,19 @@ class PouredMaterial(StrEnum):
         :return: The drain as it pours this material: with its hysteresis.
         """
         return replace(drain, repose_hysteresis=self.repose_hysteresis)
+
+    @property
+    def wall_detected_share(self) -> float:
+        """
+        :return: The share of this material's projected area the camera picks out
+            through a translucent receiver's frosted wall: the scale of the wall gauge.
+        :raises MaterialNotSeenThroughWallError: For a material the wall hides.
+        """
+        match self:
+            case PouredMaterial.CORN:
+                return CORN_WALL_DETECTED_SHARE
+            case PouredMaterial.STYROFOAM:
+                raise MaterialNotSeenThroughWallError(material=self)
 
     @property
     def full_cup_mass_grams(self) -> float:

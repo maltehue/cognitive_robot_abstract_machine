@@ -31,6 +31,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
     ModelPoint,
 )
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.receiving_cup import ReceivingCup
 from experiments.real_pouring.pour_replay import (
     CUP_SIZE,
     FRAME_PERIOD,
@@ -473,6 +474,12 @@ def main() -> None:
         default=PouredMaterial.STYROFOAM,
         choices=list(PouredMaterial),
     )
+    parser.add_argument(
+        "--receiver",
+        type=ReceivingCup,
+        default=ReceivingCup.JEROEN_CUP,
+        choices=list(ReceivingCup),
+    )
     parser.add_argument("--drain", type=Drain, default=Drain.DEMO, choices=list(Drain))
     parser.add_argument(
         "--onset",
@@ -492,6 +499,7 @@ def main() -> None:
         material=arguments.material,
         drain=arguments.drain.point,
         settings=BankSettings(tracks_onset=arguments.onset is OnsetHandling.TRACKED),
+        receiver=arguments.receiver,
     )
     viewer = PourViewer(
         replay=replay,

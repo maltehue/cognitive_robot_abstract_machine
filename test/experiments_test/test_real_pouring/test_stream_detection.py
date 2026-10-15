@@ -1,20 +1,37 @@
+from dataclasses import replace
+
+import cv2
 import numpy
 import pytest
 
 from krrood.adapters.json_serializer import from_json, to_json
 
 from experiments.real_pouring.receiver_heap import HeapGauge
+from experiments.real_pouring.receiver_wall import BLUE_MAT
+
+from .test_receiver_wall import (
+    CORN_BEHIND_THE_WALL,
+    _cup_on_mat,
+    GAUGE,
+    HEIGHT,
+    IMAGE_SIZE as WALL_IMAGE_SIZE,
+    RADIUS,
+)
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     HEAP_STILL_SECONDS,
+    CupOnMatWithoutWallGaugeError,
+    NO_OFFSET,
     CameraView,
     ChangeSegmentation,
     GrainSegmentation,
     HueBandSegmentation,
     MovingGrainSegmentation,
     OpeningRegion,
+    PixelOffset,
     ReceiverNotFoundError,
     StreamDetector,
+    TwoReceiverGaugesError,
     WhiteSegmentation,
     StreamReading,
 )
@@ -514,3 +531,129 @@ def test_a_reading_from_before_the_heap_was_read_loads_without_it():
     data = to_json(reading)
     del data["heap_fill"]
     assert from_json(data).heap_fill is None
+
+
+# %% a translucent receiver whose opening is placed by a measured offset
+
+
+WALL_HEIGHT = HEIGHT
+"""
+The translucent cup's height, in metres.
+"""
+
+WALL_RADIUS = RADIUS
+"""
+The translucent cup's inner radius, in metres.
+"""
+
+WALL_OPENING = OpeningRegion(
+    centre=numpy.array([0.0, 0.0, WALL_HEIGHT]), radius=WALL_RADIUS
+)
+"""
+The translucent cup's opening, the cup standing on the world origin.
+"""
+
+WALL_GAUGE = replace(GAUGE, detected_share=1.0)
+"""
+The translucent cup seen at an angle, like the pole camera sees it, every pixel of its
+contents picked out.
+"""
+
+FROSTED_WALL = (215, 205, 190)
+"""
+The empty cup's frosted wall, BGR.
+"""
+
+
+def _frosted_view() -> numpy.ndarray:
+    return numpy.full((*WALL_IMAGE_SIZE, 3), FROSTED_WALL, dtype=numpy.uint8)
+
+
+def _detector_on_a_translucent_cup() -> StreamDetector:
+    detector = StreamDetector(
+        view=WALL_GAUGE.view,
+        opening=WALL_OPENING,
+        segmentation=MOVING,
+        pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+        frame_period=FRAME_PERIOD,
+        wall_gauge=WALL_GAUGE,
+    )
+    detector.learn_background([_frosted_view()])
+    return detector
+
+
+def _contents_up_to(fill: float) -> numpy.ndarray:
+    """
+    The frosted cup with corn up to ``fill``, where the gauge says it shows.
+    """
+    image = _frosted_view()
+    cv2.fillPoly(
+        image,
+        [numpy.round(WALL_GAUGE.outline(fill)).astype(numpy.int32)],
+        CORN_BEHIND_THE_WALL,
+    )
+    return image
+
+
+def test_a_translucent_cup_found_on_its_mat_moves_the_opening_with_it():
+    shifted = PixelOffset(rows=12, columns=-18)
+    detector = StreamDetector(
+        view=WALL_GAUGE.view,
+        opening=WALL_OPENING,
+        segmentation=MOVING,
+        pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+        frame_period=FRAME_PERIOD,
+        cup_on_mat=BLUE_MAT,
+        wall_gauge=WALL_GAUGE,
+    )
+    detector.learn_background([_cup_on_mat(shifted)])
+    projected = WALL_OPENING.mask_in(WALL_GAUGE.view, WALL_IMAGE_SIZE)
+    assert (
+        detector.opening_mask(WALL_IMAGE_SIZE) == shifted.applied_to(projected)
+    ).all()
+
+
+def test_a_translucent_cup_is_found_on_its_mat_only_with_its_wall_gauge():
+    with pytest.raises(CupOnMatWithoutWallGaugeError):
+        StreamDetector(
+            view=WALL_GAUGE.view,
+            opening=WALL_OPENING,
+            segmentation=MOVING,
+            pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+            frame_period=FRAME_PERIOD,
+            cup_on_mat=BLUE_MAT,
+        )
+
+
+def test_contents_lying_still_behind_the_wall_tell_the_fill():
+    detector = _detector_on_a_translucent_cup()
+    for frame in range(STILL_FRAMES):
+        reading = detector.observe(_contents_up_to(0.5), stamp=frame * FRAME_PERIOD)
+    assert reading.heap_fill == pytest.approx(0.5, abs=0.02)
+
+
+def test_contents_not_yet_still_for_a_second_tell_no_fill():
+    detector = _detector_on_a_translucent_cup()
+    for frame in range(STILL_FRAMES - 1):
+        reading = detector.observe(_contents_up_to(0.5), stamp=frame * FRAME_PERIOD)
+    assert reading.heap_fill is None
+
+
+def test_a_detector_reads_the_receiver_with_one_gauge_only():
+    with pytest.raises(TwoReceiverGaugesError):
+        StreamDetector(
+            view=_looking_down(),
+            opening=OPENING,
+            segmentation=MOVING,
+            pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+            frame_period=FRAME_PERIOD,
+            outline=BLUE_CUP_OUTLINE,
+            heap_gauge=HeapGauge.for_receiver(
+                camera_position=numpy.array([0.0, 0.0, CAMERA_HEIGHT]),
+                opening_centre=OPENING.centre,
+                height=WALL_HEIGHT,
+                radius=WALL_RADIUS,
+                pixels_per_share=1.0,
+            ),
+            wall_gauge=WALL_GAUGE,
+        )

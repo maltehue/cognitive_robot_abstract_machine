@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import tempfile
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import cv2
@@ -31,12 +31,11 @@ from experiments.pouring_model_verification.hypothesis_bank import (
 from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
 from experiments.real_pouring.poured_material import PouredMaterial
-from experiments.real_pouring.receiver_heap import HeapGauge
+from experiments.real_pouring.receiving_cup import ReceivingCup
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
     ReceiverOutline,
-    OpeningRegion,
     StreamDetector,
     StreamReading,
 )
@@ -446,6 +445,8 @@ class PourReplay:
         receiver_from_count: bool = False,
         stop_lead_time: float = 0.0,
         outline: Optional[ReceiverOutline] = RECEIVER_OUTLINE,
+        receiver: ReceivingCup = ReceivingCup.JEROEN_CUP,
+        goal_fill: float = GOAL_FILL,
     ) -> PourReplay:
         """
         :param recording: The pour to replay.
@@ -454,33 +455,27 @@ class PourReplay:
         :param settings: How the bank weighs the pour.
         :param receiver_from_count: Whether the receiver is reported from the count.
         :param stop_lead_time: How long grains keep arriving after a stop, in seconds.
-        :param outline: The receiving cup's outline the opening is moved onto, or
-            ``None`` to count where the opening projects.
+        :param outline: The Jeroen cup's outline the opening is moved onto, or ``None``
+            to count where the opening projects.
+        :param receiver: The cup poured into.
+        :param goal_fill: The fill the receiver was poured to.
         :return: The replay, every reading weighed.
         """
-        world, source, source_joint = _replay_world(recording, drain)
-        opening = OpeningRegion(
-            centre=recording.receiver_position + numpy.array([0, 0, OPENING_HEIGHT]),
-            radius=OPENING_RADIUS,
+        world, source, source_joint = _replay_world(
+            recording, drain, receiver, material
         )
-        detector = StreamDetector(
+        detector = receiver.detector_for(
+            material=material,
             view=CameraView(
                 intrinsics=recording.intrinsics,
                 world_T_camera=recording.world_T_camera,
             ),
-            opening=opening,
-            segmentation=material.segmentation,
-            pixel_seconds_per_grain=material.pixel_seconds_per_grain,
+            opening_centre=recording.receiver_position
+            + numpy.array([0.0, 0.0, receiver.height]),
             frame_period=FRAME_PERIOD,
-            outline=outline,
-            heap_gauge=HeapGauge.for_receiver(
-                camera_position=recording.world_T_camera[:3, 3],
-                opening_centre=opening.centre,
-                height=OPENING_HEIGHT,
-                radius=OPENING_RADIUS,
-                pixels_per_share=material.heap_pixels_per_share,
-            ),
         )
+        if receiver is ReceivingCup.JEROEN_CUP:
+            detector = replace(detector, outline=outline)
         first = recording.first_pour_frame
         detector.learn_background(
             [
@@ -497,8 +492,10 @@ class PourReplay:
             camera=CameraCondition.POLE_COUNTING.model,
             grains_per_fill=GRAINS_PER_FILL,
             loaded_grains=GRAINS_PER_FILL,
-            goal_grains=GOAL_FILL * GRAINS_PER_FILL,
-            opening_radius=OPENING_RADIUS,
+            goal_grains=goal_fill
+            * GRAINS_PER_FILL
+            * receiver.source_cups_held(material),
+            opening_radius=receiver.inner_radius,
             prediction_window=PREDICTION_WINDOW,
             receiver_from_count=receiver_from_count,
             stop_lead_time=stop_lead_time,
@@ -568,7 +565,10 @@ def _transform(pose: CupPose, world: World) -> HomogeneousTransformationMatrix:
 
 
 def _replay_world(
-    recording: PourRecording, drain: ModelPoint
+    recording: PourRecording,
+    drain: ModelPoint,
+    receiver_cup: ReceivingCup,
+    material: PouredMaterial,
 ) -> tuple[World, HasFillLevel, Connection6DoF]:
     """
     :return: A world with the source cup, filled and draining as ``drain`` says, and the
@@ -577,17 +577,22 @@ def _replay_world(
     world = World()
     with world.modify_world():
         world.add_body(Body(name=PrefixedName(WORLD_FRAME)))
+    receiver_size = Scale(
+        2 * receiver_cup.inner_radius,
+        2 * receiver_cup.inner_radius,
+        receiver_cup.height,
+    )
     cups = {}
-    for name in ("source_cup", "receiving_cup"):
+    for name, size in (("source_cup", CUP_SIZE), ("receiving_cup", receiver_size)):
         body = Body(
             name=PrefixedName(name),
             collision=ShapeCollection(
                 [
                     Box(
                         origin=HomogeneousTransformationMatrix.from_xyz_rpy(
-                            z=CUP_SIZE.z / 2
+                            z=size.z / 2
                         ),
-                        scale=CUP_SIZE,
+                        scale=size,
                     )
                 ]
             ),
@@ -602,6 +607,9 @@ def _replay_world(
         cups[name] = (cup, joint)
     source, source_joint = cups["source_cup"]
     receiver, receiver_joint = cups["receiving_cup"]
+    receiver.measured_capacity = source.capacity * receiver_cup.source_cups_held(
+        material
+    )
     receiver_joint.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
         *recording.receiver_position, reference_frame=world.root
     )

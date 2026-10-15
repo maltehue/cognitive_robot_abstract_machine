@@ -473,6 +473,56 @@ class TestCrossContainerVolumeConversion:
             _container_volume(source) / _container_volume(receiver)
         )
 
+    def test_a_receiver_of_measured_capacity_converts_volume_by_it(self):
+        """
+        A receiver whose capacity was measured holds that much at full fill, whatever
+        the box its collision geometry bounds would hold.
+        """
+        world, source, receiver = _build_world(
+            source_class=_TiltingContainer,
+            source_axis=Vector3(0, 1, 0),
+            couple=False,
+            initialize_receiver_fill=False,
+        )
+        receiver.measured_capacity = 3.0 * _container_volume(receiver)
+        receiver.initialize_fill_level(world=world, initial_fill=0.0)
+        receiver.receive_outflow_from(source=source, world=world)
+        _set_source_offset(world, source, 0.6)
+
+        source_fill_loss_rate = (
+            -source.fill_connection.outflow_equation.symbolic_velocity(
+                source.fill_connection
+            ).evaluate()[0]
+        )
+        receiver_fill_gain_rate = (
+            receiver.fill_connection.inflow_equation.symbolic_velocity(
+                receiver.fill_connection
+            ).evaluate()[0]
+        )
+        assert receiver_fill_gain_rate / source_fill_loss_rate == pytest.approx(
+            _container_volume(source) / receiver.measured_capacity
+        )
+
+    def test_a_measured_capacity_is_the_capacity(self):
+        _, _, receiver = _build_world(couple=False)
+        receiver.measured_capacity = 0.002
+        assert receiver.capacity == receiver.measured_capacity
+
+    def test_a_measured_capacity_survives_a_json_round_trip(self):
+        """
+        The capacity has to reach the process that controls the pour, which rebuilds the
+        transfer from the synchronized annotation.
+        """
+        world, _, receiver = _build_world(couple=False)
+        receiver.measured_capacity = 0.002
+        tracker = WorldEntityWithIDKwargsTracker.from_world(world)
+
+        restored = _TranslatingContainer.from_json(
+            receiver.to_json(), **tracker.create_kwargs()
+        )
+
+        assert restored.measured_capacity == receiver.measured_capacity
+
 
 # %% geometric transfer gate
 

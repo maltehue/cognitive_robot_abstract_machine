@@ -1520,6 +1520,12 @@ class HasFillLevel(HasRootBody, LiquidSource):
     symbolic expressions cannot cross a process boundary, this survives synchronization and lets
     :meth:`ensure_inflow_coupling` rebuild the symbolic coupling in another world."""
 
+    measured_capacity: Optional[float] = field(default=None, kw_only=True)
+    """
+    The volume this container holds at full fill, in cubic metres, where it was measured,
+    or ``None`` to read it off the collision geometry.
+    """
+
     @synchronized_attribute_modification
     def set_inflow_coupling(self, coupling: Optional[LiquidTransferCoupling]) -> None:
         """
@@ -2102,10 +2108,12 @@ class HasFillLevel(HasRootBody, LiquidSource):
         """
         Volume this container holds at full fill, in cubic metres.
 
-        Read from the collision geometry as the box its extents bound. The shape factor
-        this leaves out is the same for containers of the same shape, so it cancels in a
-        transfer between them; a container whose true capacity is known overrides this.
+        The measured capacity where there is one; otherwise read from the collision
+        geometry as the box its extents bound. The shape factor this leaves out is the same
+        for containers of the same shape, so it cancels in a transfer between them.
         """
+        if self.measured_capacity is not None:
+            return self.measured_capacity
         collision = self.root.collision
         return collision.depth * collision.width * collision.height
 

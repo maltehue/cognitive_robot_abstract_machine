@@ -6,8 +6,8 @@ Start it once, after the robot and camera drivers and next to ``tracy_velocity.p
 leave it running: ``demo_pouring_transfer.py`` with ``USE_LIVE_BANK = True`` asks it to
 learn the empty view before every pour, which also restarts its count, and its live bank
 reads what it publishes. No arguments are needed; the settings below are the defaults.
-Set :data:`MATERIAL` to what the demo pours, or start it with
-``--ros-args -p material:=corn``.
+Set :data:`MATERIAL` to what the demo pours and :data:`RECEIVER` to the cup it pours
+into, or start it with ``--ros-args -p material:=corn -p receiver:=translucent_cup``.
 
 The camera's pose and the receiver's opening come from the transforms, so the camera has
 to be calibrated. Readings go out as JSON on ``/stream_detector/reading``.
@@ -30,13 +30,8 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 
 from experiments.real_pouring.poured_material import PouredMaterial
-from experiments.real_pouring.receiver_heap import HeapGauge
-from experiments.real_pouring.stream_detection import (
-    BLUE_CUP_OUTLINE,
-    CameraView,
-    OpeningRegion,
-    StreamDetector,
-)
+from experiments.real_pouring.receiving_cup import ReceivingCup
+from experiments.real_pouring.stream_detection import CameraView
 from krrood.adapters.json_serializer import to_json
 
 # %% settings
@@ -51,23 +46,23 @@ class Parameter(StrEnum):
     CAMERA_INFO_TOPIC = "camera_info_topic"
     WORLD_FRAME = "world_frame"
     RECEIVER_FRAME = "receiver_frame"
-    OPENING_HEIGHT = "opening_height"
-    OPENING_RADIUS = "opening_radius"
+    RECEIVER = "receiver"
     MATERIAL = "material"
     FRAME_PERIOD = "frame_period"
     BACKGROUND_FRAMES = "background_frames"
 
 
-MATERIAL = PouredMaterial.STYROFOAM
+MATERIAL = PouredMaterial.CORN
 """
 What the demo pours, which sets how grains are told from the empty view and how much
 image area one counts for.
 """
 
-RECEIVER_OUTLINE = BLUE_CUP_OUTLINE
+RECEIVER = ReceivingCup.TRANSLUCENT_CUP
 """
-The receiving cup's outline, onto whose rim the opening projected from the camera's pose
-is moved before every pour: the pose is a few centimetres off.
+The cup the demo pours into, which sets where its opening is, how the opening is placed
+in the image despite the camera's pose being a few centimetres off, and how its fill is
+read.
 """
 
 DEFAULTS = {
@@ -75,14 +70,13 @@ DEFAULTS = {
     Parameter.CAMERA_INFO_TOPIC: "/camera/color/camera_info",
     Parameter.WORLD_FRAME: "map",
     Parameter.RECEIVER_FRAME: "receiving_cup",
-    Parameter.OPENING_HEIGHT: 0.16,
-    Parameter.OPENING_RADIUS: 0.035,
+    Parameter.RECEIVER: RECEIVER.value,
     Parameter.MATERIAL: MATERIAL.value,
     Parameter.FRAME_PERIOD: 1 / 30,
     Parameter.BACKGROUND_FRAMES: 15,
 }
 """
-The parameters' defaults, for the Jeroen cup under the Tracy pole camera.
+The parameters' defaults, for the Tracy pole camera.
 """
 
 
@@ -188,37 +182,26 @@ class StreamDetectorNode(Node):
         world_T_receiver = _matrix(
             self.transforms.lookup_transform(world, receiver_frame, latest).transform
         )
-        opening_centre = world_T_receiver[:3, 3] + world_T_receiver[
-            :3, 2
-        ] * self._value(Parameter.OPENING_HEIGHT)
-        material = PouredMaterial(self._value(Parameter.MATERIAL))
-        opening = OpeningRegion(
-            centre=opening_centre, radius=self._value(Parameter.OPENING_RADIUS)
+        receiver = ReceivingCup(self._value(Parameter.RECEIVER))
+        opening_centre = world_T_receiver[:3, 3] + world_T_receiver[:3, 2] * (
+            receiver.height
         )
-        detector = StreamDetector(
+        material = PouredMaterial(self._value(Parameter.MATERIAL))
+        detector = receiver.detector_for(
+            material=material,
             view=CameraView(
                 intrinsics=numpy.array(self.camera_info.k).reshape(3, 3),
                 world_T_camera=world_T_camera,
             ),
-            opening=opening,
-            segmentation=material.segmentation,
-            pixel_seconds_per_grain=material.pixel_seconds_per_grain,
+            opening_centre=opening_centre,
             frame_period=self._value(Parameter.FRAME_PERIOD),
-            outline=RECEIVER_OUTLINE,
-            heap_gauge=HeapGauge.for_receiver(
-                camera_position=world_T_camera[:3, 3],
-                opening_centre=opening.centre,
-                height=self._value(Parameter.OPENING_HEIGHT),
-                radius=opening.radius,
-                pixels_per_share=material.heap_pixels_per_share,
-            ),
         )
         detector.learn_background(self.background)
         self.detector = detector
         self.background = []
         self.get_logger().info(
             f"watching the opening at {numpy.round(opening_centre, 3).tolist()} "
-            f"for {material}"
+            f"of the {receiver} for {material}"
         )
 
 

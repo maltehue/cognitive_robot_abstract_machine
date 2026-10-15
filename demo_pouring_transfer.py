@@ -4,15 +4,20 @@ Pour from the cup in Tracy's left gripper into the receiving cup on the table.
 How to run it on the robot:
 
 1. Start the robot and camera drivers, then ``tracy_velocity.py`` (it can keep running).
-2. Start the perception once, for the material in the cup, and leave it running::
+2. Start the perception once, for the material in the cup and the cup poured into, and
+   leave it running::
 
-       python pouring_perception.py --ros-args -p material:=styrofoam   # or corn
+       python pouring_perception.py --ros-args -p material:=corn -p receiver:=translucent_cup
 
-3. Set the three switches below (:data:`MATERIAL`, :data:`DRAIN`, :data:`USE_LIVE_BANK`)
-   and run this script for every pour. It prints what it runs with before the robot
+   The translucent cup stands on the blue mat where the Jeroen cup stood; the
+   perception finds it by the gap it makes in the mat, so keep the mat around it clear.
+3. Set the switches below (:data:`MATERIAL`, :data:`RECEIVING_CUP`, :data:`DRAIN`,
+   :data:`USE_LIVE_BANK`) and run this script for every pour; after changing
+   :data:`RECEIVING_CUP`, restart Giskard so it creates the cups anew. It prints what it runs with before the robot
    moves, refuses to start the live bank against a perception watching for another
    material, and records a bag with the bank's trace and the weighed result.
-4. After the pour, weigh what reached the receiver and what landed beside it when asked;
+4. After the pour, weigh what reached the receiver and what landed beside it when asked
+   (the receiver's fill is computed from its full mass in ``receiving_cup.py``);
    also weigh what is left in the source cup (note it down), which checks the full cup's
    mass.
 
@@ -39,6 +44,7 @@ from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank
 from experiments.real_pouring.live_bank_listener import LiveBankListener
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.receiving_cup import ReceivingCup
 from giskardpy.motion_statechart.data_types import DefaultWeights
 from krrood.adapters.json_serializer import to_json
 from giskardpy.motion_statechart.goals.templates import Parallel
@@ -78,7 +84,7 @@ from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     FixedConnection,
 )
-from semantic_digital_twin.world_description.geometry import Mesh, Scale
+from semantic_digital_twin.world_description.geometry import Cylinder, Mesh, Scale
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -95,7 +101,6 @@ IS_SIM = False
 # START_FILL = 0.8
 # GOAL_FILL_CONST = 0.7
 START_FILL = 1.0
-GOAL_FILL_CONST = 0.7
 POUR_START_TILT_MARGIN = 0.05
 """
 How far past the model's onset the cup is tilted before the transfer starts, in radians.
@@ -147,9 +152,28 @@ DISCHARGE_COEFFICIENT = DRAIN.discharge_coefficient
 Scales the exit speed and with it how far the stream is thrown.
 """
 
-MATERIAL = PouredMaterial.STYROFOAM
+MATERIAL = PouredMaterial.CORN
 """
 What the source cup is filled with; ``pouring_perception.py`` has to watch for the same.
+"""
+
+RECEIVING_CUP = ReceivingCup.TRANSLUCENT_CUP
+"""
+The cup poured into; ``pouring_perception.py`` has to watch the same.
+"""
+
+GOAL_FILLS = {ReceivingCup.JEROEN_CUP: 0.7, ReceivingCup.TRANSLUCENT_CUP: 0.3}
+"""
+The fill each cup is poured to: the translucent cup holds two source cups, so 0.3 of it
+holds about as much as 0.6 of the Jeroen cup.
+"""
+
+GOAL_FILL_CONST = GOAL_FILLS[RECEIVING_CUP]
+
+RECEIVER_FULL_MASS_GRAMS = RECEIVING_CUP.full_mass_grams(MATERIAL)
+"""
+What the receiving cup full of the material weighs, read before the robot moves so a cup
+nobody weighed full stops the demo here rather than after the pour.
 """
 
 FULL_CUP_MASS_GRAMS = MATERIAL.full_cup_mass_grams
@@ -343,11 +367,30 @@ def _spawn_jeroen_cup_body(name: str) -> Body:
     )
 
 
+def _spawn_receiving_cup_body(cup: ReceivingCup) -> Body:
+    """
+    Create the receiving cup's Body: the Jeroen cup's mesh, or a cylinder of the cup's
+    inner size standing on its frame.
+    """
+    if cup is ReceivingCup.JEROEN_CUP:
+        return _spawn_jeroen_cup_body("receiving_cup")
+    cylinder = Cylinder(
+        origin=HomogeneousTransformationMatrix.from_xyz_rpy(z=cup.height / 2),
+        width=2 * cup.inner_radius,
+        height=cup.height,
+    )
+    return Body.from_shape_collection(
+        shape_collection=ShapeCollection([cylinder]),
+        name=PrefixedName("receiving_cup"),
+    )
+
+
 # ----- Record the run; the bag is closed again at the end of the script -----
 recording = RosbagRecording()
 print(f"Recording into {recording.start()}.")
 print(
-    f"Pouring {MATERIAL} (a full cup weighs {FULL_CUP_MASS_GRAMS} g) to a fill of "
+    f"Pouring {MATERIAL} (a full cup weighs {FULL_CUP_MASS_GRAMS} g) into the "
+    f"{RECEIVING_CUP} (full {RECEIVER_FULL_MASS_GRAMS} g) to a fill of "
     f"{GOAL_FILL_CONST}; drain repose {math.degrees(REPOSE_ANGLE):.0f} deg, rate "
     f"{OUTFLOW_RATE_CONSTANT}, flowing down to "
     f"{math.degrees(MATERIAL.repose_hysteresis):.0f} deg below the repose angle; "
@@ -380,6 +423,11 @@ if cups_already_present:
     print("Cups already present; reusing them and resetting fill levels.")
     source_cup = world.get_semantic_annotation_by_name("source_cup")
     receiving_cup = world.get_semantic_annotation_by_name("receiving_cup")
+    RECEIVING_CUP.check_reused(
+        receiver_capacity=receiving_cup.capacity,
+        source_capacity=source_cup.capacity,
+        material=MATERIAL,
+    )
     # The fetched annotations reference detached copies of their fill connections; re-resolve the
     # world-resident ones so their fill state can be read and written.
     for cup in (source_cup, receiving_cup):
@@ -438,7 +486,7 @@ else:
     )
 
     # ----- Place the receiving cup on the table -----
-    receiving_cup_body = _spawn_jeroen_cup_body("receiving_cup")
+    receiving_cup_body = _spawn_receiving_cup_body(RECEIVING_CUP)
     with world.modify_world():
         world.add_body(receiving_cup_body)
         world.add_connection(
@@ -453,7 +501,10 @@ else:
             )
         )
     receiving_cup = HasFillLevel(
-        name=PrefixedName("receiving_cup"), root=receiving_cup_body
+        name=PrefixedName("receiving_cup"),
+        root=receiving_cup_body,
+        measured_capacity=source_cup.capacity
+        * RECEIVING_CUP.source_cups_held(MATERIAL),
     )
     with world.modify_world():
         world.add_semantic_annotation(receiving_cup)
@@ -611,7 +662,7 @@ move_left_tool_to(giskard, upright_pose)
 recording.stop()
 
 # ----- Record what the pour actually delivered and spilled, measured on a scale -----
-weighed_particles = WeighedParticles.ask(full_cup_mass_grams=FULL_CUP_MASS_GRAMS)
+weighed_particles = WeighedParticles.ask(full_cup_mass_grams=RECEIVER_FULL_MASS_GRAMS)
 recording.add_file(WEIGHED_PARTICLES_FILE_NAME, weighed_particles.as_json_text())
 if live_bank_listener is not None:
     weighed_grains = (

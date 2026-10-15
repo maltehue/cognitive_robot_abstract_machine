@@ -7,6 +7,7 @@ from experiments.pouring_model_verification.hypothesis_bank import ModelPoint
 from experiments.real_pouring import poured_material
 from experiments.real_pouring.poured_material import (
     FullCupMassUnknownError,
+    MaterialNotSeenThroughWallError,
     PouredMaterial,
 )
 from experiments.real_pouring.stream_detection import MovingGrainSegmentation
@@ -77,3 +78,15 @@ def test_a_drain_poured_with_a_material_takes_on_its_hysteresis(material):
     assert material.drain_of(drain) == replace(
         drain, repose_hysteresis=material.repose_hysteresis
     )
+
+
+def test_corn_reads_through_a_frosted_wall_on_its_own_scale():
+    assert (
+        PouredMaterial.CORN.wall_detected_share
+        == poured_material.CORN_WALL_DETECTED_SHARE
+    )
+
+
+def test_styrofoam_says_it_does_not_show_through_a_frosted_wall():
+    with pytest.raises(MaterialNotSeenThroughWallError):
+        PouredMaterial.STYROFOAM.wall_detected_share
