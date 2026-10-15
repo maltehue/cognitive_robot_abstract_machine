@@ -37,6 +37,7 @@ from giskardpy.motion_statechart.exceptions import (
 )
 from giskardpy.motion_statechart.graph_node import (
     DebugExpression,
+    MotionStatechartNode,
     NodeArtifacts,
     Task,
 )
@@ -653,6 +654,18 @@ class TiltPacing(Task):
     The tilt below which :attr:`fast_rate` applies, in radians.
     """
 
+    fast_blend_width: float = field(default=0.0, kw_only=True)
+    """
+    The span of tilt below :attr:`fast_until_tilt` over which the rate eases from
+    :attr:`fast_rate` to the slow one, in radians; zero switches at once.
+    """
+
+    ceiling_slowdown_width: float = field(default=0.0, kw_only=True)
+    """
+    The span of tilt below :attr:`maximum_tilt` over which the rate the cup may tilt
+    further eases to zero, in radians; zero stops it at the ceiling at once.
+    """
+
     receiver: Optional[HasFillLevel] = field(default=None, kw_only=True)
     """
     The cup poured into, whose fill ends the approach, or ``None`` to approach until the
@@ -702,11 +715,13 @@ class TiltPacing(Task):
         tilt = self.source.pour_tilt_expression
         cap, approach = sm.Scalar(self.maximum_rate), sm.Scalar(self.approach_rate)
         if self.fast_rate is not None:
-            fast = sm.Scalar(self.fast_rate)
-            cap = sm.if_less(tilt, sm.Scalar(self.fast_until_tilt), fast, cap)
-            approach = sm.if_less(tilt, sm.Scalar(self.fast_until_tilt), fast, approach)
-        below_ceiling = sm.if_less(
-            tilt, sm.Scalar(self.maximum_tilt), sm.Scalar(1.0), sm.Scalar(0.0)
+            fast_share = self._share_below(
+                tilt, self.fast_until_tilt, self.fast_blend_width
+            )
+            cap = cap + fast_share * (self.fast_rate - self.maximum_rate)
+            approach = approach + fast_share * (self.fast_rate - self.approach_rate)
+        below_ceiling = self._share_below(
+            tilt, self.maximum_tilt, self.ceiling_slowdown_width
         )
         if self.receiver is not None:
             approach = sm.if_less(
@@ -732,3 +747,90 @@ class TiltPacing(Task):
             name=f"{self.name}_tilt_approach",
         )
         return artifacts
+
+    @staticmethod
+    def _share_below(tilt: sm.Scalar, limit: float, width: float) -> sm.Scalar:
+        """
+        :return: One where the tilt lies at least ``width`` below ``limit``, zero at and
+            beyond it, and in between rising linearly; a step at the limit for no width.
+        """
+        if width <= 0.0:
+            return sm.if_less(tilt, sm.Scalar(limit), sm.Scalar(1.0), sm.Scalar(0.0))
+        return sm.limit((sm.Scalar(limit) - tilt) / width, 0.0, 1.0)
+
+
+TILT_HOLD_TOLERANCE = math.radians(1.0)
+"""
+How close below the tilt a cup counts as held at it, in radians.
+"""
+
+
+@dataclass(eq=False, repr=False)
+class HeldAtTilt(MotionStatechartNode):
+    """
+    Turns true once the source cup has stayed at :attr:`tilt` or beyond for
+    :attr:`seconds` without a break: a cup held at its ceiling that long has poured all
+    it will at that tilt, whatever the fill estimate says.
+    """
+
+    source: HasFillLevel
+    """
+    The cup whose tilt is watched.
+    """
+
+    tilt: float
+    """
+    The tilt watched for, in radians.
+    """
+
+    seconds: float
+    """
+    How long the cup has to stay there, in seconds.
+    """
+
+    tolerance: float = field(default=TILT_HOLD_TOLERANCE, kw_only=True)
+    """
+    How far below :attr:`tilt` the cup still counts as held at it, in radians.
+    """
+
+    _held_cycles: int = field(init=False, default=0)
+    """
+    Control cycles the cup has been held there in a row.
+    """
+
+    def build_artifacts(self, context: MotionStatechartContext) -> NodeArtifacts:
+        """
+        :param context: The build context.
+        :return: No constraints: the node only watches the tilt.
+        """
+        self._compiled_tilt = self.source.pour_tilt_expression.compile(
+            parameters=VariableParameters.from_lists(
+                context.world.state.position_float_variables,
+                context.float_variable_data.variables,
+            ),
+            sparse=False,
+        )
+        self._compiled_tilt.bind_args_to_memory_view(0, context.world.state.positions)
+        self._compiled_tilt.bind_args_to_memory_view(
+            1, context.float_variable_data.data
+        )
+        return NodeArtifacts()
+
+    def on_start(self, context: MotionStatechartContext) -> None:
+        self._held_cycles = 0
+
+    def on_tick(
+        self, context: MotionStatechartContext
+    ) -> Optional[ObservationStateValues]:
+        """
+        :return: True once the cup has been held long enough, false until then.
+        """
+        tilt = float(self._compiled_tilt.evaluate()[0])
+        if tilt < self.tilt - self.tolerance:
+            self._held_cycles = 0
+            return ObservationStateValues.FALSE
+        self._held_cycles += 1
+        held_for = self._held_cycles * context.qp_controller_config.control_dt
+        if held_for >= self.seconds:
+            return ObservationStateValues.TRUE
+        return ObservationStateValues.FALSE

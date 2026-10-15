@@ -46,6 +46,7 @@ from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.motion_statechart.tasks.pouring import (
+    HeldAtTilt,
     TiltPacing,
     FillByTransferTask,
     KeepProjectileInReceiver,
@@ -231,6 +232,25 @@ MAXIMUM_TILT = math.radians(110.0)
 """
 The tilt the cup is never turned past, in radians: the calibration ramps emptied it
 completely there.
+"""
+
+FAST_BLEND_WIDTH = math.radians(10.0)
+"""
+The span of tilt below :data:`FAST_UNTIL_TILT` over which the cup slows from the fast to
+the slow rate, in radians: switched at once, the controller overshot and jerked the arm
+back on 2026-10-15.
+"""
+
+CEILING_SLOWDOWN_WIDTH = math.radians(5.0)
+"""
+The span of tilt below :data:`MAXIMUM_TILT` over which the cup slows to a stop, in
+radians: stopped at once, the arm chattered at the ceiling on 2026-10-15.
+"""
+
+CEILING_HOLD_SECONDS = 5.0
+"""
+How long the cup may stay at :data:`MAXIMUM_TILT` before the transfer ends whatever the
+fill estimate says, in seconds: a cup held there that long has poured all it will.
 """
 
 MAXIMUM_RETURN_TILT_RATE = math.radians(30.0)
@@ -513,15 +533,24 @@ tilt_pacing = TiltPacing(
     maximum_return_rate=MAXIMUM_RETURN_TILT_RATE,
     fast_rate=FAST_TILT_RATE,
     fast_until_tilt=FAST_UNTIL_TILT,
+    fast_blend_width=FAST_BLEND_WIDTH,
+    ceiling_slowdown_width=CEILING_SLOWDOWN_WIDTH,
     receiver=receiving_cup,
     approach_until_fill=goal_fill,
 )
 extended_motion = Parallel(
     [transfer_task, no_spill, keep_above, keep_plane, tilt_pacing]
 )
+# End the transfer if the cup has stayed at its ceiling for long, even when the fill
+# estimate never reached the goal (a camera that counted too little).
+held_at_ceiling = HeldAtTilt(
+    source=source_cup, tilt=MAXIMUM_TILT, seconds=CEILING_HOLD_SECONDS
+)
 msc = MotionStatechart()
 msc.add_node(extended_motion)
 msc.add_node(EndMotion.when_true(extended_motion))
+msc.add_node(held_at_ceiling)
+msc.add_node(EndMotion.when_true(held_at_ceiling))
 live_bank_listener = None
 if USE_LIVE_BANK:
     live_bank_listener = LiveBankListener(

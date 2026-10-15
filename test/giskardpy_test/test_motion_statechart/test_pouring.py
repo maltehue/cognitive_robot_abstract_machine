@@ -36,6 +36,7 @@ from giskardpy.motion_statechart.tasks.cartesian_tasks import (
     CartesianPosition,
 )
 from giskardpy.motion_statechart.tasks.pouring import (
+    HeldAtTilt,
     TiltPacing,
     FillByTransferTask,
     KeepProjectileInReceiver,
@@ -1787,6 +1788,19 @@ PACING_TICKS = 240
 How many control cycles the pacing tests run: three seconds at the pouring frequency.
 """
 
+PACING_SETTLING_TICKS = 20
+"""
+Control cycles the transfer's other tasks take to settle the arm after the start, before
+a rate means pacing.
+"""
+
+NO_TURN_BACK_RATE = math.radians(0.5)
+"""
+The fastest the cup may turn back for an instant and still count as not turned back, in
+radians per second: a step from the fast to the slow rate turns it back at about 5
+deg/s.
+"""
+
 
 def _no_flow_drain(source_cup: PourableContainer) -> ArticulatedPouringEquation:
     equation = source_cup.fill_equation
@@ -1957,6 +1971,62 @@ class TestTiltPacing:
         assert np.mean(below) == pytest.approx(fast_rate, rel=0.2)
         assert np.mean(above) == pytest.approx(PACED_APPROACH_RATE, rel=0.2)
 
+    def test_a_blended_switch_never_turns_the_cup_back(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        Slowing from the fast rate to the slow one at once makes the controller
+        overshoot and turn the cup back for an instant, a jerk on the robot; eased over
+        a span of tilt, the cup at most stands still.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        receiving_cup.recouple_outflow_from(
+            source=source_cup, world=world, fill_equation=_no_flow_drain(source_cup)
+        )
+        start_tilt = float(source_cup.pour_tilt_expression.evaluate()[0])
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+            fast_rate=2 * PACED_APPROACH_RATE,
+            fast_until_tilt=start_tilt + math.radians(6.0),
+            fast_blend_width=math.radians(4.0),
+        )
+        history = _tilt_history(
+            _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+            PACING_TICKS,
+        )
+        assert _rates(history)[PACING_SETTLING_TICKS:].min() > -NO_TURN_BACK_RATE
+
+    def test_the_tilt_slows_down_before_the_ceiling(self, tracy_transfer_world) -> None:
+        """
+        With a slow-down span, the cup creeps up to the ceiling instead of running into
+        it at full rate.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        receiving_cup.recouple_outflow_from(
+            source=source_cup, world=world, fill_equation=_no_flow_drain(source_cup)
+        )
+        start_tilt = float(source_cup.pour_tilt_expression.evaluate()[0])
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=start_tilt + math.radians(3.0),
+            ceiling_slowdown_width=math.radians(2.0),
+        )
+        history = np.array(
+            _tilt_history(
+                _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+                PACING_TICKS,
+            )
+        )
+        rates = _rates(list(history))
+        close = rates[history[1:] > pacing.maximum_tilt - math.radians(0.5)]
+        assert close.max() <= 0.5 * PACED_APPROACH_RATE
+        assert history.max() <= pacing.maximum_tilt + math.radians(0.1)
+
     def test_non_positive_rates_are_rejected(self, tracy_transfer_world) -> None:
         world, source_cup, _, _ = tracy_transfer_world
         pacing = TiltPacing(
@@ -1992,3 +2062,54 @@ class TestTiltPacing:
         ]
         assert restored_pacing.approach_rate == pacing.approach_rate
         assert restored_pacing.maximum_tilt == pacing.maximum_tilt
+
+
+# %% ending a pour held at the tilt ceiling
+
+
+HOLD_SECONDS = 0.5
+"""
+How long the cup is held at its ceiling before the motion ends, in seconds.
+"""
+
+
+def _transfer_ending_after_a_hold(tracy_transfer_world, maximum_tilt: float):
+    """
+    A transfer whose model pours nothing, paced to ``maximum_tilt``, that also ends once
+    the cup has stayed at that tilt for :data:`HOLD_SECONDS`.
+    """
+    world, source_cup, receiving_cup, _ = tracy_transfer_world
+    receiving_cup.recouple_outflow_from(
+        source=source_cup, world=world, fill_equation=_no_flow_drain(source_cup)
+    )
+    pacing = TiltPacing(
+        source=source_cup,
+        approach_rate=PACED_APPROACH_RATE,
+        maximum_rate=PACED_APPROACH_RATE,
+        maximum_tilt=maximum_tilt,
+    )
+    transfer = _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing])
+    held = HeldAtTilt(source=source_cup, tilt=maximum_tilt, seconds=HOLD_SECONDS)
+    transfer.motion_statechart.add_node(held)
+    transfer.motion_statechart.add_node(EndMotion.when_true(held))
+    return transfer
+
+
+def test_a_cup_held_at_its_ceiling_ends_the_motion(tracy_transfer_world) -> None:
+    _, source_cup, _, _ = tracy_transfer_world
+    start_tilt = float(source_cup.pour_tilt_expression.evaluate()[0])
+    history = _tilt_history(
+        _transfer_ending_after_a_hold(
+            tracy_transfer_world, start_tilt + math.radians(1.0)
+        ),
+        PACING_TICKS,
+    )
+    assert len(history) < PACING_TICKS
+
+
+def test_a_cup_below_its_ceiling_keeps_pouring(tracy_transfer_world) -> None:
+    history = _tilt_history(
+        _transfer_ending_after_a_hold(tracy_transfer_world, math.radians(110.0)),
+        PACING_TICKS,
+    )
+    assert len(history) == PACING_TICKS
