@@ -36,3 +36,17 @@ def test_corn_is_counted_with_its_own_calibration():
         PouredMaterial.CORN.pixel_seconds_per_grain
         == poured_material.CORN_PIXEL_SECONDS_PER_GRAIN
     )
+
+
+def test_styrofoam_reads_its_heap_on_its_own_scale():
+    assert (
+        PouredMaterial.STYROFOAM.heap_pixels_per_share
+        == poured_material.STYROFOAM_HEAP_PIXELS_PER_SHARE
+    )
+
+
+def test_corn_reads_its_heap_on_its_own_scale():
+    assert (
+        PouredMaterial.CORN.heap_pixels_per_share
+        == poured_material.CORN_HEAP_PIXELS_PER_SHARE
+    )

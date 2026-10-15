@@ -40,7 +40,25 @@ for argument in sys.argv[1:]:
     steps = replay.steps
     stop = next((s for s in steps if s.told_grains >= GOAL_LOWER_EDGE), None)
     first_seen = next((s for s in steps if s.reading.stream_seen), None)
+    heap_stop = next(
+        (
+            s
+            for s in steps
+            if (s.reading.heap_fill or 0.0) * GRAINS_PER_FILL >= GOAL_LOWER_EDGE
+        ),
+        None,
+    )
     results[Path(bag).name] = dict(
+        heap_shows_goal=(
+            None
+            if heap_stop is None
+            else dict(
+                time=round(heap_stop.time, 1),
+                tilt=round(math.degrees(heap_stop.tilt), 1),
+                count=round(heap_stop.reading.counted_grains, 1),
+            )
+        ),
+        final_heap_fill=steps[-1].reading.heap_fill,
         material=str(material),
         weighed_received=round(received / full * GRAINS_PER_FILL, 1),
         final_count=round(steps[-1].reading.counted_grains, 1),

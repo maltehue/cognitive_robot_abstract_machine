@@ -227,3 +227,54 @@ def test_without_a_trickle_the_controller_runs_on_the_onset_quantile():
     assert bank.coupling.point.repose_angle == active.quantile(
         FreeParameter.REPOSE_ANGLE, NO_TRICKLE.onset_quantile
     )
+
+
+# %% the heap in the receiver as the stop signal
+
+
+def _counting_bank() -> LiveBank:
+    stream = tilted_source_above_receiver(tilt=1.0)
+    equation = stream.source.fill_equation
+    return LiveBank.for_cups(
+        source=stream.source,
+        receiver=stream.receiver,
+        world=stream.world,
+        built=ModelPoint(
+            repose_angle=equation.repose_angle,
+            discharge_coefficient=equation.discharge_coefficient,
+            outflow_rate_constant=equation.outflow_rate_constant,
+        ),
+        settings=BankSettings(),
+        camera=CameraCondition.POLE_COUNTING.model,
+        grains_per_fill=LOADED,
+        loaded_grains=LOADED,
+        goal_grains=0.7 * LOADED,
+        opening_radius=OPENING_RADIUS,
+        prediction_window=1.5,
+        receiver_from_count=True,
+    )
+
+
+def test_a_heap_showing_more_than_was_counted_is_what_the_receiver_holds():
+    bank = _counting_bank()
+    bank.observe(_no_stream(0.0))
+    heap_fill = 0.68
+    bank.observe(
+        StreamReading(
+            stamp=0.1,
+            stream_seen=False,
+            counted_grains=20.0,
+            crossing=None,
+            heap_fill=heap_fill,
+        )
+    )
+    assert bank.receiver.fill_level == pytest.approx(heap_fill)
+
+
+def test_without_a_heap_in_view_the_receiver_holds_what_was_counted():
+    bank = _counting_bank()
+    bank.observe(_no_stream(0.0))
+    step = bank.observe(
+        StreamReading(stamp=0.1, stream_seen=False, counted_grains=20.0, crossing=None)
+    )
+    assert bank.receiver.fill_level == pytest.approx(step.told_grains / LOADED)

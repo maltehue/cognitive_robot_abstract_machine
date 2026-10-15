@@ -3,8 +3,10 @@ import pytest
 
 from krrood.adapters.json_serializer import from_json, to_json
 
+from experiments.real_pouring.receiver_heap import HeapGauge
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
+    HEAP_STILL_SECONDS,
     CameraView,
     ChangeSegmentation,
     GrainSegmentation,
@@ -14,6 +16,7 @@ from experiments.real_pouring.stream_detection import (
     ReceiverNotFoundError,
     StreamDetector,
     WhiteSegmentation,
+    StreamReading,
 )
 
 # %% a camera looking straight down at a receiver's opening
@@ -421,3 +424,78 @@ def test_the_opening_drawn_is_the_moved_one():
     detector = _detector_on_the_cups_rim()
     rows, _ = numpy.nonzero(detector.opening_mask(IMAGE_SIZE))
     assert rows.min() == CUP_TOP_ROW
+
+
+# %% the heap lying still in the receiver
+
+
+STILL_FRAMES = round(HEAP_STILL_SECONDS / FRAME_PERIOD)
+"""
+How many frames a heap pixel has to stay still for.
+"""
+
+
+def _heap_in_cup(column_offset: int = 0) -> numpy.ndarray:
+    image = _view_with_cup()
+    row, column = RIM_CENTRE
+    image[
+        row : row + GRAIN_SIZE,
+        column + column_offset : column + column_offset + GRAIN_SIZE,
+    ] = YELLOW_KERNEL
+    return image
+
+
+def test_grains_lying_still_in_the_cup_for_a_second_are_the_heap():
+    detector = _detector_on_the_cups_rim()
+    for frame in range(STILL_FRAMES):
+        detector.observe(_heap_in_cup(), stamp=frame * FRAME_PERIOD)
+    assert detector.heap_pixels == GRAIN_SIZE**2
+
+
+def test_grains_not_yet_still_for_a_second_are_not_the_heap():
+    detector = _detector_on_the_cups_rim()
+    for frame in range(STILL_FRAMES - 1):
+        detector.observe(_heap_in_cup(), stamp=frame * FRAME_PERIOD)
+    assert detector.heap_pixels == 0
+
+
+def test_grains_that_keep_moving_are_not_the_heap():
+    detector = _detector_on_the_cups_rim()
+    for frame in range(2 * STILL_FRAMES):
+        detector.observe(
+            _heap_in_cup(column_offset=frame % 2 * GRAIN_SIZE),
+            stamp=frame * FRAME_PERIOD,
+        )
+    assert detector.heap_pixels == 0
+
+
+def test_a_reading_carries_the_fill_the_heap_shows():
+    gauge = HeapGauge(
+        camera_position=numpy.array([0.0, 0.0, CAMERA_HEIGHT]),
+        receiver_base=numpy.array([0.0, 0.0, -0.16]),
+        height=0.16,
+        radius=OPENING.radius,
+        pixels_per_share=GRAIN_SIZE**2 / 0.5,
+    )
+    detector = StreamDetector(
+        view=_looking_down(),
+        opening=OPENING,
+        segmentation=MOVING,
+        pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+        frame_period=FRAME_PERIOD,
+        outline=BLUE_CUP_OUTLINE,
+        heap_gauge=gauge,
+    )
+    detector.learn_background([_view_with_cup()])
+    for frame in range(STILL_FRAMES):
+        reading = detector.observe(_heap_in_cup(), stamp=frame * FRAME_PERIOD)
+    assert reading.heap_fill == gauge.fill_for(GRAIN_SIZE**2)
+
+
+def test_a_reading_from_before_the_heap_was_read_loads_without_it():
+    reading = StreamReading(
+        stamp=0.0, stream_seen=False, counted_grains=0.0, crossing=None
+    )
+    data = to_json(reading)
+    del data["heap_fill"]
+    assert from_json(data).heap_fill is None

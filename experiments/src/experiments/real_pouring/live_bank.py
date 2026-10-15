@@ -343,7 +343,7 @@ class LiveBank:
         )
         corrections.write_to(self.world, self.source.fill_connection.drain_correction)
         in_flight = self._in_flight_grains(seen)
-        told = self._write_fill_levels(seen.counted_grains, in_flight)
+        told = self._write_fill_levels(seen.counted_grains, in_flight, seen.heap_fill)
         step = LiveBankStep(
             time=seen.stamp,
             tilt=tilt,
@@ -406,14 +406,18 @@ class LiveBank:
         )
         return max(0.0, rate) * self.stop_lead_time
 
-    def _write_fill_levels(self, counted_grains: float, in_flight: float) -> float:
+    def _write_fill_levels(
+        self, counted_grains: float, in_flight: float, heap_fill: Optional[float]
+    ) -> float:
         """
         Tell the controller what both cups hold: the source what was loaded less what
         the camera counted leaving; the receiver what crossed and is still in flight, or
-        what the bank estimates arrived with the margin it stops short by.
+        what the bank estimates arrived with the margin it stops short by, or what the
+        heap seen in it shows, whichever is more.
 
         :param counted_grains: How many grains the camera has counted crossing.
         :param in_flight: How many grains are still to arrive after a stop now.
+        :param heap_fill: The receiver's fill by the heap seen in it, or ``None``.
         :return: How many grains the receiver was told to hold.
         """
         crossed = self.camera.grains_crossed(counted_grains)
@@ -423,6 +427,10 @@ class LiveBank:
         else:
             receiver_grains = self.coupling.received_grains + self.coupling.margin
         capacity_ratio = self.source.capacity / self.receiver.capacity
+        if heap_fill is not None:
+            receiver_grains = max(
+                receiver_grains, heap_fill * self.grains_per_fill / capacity_ratio
+            )
         JointState.from_mapping(
             {
                 self.source.fill_connection: max(0.0, source_grains)

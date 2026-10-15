@@ -30,6 +30,7 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.receiver_heap import HeapGauge
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
@@ -191,18 +192,26 @@ class StreamDetectorNode(Node):
             :3, 2
         ] * self._value(Parameter.OPENING_HEIGHT)
         material = PouredMaterial(self._value(Parameter.MATERIAL))
+        opening = OpeningRegion(
+            centre=opening_centre, radius=self._value(Parameter.OPENING_RADIUS)
+        )
         detector = StreamDetector(
             view=CameraView(
                 intrinsics=numpy.array(self.camera_info.k).reshape(3, 3),
                 world_T_camera=world_T_camera,
             ),
-            opening=OpeningRegion(
-                centre=opening_centre, radius=self._value(Parameter.OPENING_RADIUS)
-            ),
+            opening=opening,
             segmentation=material.segmentation,
             pixel_seconds_per_grain=material.pixel_seconds_per_grain,
             frame_period=self._value(Parameter.FRAME_PERIOD),
             outline=RECEIVER_OUTLINE,
+            heap_gauge=HeapGauge.for_receiver(
+                camera_position=world_T_camera[:3, 3],
+                opening_centre=opening.centre,
+                height=self._value(Parameter.OPENING_HEIGHT),
+                radius=opening.radius,
+                pixels_per_share=material.heap_pixels_per_share,
+            ),
         )
         detector.learn_background(self.background)
         self.detector = detector

@@ -43,6 +43,26 @@ fast one alike, counted on the opening moved onto the rim
 """
 
 
+STYROFOAM_HEAP_PIXELS_PER_SHARE = 576.0
+"""
+How many heap pixels the pole camera would see of the styrofoam surface filling the
+whole receiver, for the heap gauge: the mean of the three weighed pours of 2026-10-14
+that ended near the goal (fills 0.63 to 0.70, 513 to 675). The two fuller pours (0.79,
+0.91) show four times as much, the light balls not lying flat as the gauge assumes, so
+above the goal the gauge reads too full and stops a pour early rather than late
+(experiments/results/real_pouring/analysis_2026-10-15/heap_calibration.py).
+"""
+
+CORN_HEAP_PIXELS_PER_SHARE = 2186.0
+"""
+How many heap pixels the pole camera would see of the corn surface filling the whole
+receiver, for the heap gauge: from the corn pour of 2026-10-14 17:50, which ended at a
+fill of 0.69, near the goal. The brim-full pour of 2026-10-15 gives 2806, so above the
+goal the gauge reads up to 0.07 too full and stops a pour early rather than late
+(experiments/results/real_pouring/analysis_2026-10-15/heap_calibration.py).
+"""
+
+
 @dataclass
 class FullCupMassUnknownError(Exception):
     """
@@ -101,6 +121,18 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_PIXEL_SECONDS_PER_GRAIN
             case PouredMaterial.CORN:
                 return CORN_PIXEL_SECONDS_PER_GRAIN
+
+    @property
+    def heap_pixels_per_share(self) -> float:
+        """
+        :return: How many heap pixels the camera would see of this material's surface
+            filling the whole receiver: the scale of the heap gauge.
+        """
+        match self:
+            case PouredMaterial.STYROFOAM:
+                return STYROFOAM_HEAP_PIXELS_PER_SHARE
+            case PouredMaterial.CORN:
+                return CORN_HEAP_PIXELS_PER_SHARE
 
     @property
     def full_cup_mass_grams(self) -> float:

@@ -31,6 +31,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
 from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.receiver_heap import HeapGauge
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
@@ -458,20 +459,27 @@ class PourReplay:
         :return: The replay, every reading weighed.
         """
         world, source, source_joint = _replay_world(recording, drain)
+        opening = OpeningRegion(
+            centre=recording.receiver_position + numpy.array([0, 0, OPENING_HEIGHT]),
+            radius=OPENING_RADIUS,
+        )
         detector = StreamDetector(
             view=CameraView(
                 intrinsics=recording.intrinsics,
                 world_T_camera=recording.world_T_camera,
             ),
-            opening=OpeningRegion(
-                centre=recording.receiver_position
-                + numpy.array([0, 0, OPENING_HEIGHT]),
-                radius=OPENING_RADIUS,
-            ),
+            opening=opening,
             segmentation=material.segmentation,
             pixel_seconds_per_grain=material.pixel_seconds_per_grain,
             frame_period=FRAME_PERIOD,
             outline=outline,
+            heap_gauge=HeapGauge.for_receiver(
+                camera_position=recording.world_T_camera[:3, 3],
+                opening_centre=opening.centre,
+                height=OPENING_HEIGHT,
+                radius=OPENING_RADIUS,
+                pixels_per_share=material.heap_pixels_per_share,
+            ),
         )
         first = recording.first_pour_frame
         detector.learn_background(

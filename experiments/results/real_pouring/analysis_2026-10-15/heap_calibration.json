@@ -1,0 +1,58 @@
+{
+ "2026-10-14_17-14-22": {
+  "material": "corn",
+  "weighed_fill": 0.139,
+  "heap_pixels": 0.0,
+  "visible_share": 0.0,
+  "pixels_per_share": null
+ },
+ "2026-10-14_17-50-34": {
+  "material": "corn",
+  "weighed_fill": 0.693,
+  "heap_pixels": 648.5,
+  "visible_share": 0.297,
+  "pixels_per_share": 2185.5
+ },
+ "2026-10-15_09-07-08": {
+  "material": "corn",
+  "weighed_fill": 0.865,
+  "heap_pixels": 1905.1,
+  "visible_share": 0.679,
+  "pixels_per_share": 2806.3
+ },
+ "2026-10-14_13-44-40": {
+  "material": "styrofoam",
+  "weighed_fill": 0.63,
+  "heap_pixels": 120.3,
+  "visible_share": 0.178,
+  "pixels_per_share": 674.8
+ },
+ "2026-10-14_14-21-18": {
+  "material": "styrofoam",
+  "weighed_fill": 0.698,
+  "heap_pixels": 157.7,
+  "visible_share": 0.308,
+  "pixels_per_share": 512.8
+ },
+ "2026-10-14_14-49-47": {
+  "material": "styrofoam",
+  "weighed_fill": 0.785,
+  "heap_pixels": 1113.2,
+  "visible_share": 0.493,
+  "pixels_per_share": 2256.0
+ },
+ "2026-10-14_15-56-28": {
+  "material": "styrofoam",
+  "weighed_fill": 0.653,
+  "heap_pixels": 118.6,
+  "visible_share": 0.219,
+  "pixels_per_share": 540.5
+ },
+ "2026-10-14_13-52-37": {
+  "material": "styrofoam",
+  "weighed_fill": 0.909,
+  "heap_pixels": 1703.0,
+  "visible_share": 0.784,
+  "pixels_per_share": 2172.7
+ }
+}

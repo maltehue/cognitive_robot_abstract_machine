@@ -19,6 +19,7 @@ from typing_extensions import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy
 
+from experiments.real_pouring.receiver_heap import HeapGauge
 from krrood.adapters.json_serializer import SubclassJSONSerializer
 
 # %% the camera
@@ -140,6 +141,21 @@ How far a grain pixel's colour has to differ from what the pixel showed before t
 summed over the three channels, from 0 to 765.
 """
 
+SAME_HUE_DISTANCE = 20
+"""
+How close two hues are, on OpenCV's scale from 0 to 179, to count as the same colour.
+"""
+
+COLOURED_SATURATION = 50
+"""
+The least saturation, from 0 to 255, at which a pixel's hue means something.
+"""
+
+SHADOW_SATURATION_CHANGE = 40
+"""
+The most a pixel's saturation changes, from 0 to 255, when only a shadow falls on it.
+"""
+
 
 @dataclass(frozen=True)
 class GrainSegmentation(ABC):
@@ -166,6 +182,37 @@ class GrainSegmentation(ABC):
             )
             > self.minimum_difference
         )
+
+    def differs_from_empty_view(
+        self, image: numpy.ndarray, background: numpy.ndarray
+    ) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :param background: What the same view showed before the pour, BGR.
+        :return: Which pixels changed from the empty view to another colour: neither a
+            shadow falling on it nor its own colour brightening or darkening.
+        """
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(numpy.int16)
+        background_hsv = cv2.cvtColor(background, cv2.COLOR_BGR2HSV).astype(numpy.int16)
+        hue_distance = numpy.abs(hsv[..., 0] - background_hsv[..., 0])
+        hue_distance = numpy.minimum(hue_distance, 180 - hue_distance)
+        both_coloured = (hsv[..., 1] >= COLOURED_SATURATION) & (
+            background_hsv[..., 1] >= COLOURED_SATURATION
+        )
+        both_grey = (hsv[..., 1] < COLOURED_SATURATION) & (
+            background_hsv[..., 1] < COLOURED_SATURATION
+        )
+        same_colour = (hue_distance <= SAME_HUE_DISTANCE) | both_grey
+        shadow = (
+            (hsv[..., 2] < background_hsv[..., 2])
+            & (
+                numpy.abs(hsv[..., 1] - background_hsv[..., 1])
+                < SHADOW_SATURATION_CHANGE
+            )
+            & same_colour
+        )
+        background_colour = (hue_distance <= SAME_HUE_DISTANCE) & both_coloured
+        return self.changed(image, background) & ~shadow & ~background_colour
 
     @abstractmethod
     def grains(
@@ -276,22 +323,6 @@ class HueBandSegmentation(GrainSegmentation):
         )
 
 
-SAME_HUE_DISTANCE = 20
-"""
-How close two hues are, on OpenCV's scale from 0 to 179, to count as the same colour.
-"""
-
-COLOURED_SATURATION = 50
-"""
-The least saturation, from 0 to 255, at which a pixel's hue means something.
-"""
-
-SHADOW_SATURATION_CHANGE = 40
-"""
-The most a pixel's saturation changes, from 0 to 255, when only a shadow falls on it.
-"""
-
-
 @dataclass(frozen=True)
 class MovingGrainSegmentation(GrainSegmentation):
     """
@@ -316,27 +347,7 @@ class MovingGrainSegmentation(GrainSegmentation):
             )
             > self.minimum_difference
         )
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(numpy.int16)
-        background_hsv = cv2.cvtColor(background, cv2.COLOR_BGR2HSV).astype(numpy.int16)
-        hue_distance = numpy.abs(hsv[..., 0] - background_hsv[..., 0])
-        hue_distance = numpy.minimum(hue_distance, 180 - hue_distance)
-        both_coloured = (hsv[..., 1] >= COLOURED_SATURATION) & (
-            background_hsv[..., 1] >= COLOURED_SATURATION
-        )
-        both_grey = (hsv[..., 1] < COLOURED_SATURATION) & (
-            background_hsv[..., 1] < COLOURED_SATURATION
-        )
-        same_colour = (hue_distance <= SAME_HUE_DISTANCE) | both_grey
-        shadow = (
-            (hsv[..., 2] < background_hsv[..., 2])
-            & (
-                numpy.abs(hsv[..., 1] - background_hsv[..., 1])
-                < SHADOW_SATURATION_CHANGE
-            )
-            & same_colour
-        )
-        background_colour = (hue_distance <= SAME_HUE_DISTANCE) & both_coloured
-        return moved & self.changed(image, background) & ~shadow & ~background_colour
+        return moved & self.differs_from_empty_view(image, background)
 
 
 # %% the receiver's rim seen in the image
@@ -389,6 +400,18 @@ class ReceiverOutline:
     The least saturation of the cup, from 0 to 255.
     """
 
+    def shows_cup(self, image: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :return: Which of its pixels show the cup's colour.
+        """
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        return (
+            (hsv[..., 0] >= self.minimum_hue)
+            & (hsv[..., 0] <= self.maximum_hue)
+            & (hsv[..., 1] >= self.minimum_saturation)
+        )
+
     def align(self, opening: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
         """
         :param opening: Which pixels the opening projects to.
@@ -405,12 +428,7 @@ class ReceiverOutline:
         left, right = max(0, columns.min() - OUTLINE_SEARCH_MARGIN), min(
             width, columns.max() + OUTLINE_SEARCH_MARGIN
         )
-        hsv = cv2.cvtColor(background[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-        cup = (
-            (hsv[..., 0] >= self.minimum_hue)
-            & (hsv[..., 0] <= self.maximum_hue)
-            & (hsv[..., 1] >= self.minimum_saturation)
-        )
+        cup = self.shows_cup(background[top:bottom, left:right])
         count, labels, statistics, _ = cv2.connectedComponentsWithStats(
             cup.astype(numpy.uint8)
         )
@@ -469,6 +487,12 @@ class StreamReading(SubclassJSONSerializer):
     saw none.
     """
 
+    heap_fill: Optional[float] = None
+    """
+    How full the receiver is by the heap the camera sees lying in it, or ``None`` where
+    too little of it shows to tell.
+    """
+
     def to_json(self) -> Dict[str, Any]:
         return {
             **super().to_json(),
@@ -476,6 +500,7 @@ class StreamReading(SubclassJSONSerializer):
             "stream_seen": self.stream_seen,
             "counted_grains": self.counted_grains,
             "crossing": None if self.crossing is None else self.crossing.to_json(),
+            "heap_fill": self.heap_fill,
         }
 
     @classmethod
@@ -486,8 +511,15 @@ class StreamReading(SubclassJSONSerializer):
             stream_seen=data["stream_seen"],
             counted_grains=data["counted_grains"],
             crossing=None if crossing is None else PlanePoint._from_json(crossing),
+            heap_fill=data.get("heap_fill"),
         )
 
+
+HEAP_STILL_SECONDS = 1.0
+"""
+How long a pixel inside the receiver has to show the same grains to count as the heap
+lying there, in seconds: longer than any grain of the stream takes to fall through.
+"""
 
 MINIMUM_STREAM_PIXELS = 30
 """
@@ -536,6 +568,14 @@ class StreamDetector:
     to keep the opening where it projects.
     """
 
+    heap_gauge: Optional[HeapGauge] = None
+    """
+    What the heap seen lying in the receiver says of its fill, or ``None`` not to read
+    the heap.
+
+    Needs :attr:`outline`, which tells the receiver's inside from the rest.
+    """
+
     _background: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
     """
     What the camera showed before the pour.
@@ -559,6 +599,18 @@ class StreamDetector:
     _last_stamp: Optional[float] = field(init=False, default=None)
     """
     When the image observed last was taken, or ``None`` before the first.
+    """
+
+    _heap_region: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
+    """
+    Which pixels of the window show the receiver's inside, or ``None`` without an
+    outline.
+    """
+
+    _still_frames: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
+    """
+    For every pixel of the window, how many frames in a row it has shown grains in the
+    receiver.
     """
 
     _previous: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
@@ -589,6 +641,35 @@ class StreamDetector:
         self._counted = 0.0
         self._last_stamp = None
         self._previous = None
+        self._heap_region = (
+            None
+            if self.outline is None
+            else self._mask & self.outline.shows_cup(self._background)
+        )
+        self._still_frames = numpy.zeros(self._mask.shape, dtype=int)
+
+    @property
+    def heap_pixels(self) -> int:
+        """
+        :return: How many pixels of the receiver's inside have shown grains lying still
+            for :data:`HEAP_STILL_SECONDS`.
+        """
+        still_for = round(HEAP_STILL_SECONDS / self.frame_period)
+        return int((self._still_frames >= still_for).sum())
+
+    def _watch_heap(self, window: numpy.ndarray) -> None:
+        """
+        Count, for every pixel of the receiver's inside, how long it has shown grains.
+
+        :param window: The window around the opening of the latest image, BGR.
+        """
+        if self._heap_region is None:
+            return
+        grains = (
+            self.segmentation.differs_from_empty_view(window, self._background)
+            & self._heap_region
+        )
+        self._still_frames = numpy.where(grains, self._still_frames + 1, 0)
 
     def opening_mask(self, image_size: Tuple[int, int]) -> numpy.ndarray:
         """
@@ -635,6 +716,12 @@ class StreamDetector:
         window = image[self._window]
         grains = self._grains_in_window(window, self._previous)
         self._previous = window
+        self._watch_heap(window)
+        heap_fill = (
+            None
+            if self.heap_gauge is None
+            else self.heap_gauge.fill_for(self.heap_pixels)
+        )
         pixels = int(grains.sum())
         shown_for = (
             self.frame_period if self._last_stamp is None else stamp - self._last_stamp
@@ -647,6 +734,7 @@ class StreamDetector:
                 stream_seen=False,
                 counted_grains=self._counted,
                 crossing=None,
+                heap_fill=heap_fill,
             )
         rows, columns = numpy.nonzero(grains)
         crossing = self.view.on_plane(
@@ -663,4 +751,5 @@ class StreamDetector:
             stream_seen=True,
             counted_grains=self._counted,
             crossing=crossing,
+            heap_fill=heap_fill,
         )
