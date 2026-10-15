@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import cv2
 import numpy
 import pytest
@@ -7,11 +9,15 @@ from experiments.pouring_model_verification.hypothesis_bank import (
     ModelPoint,
 )
 from experiments.real_pouring.poured_material import PouredMaterial
-from experiments.real_pouring.receiving_cup import ReceivingCup
+from experiments.real_pouring.receiving_cup import (
+    RECEIVING_CUP_FILE_NAME,
+    ReceivingCup,
+)
 from experiments.real_pouring.stream_detection import ReceiverNotFoundError
 from experiments.real_pouring.pour_replay import (
     CameraFrame,
     CupPose,
+    GRAINS_PER_FILL,
     NoRecordingFoundError,
     OPENING_HEIGHT,
     PourRecording,
@@ -169,3 +175,34 @@ def test_a_pour_into_the_translucent_cup_is_replayed_looking_for_it_on_its_mat()
             settings=BankSettings(tracks_onset=True),
             receiver=ReceivingCup.TRANSLUCENT_CUP,
         )
+
+
+def test_a_replay_pours_into_the_cup_the_recording_names():
+    recording = replace(_recording(), receiver=ReceivingCup.TRANSLUCENT_CUP)
+    with pytest.raises(ReceiverNotFoundError):
+        PourReplay.of(
+            recording,
+            material=PouredMaterial.CORN,
+            drain=DRAIN,
+            settings=BankSettings(tracks_onset=True),
+        )
+
+
+def test_a_bag_names_the_cup_it_was_poured_into(tmp_path):
+    (tmp_path / RECEIVING_CUP_FILE_NAME).write_text(ReceivingCup.TRANSLUCENT_CUP.value)
+    assert PourRecording.receiver_named_in(tmp_path) is ReceivingCup.TRANSLUCENT_CUP
+
+
+def test_a_bag_from_before_bags_named_their_cup_was_poured_into_the_jeroen_cup(
+    tmp_path,
+):
+    assert PourRecording.receiver_named_in(tmp_path) is ReceivingCup.JEROEN_CUP
+
+
+def test_a_replay_pours_to_the_goal_of_the_cup_it_pours_into():
+    replay = _replay()
+    assert replay.goal_grains == (
+        ReceivingCup.JEROEN_CUP.goal_fill
+        * GRAINS_PER_FILL
+        * ReceivingCup.JEROEN_CUP.source_cups_held(PouredMaterial.STYROFOAM)
+    )

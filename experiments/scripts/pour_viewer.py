@@ -35,7 +35,6 @@ from experiments.real_pouring.receiving_cup import ReceivingCup
 from experiments.real_pouring.pour_replay import (
     CUP_SIZE,
     FRAME_PERIOD,
-    GOAL_FILL,
     GRAINS_PER_FILL,
     PourRecording,
     PourReplay,
@@ -118,6 +117,11 @@ OPENING_COLOUR = (0, 0, 255)
 The colour of the opening's outline, BGR.
 """
 
+RECEIVER_COLOUR = (0, 200, 0)
+"""
+The colour of a translucent receiver's outline, where its fill is read, BGR.
+"""
+
 PLAYBACK_INTERVAL_MS = int(FRAME_PERIOD * 1000)
 """
 How long a frame shows while playing, in milliseconds: real time.
@@ -182,6 +186,12 @@ class PourViewer:
     The opening's outline in the image, as OpenCV contours.
     """
 
+    _receiver_outline: list = field(init=False)
+    """
+    The translucent receiver's outline in the image, where its fill is read, as OpenCV
+    contours; none for a receiver read by its heap.
+    """
+
     _cursors: list = field(init=False, default_factory=list)
     """
     The lines marking the frame shown in every plot.
@@ -206,6 +216,16 @@ class PourViewer:
             opening.astype(numpy.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
         self._outline = contours
+        receiver = self.replay.receiver_mask()
+        self._receiver_outline = (
+            []
+            if receiver is None
+            else cv2.findContours(
+                receiver.astype(numpy.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )[0]
+        )
         self._build()
 
     @property
@@ -282,10 +302,16 @@ class PourViewer:
             linestyle=":",
             label="told the controller",
         )
-        count_axes.axhline(GOAL_FILL * GRAINS_PER_FILL, color="gray", linewidth=0.8)
+        count_axes.plot(
+            times,
+            [self._seen_fill_grains(s) for s in self._steps],
+            color="tab:purple",
+            label="receiver: fill the camera sees",
+        )
+        count_axes.axhline(self.replay.goal_grains, color="gray", linewidth=0.8)
         weighed = self.replay.recording.weighed
         if weighed is not None:
-            full = weighed.get("full_cup_mass_grams", self.material.full_cup_mass_grams)
+            full = self.material.full_cup_mass_grams
             count_axes.axhline(
                 weighed["received_mass_grams"] / full * GRAINS_PER_FILL,
                 color="tab:blue",
@@ -401,9 +427,23 @@ class PourViewer:
         self.timer.add_callback(self._advance)
         self._show(self.frame_index)
 
+    def _seen_fill_grains(self, step: ReplayStep) -> float:
+        """
+        :return: The receiver's fill the camera sees at a step, in grains of the source
+            cup, or ``nan`` where it sees too little to tell.
+        """
+        if step.reading.heap_fill is None:
+            return math.nan
+        return (
+            step.reading.heap_fill
+            * GRAINS_PER_FILL
+            * self.replay.receiver.source_cups_held(self.material)
+        )
+
     def _frame_picture(self, frame_index: int) -> numpy.ndarray:
         image = self.replay.recording.frames[frame_index].image()
         image[self.replay.grain_mask(frame_index)] = GRAIN_COLOUR
+        cv2.drawContours(image, self._receiver_outline, -1, RECEIVER_COLOUR, 2)
         cv2.drawContours(image, self._outline, -1, OPENING_COLOUR, 2)
         return cv2.cvtColor(image[self._crop], cv2.COLOR_BGR2RGB)
 
@@ -420,7 +460,8 @@ class PourViewer:
             onset = "-" if step.onset is None else f"{math.degrees(step.onset):.1f}°"
             self.caption.set_text(
                 f"t {time:.2f} s   tilt {math.degrees(step.tilt):.1f}°   stream {'seen' if step.reading.stream_seen else 'not seen'}   "
-                f"count {step.reading.counted_grains:.1f}\n"
+                f"count {step.reading.counted_grains:.1f}   "
+                f"fill seen {'-' if step.reading.heap_fill is None else f'{step.reading.heap_fill:.2f}'}\n"
                 f"bank: {step.bank.active} in charge, arrived {step.bank.received_grains:.1f}, told {step.told_grains:.1f}, "
                 f"onset estimate {onset}, repose correction {math.degrees(step.bank.corrections.repose_correction):+.1f}°"
             )
@@ -477,8 +518,10 @@ def main() -> None:
     parser.add_argument(
         "--receiver",
         type=ReceivingCup,
-        default=ReceivingCup.JEROEN_CUP,
+        default=None,
         choices=list(ReceivingCup),
+        help="the cup poured into; by default the one the bag names, the Jeroen cup "
+        "for a bag that names none",
     )
     parser.add_argument("--drain", type=Drain, default=Drain.DEMO, choices=list(Drain))
     parser.add_argument(

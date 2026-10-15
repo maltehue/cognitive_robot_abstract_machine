@@ -217,6 +217,15 @@ class GrainSegmentation(ABC):
         background_colour = (hue_distance <= SAME_HUE_DISTANCE) & both_coloured
         return self.changed(image, background) & ~shadow & ~background_colour
 
+    def moved(self, image: numpy.ndarray, previous: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :param previous: The image before it, BGR.
+        :return: Which pixels changed since the image before by at least
+            :attr:`minimum_difference`.
+        """
+        return self.changed(image, previous)
+
     @abstractmethod
     def grains(
         self,
@@ -344,13 +353,89 @@ class MovingGrainSegmentation(GrainSegmentation):
     ) -> numpy.ndarray:
         if previous is None:
             return numpy.zeros(image.shape[:2], dtype=bool)
-        moved = (
-            numpy.abs(image.astype(numpy.int16) - previous.astype(numpy.int16)).sum(
-                axis=2
-            )
-            > self.minimum_difference
+        return self.moved(image, previous) & self.differs_from_empty_view(
+            image, background
         )
-        return moved & self.differs_from_empty_view(image, background)
+
+
+MINIMUM_YELLOWING = 8
+"""
+How much yellower than the empty view, on the blue-yellow axis of the Lab colour space
+from 0 to 255, a pixel has to turn to show corn against a light background: corn behind
+the translucent cup's frosted wall turned it 10 to 30 in a video of a pour into the cup,
+the bare wall above the corn no more than 7.
+"""
+
+LAB_BLUE_YELLOW_CHANNEL = 2
+"""
+The channel of an OpenCV Lab image running from blue to yellow.
+"""
+
+
+@dataclass(frozen=True)
+class Yellowing:
+    """
+    Corn told from a light background by turning it yellower, however pale and blurred
+    it shows: a blue cup, a grey arm or a white wall passing by do not turn it so.
+    """
+
+    minimum: int = MINIMUM_YELLOWING
+    """
+    How much yellower than the background a pixel has to turn.
+    """
+
+    def shows(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :param background: What the same view showed before the pour, BGR.
+        :return: Which pixels turned yellow enough to show corn.
+        """
+        channel = LAB_BLUE_YELLOW_CHANNEL
+        yellowing = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[..., channel].astype(
+            numpy.int16
+        ) - cv2.cvtColor(background, cv2.COLOR_BGR2LAB)[..., channel].astype(
+            numpy.int16
+        )
+        return yellowing >= self.minimum
+
+
+MINIMUM_YELLOW_MOVEMENT = 45
+"""
+How much a pixel's colour has to change from the previous frame, summed over the three
+channels, for corn moving over a light background to count as moving: on the corn pour
+into the translucent cup of 2026-10-15 18:33, the stream's count stood 45 times above
+the creep while no stream fell (the source cup moving over the opening), against 20
+times at 20 and 70 times at 60, which leaves too few pixels of a thin trickle.
+"""
+
+
+@dataclass(frozen=True)
+class MovingYellowSegmentation(GrainSegmentation):
+    """
+    Grains are pixels that changed since the previous frame and turned yellower than the
+    empty view: corn falling through the light inside of a translucent cup, against which
+    a thin, blurred stream barely changes the brightness.
+    """
+
+    minimum_difference: int = MINIMUM_YELLOW_MOVEMENT
+    """
+    How much a pixel's colour has to change from the previous frame to count as moving.
+    """
+
+    yellowing: Yellowing = Yellowing()
+    """
+    How corn is told from the light background.
+    """
+
+    def grains(
+        self,
+        image: numpy.ndarray,
+        background: numpy.ndarray,
+        previous: Optional[numpy.ndarray] = None,
+    ) -> numpy.ndarray:
+        if previous is None:
+            return numpy.zeros(image.shape[:2], dtype=bool)
+        return self.moved(image, previous) & self.yellowing.shows(image, background)
 
 
 # %% the receiver's rim seen in the image
@@ -820,6 +905,25 @@ class StreamDetector:
         self._wall_background = empty_view[self._wall_window]
         self._wall_still_frames = numpy.zeros(self._wall_region.shape, dtype=int)
 
+    def wall_mask(self, image_size: Tuple[int, int]) -> numpy.ndarray:
+        """
+        :param image_size: Height and width of the camera's images.
+        :return: Which pixels the detector reads the translucent receiver's fill in,
+            where it found the receiver.
+        """
+        mask = numpy.zeros(image_size, dtype=bool)
+        mask[self._wall_window] = self._wall_region
+        return mask
+
+    @property
+    def wall_pixels(self) -> int:
+        """
+        :return: How many pixels of the translucent receiver have shown its contents
+            lying still for :data:`HEAP_STILL_SECONDS`.
+        """
+        still_for = round(HEAP_STILL_SECONDS / self.frame_period)
+        return int((self._wall_still_frames >= still_for).sum())
+
     def _watch_wall(self, image: numpy.ndarray) -> Optional[float]:
         """
         Count, for every pixel of the translucent receiver, how long it has shown the
@@ -838,10 +942,7 @@ class StreamDetector:
             & self._wall_region
         )
         self._wall_still_frames = numpy.where(contents, self._wall_still_frames + 1, 0)
-        still_for = round(HEAP_STILL_SECONDS / self.frame_period)
-        return self.wall_gauge.fill_for(
-            int((self._wall_still_frames >= still_for).sum())
-        )
+        return self.wall_gauge.fill_for(self.wall_pixels)
 
     @property
     def heap_pixels(self) -> int:

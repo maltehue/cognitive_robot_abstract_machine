@@ -27,6 +27,7 @@ from experiments.real_pouring.stream_detection import (
     GrainSegmentation,
     HueBandSegmentation,
     MovingGrainSegmentation,
+    MovingYellowSegmentation,
     OpeningRegion,
     PixelOffset,
     ReceiverNotFoundError,
@@ -657,3 +658,65 @@ def test_a_detector_reads_the_receiver_with_one_gauge_only():
             ),
             wall_gauge=WALL_GAUGE,
         )
+
+
+# %% grains that move and turn the light inside of a translucent cup yellow
+
+
+MOVING_YELLOW = MovingYellowSegmentation()
+"""
+Grains are what moved since the last frame and turned yellower than the empty view.
+"""
+
+PALE_KERNEL = (150, 195, 215)
+"""
+A motion-blurred corn kernel against the cup's frosted inside, BGR: pale, but yellow.
+"""
+
+GREY_THING = (150, 150, 150)
+"""
+Something grey passing over the opening, BGR.
+"""
+
+
+def test_a_pale_yellow_grain_moving_over_a_light_inside_is_a_grain():
+    frosted = _frosted_view()
+    grains = MOVING_YELLOW.grains(
+        _grain_at(10, PALE_KERNEL, frosted),
+        frosted,
+        previous=_grain_at(0, PALE_KERNEL, frosted),
+    )
+    assert grains.sum() == GRAIN_SIZE**2
+
+
+def test_a_grey_thing_moving_over_a_light_inside_is_no_grain():
+    frosted = _frosted_view()
+    grains = MOVING_YELLOW.grains(
+        _grain_at(10, GREY_THING, frosted),
+        frosted,
+        previous=_grain_at(0, GREY_THING, frosted),
+    )
+    assert grains.sum() == 0
+
+
+def test_a_pale_yellow_grain_lying_still_is_no_grain():
+    frosted = _frosted_view()
+    lying = _grain_at(0, PALE_KERNEL, frosted)
+    assert MOVING_YELLOW.grains(lying, frosted, previous=lying).sum() == 0
+
+
+def test_the_contents_lying_still_are_counted_pixel_by_pixel():
+    detector = _detector_on_a_translucent_cup()
+    image = _contents_up_to(0.5)
+    for frame in range(STILL_FRAMES):
+        detector.observe(image, stamp=frame * FRAME_PERIOD)
+    painted = (image == CORN_BEHIND_THE_WALL).all(axis=2)
+    assert detector.wall_pixels == int(painted.sum())
+
+
+def test_the_translucent_cup_is_drawn_where_it_was_found():
+    detector = _detector_on_a_translucent_cup()
+    assert (
+        detector.wall_mask(WALL_IMAGE_SIZE)
+        == WALL_GAUGE.region_in(WALL_IMAGE_SIZE, NO_OFFSET)
+    ).all()

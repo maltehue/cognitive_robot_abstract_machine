@@ -12,7 +12,11 @@ from experiments.real_pouring.receiving_cup import (
     ReceivingCup,
 )
 from experiments.real_pouring.receiver_wall import BLUE_MAT
-from experiments.real_pouring.stream_detection import BLUE_CUP_OUTLINE, CameraView
+from experiments.real_pouring.stream_detection import (
+    BLUE_CUP_OUTLINE,
+    CameraView,
+    MovingYellowSegmentation,
+)
 
 VIEW = CameraView(
     intrinsics=numpy.array([[1000.0, 0.0, 640.0], [0.0, 1000.0, 480.0], [0, 0, 1]]),
@@ -56,8 +60,27 @@ def test_the_translucent_cup_is_found_on_its_mat_and_read_through_its_wall():
     ) == (
         None,
         BLUE_MAT,
-        PouredMaterial.CORN.wall_detected_share,
+        receiving_cup.TRANSLUCENT_CUP_CORN_WALL_DETECTED_SHARE,
         None,
+    )
+
+
+def test_corn_falling_into_the_translucent_cup_is_counted_by_turning_it_yellow():
+    detector = _detector(ReceivingCup.TRANSLUCENT_CUP)
+    assert (
+        type(detector.segmentation),
+        detector.pixel_seconds_per_grain,
+    ) == (
+        MovingYellowSegmentation,
+        receiving_cup.TRANSLUCENT_CUP_CORN_PIXEL_SECONDS_PER_GRAIN,
+    )
+
+
+def test_corn_falling_into_the_jeroen_cup_is_counted_as_the_material_says():
+    detector = _detector(ReceivingCup.JEROEN_CUP)
+    assert (detector.segmentation, detector.pixel_seconds_per_grain) == (
+        PouredMaterial.CORN.segmentation,
+        PouredMaterial.CORN.pixel_seconds_per_grain,
     )
 
 
@@ -109,3 +132,16 @@ def test_a_receiver_left_from_a_pour_into_another_cup_may_not_be_reused():
             source_capacity=SOURCE_CAPACITY,
             material=PouredMaterial.CORN,
         )
+
+
+def test_the_translucent_cup_is_poured_to_about_the_share_of_a_source_cup_the_jeroen_cup_was():
+    corn = PouredMaterial.CORN
+    assert (
+        ReceivingCup.TRANSLUCENT_CUP.goal_fill
+        * ReceivingCup.TRANSLUCENT_CUP.source_cups_held(corn)
+        == pytest.approx(
+            ReceivingCup.JEROEN_CUP.goal_fill
+            * ReceivingCup.JEROEN_CUP.source_cups_held(corn),
+            abs=0.15,
+        )
+    )

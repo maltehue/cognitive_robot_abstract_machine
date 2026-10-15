@@ -1,0 +1,12 @@
+{
+ "2026-10-15_18-33-08": {
+  "received_grams": 326.0,
+  "pour_seconds": 99.60079193115234,
+  "pixel_seconds": 993.3543646335602,
+  "creep_pixel_seconds_per_second": 1.716727899692916,
+  "pixel_seconds_per_grain": 9.699138876769245,
+  "wall_pixels": 8021,
+  "received_fill": 0.4515235457063712,
+  "wall_detected_share": 0.6763576560339136
+ }
+}

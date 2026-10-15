@@ -15,16 +15,16 @@ from experiments.pouring_model_verification.hypothesis_bank import (
 )
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.pour_replay import (
-    GOAL_FILL,
     GRAINS_PER_FILL,
     PourRecording,
     PourReplay,
 )
+from experiments.real_pouring.receiving_cup import ReceivingCup
 
 DEMO_DRAIN = ModelPoint(
     repose_angle=0.0, discharge_coefficient=0.2, outflow_rate_constant=0.8
 )
-GOAL_LOWER_EDGE = (GOAL_FILL - 0.05) * GRAINS_PER_FILL
+GOAL_LOWER_EDGE = (ReceivingCup.JEROEN_CUP.goal_fill - 0.05) * GRAINS_PER_FILL
 results = {}
 for argument in sys.argv[1:]:
     material, bag, received, full = argument.split("::")

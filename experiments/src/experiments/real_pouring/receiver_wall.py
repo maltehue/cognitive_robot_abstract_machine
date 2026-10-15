@@ -19,24 +19,12 @@ from experiments.real_pouring.stream_detection import (
     CameraView,
     PixelOffset,
     ReceiverNotFoundError,
+    Yellowing,
 )
 
 OUTLINE_SAMPLES = 90
 """
 How many points around the receiver's circumference are projected to outline it.
-"""
-
-MINIMUM_YELLOWING = 8
-"""
-How much yellower than the empty view, on the blue-yellow axis of the Lab colour space
-from 0 to 255, a pixel has to turn to show corn through the frosted wall: corn behind
-the wall turned it 10 to 30 in a video of a pour into the cup, the bare wall above the
-corn no more than 7.
-"""
-
-LAB_BLUE_YELLOW_CHANNEL = 2
-"""
-The channel of an OpenCV Lab image running from blue to yellow.
 """
 
 
@@ -74,9 +62,9 @@ class WallGauge:
     wall: the scale one weighed pour of a material sets.
     """
 
-    minimum_yellowing: int = MINIMUM_YELLOWING
+    yellowing: Yellowing = Yellowing()
     """
-    How much yellower than the empty view a pixel has to turn to show the contents.
+    How the contents are told from the empty view.
     """
 
     @classmethod
@@ -171,13 +159,7 @@ class WallGauge:
         :param background: What the same view showed before the pour, BGR.
         :return: Which pixels turned yellow enough to show the contents.
         """
-        channel = LAB_BLUE_YELLOW_CHANNEL
-        yellowing = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[..., channel].astype(
-            numpy.int16
-        ) - cv2.cvtColor(background, cv2.COLOR_BGR2LAB)[..., channel].astype(
-            numpy.int16
-        )
-        return yellowing >= self.minimum_yellowing
+        return self.yellowing.shows(image, background)
 
 
 # %% finding the cup as the gap it makes in the mat it stands on

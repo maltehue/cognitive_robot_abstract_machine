@@ -44,7 +44,10 @@ from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank
 from experiments.real_pouring.live_bank_listener import LiveBankListener
 from experiments.real_pouring.poured_material import PouredMaterial
-from experiments.real_pouring.receiving_cup import ReceivingCup
+from experiments.real_pouring.receiving_cup import (
+    RECEIVING_CUP_FILE_NAME,
+    ReceivingCup,
+)
 from giskardpy.motion_statechart.data_types import DefaultWeights
 from krrood.adapters.json_serializer import to_json
 from giskardpy.motion_statechart.goals.templates import Parallel
@@ -162,13 +165,7 @@ RECEIVING_CUP = ReceivingCup.TRANSLUCENT_CUP
 The cup poured into; ``pouring_perception.py`` has to watch the same.
 """
 
-GOAL_FILLS = {ReceivingCup.JEROEN_CUP: 0.7, ReceivingCup.TRANSLUCENT_CUP: 0.3}
-"""
-The fill each cup is poured to: the translucent cup holds two source cups, so 0.3 of it
-holds about as much as 0.6 of the Jeroen cup.
-"""
-
-GOAL_FILL_CONST = GOAL_FILLS[RECEIVING_CUP]
+GOAL_FILL_CONST = RECEIVING_CUP.goal_fill
 
 RECEIVER_FULL_MASS_GRAMS = RECEIVING_CUP.full_mass_grams(MATERIAL)
 """
@@ -388,6 +385,7 @@ def _spawn_receiving_cup_body(cup: ReceivingCup) -> Body:
 # ----- Record the run; the bag is closed again at the end of the script -----
 recording = RosbagRecording()
 print(f"Recording into {recording.start()}.")
+recording.add_file(RECEIVING_CUP_FILE_NAME, RECEIVING_CUP.value)
 print(
     f"Pouring {MATERIAL} (a full cup weighs {FULL_CUP_MASS_GRAMS} g) into the "
     f"{RECEIVING_CUP} (full {RECEIVER_FULL_MASS_GRAMS} g) to a fill of "

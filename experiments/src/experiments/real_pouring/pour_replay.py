@@ -31,7 +31,10 @@ from experiments.pouring_model_verification.hypothesis_bank import (
 from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
 from experiments.real_pouring.poured_material import PouredMaterial
-from experiments.real_pouring.receiving_cup import ReceivingCup
+from experiments.real_pouring.receiving_cup import (
+    RECEIVING_CUP_FILE_NAME,
+    ReceivingCup,
+)
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
@@ -88,11 +91,6 @@ Every how many frames the live bank weighs a reading: ten times a second.
 GRAINS_PER_FILL = 100.0
 """
 How many of the bank's grains fill the source cup.
-"""
-
-GOAL_FILL = 0.7
-"""
-The fill the demo pours the receiver to.
 """
 
 PREDICTION_WINDOW = 1.5
@@ -249,6 +247,23 @@ class PourRecording:
     What was weighed after the pour, as recorded, or ``None`` without it.
     """
 
+    receiver: ReceivingCup = ReceivingCup.JEROEN_CUP
+    """
+    The cup poured into, as the bag names it.
+    """
+
+    @staticmethod
+    def receiver_named_in(bag: Path) -> ReceivingCup:
+        """
+        :param bag: A demo bag's folder.
+        :return: The cup the bag names as poured into; the Jeroen cup for a bag from
+            before bags named it.
+        """
+        named = bag / RECEIVING_CUP_FILE_NAME
+        if not named.exists():
+            return ReceivingCup.JEROEN_CUP
+        return ReceivingCup(named.read_text().strip())
+
     @classmethod
     def read(cls, bag: Path) -> PourRecording:
         """
@@ -349,6 +364,7 @@ class PourRecording:
             weighed=(
                 json.loads(weighed_file.read_text()) if weighed_file.exists() else None
             ),
+            receiver=cls.receiver_named_in(bag),
         )
 
     @property
@@ -430,6 +446,16 @@ class PourReplay:
     The detector, with the empty view learned before the pour.
     """
 
+    receiver: ReceivingCup
+    """
+    The cup poured into.
+    """
+
+    goal_grains: float
+    """
+    How many of the bank's grains the receiver was to hold.
+    """
+
     steps: List[ReplayStep] = field(default_factory=list)
     """
     Every reading the bank weighed, in order.
@@ -445,8 +471,8 @@ class PourReplay:
         receiver_from_count: bool = False,
         stop_lead_time: float = 0.0,
         outline: Optional[ReceiverOutline] = RECEIVER_OUTLINE,
-        receiver: ReceivingCup = ReceivingCup.JEROEN_CUP,
-        goal_fill: float = GOAL_FILL,
+        receiver: Optional[ReceivingCup] = None,
+        goal_fill: Optional[float] = None,
     ) -> PourReplay:
         """
         :param recording: The pour to replay.
@@ -457,10 +483,17 @@ class PourReplay:
         :param stop_lead_time: How long grains keep arriving after a stop, in seconds.
         :param outline: The Jeroen cup's outline the opening is moved onto, or ``None``
             to count where the opening projects.
-        :param receiver: The cup poured into.
-        :param goal_fill: The fill the receiver was poured to.
+        :param receiver: The cup poured into, or ``None`` for the one the recording
+            names.
+        :param goal_fill: The fill the receiver was poured to, or ``None`` for the
+            demo's goal for that cup.
         :return: The replay, every reading weighed.
         """
+        if receiver is None:
+            receiver = recording.receiver
+        if goal_fill is None:
+            goal_fill = receiver.goal_fill
+        goal_grains = goal_fill * GRAINS_PER_FILL * receiver.source_cups_held(material)
         world, source, source_joint = _replay_world(
             recording, drain, receiver, material
         )
@@ -492,15 +525,18 @@ class PourReplay:
             camera=CameraCondition.POLE_COUNTING.model,
             grains_per_fill=GRAINS_PER_FILL,
             loaded_grains=GRAINS_PER_FILL,
-            goal_grains=goal_fill
-            * GRAINS_PER_FILL
-            * receiver.source_cups_held(material),
+            goal_grains=goal_grains,
             opening_radius=receiver.inner_radius,
             prediction_window=PREDICTION_WINDOW,
             receiver_from_count=receiver_from_count,
             stop_lead_time=stop_lead_time,
         )
-        replay = cls(recording=recording, detector=detector)
+        replay = cls(
+            recording=recording,
+            detector=detector,
+            receiver=receiver,
+            goal_grains=goal_grains,
+        )
         for index in range(first, len(recording.frames)):
             frame = recording.frames[index]
             reading = detector.observe(
@@ -539,6 +575,15 @@ class PourReplay:
         frames = self.recording.frames
         previous = frames[frame_index - 1].image() if frame_index > 0 else None
         return self.detector.grain_mask(frames[frame_index].image(), previous)
+
+    def receiver_mask(self) -> Optional[numpy.ndarray]:
+        """
+        :return: Which pixels of a frame the detector reads a translucent receiver's
+            fill in, or ``None`` for a receiver read by its heap.
+        """
+        if self.detector.wall_gauge is None:
+            return None
+        return self.detector.wall_mask(self.recording.frames[0].image().shape[:2])
 
     def opening_mask(self) -> numpy.ndarray:
         """
