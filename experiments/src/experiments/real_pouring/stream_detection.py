@@ -364,6 +364,52 @@ How many rows below its top edge the outline's centre is taken from, in pixels.
 """
 
 
+@dataclass(frozen=True)
+class PixelOffset:
+    """
+    How far the opening was moved in the image, in pixels.
+    """
+
+    rows: int
+    """
+    How many rows down it was moved.
+    """
+
+    columns: int
+    """
+    How many columns right it was moved.
+    """
+
+    def applied_to(self, mask: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param mask: Which pixels of an image are set.
+        :return: The same pixels moved by this offset, those moved off the image held at
+            its edge.
+        """
+        rows, columns = numpy.nonzero(mask)
+        height, width = mask.shape
+        moved = numpy.zeros_like(mask)
+        moved[
+            numpy.clip(rows + self.rows, 0, height - 1),
+            numpy.clip(columns + self.columns, 0, width - 1),
+        ] = True
+        return moved
+
+    def undone(self, pixel: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param pixel: A ``(column, row)`` in the image.
+        :return: Where that pixel lay before the move: where the camera's pose projects
+            the point of the opening it shows.
+        """
+        return pixel - numpy.array([self.columns, self.rows])
+
+
+NO_OFFSET = PixelOffset(rows=0, columns=0)
+"""
+An opening left where it projects.
+"""
+
+
 @dataclass
 class ReceiverNotFoundError(Exception):
     """
@@ -420,6 +466,16 @@ class ReceiverOutline:
             outline and its centre the centre of that edge.
         :raises ReceiverNotFoundError: If the cup does not show near the projection.
         """
+        return self.offset(opening, background).applied_to(opening)
+
+    def offset(self, opening: numpy.ndarray, background: numpy.ndarray) -> PixelOffset:
+        """
+        :param opening: Which pixels the opening projects to.
+        :param background: The empty view, BGR.
+        :return: How far the opening has to move for its top to meet the top edge of the
+            cup's outline and its centre the centre of that edge.
+        :raises ReceiverNotFoundError: If the cup does not show near the projection.
+        """
         rows, columns = numpy.nonzero(opening)
         height, width = opening.shape
         top, bottom = max(0, rows.min() - OUTLINE_SEARCH_MARGIN), min(
@@ -438,14 +494,10 @@ class ReceiverOutline:
         cup_rows, cup_columns = numpy.nonzero(labels == largest)
         cup_top = cup_rows.min()
         centre = cup_columns[cup_rows < cup_top + TOP_EDGE_ROWS].mean() + left
-        row_shift = int(cup_top + top - rows.min())
-        column_shift = int(round(centre - columns.mean()))
-        aligned = numpy.zeros_like(opening)
-        aligned[
-            numpy.clip(rows + row_shift, 0, height - 1),
-            numpy.clip(columns + column_shift, 0, width - 1),
-        ] = True
-        return aligned
+        return PixelOffset(
+            rows=int(cup_top + top - rows.min()),
+            columns=int(round(centre - columns.mean())),
+        )
 
 
 BLUE_CUP_OUTLINE = ReceiverOutline(
@@ -586,6 +638,11 @@ class StreamDetector:
     Which pixels show the opening.
     """
 
+    _opening_offset: PixelOffset = field(init=False, default=NO_OFFSET)
+    """
+    How far the opening was moved from where the camera's pose projects it.
+    """
+
     _counted: float = field(init=False, default=0.0)
     """
     The grains counted so far.
@@ -626,9 +683,11 @@ class StreamDetector:
         :param images: Images taken before any grain leaves the source, BGR.
         """
         mask = self.opening.mask_in(self.view, images[0].shape[:2])
+        self._opening_offset = NO_OFFSET
         if self.outline is not None:
             empty_view = numpy.median(numpy.stack(images), axis=0).astype(numpy.uint8)
-            mask = self.outline.align(mask, empty_view)
+            self._opening_offset = self.outline.offset(mask, empty_view)
+            mask = self._opening_offset.applied_to(mask)
         rows, columns = numpy.nonzero(mask)
         self._window = (
             slice(rows.min(), rows.max() + 1),
@@ -738,11 +797,13 @@ class StreamDetector:
             )
         rows, columns = numpy.nonzero(grains)
         crossing = self.view.on_plane(
-            numpy.array(
-                [
-                    columns.mean() + self._window[1].start,
-                    rows.mean() + self._window[0].start,
-                ]
+            self._opening_offset.undone(
+                numpy.array(
+                    [
+                        columns.mean() + self._window[1].start,
+                        rows.mean() + self._window[0].start,
+                    ]
+                )
             ),
             plane_height=float(self.opening.centre[2]),
         )

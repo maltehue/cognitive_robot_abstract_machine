@@ -420,6 +420,21 @@ def test_a_grain_falling_where_the_opening_projects_but_the_cup_is_not_is_not_co
     assert not reading.stream_seen
 
 
+def test_a_grain_falling_through_the_moved_opening_crosses_where_the_opening_lies():
+    detector = _detector_on_the_cups_rim()
+    rows, columns = numpy.nonzero(detector.opening_mask(IMAGE_SIZE))
+    centre = (
+        int(round(rows.mean())) - GRAIN_SIZE // 2,
+        int(round(columns.mean())) - GRAIN_SIZE // 2,
+    )
+    detector.observe(_falling_grain(centre[0] - 12, centre[1]), stamp=0.0)
+    reading = detector.observe(_falling_grain(*centre), stamp=FRAME_PERIOD)
+    pixel = CAMERA_HEIGHT / FOCAL_LENGTH
+    assert (reading.crossing.x, reading.crossing.y) == pytest.approx(
+        (OPENING.centre[0], OPENING.centre[1]), abs=2 * pixel
+    )
+
+
 def test_the_opening_drawn_is_the_moved_one():
     detector = _detector_on_the_cups_rim()
     rows, _ = numpy.nonzero(detector.opening_mask(IMAGE_SIZE))
