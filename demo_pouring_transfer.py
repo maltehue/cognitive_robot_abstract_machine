@@ -104,13 +104,6 @@ IS_SIM = False
 # START_FILL = 0.8
 # GOAL_FILL_CONST = 0.7
 START_FILL = 1.0
-POUR_START_TILT_MARGIN = 0.05
-"""
-How far past the model's onset the cup is tilted before the transfer starts, in radians.
-
-Below the onset the model has neither flow nor a gradient for the fill task to act on,
-and the transfer never starts.
-"""
 
 UNCALIBRATED_DRAIN = ModelPoint(
     repose_angle=0.0, discharge_coefficient=0.2, outflow_rate_constant=0.8
@@ -240,13 +233,7 @@ MAXIMUM_TILT_RATE = math.radians(3.0)
 The fastest the fill task may tilt the cup further, in radians per second.
 """
 
-FAST_TILT_RATE = math.radians(10.0)
-"""
-How fast the cup turns below :data:`FAST_UNTIL_TILT`, in radians per second: the rate
-the calibration ramps ran at.
-"""
-
-FAST_UNTIL_TILT = math.radians(60.0)
+DRY_TILT = math.radians(60.0)
 """
 The tilt below which nothing but stray heap grains has left the cup in any recorded pour
 (first bulk stream at 66 to 80 degrees), in radians.
@@ -258,11 +245,15 @@ The tilt the cup is never turned past, in radians: the calibration ramps emptied
 completely there.
 """
 
-FAST_BLEND_WIDTH = math.radians(10.0)
+TRANSFER_START_TILT = DRY_TILT - math.radians(10.0)
 """
-The span of tilt below :data:`FAST_UNTIL_TILT` over which the cup slows from the fast to
-the slow rate, in radians: switched at once, the controller overshot and jerked the arm
-back on 2026-10-15.
+The tilt a plain pose goal turns the cup to before the transfer starts, in radians:
+short of :data:`DRY_TILT`, so the transfer's approach covers the last stretch to the
+first stream at its own rate.
+
+The pose goal turns the cup without the pouring tasks, which chase a landing point and
+an upright plane that move with the tilt: when the transfer itself turned the cup at 10
+degrees per second through the dry stretch, the arm shook on 2026-10-15.
 """
 
 CEILING_SLOWDOWN_WIDTH = math.radians(5.0)
@@ -392,9 +383,9 @@ print(
     f"{GOAL_FILL_CONST}; drain repose {math.degrees(REPOSE_ANGLE):.0f} deg, rate "
     f"{OUTFLOW_RATE_CONSTANT}, flowing down to "
     f"{math.degrees(MATERIAL.repose_hysteresis):.0f} deg below the repose angle; "
-    f"live bank {'on' if USE_LIVE_BANK else 'off'}; tilt "
-    f"{math.degrees(FAST_TILT_RATE):.0f} deg/s up to {math.degrees(FAST_UNTIL_TILT):.0f} "
-    f"deg, then at most {math.degrees(MAXIMUM_TILT_RATE):.0f} deg/s, never past "
+    f"live bank {'on' if USE_LIVE_BANK else 'off'}; transfer from "
+    f"{math.degrees(TRANSFER_START_TILT):.0f} deg at most "
+    f"{math.degrees(MAXIMUM_TILT_RATE):.0f} deg/s, never past "
     f"{math.degrees(MAXIMUM_TILT):.0f} deg."
 )
 
@@ -528,11 +519,9 @@ time.sleep(0.2)
 assert source_cup.fill_level == START_FILL
 assert receiving_cup.fill_level == 0.0
 
-# ----- Tilt to just past the model's onset -----
-onset = _analytic_drain(source_cup).onset_tilt(START_FILL)
-pour_start_tilt = float(onset.evaluate()[0]) + POUR_START_TILT_MARGIN
-print(f"Tilting to the pour start at {math.degrees(pour_start_tilt):.1f} deg.")
-move_left_tool_to(giskard, upright_carry_pose(giskard, tilt=pour_start_tilt))
+# ----- Tilt through the dry stretch with a plain pose goal -----
+print(f"Tilting to the transfer start at {math.degrees(TRANSFER_START_TILT):.1f} deg.")
+move_left_tool_to(giskard, upright_carry_pose(giskard, tilt=TRANSFER_START_TILT))
 
 # ----- Transfer -----
 goal_fill = GOAL_FILL_CONST
@@ -585,9 +574,6 @@ tilt_pacing = TiltPacing(
     maximum_rate=MAXIMUM_TILT_RATE,
     maximum_tilt=MAXIMUM_TILT,
     maximum_return_rate=MAXIMUM_RETURN_TILT_RATE,
-    fast_rate=FAST_TILT_RATE,
-    fast_until_tilt=FAST_UNTIL_TILT,
-    fast_blend_width=FAST_BLEND_WIDTH,
     ceiling_slowdown_width=CEILING_SLOWDOWN_WIDTH,
     receiver=receiving_cup,
     approach_until_fill=goal_fill,
