@@ -31,6 +31,7 @@ from tf2_ros import Buffer, TransformListener
 
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.stream_detection import (
+    BLUE_CUP_OUTLINE,
     CameraView,
     OpeningRegion,
     StreamDetector,
@@ -60,6 +61,12 @@ MATERIAL = PouredMaterial.STYROFOAM
 """
 What the demo pours, which sets how grains are told from the empty view and how much
 image area one counts for.
+"""
+
+RECEIVER_OUTLINE = BLUE_CUP_OUTLINE
+"""
+The receiving cup's outline, onto whose rim the opening projected from the camera's pose
+is moved before every pour: the pose is a few centimetres off.
 """
 
 DEFAULTS = {
@@ -195,6 +202,7 @@ class StreamDetectorNode(Node):
             segmentation=material.segmentation,
             pixel_seconds_per_grain=material.pixel_seconds_per_grain,
             frame_period=self._value(Parameter.FRAME_PERIOD),
+            outline=RECEIVER_OUTLINE,
         )
         detector.learn_background(self.background)
         self.detector = detector

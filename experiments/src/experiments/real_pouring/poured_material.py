@@ -13,15 +13,16 @@ from giskardpy.middleware.ros2.particle_weighing import FULL_CUP_MASS_GRAMS
 
 from experiments.real_pouring.stream_detection import (
     GrainSegmentation,
-    HueBandSegmentation,
-    WhiteSegmentation,
+    MovingGrainSegmentation,
 )
 
-STYROFOAM_PIXEL_SECONDS_PER_GRAIN = 29.15
+STYROFOAM_PIXEL_SECONDS_PER_GRAIN = 24.8
 """
-How much stream area, times the time it shows, one of the live bank's grains (a percent
-of a full Jeroen cup) adds for the styrofoam balls: 1100 pixel-seconds per gram in the
-five demo pours of 2026-10-12, times 2.65 g per full cup over 100 grains.
+How much moving grain area in the opening, times the time it shows, one of the live
+bank's grains (a percent of a full Jeroen cup) received adds for the styrofoam balls:
+the mean of five weighed pours of 2026-10-14, 22.1 to 28.2 (within 12 %), counted on
+the opening moved onto the rim
+(experiments/results/real_pouring/analysis_2026-10-15/count_calibration.py).
 """
 
 
@@ -32,26 +33,13 @@ of them has been weighed. Weighed on 2026-10-14 as the received, spilled and lef
 masses of one pour: 50.24 + 4.77 + 306.82 g.
 """
 
-CORN_PIXEL_SECONDS_PER_GRAIN = 34.0
+CORN_PIXEL_SECONDS_PER_GRAIN = 48.8
 """
-How much corn-coloured changed area, times the time it shows, one of the live bank's
-grains of corn adds.
-
-From the corn pour of 2026-10-14 17:50, whose count at 9.5 was 269.3 grains where 79.5
-left the cup: 33.9. The pour that emptied the cup before it puts it at 29 or more; the
-first corn pour, with someone walking behind the receiver and only 15 grains poured, at
-9.5. A value too high counts too few grains and lets a pour run on.
-"""
-
-
-CORN_HUES = HueBandSegmentation(
-    minimum_hue=8, maximum_hue=35, minimum_saturation=80, minimum_value=60
-)
-"""
-The corn kernels' colours, orange-brown to yellow: chosen on the 2026-10-14 corn bags,
-where they keep the kernels and leave out the dark clothes and white shoe of someone
-passing behind the receiver. Dark, shaded kernels fall below the band; the count's
-calibration covers the share they make up.
+How much moving grain area in the opening, times the time it shows, one of the live
+bank's grains of corn received adds: the mean of the three weighed corn pours of
+2026-10-14 and 2026-10-15, 43.1 to 54.0 (within 11 %), a thin slow stream and a dense
+fast one alike, counted on the opening moved onto the rim
+(experiments/results/real_pouring/analysis_2026-10-15/count_calibration.py).
 """
 
 
@@ -93,13 +81,13 @@ class PouredMaterial(StrEnum):
     @property
     def segmentation(self) -> GrainSegmentation:
         """
-        :return: How the camera tells this material's grains from the empty view.
+        :return: How the camera tells this material's grains from the empty view:
+            for every material, by what moves through the opening in another colour
+            than the empty view's, so only the calibration differs.
         """
         match self:
-            case PouredMaterial.STYROFOAM:
-                return WhiteSegmentation()
-            case PouredMaterial.CORN:
-                return CORN_HUES
+            case PouredMaterial.STYROFOAM | PouredMaterial.CORN:
+                return MovingGrainSegmentation()
 
     @property
     def pixel_seconds_per_grain(self) -> float:

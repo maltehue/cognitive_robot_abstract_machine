@@ -1,0 +1,69 @@
+{
+ "2026-10-15_09-07-08": {
+  "material": "corn",
+  "weighed_received": 86.5,
+  "final_count": 72.6,
+  "final_told": 75.6,
+  "stream_first_seen": {
+   "time": 6.5,
+   "tilt": 48.7
+  },
+  "told_reaches_goal": {
+   "time": 22.1,
+   "tilt": 103.8,
+   "count": 51.1
+  }
+ },
+ "2026-10-14_17-50-34": {
+  "material": "corn",
+  "weighed_received": 69.3,
+  "final_count": 66.3,
+  "final_told": 59.3,
+  "stream_first_seen": {
+   "time": 3.4,
+   "tilt": 53.9
+  },
+  "told_reaches_goal": {
+   "time": 5.9,
+   "tilt": 100.5,
+   "count": 38.3
+  }
+ },
+ "2026-10-14_17-14-22": {
+  "material": "corn",
+  "weighed_received": 13.9,
+  "final_count": 14.6,
+  "final_told": 15.3,
+  "stream_first_seen": {
+   "time": 3.6,
+   "tilt": 56.2
+  },
+  "told_reaches_goal": null
+ },
+ "2026-10-14_15-56-28": {
+  "material": "styrofoam",
+  "weighed_received": 65.3,
+  "final_count": 55.2,
+  "final_told": 47.0,
+  "stream_first_seen": {
+   "time": 4.1,
+   "tilt": 67.4
+  },
+  "told_reaches_goal": {
+   "time": 6.4,
+   "tilt": 105.7,
+   "count": 36.6
+  }
+ },
+ "2026-10-14_13-44-40": {
+  "material": "styrofoam",
+  "weighed_received": 63.0,
+  "final_count": 54.2,
+  "final_told": 46.4,
+  "stream_first_seen": {
+   "time": 4.8,
+   "tilt": 70.0
+  },
+  "told_reaches_goal": null
+ }
+}

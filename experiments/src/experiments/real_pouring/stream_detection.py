@@ -168,10 +168,16 @@ class GrainSegmentation(ABC):
         )
 
     @abstractmethod
-    def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+    def grains(
+        self,
+        image: numpy.ndarray,
+        background: numpy.ndarray,
+        previous: Optional[numpy.ndarray] = None,
+    ) -> numpy.ndarray:
         """
         :param image: A colour image, BGR.
         :param background: What the same view showed before the pour, BGR.
+        :param previous: The image before it, BGR, or ``None`` for the first.
         :return: Which pixels show grains.
         """
 
@@ -194,7 +200,12 @@ class WhiteSegmentation(GrainSegmentation):
     The most saturation a grain pixel has, from 0 to 255; white grains have little.
     """
 
-    def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+    def grains(
+        self,
+        image: numpy.ndarray,
+        background: numpy.ndarray,
+        previous: Optional[numpy.ndarray] = None,
+    ) -> numpy.ndarray:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         return (
             (hsv[..., 2] > self.minimum_value)
@@ -211,7 +222,12 @@ class ChangeSegmentation(GrainSegmentation):
     single colour picks out. Anything else moving through the opening counts as well.
     """
 
-    def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+    def grains(
+        self,
+        image: numpy.ndarray,
+        background: numpy.ndarray,
+        previous: Optional[numpy.ndarray] = None,
+    ) -> numpy.ndarray:
         return self.changed(image, background)
 
 
@@ -244,7 +260,12 @@ class HueBandSegmentation(GrainSegmentation):
     The least brightness a grain pixel has, from 0 to 255.
     """
 
-    def grains(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+    def grains(
+        self,
+        image: numpy.ndarray,
+        background: numpy.ndarray,
+        previous: Optional[numpy.ndarray] = None,
+    ) -> numpy.ndarray:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         return (
             (hsv[..., 0] >= self.minimum_hue)
@@ -253,6 +274,168 @@ class HueBandSegmentation(GrainSegmentation):
             & (hsv[..., 2] >= self.minimum_value)
             & self.changed(image, background)
         )
+
+
+SAME_HUE_DISTANCE = 20
+"""
+How close two hues are, on OpenCV's scale from 0 to 179, to count as the same colour.
+"""
+
+COLOURED_SATURATION = 50
+"""
+The least saturation, from 0 to 255, at which a pixel's hue means something.
+"""
+
+SHADOW_SATURATION_CHANGE = 40
+"""
+The most a pixel's saturation changes, from 0 to 255, when only a shadow falls on it.
+"""
+
+
+@dataclass(frozen=True)
+class MovingGrainSegmentation(GrainSegmentation):
+    """
+    Grains are pixels that changed since the previous frame and whose colour differs
+    from what the empty view showed there: falling grains of any colour, however thin
+    and blurred the stream, but neither grains lying still in a filled receiver, nor
+    shadows, nor the background's own colour brightening or darkening as something
+    passes in front of it.
+    """
+
+    def grains(
+        self,
+        image: numpy.ndarray,
+        background: numpy.ndarray,
+        previous: Optional[numpy.ndarray] = None,
+    ) -> numpy.ndarray:
+        if previous is None:
+            return numpy.zeros(image.shape[:2], dtype=bool)
+        moved = (
+            numpy.abs(image.astype(numpy.int16) - previous.astype(numpy.int16)).sum(
+                axis=2
+            )
+            > self.minimum_difference
+        )
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(numpy.int16)
+        background_hsv = cv2.cvtColor(background, cv2.COLOR_BGR2HSV).astype(numpy.int16)
+        hue_distance = numpy.abs(hsv[..., 0] - background_hsv[..., 0])
+        hue_distance = numpy.minimum(hue_distance, 180 - hue_distance)
+        both_coloured = (hsv[..., 1] >= COLOURED_SATURATION) & (
+            background_hsv[..., 1] >= COLOURED_SATURATION
+        )
+        both_grey = (hsv[..., 1] < COLOURED_SATURATION) & (
+            background_hsv[..., 1] < COLOURED_SATURATION
+        )
+        same_colour = (hue_distance <= SAME_HUE_DISTANCE) | both_grey
+        shadow = (
+            (hsv[..., 2] < background_hsv[..., 2])
+            & (
+                numpy.abs(hsv[..., 1] - background_hsv[..., 1])
+                < SHADOW_SATURATION_CHANGE
+            )
+            & same_colour
+        )
+        background_colour = (hue_distance <= SAME_HUE_DISTANCE) & both_coloured
+        return moved & self.changed(image, background) & ~shadow & ~background_colour
+
+
+# %% the receiver's rim seen in the image
+
+
+OUTLINE_SEARCH_MARGIN = 100
+"""
+How far around the projected opening the receiver's outline is looked for, in pixels.
+"""
+
+TOP_EDGE_ROWS = 15
+"""
+How many rows below its top edge the outline's centre is taken from, in pixels.
+"""
+
+
+@dataclass
+class ReceiverNotFoundError(Exception):
+    """
+    Raised when the receiver's outline does not show near where its opening projects.
+    """
+
+    def __str__(self) -> str:
+        return (
+            "The receiving cup does not show near where its opening projects into the "
+            "image: check that it stands in view and that the camera's pose is right."
+        )
+
+
+@dataclass(frozen=True)
+class ReceiverOutline:
+    """
+    The receiving cup's colour, by which its outline is found in the empty view, so the
+    opening projected from a camera pose that is a few centimetres off can be moved onto
+    the rim the image shows.
+    """
+
+    minimum_hue: int
+    """
+    The lowest hue of the cup, on OpenCV's scale from 0 to 179.
+    """
+
+    maximum_hue: int
+    """
+    The highest hue of the cup, on OpenCV's scale from 0 to 179.
+    """
+
+    minimum_saturation: int
+    """
+    The least saturation of the cup, from 0 to 255.
+    """
+
+    def align(self, opening: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param opening: Which pixels the opening projects to.
+        :param background: The empty view, BGR.
+        :return: The same opening, moved so its top meets the top edge of the cup's
+            outline and its centre the centre of that edge.
+        :raises ReceiverNotFoundError: If the cup does not show near the projection.
+        """
+        rows, columns = numpy.nonzero(opening)
+        height, width = opening.shape
+        top, bottom = max(0, rows.min() - OUTLINE_SEARCH_MARGIN), min(
+            height, rows.max() + OUTLINE_SEARCH_MARGIN
+        )
+        left, right = max(0, columns.min() - OUTLINE_SEARCH_MARGIN), min(
+            width, columns.max() + OUTLINE_SEARCH_MARGIN
+        )
+        hsv = cv2.cvtColor(background[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+        cup = (
+            (hsv[..., 0] >= self.minimum_hue)
+            & (hsv[..., 0] <= self.maximum_hue)
+            & (hsv[..., 1] >= self.minimum_saturation)
+        )
+        count, labels, statistics, _ = cv2.connectedComponentsWithStats(
+            cup.astype(numpy.uint8)
+        )
+        if count < 2:
+            raise ReceiverNotFoundError()
+        largest = 1 + int(numpy.argmax(statistics[1:, cv2.CC_STAT_AREA]))
+        cup_rows, cup_columns = numpy.nonzero(labels == largest)
+        cup_top = cup_rows.min()
+        centre = cup_columns[cup_rows < cup_top + TOP_EDGE_ROWS].mean() + left
+        row_shift = int(cup_top + top - rows.min())
+        column_shift = int(round(centre - columns.mean()))
+        aligned = numpy.zeros_like(opening)
+        aligned[
+            numpy.clip(rows + row_shift, 0, height - 1),
+            numpy.clip(columns + column_shift, 0, width - 1),
+        ] = True
+        return aligned
+
+
+BLUE_CUP_OUTLINE = ReceiverOutline(
+    minimum_hue=95, maximum_hue=125, minimum_saturation=80
+)
+"""
+The blue Jeroen cups' outline: the hue band the receiving cup shows in the pole camera.
+"""
 
 
 # %% what the camera reports
@@ -347,6 +530,12 @@ class StreamDetector:
     after the background stands for.
     """
 
+    outline: Optional[ReceiverOutline] = None
+    """
+    The receiving cup's outline the opening is moved onto in the empty view, or ``None``
+    to keep the opening where it projects.
+    """
+
     _background: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
     """
     What the camera showed before the pour.
@@ -372,6 +561,12 @@ class StreamDetector:
     When the image observed last was taken, or ``None`` before the first.
     """
 
+    _previous: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
+    """
+    The window around the opening of the image observed last, or ``None`` before the
+    first.
+    """
+
     def learn_background(self, images: List[numpy.ndarray]) -> None:
         """
         Remember what the view shows before the pour, and start counting from nothing.
@@ -379,6 +574,9 @@ class StreamDetector:
         :param images: Images taken before any grain leaves the source, BGR.
         """
         mask = self.opening.mask_in(self.view, images[0].shape[:2])
+        if self.outline is not None:
+            empty_view = numpy.median(numpy.stack(images), axis=0).astype(numpy.uint8)
+            mask = self.outline.align(mask, empty_view)
         rows, columns = numpy.nonzero(mask)
         self._window = (
             slice(rows.min(), rows.max() + 1),
@@ -390,23 +588,42 @@ class StreamDetector:
         ).astype(numpy.uint8)
         self._counted = 0.0
         self._last_stamp = None
+        self._previous = None
 
-    def grain_mask(self, image: numpy.ndarray) -> numpy.ndarray:
+    def opening_mask(self, image_size: Tuple[int, int]) -> numpy.ndarray:
+        """
+        :param image_size: Height and width of the camera's images.
+        :return: Which pixels the detector watches as the opening, where it moved it.
+        """
+        mask = numpy.zeros(image_size, dtype=bool)
+        mask[self._window] = self._mask
+        return mask
+
+    def grain_mask(
+        self, image: numpy.ndarray, previous: Optional[numpy.ndarray] = None
+    ) -> numpy.ndarray:
         """
         :param image: An image of the view, BGR.
+        :param previous: The image before it, BGR, or ``None``.
         :return: Which of its pixels show grains in the opening, over the whole image.
         """
         mask = numpy.zeros(image.shape[:2], dtype=bool)
-        mask[self._window] = self._grains_in_window(image)
+        mask[self._window] = self._grains_in_window(
+            image[self._window], None if previous is None else previous[self._window]
+        )
         return mask
 
-    def _grains_in_window(self, image: numpy.ndarray) -> numpy.ndarray:
+    def _grains_in_window(
+        self, window: numpy.ndarray, previous: Optional[numpy.ndarray]
+    ) -> numpy.ndarray:
         """
-        :param image: An image of the view, BGR.
-        :return: Which pixels of the window around the opening show grains in it.
+        :param window: The window around the opening of an image, BGR.
+        :param previous: The same window of the image before, BGR, or ``None``.
+        :return: Which of its pixels show grains in the opening.
         """
         return (
-            self.segmentation.grains(image[self._window], self._background) & self._mask
+            self.segmentation.grains(window, self._background, previous=previous)
+            & self._mask
         )
 
     def observe(self, image: numpy.ndarray, stamp: float) -> StreamReading:
@@ -415,7 +632,9 @@ class StreamDetector:
         :param stamp: When it was taken, in seconds.
         :return: What it shows of the stream.
         """
-        grains = self._grains_in_window(image)
+        window = image[self._window]
+        grains = self._grains_in_window(window, self._previous)
+        self._previous = window
         pixels = int(grains.sum())
         shown_for = (
             self.frame_period if self._last_stamp is None else stamp - self._last_stamp

@@ -1,0 +1,50 @@
+{
+ "2026-10-14_17-14-22": {
+  "material": "corn",
+  "pixel_seconds": 711.7,
+  "received_grains": 13.88,
+  "pixel_seconds_per_grain": 53.95
+ },
+ "2026-10-14_17-50-34": {
+  "material": "corn",
+  "pixel_seconds": 3235.4,
+  "received_grains": 69.26,
+  "pixel_seconds_per_grain": 49.17
+ },
+ "2026-10-15_09-07-08": {
+  "material": "corn",
+  "pixel_seconds": 3544.1,
+  "received_grains": 86.5,
+  "pixel_seconds_per_grain": 43.13
+ },
+ "2026-10-14_13-44-40": {
+  "material": "styrofoam",
+  "pixel_seconds": 1343.1,
+  "received_grains": 63.02,
+  "pixel_seconds_per_grain": 22.43
+ },
+ "2026-10-14_14-21-18": {
+  "material": "styrofoam",
+  "pixel_seconds": 1709.7,
+  "received_grains": 69.81,
+  "pixel_seconds_per_grain": 25.78
+ },
+ "2026-10-14_14-49-47": {
+  "material": "styrofoam",
+  "pixel_seconds": 2101.7,
+  "received_grains": 78.49,
+  "pixel_seconds_per_grain": 28.19
+ },
+ "2026-10-14_15-56-28": {
+  "material": "styrofoam",
+  "pixel_seconds": 1368.1,
+  "received_grains": 65.28,
+  "pixel_seconds_per_grain": 22.06
+ },
+ "2026-10-14_13-52-37": {
+  "material": "styrofoam",
+  "pixel_seconds": 2184.0,
+  "received_grains": 90.94,
+  "pixel_seconds_per_grain": 25.28
+ }
+}

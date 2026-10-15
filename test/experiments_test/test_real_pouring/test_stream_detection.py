@@ -4,11 +4,14 @@ import pytest
 from krrood.adapters.json_serializer import from_json, to_json
 
 from experiments.real_pouring.stream_detection import (
+    BLUE_CUP_OUTLINE,
     CameraView,
     ChangeSegmentation,
     GrainSegmentation,
     HueBandSegmentation,
+    MovingGrainSegmentation,
     OpeningRegion,
+    ReceiverNotFoundError,
     StreamDetector,
     WhiteSegmentation,
 )
@@ -276,3 +279,145 @@ def test_a_change_outside_the_hue_band_is_not_a_grain(colour):
         _image_with_square(*CENTRE, colour), stamp=0.0
     )
     assert not reading.stream_seen
+
+
+# %% the window moved onto the receiver's rim seen in the image
+
+
+BLUE = (200, 110, 30)
+"""
+The receiving cup's blue, BGR.
+"""
+
+CUP_TOP_ROW = IMAGE_SIZE[0] // 2 + 30
+"""
+The image row the receiving cup's top edge shows at: below where the opening projects.
+"""
+
+CUP_COLUMNS = (IMAGE_SIZE[1] // 2 - 15, IMAGE_SIZE[1] // 2 + 45)
+"""
+The image columns the receiving cup spans: right of where the opening projects.
+"""
+
+
+def _view_with_cup() -> numpy.ndarray:
+    image = _dark_image()
+    image[CUP_TOP_ROW : CUP_TOP_ROW + 120, CUP_COLUMNS[0] : CUP_COLUMNS[1]] = BLUE
+    return image
+
+
+def test_the_window_moves_onto_the_cups_top_edge():
+    projected = OPENING.mask_in(_looking_down(), IMAGE_SIZE)
+    aligned = BLUE_CUP_OUTLINE.align(projected, _view_with_cup())
+    rows, columns = numpy.nonzero(aligned)
+    assert rows.min() == CUP_TOP_ROW
+    assert columns.mean() == pytest.approx(sum(CUP_COLUMNS) / 2 - 0.5, abs=1.0)
+    assert aligned.sum() == projected.sum()
+
+
+def test_a_view_without_the_cup_says_so():
+    projected = OPENING.mask_in(_looking_down(), IMAGE_SIZE)
+    with pytest.raises(ReceiverNotFoundError):
+        BLUE_CUP_OUTLINE.align(projected, _dark_image())
+
+
+# %% grains that move
+
+
+MOVING = MovingGrainSegmentation()
+"""
+Grains are what moved since the last frame and differs from the empty view's colour.
+"""
+
+
+def _grain_at(column_offset: int, colour=YELLOW_KERNEL, background=None):
+    image = _dark_image() if background is None else background.copy()
+    row, column = CENTRE
+    image[
+        row : row + GRAIN_SIZE,
+        column + column_offset : column + column_offset + GRAIN_SIZE,
+    ] = colour
+    return image
+
+
+def test_a_grain_that_moved_is_counted_where_it_is_now():
+    grains = MOVING.grains(_grain_at(10), _dark_image(), previous=_grain_at(0))
+    assert grains.sum() == GRAIN_SIZE**2
+
+
+def test_a_grain_lying_still_is_not_counted():
+    grains = MOVING.grains(_grain_at(0), _dark_image(), previous=_grain_at(0))
+    assert grains.sum() == 0
+
+
+def test_nothing_is_counted_without_a_previous_frame():
+    assert MOVING.grains(_grain_at(10), _dark_image(), previous=None).sum() == 0
+
+
+def test_a_change_in_the_backgrounds_own_colour_is_not_a_grain():
+    blue = numpy.full((*IMAGE_SIZE, 3), BLUE, dtype=numpy.uint8)
+    lighter_blue = tuple(min(255, value + 60) for value in BLUE)
+    grains = MOVING.grains(
+        _grain_at(10, lighter_blue, blue),
+        blue,
+        previous=_grain_at(0, lighter_blue, blue),
+    )
+    assert grains.sum() == 0
+
+
+def test_a_shadow_is_not_a_grain():
+    grey = numpy.full((*IMAGE_SIZE, 3), 160, dtype=numpy.uint8)
+    shadow = (70, 70, 70)
+    grains = MOVING.grains(
+        _grain_at(10, shadow, grey), grey, previous=_grain_at(0, shadow, grey)
+    )
+    assert grains.sum() == 0
+
+
+# %% the detector on the moved window, counting moving grains
+
+
+def _detector_on_the_cups_rim() -> StreamDetector:
+    detector = StreamDetector(
+        view=_looking_down(),
+        opening=OPENING,
+        segmentation=MOVING,
+        pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+        frame_period=FRAME_PERIOD,
+        outline=BLUE_CUP_OUTLINE,
+    )
+    detector.learn_background([_view_with_cup()])
+    return detector
+
+
+def _falling_grain(row: int, column: int) -> numpy.ndarray:
+    image = _view_with_cup()
+    image[row : row + GRAIN_SIZE, column : column + GRAIN_SIZE] = YELLOW_KERNEL
+    return image
+
+
+RIM_CENTRE = (CUP_TOP_ROW + 10, sum(CUP_COLUMNS) // 2)
+"""
+A point just inside the cup's rim, where the moved window lies.
+"""
+
+
+def test_a_grain_falling_through_the_rim_is_counted():
+    detector = _detector_on_the_cups_rim()
+    detector.observe(_falling_grain(RIM_CENTRE[0] - 12, RIM_CENTRE[1]), stamp=0.0)
+    reading = detector.observe(_falling_grain(*RIM_CENTRE), stamp=FRAME_PERIOD)
+    assert reading.stream_seen
+
+
+def test_a_grain_falling_where_the_opening_projects_but_the_cup_is_not_is_not_counted():
+    detector = _detector_on_the_cups_rim()
+    projected_top = (IMAGE_SIZE[0] // 2 - 45, IMAGE_SIZE[1] // 2 - 40)
+    detector.observe(_falling_grain(projected_top[0] - 12, projected_top[1]), stamp=0.0)
+    reading = detector.observe(_falling_grain(*projected_top), stamp=FRAME_PERIOD)
+    assert not reading.stream_seen
+
+
+def test_the_opening_drawn_is_the_moved_one():
+    detector = _detector_on_the_cups_rim()
+    rows, _ = numpy.nonzero(detector.opening_mask(IMAGE_SIZE))
+    assert rows.min() == CUP_TOP_ROW

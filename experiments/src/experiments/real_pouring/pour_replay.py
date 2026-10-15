@@ -32,7 +32,9 @@ from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.stream_detection import (
+    BLUE_CUP_OUTLINE,
     CameraView,
+    ReceiverOutline,
     OpeningRegion,
     StreamDetector,
     StreamReading,
@@ -71,6 +73,11 @@ How long apart the pole camera takes its images, in seconds.
 BACKGROUND_FRAMES = 15
 """
 How many frames before the pour make up the empty view.
+"""
+
+RECEIVER_OUTLINE = BLUE_CUP_OUTLINE
+"""
+The receiving cup's outline the opening is moved onto, as the perception node does.
 """
 
 READING_EVERY = 3
@@ -437,6 +444,7 @@ class PourReplay:
         settings: BankSettings,
         receiver_from_count: bool = False,
         stop_lead_time: float = 0.0,
+        outline: Optional[ReceiverOutline] = RECEIVER_OUTLINE,
     ) -> PourReplay:
         """
         :param recording: The pour to replay.
@@ -445,6 +453,8 @@ class PourReplay:
         :param settings: How the bank weighs the pour.
         :param receiver_from_count: Whether the receiver is reported from the count.
         :param stop_lead_time: How long grains keep arriving after a stop, in seconds.
+        :param outline: The receiving cup's outline the opening is moved onto, or
+            ``None`` to count where the opening projects.
         :return: The replay, every reading weighed.
         """
         world, source, source_joint = _replay_world(recording, drain)
@@ -461,6 +471,7 @@ class PourReplay:
             segmentation=material.segmentation,
             pixel_seconds_per_grain=material.pixel_seconds_per_grain,
             frame_period=FRAME_PERIOD,
+            outline=outline,
         )
         first = recording.first_pour_frame
         detector.learn_background(
@@ -520,15 +531,15 @@ class PourReplay:
         :param frame_index: A frame of the recording.
         :return: Which of its pixels the detector takes for grains in the opening.
         """
-        return self.detector.grain_mask(self.recording.frames[frame_index].image())
+        frames = self.recording.frames
+        previous = frames[frame_index - 1].image() if frame_index > 0 else None
+        return self.detector.grain_mask(frames[frame_index].image(), previous)
 
     def opening_mask(self) -> numpy.ndarray:
         """
-        :return: Which pixels of a frame show the receiver's opening.
+        :return: Which pixels of a frame the detector watches as the receiver's opening.
         """
-        return self.detector.opening.mask_in(
-            self.detector.view, self.recording.frames[0].image().shape[:2]
-        )
+        return self.detector.opening_mask(self.recording.frames[0].image().shape[:2])
 
 
 def _transform(pose: CupPose, world: World) -> HomogeneousTransformationMatrix:

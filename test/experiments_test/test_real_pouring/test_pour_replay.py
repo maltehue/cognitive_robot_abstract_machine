@@ -96,11 +96,16 @@ def _recording() -> PourRecording:
 
 
 def _replay() -> PourReplay:
+    """
+    The synthetic recording replayed; its view shows no receiving cup, so the opening is
+    counted where it projects.
+    """
     return PourReplay.of(
         _recording(),
         material=PouredMaterial.STYROFOAM,
         drain=DRAIN,
         settings=BankSettings(tracks_onset=True),
+        outline=None,
     )
 
 

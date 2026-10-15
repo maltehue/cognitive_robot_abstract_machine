@@ -5,19 +5,13 @@ from experiments.real_pouring.poured_material import (
     FullCupMassUnknownError,
     PouredMaterial,
 )
-from experiments.real_pouring.stream_detection import (
-    HueBandSegmentation,
-    WhiteSegmentation,
-)
+from experiments.real_pouring.stream_detection import MovingGrainSegmentation
 from giskardpy.middleware.ros2.particle_weighing import FULL_CUP_MASS_GRAMS
 
 
-def test_styrofoam_is_seen_by_its_whiteness():
-    assert isinstance(PouredMaterial.STYROFOAM.segmentation, WhiteSegmentation)
-
-
-def test_corn_is_seen_by_its_hue():
-    assert isinstance(PouredMaterial.CORN.segmentation, HueBandSegmentation)
+@pytest.mark.parametrize("material", list(PouredMaterial))
+def test_every_material_is_counted_by_what_moves_through_the_opening(material):
+    assert isinstance(material.segmentation, MovingGrainSegmentation)
 
 
 def test_a_full_cup_of_styrofoam_weighs_what_the_scale_said():
