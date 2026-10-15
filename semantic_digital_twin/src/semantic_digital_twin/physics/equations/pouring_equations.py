@@ -648,4 +648,12 @@ class GatedInflowEquation(InflowEquation):
         :param context: Kinematic context; forwarded to the base inflow conversion.
         :return: Gated normalised fill velocity; zero while the gate is closed.
         """
-        return self.gate * super().symbolic_velocity(context)
+        return self.gate * self.ungated_velocity(context)
+
+    def ungated_velocity(self, context: FillContext) -> Scalar:
+        """
+        :param context: Kinematic context; forwarded to the base inflow conversion.
+        :return: The normalised fill velocity the inflow gives while the gate is fully
+            open.
+        """
+        return super().symbolic_velocity(context)

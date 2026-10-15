@@ -8,6 +8,7 @@ from typing import ClassVar, Optional
 import krrood.symbolic_math.symbolic_math as sm
 from krrood.symbolic_math.symbolic_math import (
     CompiledFunction,
+    FloatVariable,
     Scalar,
     VariableParameters,
 )
@@ -168,9 +169,7 @@ class TerminalFillConstraintTask(Task, ABC):
         self._compiled_fill_velocity.bind_args_to_memory_view(
             0, context.world.state.positions
         )
-        self._compiled_fill_velocity.bind_args_to_memory_view(
-            1, context.float_variable_data.data
-        )
+        context.float_variable_data.bind_argument(self._compiled_fill_velocity, 1)
         artifacts.constraints.add_terminal_state_prediction_constraint(
             name=f"{self.fill_connection.name}",
             state_velocity=self.fill_velocity_expression,
@@ -272,14 +271,31 @@ class FillByTransferTask(TerminalFillConstraintTask):
 
     Unlike :class:`PouringTask`, the controlled degrees of freedom (the arm holding the
     source) do not belong to the container whose fill level is the goal.  The receiver's
-    inflow ODE depends symbolically on the source arm configuration through the gated
-    source outflow, so driving the receiver's predicted terminal fill toward the goal
-    makes the optimizer tilt and position the source.
+    inflow ODE depends symbolically on the source arm configuration through the source
+    outflow, so driving the receiver's predicted terminal fill toward the goal makes the
+    optimizer tilt the source.
+
+    The transfer gate scales the predicted fill but is held as a value read once per
+    tick, outside the row's gradient: its logistics never go flat, so a row that
+    differentiated them would keep lifting the source to open the height gate a little
+    more, against the clearance band, for the whole pour. Placing the source over the
+    receiver is left to the aiming and clearance tasks.
     """
 
     receiver: HasFillLevel
     """
     The container whose fill level is driven up to :attr:`goal_value`.
+    """
+
+    _gate_value: FloatVariable = field(init=False, repr=False)
+    """
+    The transfer gate's value at the last tick, standing in for the symbolic gate in the
+    fill velocity.
+    """
+
+    _compiled_gate: CompiledFunction = field(init=False, repr=False)
+    """
+    The symbolic transfer gate, compiled to be read once per tick.
     """
 
     def _resolve_fill_connection(
@@ -299,7 +315,42 @@ class FillByTransferTask(TerminalFillConstraintTask):
 
     def _fill_velocity(self, context: MotionStatechartContext) -> Scalar:
         inflow_equation = self.fill_connection.inflow_equation
-        return inflow_equation.symbolic_velocity(self.fill_connection)
+        if not isinstance(inflow_equation, GatedInflowEquation):
+            return inflow_equation.symbolic_velocity(self.fill_connection)
+        self._gate_value = FloatVariable(name=f"{self.name}_gate")
+        context.float_variable_data.register_expression(self._gate_value)
+        self._compiled_gate = inflow_equation.gate.compile(
+            parameters=VariableParameters.from_lists(
+                context.world.state.position_float_variables
+            ),
+            sparse=False,
+        )
+        self._compiled_gate.bind_args_to_memory_view(0, context.world.state.positions)
+        self._read_gate(context)
+        return self._gate_value * inflow_equation.ungated_velocity(self.fill_connection)
+
+    def _read_gate(self, context: MotionStatechartContext) -> None:
+        """
+        Store the transfer gate's current value for the fill velocity to read.
+
+        :param context: The runtime context.
+        """
+        context.float_variable_data.set_value(
+            self._gate_value, float(self._compiled_gate.evaluate()[0])
+        )
+
+    def on_tick(
+        self, context: MotionStatechartContext
+    ) -> Optional[ObservationStateValues]:
+        """
+        Reads the transfer gate anew, then reports success as the base task does.
+
+        :param context: The runtime context.
+        :return: The observation state.
+        """
+        if isinstance(self.fill_connection.inflow_equation, GatedInflowEquation):
+            self._read_gate(context)
+        return super().on_tick(context)
 
     def _fill_goal_reached(self, fill_level: float) -> bool:
         return fill_level >= self.goal_value - self.fill_level_tolerance

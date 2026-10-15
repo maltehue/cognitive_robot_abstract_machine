@@ -1422,6 +1422,69 @@ class TestShareAimWithReceiver:
         assert row.expression.jacobian([source_dof])[0, 0].evaluate()[0] == 0.0
 
 
+class TestFillRowLeavesPlacementToTheOtherTasks:
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` predicts the
+    fill through the transfer gate but may not steer by it: the gate's logistics never
+    go flat, so a row that differentiated them would keep lifting the source to open
+    the height gate a little more, against the clearance band, for the whole pour.
+    Placing the source over the receiver is the aim's and the clearance's job; the fill
+    row only tilts.
+    """
+
+    def test_the_fill_row_does_not_move_the_source_towards_the_receiver(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The receiver's pose enters the inflow only through the gate, so the fill row's
+        velocity has no gradient along the receiver's own degrees of freedom, while the
+        tilt still drives it.
+        """
+        world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        transfer_task = FillByTransferTask(
+            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
+        )
+        receiver_height = receiving_cup.root.parent_connection.z.variables.position
+        receiver_offset = receiving_cup.root.parent_connection.x.variables.position
+        tilt_joint = world.get_connection_by_name(
+            "left_wrist_3_joint"
+        ).dof.variables.position
+
+        transfer_task.build(MotionStatechartContext(world=world))
+
+        velocity = transfer_task.fill_velocity_expression
+        assert velocity.jacobian([receiver_height])[0, 0].evaluate()[0] == 0.0
+        assert velocity.jacobian([receiver_offset])[0, 0].evaluate()[0] == 0.0
+        assert velocity.jacobian([tilt_joint])[0, 0].evaluate()[0] != 0.0
+
+    def test_the_fill_rate_still_closes_with_the_gate(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The gate's value still scales the predicted fill rate on every tick: moved out
+        from under the pour, the receiver is predicted to receive nothing.
+        """
+        world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        transfer_task = FillByTransferTask(
+            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
+        )
+        context = MotionStatechartContext(world=world)
+        transfer_task.build(context)
+        receiver_connection = receiving_cup.root.parent_connection
+
+        transfer_task.on_tick(context)
+        under_the_pour = float(transfer_task._compiled_fill_velocity.evaluate()[0])
+        receiver_connection.origin = (
+            receiver_connection.origin
+            @ HomogeneousTransformationMatrix.from_xyz_rpy(x=1.0)
+        )
+        transfer_task.on_tick(context)
+        moved_away = float(transfer_task._compiled_fill_velocity.evaluate()[0])
+
+        assert under_the_pour > 0.0
+        assert moved_away == pytest.approx(0.0, abs=1e-6)
+
+
 class TestProjectileAimingErrorIsHorizontal:
     """
     :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInReceiver`
