@@ -4,6 +4,11 @@ import numpy as np
 import pytest
 
 from semantic_digital_twin.specifications.robots import RobotSpecification
+from semantic_digital_twin.specifications.kinematic_structure_entities import (
+    BodySpecification,
+)
+from semantic_digital_twin.robots import root_placement
+from semantic_digital_twin.world_description.geometry import Scale
 from semantic_digital_twin.exceptions import ParsingError
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
 from semantic_digital_twin.robots.pr2 import PR2
@@ -96,6 +101,8 @@ class FrameName(StrEnum):
 
     WORLD = "world"
     TARGET = "target"
+    SUPPORT = "support"
+    LOWER_LINK = "lower_link"
 
 
 @pytest.fixture
@@ -181,3 +188,114 @@ def test_standing_pose_without_parent_preserves_target(mini_world: World) -> Non
     target = Pose.from_xyz_rpy(z=0.7, reference_frame=mini_world.root)
 
     assert robot.resolve_standing_pose(target) is target
+
+
+# %% support-body placement
+
+
+@pytest.fixture
+def support_body(standing_robot: MinimalRobot) -> Body:
+    """
+    A support body below the standing robot's elevated root.
+    """
+    return BodySpecification.box(
+        FrameName.SUPPORT,
+        Scale(0.25, 0.25, 0.125),
+        parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(z=-0.75),
+    ).spawn(standing_robot._world, parent=standing_robot.root)
+
+
+def test_support_placement_aligns_selected_geometry_and_preserves_planar_pose(
+    standing_robot: MinimalRobot, support_body: Body
+) -> None:
+    """
+    Placement changes height while retaining horizontal position and orientation.
+    """
+    world = standing_robot._world
+    before = standing_robot.root.global_transform.to_np()
+    surface_height = 0.25
+    root_placement.RobotSupportPlacement(
+        standing_robot, [support_body], surface_height
+    ).apply()
+    after = standing_robot.root.global_transform.to_np()
+
+    bounds = support_body.collision.as_bounding_box_collection_in_frame(
+        world.root
+    ).bounding_box()
+    assert float(bounds.min_z) == pytest.approx(surface_height)
+    np.testing.assert_allclose(after[:2, 3], before[:2, 3])
+    np.testing.assert_allclose(after[:3, :3], before[:3, :3])
+
+
+def test_support_placement_ignores_lower_links_outside_the_support_selection(
+    standing_robot: MinimalRobot, support_body: Body
+) -> None:
+    """
+    An unrelated low link cannot determine the feet's contact height.
+    """
+    world = standing_robot._world
+    lower = BodySpecification.box(
+        FrameName.LOWER_LINK,
+        Scale(0.1, 0.1, 0.1),
+        parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(z=-2),
+    ).spawn(world, parent=standing_robot.root)
+    root_placement.RobotSupportPlacement(standing_robot, [support_body], 0.0).apply()
+
+    bounds = support_body.collision.as_bounding_box_collection_in_frame(
+        world.root
+    ).bounding_box()
+    assert float(bounds.min_z) == pytest.approx(0.0)
+    assert float(
+        lower.collision.as_bounding_box_collection_in_frame(world.root)
+        .bounding_box()
+        .min_z
+    ) < float(bounds.min_z)
+
+
+def test_support_placement_is_retained_during_planar_navigation(
+    standing_robot: MinimalRobot, support_body: Body
+) -> None:
+    """
+    A navigation pose retains the standing height established from support geometry.
+    """
+    world = standing_robot._world
+    root_placement.RobotSupportPlacement(standing_robot, [support_body], 0.0).apply()
+    before = standing_robot.root.global_pose.position.z
+    standing_robot.set_root_pose(
+        standing_robot.resolve_standing_pose(
+            Pose.from_xyz_rpy(x=2, y=1, yaw=0.8, reference_frame=world.root)
+        )
+    )
+
+    assert float(standing_robot.root.global_pose.position.z) == pytest.approx(
+        float(before)
+    )
+    assert float(
+        support_body.collision.as_bounding_box_collection_in_frame(world.root)
+        .bounding_box()
+        .min_z
+    ) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("case", [FrameName.WORLD, FrameName.TARGET, FrameName.SUPPORT])
+def test_support_placement_rejects_missing_or_invalid_geometry(
+    standing_robot: MinimalRobot, support_body: Body, case: FrameName
+) -> None:
+    """
+    A support selection must contain collision bodies belonging to the robot.
+    """
+    bodies = (
+        []
+        if case is FrameName.WORLD
+        else (
+            [standing_robot._world.root]
+            if case is FrameName.TARGET
+            else [standing_robot.root]
+        )
+    )
+    before = standing_robot.root.global_transform.to_np()
+
+    with pytest.raises(root_placement.InvalidRobotSupportBodiesError):
+        root_placement.RobotSupportPlacement(standing_robot, bodies, 0.0).apply()
+
+    np.testing.assert_allclose(standing_robot.root.global_transform.to_np(), before)
