@@ -15,6 +15,7 @@ parts:
 - caption: Debugging
   chapters:
     - file: debugging_guide
+    - file: constraint_enforcement_investigation
 
 - caption: References
   chapters:
