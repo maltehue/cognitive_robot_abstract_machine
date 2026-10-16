@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import hypot
 
 from typing_extensions import Optional, Any, Dict
 
 from coraplex.datastructures.dataclasses import Context
 from coraplex.exceptions import NoFloorBelowRobot, NotOnASingleLevelException
+from coraplex.plans.failures import NavigationPathNotFound
 from coraplex.plans.attachment_nodes import ReAttachNode
 from coraplex.plans.factories import execute_single, pause_until, sequential
 from coraplex.plans.plan_node import PlanNode
@@ -21,7 +23,7 @@ from krrood.entity_query_language.factories import variable_from, and_, Conditio
 from semantic_digital_twin.exceptions import MissingMovableJointError
 from semantic_digital_twin.reasoning.predicates import allclose, InsideOf
 from semantic_digital_twin.reasoning.robot_predicates import is_pose_free_for_robot
-from semantic_digital_twin.robots.robot_parts import Camera
+from semantic_digital_twin.robots.robot_parts import AbstractRobot, Camera
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Level,
     Elevator,
@@ -133,6 +135,73 @@ class FaceAtAction(ActionDescription):
         return execute_single(TurnMotion(self.target))
 
 
+# %% clearance of the current robot posture
+
+
+@dataclass
+class NavigationClearance:
+    """
+    A conservative turning circle and world height for navigation.
+    """
+
+    radius: float
+    """
+    Horizontal clearance about the robot root, including held objects.
+    """
+
+    top_height: float
+    """
+    Highest collision geometry in the world frame.
+    """
+
+    @classmethod
+    def from_robot(
+        cls, robot: AbstractRobot, *, include_robot_geometry: bool = False
+    ) -> NavigationClearance:
+        """
+        Measure held geometry and optionally the complete current posture.
+        """
+        bodies = (
+            robot.bodies_with_collision
+            if include_robot_geometry
+            else [
+                body
+                for gripper in robot.all_end_effectors
+                for body in gripper.held_bodies
+            ]
+        )
+        boxes = [
+            body.collision.as_bounding_box_collection_in_frame(
+                robot.root
+            ).bounding_box()
+            for body in bodies
+        ]
+        radius = (
+            max(
+                robot.mobile_base.base_radius,
+                *(
+                    hypot(
+                        max(abs(box.min_x), abs(box.max_x)),
+                        max(abs(box.min_y), abs(box.max_y)),
+                    )
+                    for box in boxes
+                ),
+            )
+            if boxes
+            else robot.mobile_base.base_radius
+        )
+        top_height = max(
+            body.collision.as_bounding_box_collection_in_frame(robot._world.root)
+            .bounding_box()
+            .max_z
+            for body in robot.bodies_with_collision
+        )
+        return cls(radius, top_height)
+
+
+# %% paths through known obstacles
+
+
 @dataclass
 class PathPlanningNavigateAction(ActionDescription):
     """
@@ -148,6 +217,11 @@ class PathPlanningNavigateAction(ActionDescription):
     target: Pose
     """
     Where the robot should stand at the end of the path, with its base.
+    """
+
+    include_robot_geometry: bool = field(default=False, kw_only=True)
+    """
+    Expand clearance to the full posture as well as any carried objects.
     """
 
     @property
@@ -235,7 +309,7 @@ class PathPlanningNavigateAction(ActionDescription):
             ).pose
             for waypoint, next_waypoint in zip(waypoints[1:], waypoints[2:])
         ]
-        return poses + [self.target]
+        return poses + [self.robot.resolve_standing_pose(self.target)]
 
     def _waypoints(self) -> list[Point2]:
         """
@@ -245,15 +319,20 @@ class PathPlanningNavigateAction(ActionDescription):
             target's.
         """
         base_pose = self.robot.root.global_pose
-        free_space = self._floor.planar_free_space(
-            max_height=self.robot.as_bounding_box_collection_in_frame(self.robot.root)
-            .bounding_box()
-            .scale.z,
-            bloat_obstacles=self.robot.mobile_base.base_radius,
+        floor = self._floor
+        clearance = NavigationClearance.from_robot(
+            self.robot, include_robot_geometry=self.include_robot_geometry
         )
-        return free_space.path_from_to(
+        free_space = floor.planar_free_space(
+            max_height=clearance.top_height - self._extent_of(floor).max_z,
+            bloat_obstacles=clearance.radius,
+        )
+        path = free_space.path_from_to(
             Point2.from_pose(base_pose), Point2.from_pose(self.target)
         )
+        if path is None:
+            raise NavigationPathNotFound(self.target)
+        return path
 
 
 @dataclass

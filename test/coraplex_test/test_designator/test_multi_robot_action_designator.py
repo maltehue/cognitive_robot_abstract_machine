@@ -1,5 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass, field
+from enum import StrEnum
+from math import hypot
 
 import numpy as np
 import pytest
@@ -90,6 +92,11 @@ from semantic_digital_twin.spatial_types import (
 )
 from semantic_digital_twin.spatial_types.spatial_types import Pose, Pose2D
 from semantic_digital_twin.world import World
+from semantic_digital_twin.specifications.kinematic_structure_entities import (
+    BodySpecification,
+)
+from coraplex.plans import failures
+from coraplex.robot_plans.actions.core import navigation as navigation_actions
 from semantic_digital_twin.world_description.geometry import Scale
 
 from ...conftest import SAMPLING_SEED
@@ -1074,4 +1081,125 @@ def test_elevator_navigation(multiple_robot_apartment_context, rclpy_node):
     assert operator.robot_boarded
     assert robot.root.global_transform.position.to_np().flatten()[:3] == pytest.approx(
         expected_position, abs=0.01
+    )
+
+
+# %% navigation with carried geometry
+
+
+class ClearanceBody(StrEnum):
+    """
+    Bodies in a room divided by a narrow opening.
+    """
+
+    FLOOR = "clearance_floor"
+    NORTH_WALL = "north_wall"
+    SOUTH_WALL = "south_wall"
+    PAYLOAD = "wide_payload"
+
+
+@pytest.fixture
+def narrow_opening(pr2_world_copy):
+    """
+    A base fits through the opening while a wide carried object does not.
+    """
+    world = pr2_world_copy
+    robot = world.get_semantic_annotations_by_type(PR2)[0]
+    robot.root.parent_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
+        x=-2
+    )
+    world.notify_state_change()
+    with world.modify_world():
+        floor_body = BodySpecification.box(
+            ClearanceBody.FLOOR,
+            Scale(6, 6, 0.25),
+            parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(z=-0.125),
+        ).spawn(world)
+        floor = Floor(root=floor_body)
+        world.add_semantic_annotation(floor)
+        for name, position in (
+            (ClearanceBody.NORTH_WALL, 2),
+            (ClearanceBody.SOUTH_WALL, -2),
+        ):
+            BodySpecification.box(
+                name,
+                Scale(0.25, 2.5, 2),
+                parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    y=position, z=1
+                ),
+            ).spawn(world)
+    target = Pose.from_xyz_rpy(2, 0, 0, reference_frame=world.root)
+    action = PathPlanningNavigateAction(target)
+    execute_single(action, context=Context(world, robot))
+    return world, robot, action
+
+
+def test_carried_object_cannot_pass_an_opening_that_fits_the_base(narrow_opening):
+    """
+    Planning accounts for a payload attached beneath the tool frame.
+    """
+    world, robot, action = narrow_opening
+    unloaded_path = action._waypoints()
+    assert float(unloaded_path[-1].x) == pytest.approx(
+        float(
+            world.transform(action.target.position, unloaded_path[-1].reference_frame).x
+        )
+    )
+    payload = BodySpecification.box(
+        ClearanceBody.PAYLOAD,
+        Scale(0.25, 2, 0.25),
+        parent_T_self=HomogeneousTransformationMatrix.from_xyz_rpy(x=-2, z=1),
+    ).spawn(world)
+    world.move_branch(payload, robot.left_arm.end_effector.tool_frame)
+
+    with pytest.raises(failures.NavigationPathNotFound) as raised:
+        action._waypoints()
+
+    assert raised.value.target is action.target
+
+
+def test_navigation_clearance_uses_the_complete_robot_when_requested(narrow_opening):
+    """
+    The opt-in circle covers every collision body at the current posture.
+    """
+    world, robot, _ = narrow_opening
+    clearance = navigation_actions.NavigationClearance.from_robot(
+        robot, include_robot_geometry=True
+    )
+    boxes = [
+        body.collision.as_bounding_box_collection_in_frame(robot.root).bounding_box()
+        for body in robot.bodies_with_collision
+    ]
+    expected_radius = max(
+        robot.mobile_base.base_radius,
+        *(
+            hypot(
+                max(abs(box.min_x), abs(box.max_x)), max(abs(box.min_y), abs(box.max_y))
+            )
+            for box in boxes
+        ),
+    )
+    assert clearance.radius == pytest.approx(expected_radius)
+    assert (
+        navigation_actions.NavigationClearance.from_robot(robot).radius
+        == robot.mobile_base.base_radius
+    )
+
+
+def test_navigation_target_keeps_the_standing_height(narrow_opening):
+    """
+    The final waypoint preserves a planar robot's established root height.
+    """
+    world, robot, action = narrow_opening
+    connection = robot.root.parent_connection
+    raised_connection = connection.copy_with_new_parent(
+        connection.parent, HomogeneousTransformationMatrix.from_xyz_rpy(z=0.75)
+    )
+    with world.modify_world():
+        world.remove_connection(connection)
+        world.add_connection(raised_connection)
+    world.notify_state_change()
+
+    np.testing.assert_allclose(
+        action._path()[-1].to_np(), robot.resolve_standing_pose(action.target).to_np()
     )
