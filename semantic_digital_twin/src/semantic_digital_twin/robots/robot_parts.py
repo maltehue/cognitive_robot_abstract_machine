@@ -46,7 +46,13 @@ from semantic_digital_twin.exceptions import (
     MissingDefaultCameraError,
 )
 from semantic_digital_twin.input_synchronization import InputSynchronizer
-from semantic_digital_twin.robots.exceptions import MissingDriveConnectionError
+from semantic_digital_twin.robots.exceptions import (
+    MissingDriveConnectionError,
+    MissingBaseCollisionGeometry,
+)
+from semantic_digital_twin.world_description.shape_collection import (
+    BoundingBoxCollection,
+)
 from semantic_digital_twin.robots.input_source import (
     BasePoseSource,
     JointPositionSource,
@@ -913,8 +919,30 @@ class MobileBase(
 
     @property
     def bounding_box(self) -> VolumetricBoundingBox:
-        return self.root.collision.as_bounding_box_collection_in_frame(
-            self._world.root
+        """Measure the geometric root or rigid descendants of a frame-only root."""
+        if self.root.has_collision():
+            return self.root.collision.as_bounding_box_collection_in_frame(
+                self._world.root
+            ).bounding_box()
+        pending = [self.root]
+        bodies = []
+        while pending:
+            body = pending.pop()
+            if isinstance(body, Body) and body.has_collision():
+                bodies.append(body)
+            pending.extend(
+                child
+                for child in body.child_kinematic_structure_entities
+                if isinstance(child.parent_connection, FixedConnection)
+            )
+        if not bodies:
+            raise MissingBaseCollisionGeometry(self.root)
+        return BoundingBoxCollection.merge_all(
+            [
+                body.collision.as_bounding_box_collection_in_frame(self._world.root)
+                for body in bodies
+            ],
+            reference_frame=self._world.root,
         ).bounding_box()
 
     @property
