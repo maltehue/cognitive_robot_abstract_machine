@@ -8,6 +8,8 @@ from copy import deepcopy
 from importlib.resources import files
 from pathlib import Path
 
+from krrood.symbolic_math.float_variable_data import FloatVariableData
+from krrood.symbolic_math.symbolic_math import FloatVariable
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.qp.qp_controller_config import QPControllerConfig
@@ -84,7 +86,7 @@ from semantic_digital_twin.world_description.geometry import (
 )
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing_extensions import Sequence
 
 _JEROEN_CUP_STL = str(
@@ -1483,6 +1485,35 @@ class TestFillRowLeavesPlacementToTheOtherTasks:
 
         assert under_the_pour > 0.0
         assert moved_away == pytest.approx(0.0, abs=1e-6)
+
+    def test_a_gate_reading_a_corrected_drain_still_builds(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        A drain correction held in a float variable enters the gate through the stream's
+        exit speed once the coupling is rebuilt from the corrected drain, so the gate
+        has to be compiled with the task's float variables, as the fill velocity is, and
+        read with their current values.
+        """
+        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        repose_correction = FloatVariable("source_repose_correction")
+        with world.modify_world():
+            source_cup.add_fill_equation(
+                replace(source_cup.fill_equation, repose_correction=repose_correction)
+            )
+            receiving_cup.add_inflow_equation(None)
+        variables = FloatVariableData()
+        variables.register_expression(repose_correction)
+        variables.set_value(repose_correction, 0.0)
+        transfer_task = FillByTransferTask(
+            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
+        )
+        context = MotionStatechartContext(world=world, float_variable_data=variables)
+
+        transfer_task.build(context)
+        transfer_task.on_tick(context)
+
+        assert float(transfer_task._compiled_fill_velocity.evaluate()[0]) > 0.0
 
 
 class TestProjectileAimingErrorIsHorizontal:

@@ -321,11 +321,13 @@ class FillByTransferTask(TerminalFillConstraintTask):
         context.float_variable_data.register_expression(self._gate_value)
         self._compiled_gate = inflow_equation.gate.compile(
             parameters=VariableParameters.from_lists(
-                context.world.state.position_float_variables
+                context.world.state.position_float_variables,
+                context.float_variable_data.variables,
             ),
             sparse=False,
         )
         self._compiled_gate.bind_args_to_memory_view(0, context.world.state.positions)
+        context.float_variable_data.bind_argument(self._compiled_gate, 1)
         self._read_gate(context)
         return self._gate_value * inflow_equation.ungated_velocity(self.fill_connection)
 
