@@ -144,7 +144,12 @@ def test_external_collision_avoidance(cylinder_bot_world: World):
     kin_sim.compile(motion_statechart=msc_copy)
 
     kin_sim.tick_until_end(500)
-    collisions = kin_sim.context.world.collision_manager.compute_collisions()
+    [rule_update] = msc_copy.get_nodes_by_type(UpdateTemporaryCollisionRules)
+    collisions = (
+        kin_sim.context.world.collision_manager.collision_detector.check_collisions(
+            rule_update.collision_matrix
+        )
+    )
     assert len(collisions.contacts) == 1
     assert collisions.contacts[0].distance > 0.049
     assert len(cylinder_bot_world.collision_manager.collision_consumers) == 0
@@ -355,7 +360,12 @@ def test_external_collision_avoidance_with_weight_above_ca(cylinder_bot_world: W
     kin_sim.compile(motion_statechart=msc_copy)
 
     kin_sim.tick_until_end(500)
-    collisions = kin_sim.context.world.collision_manager.compute_collisions()
+    [rule_update] = msc_copy.get_nodes_by_type(UpdateTemporaryCollisionRules)
+    collisions = (
+        kin_sim.context.world.collision_manager.collision_detector.check_collisions(
+            rule_update.collision_matrix
+        )
+    )
     assert len(collisions.contacts) == 1
     assert collisions.contacts[0].distance < 0.049
     assert collisions.contacts[0].distance > 0.0
@@ -583,7 +593,12 @@ def test_self_collision_avoidance(self_collision_bot_world: World):
     assert len(msc_copy.nodes) == 4 + 20 + 1
 
     kin_sim.tick_until_end(500)
-    collisions = kin_sim.context.world.collision_manager.compute_collisions()
+    [rule_update] = msc_copy.get_nodes_by_type(UpdateTemporaryCollisionRules)
+    collisions = (
+        kin_sim.context.world.collision_manager.collision_detector.check_collisions(
+            rule_update.collision_matrix
+        )
+    )
     assert len(collisions.contacts) == 1
     for contact in collisions.contacts:
         assert contact.distance > 0.249
