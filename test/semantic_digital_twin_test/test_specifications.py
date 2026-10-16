@@ -2,6 +2,7 @@ import copy
 import inspect
 import os
 from uuid import uuid4
+from enum import StrEnum
 from pathlib import Path
 
 import numpy as np
@@ -44,7 +45,7 @@ from semantic_digital_twin.exceptions import (
     UselessConceptError,
     DriveVelocityLimitsOnUndrivenRobot,
 )
-from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.robots.pr2 import PR2, PR2Joint
 from semantic_digital_twin.robots.minimal_robot import MinimalRobot
 from semantic_digital_twin.robots.robot_parts import AbstractRobotPart
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
@@ -1978,3 +1979,55 @@ def test_annotation_specification_survives_orm_round_trip(empty_world):
     assert isinstance(drawer, Drawer)
     assert isinstance(drawer.handle, Handle)
     assert len(drawer.root.collision.shapes) > 0
+
+
+# %% independently named robot instances
+
+
+class RobotInstance(StrEnum):
+    """
+    Namespaces distinguishing two instances of the same description.
+    """
+
+    FIRST = "first"
+    SECOND = "second"
+
+
+def test_robot_specification_instances_have_independent_named_joints(
+    empty_world: World,
+) -> None:
+    """
+    Two copies of one robot can be addressed by full names without sharing state.
+    """
+    first = RobotSpecification(
+        semantic_annotation_type=PR2, prefix=RobotInstance.FIRST
+    ).spawn(empty_world)
+    second = RobotSpecification(
+        semantic_annotation_type=PR2, prefix=RobotInstance.SECOND
+    ).spawn(empty_world)
+    first_joint = empty_world.get_connection_by_name(
+        PrefixedName(PR2Joint.TORSO_LIFT, RobotInstance.FIRST)
+    )
+    second_joint = empty_world.get_connection_by_name(
+        PrefixedName(PR2Joint.TORSO_LIFT, RobotInstance.SECOND)
+    )
+    second_position = second_joint.position
+    target_position = first_joint.position + 0.01
+
+    assert empty_world.get_body_by_name(first.root.name) is first.root
+    assert empty_world.get_body_by_name(second.root.name) is second.root
+    assert first_joint in first.controlled_connections
+    assert second_joint in second.controlled_connections
+    assert (
+        empty_world.get_degree_of_freedom_by_name(first_joint.raw_dof.name)
+        is first_joint.raw_dof
+    )
+    assert (
+        empty_world.get_degree_of_freedom_by_name(second_joint.raw_dof.name)
+        is second_joint.raw_dof
+    )
+
+    first_joint.position = target_position
+
+    assert first_joint.position == pytest.approx(target_position)
+    assert second_joint.position == pytest.approx(second_position)
