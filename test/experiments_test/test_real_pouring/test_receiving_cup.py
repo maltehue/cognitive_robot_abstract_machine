@@ -7,6 +7,7 @@ from experiments.real_pouring.poured_material import (
     PouredMaterial,
 )
 from experiments.real_pouring.receiving_cup import (
+    ReceiverFillReport,
     ReceiverFullMassUnknownError,
     ReceivingCupChangedError,
     ReceivingCup,
@@ -145,3 +146,16 @@ def test_the_translucent_cup_is_poured_to_about_the_share_of_a_source_cup_the_je
             abs=0.15,
         )
     )
+
+
+# %% how each cup reports its fill to the controller
+
+
+def test_the_translucent_cup_reports_its_fill_through_its_wall():
+    assert (
+        ReceivingCup.TRANSLUCENT_CUP.fill_report is ReceiverFillReport.SEEN_THROUGH_WALL
+    )
+
+
+def test_the_jeroen_cup_reports_its_fill_from_the_count():
+    assert ReceivingCup.JEROEN_CUP.fill_report is ReceiverFillReport.COUNTED

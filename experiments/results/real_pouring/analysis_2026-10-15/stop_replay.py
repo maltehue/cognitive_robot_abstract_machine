@@ -19,7 +19,7 @@ from experiments.real_pouring.pour_replay import (
     PourRecording,
     PourReplay,
 )
-from experiments.real_pouring.receiving_cup import ReceivingCup
+from experiments.real_pouring.receiving_cup import ReceiverFillReport, ReceivingCup
 
 DEMO_DRAIN = ModelPoint(
     repose_angle=0.0, discharge_coefficient=0.2, outflow_rate_constant=0.8
@@ -34,7 +34,7 @@ for argument in sys.argv[1:]:
         material=material,
         drain=DEMO_DRAIN,
         settings=BankSettings(tracks_onset=True, trickle=0.0),
-        receiver_from_count=True,
+        fill_report=ReceiverFillReport.COUNTED,
         stop_lead_time=1.0,
     )
     steps = replay.steps

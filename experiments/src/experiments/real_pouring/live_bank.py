@@ -33,6 +33,7 @@ from experiments.pouring_model_verification.recovery import (
 from experiments.pouring_model_verification.scene import SourceCup
 from experiments.pouring_model_verification.sensor import CameraModel
 from experiments.pouring_model_verification.transfer_trial import ModelBlend
+from experiments.real_pouring.receiving_cup import ReceiverFillReport
 from experiments.real_pouring.stream_detection import StreamReading
 from krrood.adapters.json_serializer import SubclassJSONSerializer
 from semantic_digital_twin.datastructures.joint_state import JointState
@@ -203,11 +204,12 @@ class LiveBank:
     How far ahead the fill task predicts, in seconds.
     """
 
-    receiver_from_count: bool = field(default=False, kw_only=True)
+    fill_report: ReceiverFillReport = field(
+        default=ReceiverFillReport.ESTIMATED, kw_only=True
+    )
     """
-    Whether the receiver's fill is reported from what the camera counted crossing, with
-    the grains still in flight added, rather than from the bank's estimate with its
-    margin.
+    What the controller is told the receiver holds: the bank's estimate, what the camera
+    counted crossing, or what it sees through the receiver's wall.
     """
 
     stop_lead_time: float = field(default=0.0, kw_only=True)
@@ -242,7 +244,7 @@ class LiveBank:
         opening_radius: float,
         prediction_window: float,
         seed: int = 0,
-        receiver_from_count: bool = False,
+        fill_report: ReceiverFillReport = ReceiverFillReport.ESTIMATED,
         stop_lead_time: float = 0.0,
     ) -> LiveBank:
         """
@@ -289,7 +291,7 @@ class LiveBank:
             goal_grains=goal_grains,
             opening_radius=opening_radius,
             prediction_window=prediction_window,
-            receiver_from_count=receiver_from_count,
+            fill_report=fill_report,
             stop_lead_time=stop_lead_time,
         )
 
@@ -389,7 +391,7 @@ class LiveBank:
             camera's count rose at over :data:`COUNT_RATE_WINDOW`, held for
             :attr:`stop_lead_time`; zero where the receiver is reported from the bank.
         """
-        if not self.receiver_from_count:
+        if self.fill_report is ReceiverFillReport.ESTIMATED:
             return 0.0
         earlier = [
             step for step in self.trace if step.time <= seen.stamp - COUNT_RATE_WINDOW
@@ -411,26 +413,26 @@ class LiveBank:
     ) -> float:
         """
         Tell the controller what both cups hold: the source what was loaded less what
-        the camera counted leaving; the receiver what crossed and is still in flight, or
-        what the bank estimates arrived with the margin it stops short by, or what the
-        heap seen in it shows, whichever is more.
+        the camera counted leaving; the receiver what :attr:`fill_report` says.
 
         :param counted_grains: How many grains the camera has counted crossing.
         :param in_flight: How many grains are still to arrive after a stop now.
-        :param heap_fill: The receiver's fill by the heap seen in it, or ``None``.
+        :param heap_fill: The receiver's fill by its contents seen lying in it, or
+            ``None``.
         :return: How many grains the receiver was told to hold.
         """
         crossed = self.camera.grains_crossed(counted_grains)
         source_grains = self.loaded_grains - crossed
-        if self.receiver_from_count:
-            receiver_grains = crossed * self.coupling.inside_share + in_flight
-        else:
-            receiver_grains = self.coupling.received_grains + self.coupling.margin
         capacity_ratio = self.source.capacity / self.receiver.capacity
-        if heap_fill is not None:
-            receiver_grains = max(
-                receiver_grains, heap_fill * self.grains_per_fill / capacity_ratio
-            )
+        receiver_grains = self._receiver_grains(
+            crossed=crossed,
+            in_flight=in_flight,
+            lying=(
+                None
+                if heap_fill is None
+                else heap_fill * self.grains_per_fill / capacity_ratio
+            ),
+        )
         JointState.from_mapping(
             {
                 self.source.fill_connection: max(0.0, source_grains)
@@ -441,3 +443,24 @@ class LiveBank:
             }
         ).apply_to(self.world)
         return receiver_grains
+
+    def _receiver_grains(
+        self, crossed: float, in_flight: float, lying: Optional[float]
+    ) -> float:
+        """
+        :param crossed: How many grains the camera counted crossing the opening.
+        :param in_flight: How many grains are still to arrive after a stop now.
+        :param lying: How many grains the camera sees lying in the receiver, or
+            ``None`` where it sees too few to tell.
+        :return: How many grains the receiver is told to hold, by
+            :attr:`fill_report`.
+        """
+        counted = crossed * self.coupling.inside_share
+        match self.fill_report:
+            case ReceiverFillReport.ESTIMATED:
+                reported = self.coupling.received_grains + self.coupling.margin
+            case ReceiverFillReport.COUNTED:
+                reported = counted + in_flight
+            case ReceiverFillReport.SEEN_THROUGH_WALL:
+                return (counted if lying is None else lying) + in_flight
+        return reported if lying is None else max(reported, lying)

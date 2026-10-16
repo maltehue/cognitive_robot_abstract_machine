@@ -205,10 +205,14 @@ Every hypothesis also estimates the trickle of single grains below the onset, so
 trickle neither moves the onset nor counts as the contents flowing.
 """
 
-RECEIVER_FROM_COUNT = True
+RECEIVER_FILL_REPORT = RECEIVING_CUP.fill_report
 """
-Report the receiver's fill to the controller from what the camera counted crossing, with
-the grains still in flight added, instead of from the bank's lagging estimate.
+What the controller is told the receiver holds, as the cup poured into calls for: what
+the camera sees through the translucent cup's wall, what it counted crossing the opaque
+cup's rim; the grains still in flight are added to either.
+
+The count alone overstated the crossings 2.2 times on 2026-10-16 (its area per grain was
+calibrated on a far denser stream), while the wall read the fill within 0.03.
 """
 
 STOP_LEAD_TIME = 1.0
@@ -245,11 +249,12 @@ The tilt the cup is never turned past, in radians: the calibration ramps emptied
 completely there.
 """
 
-TRANSFER_START_TILT = DRY_TILT - math.radians(10.0)
+TRANSFER_START_TILT = DRY_TILT - math.radians(20.0)
 """
 The tilt a plain pose goal turns the cup to before the transfer starts, in radians:
 short of :data:`DRY_TILT`, so the transfer's approach covers the last stretch to the
-first stream at its own rate.
+first stream at its own rate. At 50 degrees a brimful cup already let a few kernels fall
+on 2026-10-16.
 
 The pose goal turns the cup without the pouring tasks, which chase a landing point and
 an upright plane that move with the tilt: when the transfer itself turned the cup at 10
@@ -611,7 +616,7 @@ if USE_LIVE_BANK:
             / source_cup.capacity,
             opening_radius=receiving_cup.opening_radius,
             prediction_window=transfer_task.prediction_duration,
-            receiver_from_count=RECEIVER_FROM_COUNT,
+            fill_report=RECEIVER_FILL_REPORT,
             stop_lead_time=STOP_LEAD_TIME,
         ),
     )

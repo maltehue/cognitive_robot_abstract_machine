@@ -6,6 +6,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
     ModelPoint,
 )
 from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
+from experiments.real_pouring.receiving_cup import ReceiverFillReport
 from experiments.real_pouring.stream_detection import StreamReading
 from experiments.pouring_model_verification.sensor import CameraCondition
 
@@ -173,7 +174,7 @@ def live_bank_from_count(tilt: float) -> LiveBank:
         goal_grains=0.7 * LOADED,
         opening_radius=OPENING_RADIUS,
         prediction_window=1.5,
-        receiver_from_count=True,
+        fill_report=ReceiverFillReport.COUNTED,
         stop_lead_time=STOP_LEAD_TIME,
     )
 
@@ -251,7 +252,7 @@ def _counting_bank() -> LiveBank:
         goal_grains=0.7 * LOADED,
         opening_radius=OPENING_RADIUS,
         prediction_window=1.5,
-        receiver_from_count=True,
+        fill_report=ReceiverFillReport.COUNTED,
     )
 
 
@@ -278,3 +279,65 @@ def test_without_a_heap_in_view_the_receiver_holds_what_was_counted():
         StreamReading(stamp=0.1, stream_seen=False, counted_grains=20.0, crossing=None)
     )
     assert bank.receiver.fill_level == pytest.approx(step.told_grains / LOADED)
+
+
+# %% the receiver read through its wall
+
+
+def live_bank_through_wall(tilt: float) -> LiveBank:
+    stream = tilted_source_above_receiver(tilt=tilt)
+    equation = stream.source.fill_equation
+    return LiveBank.for_cups(
+        source=stream.source,
+        receiver=stream.receiver,
+        world=stream.world,
+        built=ModelPoint(
+            repose_angle=equation.repose_angle,
+            discharge_coefficient=equation.discharge_coefficient,
+            outflow_rate_constant=equation.outflow_rate_constant,
+        ),
+        settings=BankSettings(),
+        camera=CameraCondition.POLE_COUNTING.model,
+        grains_per_fill=LOADED,
+        loaded_grains=LOADED,
+        goal_grains=0.7 * LOADED,
+        opening_radius=OPENING_RADIUS,
+        prediction_window=1.5,
+        fill_report=ReceiverFillReport.SEEN_THROUGH_WALL,
+        stop_lead_time=STOP_LEAD_TIME,
+    )
+
+
+def test_a_translucent_receiver_holds_what_its_wall_shows_plus_what_is_in_flight():
+    bank = live_bank_through_wall(tilt=1.0)
+    wall_fill = 0.12
+    for step, counted in enumerate([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]):
+        bank.observe(
+            StreamReading(
+                stamp=0.1 * step,
+                stream_seen=True,
+                counted_grains=counted,
+                crossing=None,
+                heap_fill=wall_fill,
+            )
+        )
+    capacity_ratio = bank.source.capacity / bank.receiver.capacity
+    wall_grains = wall_fill * LOADED / capacity_ratio
+    in_flight = bank.trace[-1].in_flight_grains
+    assert in_flight > 0.0
+    assert bank.trace[-1].told_grains == pytest.approx(wall_grains + in_flight)
+    assert bank.receiver.fill_level == pytest.approx(
+        wall_fill + in_flight / LOADED * capacity_ratio
+    )
+
+
+def test_a_wall_showing_nothing_yet_leaves_the_receiver_at_what_crossed():
+    bank = live_bank_through_wall(tilt=1.0)
+    bank.observe(_no_stream(0.0))
+    step = bank.observe(
+        StreamReading(stamp=0.1, stream_seen=True, counted_grains=4.0, crossing=None)
+    )
+    crossed = bank.camera.grains_crossed(4.0)
+    assert step.told_grains == pytest.approx(
+        crossed * bank.coupling.inside_share + step.in_flight_grains
+    )

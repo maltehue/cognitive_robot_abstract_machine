@@ -134,6 +134,30 @@ How far, relatively, two capacities may differ and still be the same cup's.
 """
 
 
+class ReceiverFillReport(StrEnum):
+    """
+    What the controller is told the receiver holds.
+    """
+
+    ESTIMATED = "estimated"
+    """
+    What the bank estimates arrived, with the margin it stops short by; a heap seen
+    lying in the receiver raises it.
+    """
+
+    COUNTED = "counted"
+    """
+    What the camera counted crossing the opening, with the grains still in flight
+    added; a heap seen lying in the receiver raises it.
+    """
+
+    SEEN_THROUGH_WALL = "seen_through_wall"
+    """
+    What the camera sees lying in the receiver through its wall, with the grains still
+    in flight added; what crossed until the wall shows anything.
+    """
+
+
 class ReceivingCup(StrEnum):
     """
     A cup the robot pours into.
@@ -185,6 +209,19 @@ class ReceivingCup(StrEnum):
                 return JEROEN_CUP_GOAL_FILL
             case ReceivingCup.TRANSLUCENT_CUP:
                 return TRANSLUCENT_CUP_GOAL_FILL
+
+    @property
+    def fill_report(self) -> ReceiverFillReport:
+        """
+        :return: How the controller is told what this cup holds: the translucent cup
+            shows its contents through the wall, the opaque Jeroen cup only what crosses
+            its rim.
+        """
+        match self:
+            case ReceivingCup.JEROEN_CUP:
+                return ReceiverFillReport.COUNTED
+            case ReceivingCup.TRANSLUCENT_CUP:
+                return ReceiverFillReport.SEEN_THROUGH_WALL
 
     def full_mass_grams(self, material: PouredMaterial) -> float:
         """

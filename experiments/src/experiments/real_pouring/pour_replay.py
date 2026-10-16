@@ -32,6 +32,7 @@ from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.receiving_cup import (
+    ReceiverFillReport,
     RECEIVING_CUP_FILE_NAME,
     ReceivingCup,
 )
@@ -468,7 +469,7 @@ class PourReplay:
         material: PouredMaterial,
         drain: ModelPoint,
         settings: BankSettings,
-        receiver_from_count: bool = False,
+        fill_report: Optional[ReceiverFillReport] = None,
         stop_lead_time: float = 0.0,
         outline: Optional[ReceiverOutline] = RECEIVER_OUTLINE,
         receiver: Optional[ReceivingCup] = None,
@@ -479,7 +480,8 @@ class PourReplay:
         :param material: What was poured, which sets how the camera counts.
         :param drain: The drain the controller's model was built with.
         :param settings: How the bank weighs the pour.
-        :param receiver_from_count: Whether the receiver is reported from the count.
+        :param fill_report: What the controller is told the receiver holds, or ``None``
+            for what the cup poured into calls for.
         :param stop_lead_time: How long grains keep arriving after a stop, in seconds.
         :param outline: The Jeroen cup's outline the opening is moved onto, or ``None``
             to count where the opening projects.
@@ -493,6 +495,8 @@ class PourReplay:
             receiver = recording.receiver
         if goal_fill is None:
             goal_fill = receiver.goal_fill
+        if fill_report is None:
+            fill_report = receiver.fill_report
         goal_grains = goal_fill * GRAINS_PER_FILL * receiver.source_cups_held(material)
         world, source, source_joint = _replay_world(
             recording, drain, receiver, material
@@ -528,7 +532,7 @@ class PourReplay:
             goal_grains=goal_grains,
             opening_radius=receiver.inner_radius,
             prediction_window=PREDICTION_WINDOW,
-            receiver_from_count=receiver_from_count,
+            fill_report=fill_report,
             stop_lead_time=stop_lead_time,
         )
         replay = cls(
