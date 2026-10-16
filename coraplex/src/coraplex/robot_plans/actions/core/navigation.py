@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import hypot
 
 from typing_extensions import Optional, Any, Dict
 
 from coraplex.datastructures.dataclasses import Context
 from coraplex.exceptions import NoFloorBelowRobot, NotOnASingleLevelException
+from coraplex.plans.failures import NavigationPathNotFound
 from coraplex.plans.attachment_nodes import ReAttachNode
 from coraplex.plans.factories import execute_single, pause_until, sequential
 from coraplex.plans.plan_node import PlanNode
@@ -21,7 +23,7 @@ from krrood.entity_query_language.factories import variable_from, and_, Conditio
 from semantic_digital_twin.exceptions import MissingMovableJointError
 from semantic_digital_twin.reasoning.predicates import allclose, InsideOf
 from semantic_digital_twin.reasoning.robot_predicates import is_pose_free_for_robot
-from semantic_digital_twin.robots.robot_parts import Camera
+from semantic_digital_twin.robots.robot_parts import AbstractRobot, Camera
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Level,
     Elevator,
@@ -36,6 +38,8 @@ from semantic_digital_twin.spatial_types.spatial_types import (
     Vector3,
 )
 from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
+
+# %% navigation targets
 
 
 @dataclass
@@ -52,8 +56,15 @@ class NavigateAction(ActionDescription):
 
     @property
     def _action_plan(self) -> PlanNode:
+        """
+        Move the root to the requested heading at its standing height.
+        """
         return execute_single(
-            MoveMotion(self.robot.mobile_base.pose_facing(self.target_location))
+            MoveMotion(
+                self.robot.resolve_standing_pose(
+                    self.robot.mobile_base.pose_facing(self.target_location)
+                )
+            )
         )
 
     @staticmethod
@@ -72,14 +83,16 @@ class NavigateAction(ActionDescription):
 
     @staticmethod
     def post_condition(
-        variables: Dict[str, Variable], context: Context, kwargs: Dict[str, Any]
+        variables: dict[str, Variable], context: Context, kwargs: dict[str, Any]
     ) -> ConditionType:
         """
-        The robot needs to be within 3 cm of where the heading puts its base.
+        The robot needs to be within 3 cm of the standing root target.
         """
         return allclose(
             variable_from(context.robot.root).global_pose,
-            context.robot.mobile_base.pose_facing(kwargs["target_location"]),
+            context.robot.resolve_standing_pose(
+                context.robot.mobile_base.pose_facing(kwargs["target_location"])
+            ),
             atol=0.03,
         )
 
@@ -122,6 +135,73 @@ class FaceAtAction(ActionDescription):
         return execute_single(TurnMotion(self.target))
 
 
+# %% clearance of the current robot posture
+
+
+@dataclass
+class NavigationClearance:
+    """
+    A conservative turning circle and world height for navigation.
+    """
+
+    radius: float
+    """
+    Horizontal clearance about the robot root, including held objects.
+    """
+
+    top_height: float
+    """
+    Highest collision geometry in the world frame.
+    """
+
+    @classmethod
+    def from_robot(
+        cls, robot: AbstractRobot, *, include_robot_geometry: bool = False
+    ) -> NavigationClearance:
+        """
+        Measure held geometry and optionally the complete current posture.
+        """
+        bodies = (
+            robot.bodies_with_collision
+            if include_robot_geometry
+            else [
+                body
+                for gripper in robot.all_end_effectors
+                for body in gripper.held_bodies
+            ]
+        )
+        boxes = [
+            body.collision.as_bounding_box_collection_in_frame(
+                robot.root
+            ).bounding_box()
+            for body in bodies
+        ]
+        radius = (
+            max(
+                robot.mobile_base.base_radius,
+                *(
+                    hypot(
+                        max(abs(box.min_x), abs(box.max_x)),
+                        max(abs(box.min_y), abs(box.max_y)),
+                    )
+                    for box in boxes
+                ),
+            )
+            if boxes
+            else robot.mobile_base.base_radius
+        )
+        top_height = max(
+            body.collision.as_bounding_box_collection_in_frame(robot._world.root)
+            .bounding_box()
+            .max_z
+            for body in robot.bodies_with_collision
+        )
+        return cls(radius, top_height)
+
+
+# %% paths through known obstacles
+
+
 @dataclass
 class PathPlanningNavigateAction(ActionDescription):
     """
@@ -139,9 +219,24 @@ class PathPlanningNavigateAction(ActionDescription):
     Where the robot should stand at the end of the path, with its base.
     """
 
+    include_robot_geometry: bool = field(default=False, kw_only=True)
+    """
+    Expand clearance to the full posture as well as any carried objects.
+    """
+
+    use_trajectory: bool = field(default=False, kw_only=True)
+    """
+    Execute simulated path legs continuously with collision checks when enabled.
+    """
+
     @property
     def _action_plan(self) -> PlanNode:
-        return sequential([MoveMotion(waypoint) for waypoint in self._path()])
+        return sequential(
+            [
+                MoveMotion(waypoint, use_trajectory=self.use_trajectory)
+                for waypoint in self._path()
+            ]
+        )
 
     @property
     def _floor(self) -> Floor:
@@ -176,14 +271,15 @@ class PathPlanningNavigateAction(ActionDescription):
         """
         :param floor: The floor to test.
         :return: Whether the robot's base rests within this floor's footprint and no
-            lower than its top.
+            lower than its top when measured at the root or base underside.
         """
         extent = self._extent_of(floor)
         base_pose = self.robot.root.global_pose
         return (
             extent.min_x <= float(base_pose.x) <= extent.max_x
             and extent.min_y <= float(base_pose.y) <= extent.max_y
-            and extent.max_z <= float(base_pose.z)
+            and extent.max_z
+            <= max(float(base_pose.z), self.robot.mobile_base.bounding_box.min_z)
         )
 
     def _path(self) -> list[Pose]:
@@ -224,7 +320,7 @@ class PathPlanningNavigateAction(ActionDescription):
             ).pose
             for waypoint, next_waypoint in zip(waypoints[1:], waypoints[2:])
         ]
-        return poses + [self.target]
+        return poses + [self.robot.resolve_standing_pose(self.target)]
 
     def _waypoints(self) -> list[Point2]:
         """
@@ -234,15 +330,20 @@ class PathPlanningNavigateAction(ActionDescription):
             target's.
         """
         base_pose = self.robot.root.global_pose
-        free_space = self._floor.planar_free_space(
-            max_height=self.robot.as_bounding_box_collection_in_frame(self.robot.root)
-            .bounding_box()
-            .scale.z,
-            bloat_obstacles=self.robot.mobile_base.base_radius,
+        floor = self._floor
+        clearance = NavigationClearance.from_robot(
+            self.robot, include_robot_geometry=self.include_robot_geometry
         )
-        return free_space.path_from_to(
+        free_space = floor.planar_free_space(
+            max_height=clearance.top_height - self._extent_of(floor).max_z,
+            bloat_obstacles=clearance.radius,
+        )
+        path = free_space.path_from_to(
             Point2.from_pose(base_pose), Point2.from_pose(self.target)
         )
+        if path is None:
+            raise NavigationPathNotFound(self.target)
+        return path
 
 
 @dataclass

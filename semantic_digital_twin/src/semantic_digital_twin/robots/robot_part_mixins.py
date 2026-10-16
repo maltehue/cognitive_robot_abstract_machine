@@ -137,6 +137,26 @@ class HasFingers(
         ]
         return thumb
 
+    # %% grasp references
+
+    def tool_frame_goal_for_grasp(self, grasp_pose: Pose) -> Pose:
+        """
+        Express a grasp at the tool origin as a tool-frame goal.
+
+        :param grasp_pose: The grasp frame to reach.
+        :return: The tool goal in the grasp's reference frame.
+        """
+        tool_P_grasp = Point3(reference_frame=self.tool_frame)
+        return self.tool_frame_goal_for_point(tool_P_grasp, grasp_pose)
+
+    @property
+    def held_body_T_grasp(self) -> Pose:
+        """
+        The grasp at the tool origin, expressed in the held body's frame.
+        """
+        tool_P_grasp = Point3(reference_frame=self.tool_frame)
+        return self.held_body_T_grasp_at(tool_P_grasp)
+
 
 # %% the fingertips a gripper closes with
 

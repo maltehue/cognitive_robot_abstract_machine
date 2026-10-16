@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List
 
 import numpy as np
 import trimesh.sample
+from typing_extensions import Self
 
 from krrood.entity_query_language.factories import (
     entity,
@@ -40,7 +41,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AllowSelfCollisions,
 )
 from semantic_digital_twin.reasoning.predicates import PlaceIsOccupied
-from semantic_digital_twin.robots.robot_part_mixins import HasTwoFingers
+from semantic_digital_twin.robots.robot_part_mixins import HasFingers
 from semantic_digital_twin.robots.robot_parts import (
     AbstractRobot,
     Camera,
@@ -155,34 +156,68 @@ def blocking(
     return robot_in_collision(robot.first(), [])
 
 
+# %% sampled grasp contacts
+
+
+@dataclass
+class GripperRaySamples:
+    """
+    Distinct sampled rays hitting each body between a gripper's fingers.
+    """
+
+    sample_size: int
+    """
+    The total number of sampled rays, including misses.
+    """
+
+    hit_rays: dict[Body, set[int]] = field(default_factory=dict)
+    """
+    The distinct indices of rays intersecting each non-finger body.
+    """
+
+    @classmethod
+    def sample(cls, gripper: HasFingers, sample_size: int) -> Self:
+        """
+        Sample each thumb-opposed finger pair and retain distinct hit indices.
+        """
+        thumb_mesh = gripper.thumb.tip.collision.combined_mesh.copy()
+        thumb_mesh.apply_transform(gripper.thumb.tip.global_transform.to_np())
+        opposing_fingers = [
+            finger for finger in gripper.fingers if finger is not gripper.thumb
+        ]
+        finger_bodies = {body for finger in gripper.fingers for body in finger.bodies}
+        samples = cls(sample_size=sample_size * len(opposing_fingers))
+        ray_tracer = gripper._world.ray_tracer
+        ray_tracer.update_scene()
+        for finger_index, finger in enumerate(opposing_fingers):
+            finger_mesh = finger.tip.collision.combined_mesh.copy()
+            finger_mesh.apply_transform(finger.tip.global_transform.to_np())
+            finger_points = trimesh.sample.sample_surface(finger_mesh, sample_size)[0]
+            thumb_points = trimesh.sample.sample_surface(thumb_mesh, sample_size)[0]
+            _, ray_indices, bodies = ray_tracer.ray_test(finger_points, thumb_points)
+            for ray_index, body in zip(ray_indices, bodies):
+                if body not in finger_bodies:
+                    samples.hit_rays.setdefault(body, set()).add(
+                        finger_index * sample_size + int(ray_index)
+                    )
+        return samples
+
+    def compute_fraction(self, body: Body) -> float:
+        """
+        Return the fraction of sampled rays intersecting the requested body.
+        """
+        return len(self.hit_rays.get(body, set())) / self.sample_size
+
+
 @symbolic_function
-def bodies_in_gripper(gripper: HasTwoFingers, sample_size: int = 100) -> List[Body]:
+def bodies_in_gripper(gripper: HasFingers, sample_size: int = 100) -> list[Body]:
     """
-    Gets all bodies which are between the finger of the gripper.
+    Return the distinct non-finger bodies intersecting rays between the fingers.
 
-    This method uses samples of rays which are cast between the finger.
-
-    :param gripper: The gripper for which the check should be done.
-    :param sample_size: The number of rays to sample.
+    :param gripper: The gripper to inspect.
+    :param sample_size: The number of rays sampled per thumb-opposed finger pair.
     """
-    # Retrieve meshes in local frames
-    thumb_mesh = gripper.thumb.tip.collision.combined_mesh.copy()
-    finger_mesh = gripper.finger.tip.collision.combined_mesh.copy()
-
-    # Transform copies of the meshes into the world frame
-    # body_mesh.apply_transform(body.global_transform.to_np())
-    thumb_mesh.apply_transform(gripper.thumb.tip.global_transform.to_np())
-    finger_mesh.apply_transform(gripper.finger.tip.global_transform.to_np())
-
-    # get random points from thumb mesh
-    finger_points = trimesh.sample.sample_surface(finger_mesh, sample_size)[0]
-    thumb_points = trimesh.sample.sample_surface(thumb_mesh, sample_size)[0]
-
-    rt = gripper._world.ray_tracer
-    rt.update_scene()
-
-    points, index_ray, bodies = rt.ray_test(finger_points, thumb_points)
-    return list(set(bodies) - set(gripper.finger.bodies) - set(gripper.thumb.bodies))
+    return list(GripperRaySamples.sample(gripper, sample_size).hit_rays)
 
 
 @symbolic_function
@@ -197,11 +232,10 @@ def is_body_in_gripper(
 
     :param body: The body for which the check should be done.
     :param gripper: The gripper for which the check should be done.
-    :param sample_size: The number of rays to sample.
+    :param sample_size: The number of rays sampled per thumb-opposed finger pair.
     :return: The percentage of rays between the fingers that hit the body.
     """
-    bodies = bodies_in_gripper(gripper, sample_size)
-    return len([b for b in bodies if b == body]) / sample_size
+    return GripperRaySamples.sample(gripper, sample_size).compute_fraction(body)
 
 
 @symbolic_function
@@ -215,7 +249,7 @@ def is_body_gripped(
     :param gripper: The gripper for which the check should be done.
     :param threshold: Minimum fraction of sampled rays that must hit ``body`` (see
         :func:`is_body_in_gripper`) for it to count as held.
-    :param sample_size: The number of rays to sample.
+    :param sample_size: The number of rays sampled per thumb-opposed finger pair.
     :return: Whether ``body`` is held by ``gripper``.
     """
     return is_body_in_gripper(body, gripper, sample_size) > threshold

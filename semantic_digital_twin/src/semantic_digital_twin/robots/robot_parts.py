@@ -46,7 +46,13 @@ from semantic_digital_twin.exceptions import (
     MissingDefaultCameraError,
 )
 from semantic_digital_twin.input_synchronization import InputSynchronizer
-from semantic_digital_twin.robots.exceptions import MissingDriveConnectionError
+from semantic_digital_twin.robots.exceptions import (
+    MissingDriveConnectionError,
+    MissingBaseCollisionGeometry,
+)
+from semantic_digital_twin.world_description.shape_collection import (
+    BoundingBoxCollection,
+)
 from semantic_digital_twin.robots.input_source import (
     BasePoseSource,
     JointPositionSource,
@@ -913,8 +919,30 @@ class MobileBase(
 
     @property
     def bounding_box(self) -> VolumetricBoundingBox:
-        return self.root.collision.as_bounding_box_collection_in_frame(
-            self._world.root
+        """Measure the geometric root or rigid descendants of a frame-only root."""
+        if self.root.has_collision():
+            return self.root.collision.as_bounding_box_collection_in_frame(
+                self._world.root
+            ).bounding_box()
+        pending = [self.root]
+        bodies = []
+        while pending:
+            body = pending.pop()
+            if isinstance(body, Body) and body.has_collision():
+                bodies.append(body)
+            pending.extend(
+                child
+                for child in body.child_kinematic_structure_entities
+                if isinstance(child.parent_connection, FixedConnection)
+            )
+        if not bodies:
+            raise MissingBaseCollisionGeometry(self.root)
+        return BoundingBoxCollection.merge_all(
+            [
+                body.collision.as_bounding_box_collection_in_frame(self._world.root)
+                for body in bodies
+            ],
+            reference_frame=self._world.root,
         ).bounding_box()
 
     @property
@@ -1169,6 +1197,34 @@ class AbstractRobot(Agent, HasRobotParts, ABC):
                 return parent_connection
         except AttributeError:
             pass
+
+    # %% standing root placement
+
+    def resolve_standing_pose(self, pose: Pose) -> Pose:
+        """
+        Preserve a target's planar position and orientation at the root's current
+        height in its parent frame.
+
+        :param pose: Requested placement expressed in any world frame.
+        :return: Placement at the standing height, in the requested reference frame.
+        """
+        drive_frame = self.root.parent_kinematic_structure_entity
+        if drive_frame is None:
+            return pose
+        drive_pose = self._world.transform(pose, drive_frame)
+        drive_T_root = self._world.compute_forward_kinematics(drive_frame, self.root)
+        standing_position = Point3(
+            drive_pose.x,
+            drive_pose.y,
+            drive_T_root.z,
+            reference_frame=drive_frame,
+        )
+        standing_pose = HomogeneousTransformationMatrix.from_point_rotation_matrix(
+            standing_position,
+            drive_pose.rotation_matrix,
+            reference_frame=drive_frame,
+        ).pose
+        return self._world.transform(standing_pose, pose.reference_frame)
 
     def set_root_pose(self, pose: Pose) -> None:
         """

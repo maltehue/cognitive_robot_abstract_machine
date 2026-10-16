@@ -7,7 +7,14 @@ from coraplex.plans.factories import sequential
 from coraplex.plans.plan_node import MotionNode
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.robot_plans.actions.core.placing import PlaceAction
-from coraplex.robot_plans.motions.gripper import MoveToolCenterPointMotion
+from coraplex.robot_plans.actions.core.carrying import CarryAction
+from coraplex.robot_plans.motions.gripper import (
+    MoveToolCenterPointMotion,
+    MoveGripperMotion,
+)
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AllowCollisionForEndEffector,
+)
 from semantic_digital_twin.robots.robot_parts import Arm
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
@@ -185,3 +192,71 @@ def test_place_takes_the_arm_its_pick_up_will_use(pr2_apartment_context):
     sequential([pick_up, place], context=context)
 
     assert _arms_moved_by(place) == {robot.right_arm}
+
+
+# %% targeted release contacts
+
+
+def test_place_applies_selected_contacts_through_release(pr2_holding_milk) -> None:
+    """Release motions keep selected object contacts without freeing the whole hand."""
+    world, robot, milk = pr2_holding_milk
+    action = PlaceAction(
+        milk,
+        Pose(reference_frame=world.root),
+        allow_environment_contacts=False,
+        support_bodies=[
+            next(
+                body for body in world.bodies_with_collision if body not in robot.bodies
+            )
+        ],
+    )
+    sequential([action], Context(world, robot, sampling_seed=SAMPLING_SEED))
+    motions = [
+        node.designator
+        for node in action._action_plan.descendants
+        if isinstance(node, MotionNode)
+        and isinstance(node.designator, (MoveToolCenterPointMotion, MoveGripperMotion))
+    ]
+
+    assert len(motions) == 4
+    assert [len(motion.allowed_contacts) for motion in motions] == [2, 2, 2, 1]
+    assert all(
+        not isinstance(rule, AllowCollisionForEndEffector)
+        for motion in motions
+        for rule in motion.allowed_contacts
+    )
+
+
+# %% carrying the actual attachment
+
+
+def test_carry_preserves_the_live_object_to_tool_transform(pr2_holding_milk):
+    """An off-centre rotated grasp places the object at its requested carrying pose."""
+    world, robot, milk = pr2_holding_milk
+    target = Pose.from_xyz_rpy(x=0.5, y=0.2, z=1, yaw=0.3, reference_frame=robot.root)
+    action = CarryAction(milk, target)
+    sequential([action], context=Context(world, robot))
+    motion = action._action_plan.designator
+    object_T_tool = world.transform(
+        robot.left_arm.end_effector.tool_frame.global_transform, milk.root
+    )
+
+    np.testing.assert_allclose(
+        motion.target.to_np(),
+        (target.homogeneous_matrix @ object_T_tool).to_np(),
+        atol=1e-12,
+    )
+    assert motion.arm is robot.left_arm
+
+
+def test_carry_requires_an_attached_object(simple_pr2_context):
+    """A carrying step cannot move an object that has not been picked up."""
+    world, robot, context = simple_pr2_context
+    milk = Milk(root=world.get_body_by_name("milk.stl"))
+    action = CarryAction(milk, milk.root.global_pose)
+    sequential([action], context=context)
+
+    with pytest.raises(ObjectIsNotHeld) as raised:
+        action._action_plan
+
+    assert raised.value.object_designator is milk

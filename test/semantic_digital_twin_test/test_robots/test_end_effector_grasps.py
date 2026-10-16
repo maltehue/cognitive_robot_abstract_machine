@@ -14,7 +14,7 @@ from semantic_digital_twin.exceptions import (
     NothingHeld,
 )
 from semantic_digital_twin.robots.pr2 import PR2
-from semantic_digital_twin.robots.robot_part_mixins import HasTwoFingers
+from semantic_digital_twin.robots.robot_part_mixins import HasFingers, HasTwoFingers
 from semantic_digital_twin.robots.robot_parts import Camera, EndEffector
 from semantic_digital_twin.robots.tracy import Tracy
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
@@ -486,3 +486,32 @@ def test_reading_the_travel_stands_the_world_back_up(tracy_world):
     gripper.travel_when_closing
 
     np.testing.assert_array_equal(tracy_world.state.positions, positions_before)
+
+
+# %% default grasp references for hands
+
+
+def test_default_finger_grasp_goal_uses_the_tool_origin(
+    pr2_gripper: EndEffector, graspable_box: Milk
+) -> None:
+    """The general finger contract retains a grasp at the tool origin."""
+    grasp = graspable_box.grasp_candidates()[0].grasp_pose
+    expected = pr2_gripper.tool_frame_goal(grasp)
+
+    actual = HasFingers.tool_frame_goal_for_grasp(pr2_gripper, grasp)
+
+    np.testing.assert_allclose(actual.to_np(), expected.to_np(), atol=1e-12)
+
+
+def test_default_held_finger_grasp_is_read_at_the_tool_origin(
+    pr2_gripper: EndEffector,
+) -> None:
+    """The general finger contract reads the attachment without a fingertip offset."""
+    hold_body(pr2_gripper)
+    expected = pr2_gripper.held_body_T_grasp_at(
+        Point3(reference_frame=pr2_gripper.tool_frame)
+    )
+
+    actual = HasFingers.held_body_T_grasp.fget(pr2_gripper)
+
+    np.testing.assert_allclose(actual.to_np(), expected.to_np(), atol=1e-12)

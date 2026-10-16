@@ -1,6 +1,7 @@
 import os.path
 from dataclasses import dataclass
 from math import pi
+from enum import StrEnum
 
 import numpy as np
 import pytest
@@ -259,3 +260,29 @@ def test_xacro():
     assert len(world.kinematic_structure_entities) > 0
     assert len(world.connections) > 0
     assert world.root.name.name == "base_footprint"
+
+
+# %% explicit description prefixes
+
+
+class DescriptionPrefix(StrEnum):
+    """
+    Explicit namespaces overriding a description's robot name.
+    """
+
+    INSTANCE = "instance"
+    EMPTY = ""
+
+
+@pytest.mark.parametrize("prefix", list(DescriptionPrefix))
+def test_explicit_prefix_applies_to_bodies_connections_and_degrees_of_freedom(
+    pr2_parser: URDFParser, prefix: DescriptionPrefix
+) -> None:
+    """
+    Every named kinematic entity uses the caller's prefix, including an empty one.
+    """
+    world = URDFParser(urdf=pr2_parser.urdf, prefix=prefix).parse()
+
+    assert {body.name.prefix for body in world.bodies} == {prefix}
+    assert {connection.name.prefix for connection in world.connections} == {prefix}
+    assert {degree.name.prefix for degree in world.degrees_of_freedom} == {prefix}

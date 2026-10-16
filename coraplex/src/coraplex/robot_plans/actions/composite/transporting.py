@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing_extensions import Self
 
 from krrood.entity_query_language.factories import a, variable
@@ -16,10 +16,12 @@ from coraplex.robot_plans.actions.core.navigation import (
     FaceAtAction,
     LookAtAction,
     NavigateAction,
+    PathPlanningNavigateAction,
 )
 from coraplex.querying.predicates import IsAmongTheClosestGraspsTo
 from coraplex.robot_plans.actions.core.pick_up import PickUpAction
 from coraplex.robot_plans.actions.core.placing import PlaceAction
+from coraplex.robot_plans.actions.core.carrying import CarryAction
 from coraplex.robot_plans.actions.core.robot_body import ParkArmsAction
 from krrood.entity_query_language.query.match import Match
 from semantic_digital_twin.robots.robot_parts import Arm
@@ -45,6 +47,11 @@ class TransportAction(ActionDescription):
     place: MoveAndPlaceAction
     """
     The step that puts down what :attr:`pick_up` picked up.
+    """
+
+    carry: CarryAction | Match | None = field(default=None, kw_only=True)
+    """
+    Optional carrying step grounded after pick-up instead of parking the arms.
     """
 
     @classmethod
@@ -96,14 +103,28 @@ class TransportAction(ActionDescription):
             ),
         )
 
+    # %% transportation phases
+
     @property
     def _action_plan(self) -> PlanNode:
+        """
+        Prepare, pick up, carry and place in execution order.
+        """
+        carry = self.carry
+        place = self.place
+        if carry is None:
+            carry = ParkArmsAction(self.robot.all_arms)
+        else:
+            if isinstance(carry, CarryAction):
+                carry = a(type(carry))(**carry.designator_parameter)
+            if isinstance(place, MoveAndPlaceAction):
+                place = a(type(place))(**place.designator_parameter)
         return sequential(
             [
                 ParkArmsAction(self.robot.all_arms),
                 self.pick_up,
-                ParkArmsAction(self.robot.all_arms),
-                self.place,
+                carry,
+                place,
                 ParkArmsAction(self.robot.all_arms),
             ]
         )
@@ -137,7 +158,7 @@ class MoveAndPlaceAction(ActionDescription):
     Navigates to where the robot stands, faces the target and places the object there.
     """
 
-    navigate: NavigateAction
+    navigate: NavigateAction | PathPlanningNavigateAction
     """
     The step to where the robot stands while placing.
     """
@@ -187,7 +208,7 @@ class MoveAndPickUpAction(ActionDescription):
     Navigates to where the robot stands, faces the object and picks it up.
     """
 
-    navigate: NavigateAction
+    navigate: NavigateAction | PathPlanningNavigateAction
     """
     The step to where the robot stands while picking up.
     """
@@ -294,7 +315,7 @@ class MoveAndOpenAction(ActionDescription):
     Navigates to where the robot stands, faces the handle and opens its container.
     """
 
-    navigate: NavigateAction
+    navigate: NavigateAction | PathPlanningNavigateAction
     """
     The step to where the robot stands while opening.
     """
