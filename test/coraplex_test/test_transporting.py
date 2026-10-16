@@ -14,7 +14,7 @@ from typing_extensions import Callable, List, Type, TYPE_CHECKING
 from krrood.entity_query_language.factories import a, variable
 from krrood.entity_query_language.query.match import Match
 from coraplex.datastructures.dataclasses import Context
-from coraplex.execution_environment import simulated_robot
+from coraplex.execution_environment import kinematically_simulated_robot
 from coraplex.locations.locations import ReachabilityLocation
 from coraplex.plans.factories import sequential
 from coraplex.plans.plan_node import ActionNode, MotionNode
@@ -902,7 +902,7 @@ def test_facing_after_navigating_turns_where_the_robot_was_sent(pr2_apartment_co
         [NavigateAction(_standing_pose(world)), FaceAtAction(target)], context
     )
 
-    with simulated_robot:
+    with kinematically_simulated_robot:
         plan.perform()
 
     np.testing.assert_allclose(
@@ -926,7 +926,7 @@ def test_facing_a_target_given_relative_to_a_body_turns_towards_that_body(
         context,
     )
 
-    with simulated_robot:
+    with kinematically_simulated_robot:
         plan.perform()
 
     _assert_base_faces(robot, milk.global_pose.position)
@@ -945,7 +945,7 @@ def test_facing_and_looking_at_a_target_turns_the_base_and_the_camera_towards_it
         context,
     )
 
-    with simulated_robot:
+    with kinematically_simulated_robot:
         plan.perform()
 
     _assert_base_faces(robot, target.position)
@@ -1062,7 +1062,7 @@ def test_transportation_in_an_imported_scene_preserves_the_attachment_and_releas
     plan = scene.create_plan()
     with ExitStack() as cleanup:
         cleanup.callback(observer.stop)
-        with simulated_robot(collision_avoidance=True):
+        with kinematically_simulated_robot(collision_avoidance=True):
             plan.perform()
 
     assert len(observer.root_positions) > 1

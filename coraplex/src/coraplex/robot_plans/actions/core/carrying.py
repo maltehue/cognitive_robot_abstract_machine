@@ -16,7 +16,6 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AllowCollisionBetweenGroups,
 )
 from semantic_digital_twin.grasping.grasp_candidates import (
-    GraspCandidate,
     HasGraspCandidates,
 )
 from semantic_digital_twin.spatial_types.spatial_types import Pose
@@ -57,8 +56,10 @@ class CarryAction(
         if arm is None:
             raise ObjectIsNotHeld(self.object_designator)
         gripper = arm.end_effector
-        grasp = GraspCandidate(self.object_designator, gripper.held_body_T_grasp)
-        target = gripper.tool_frame_goal(grasp.moved_to(self.target))
+        object_T_tool = self.world.transform(
+            gripper.tool_frame.global_transform, object_body
+        )
+        target = (self.target.homogeneous_matrix @ object_T_tool).pose
         return execute_single(
             MoveToolCenterPointMotion(
                 target=target,

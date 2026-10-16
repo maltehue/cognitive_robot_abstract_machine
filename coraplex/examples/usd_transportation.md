@@ -12,7 +12,7 @@ USD coordinates retain their authored units and axes. Supply `world_T_scene` to 
 
 ## Merge order
 
-Dependent PRs target their prerequisite branches to keep each review focused. Merge the prerequisite into `main`, then retarget its dependent PR to `main`. Keep the branches until their dependent PRs are retargeted. The integration PR is the combined acceptance snapshot; merge its remaining test and documentation additions last after the component PRs.
+Dependent PRs target their prerequisite branches to keep each review focused. Merge the prerequisite into `main`, then retarget its dependent PR to `main`. Keep the branches until their dependent PRs are retargeted. The integration PR is the combined acceptance snapshot; merge its remaining tests, documentation and API compatibility fixes last after the component PRs.
 
 | PR | Change | Prerequisite |
 | --- | --- | --- |
@@ -40,3 +40,8 @@ Dependent PRs target their prerequisite branches to keep each review focused. Me
 | [25](https://github.com/maltehue/cognitive_robot_abstract_machine/pull/25) | Carrying posture and deferred placement | 22 |
 
 ROS waits concern independent client calls; they do not schedule competing goals on one server or coordinate robot motions. The transportation example runs one robot's plan sequentially. Cramera foundation work and UI features are outside this series.
+
+
+## Compatibility with current main
+
+The integration branch uses the kinematic simulation API from main and retains base-holding tasks during tool motions. Carrying computes its tool goal from the live object-to-tool attachment rather than a fingertip grasp reference. General finger hands retain tool-origin grasp defaults; two-finger hands keep their measured closed-fingertip reference. Two focused regressions cover those defaults alongside the existing carrying-transform and two-finger tests.
