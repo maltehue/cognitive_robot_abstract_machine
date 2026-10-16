@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List
 
 import numpy as np
 import trimesh.sample
+from typing_extensions import Self
 
 from krrood.entity_query_language.factories import (
     entity,
@@ -155,34 +156,62 @@ def blocking(
     return robot_in_collision(robot.first(), [])
 
 
-@symbolic_function
-def bodies_in_gripper(gripper: HasTwoFingers, sample_size: int = 100) -> List[Body]:
+# %% sampled grasp contacts
+
+
+@dataclass
+class GripperRaySamples:
     """
-    Gets all bodies which are between the finger of the gripper.
+    Distinct sampled rays hitting each body between a gripper's fingers.
+    """
 
-    This method uses samples of rays which are cast between the finger.
+    sample_size: int
+    """
+    The total number of sampled rays, including misses.
+    """
 
-    :param gripper: The gripper for which the check should be done.
+    hit_rays: dict[Body, set[int]] = field(default_factory=dict)
+    """
+    The distinct indices of rays intersecting each non-finger body.
+    """
+
+    @classmethod
+    def sample(cls, gripper: HasTwoFingers, sample_size: int) -> Self:
+        """
+        Sample rays between the opposing fingers and retain their hit indices.
+        """
+        thumb_mesh = gripper.thumb.tip.collision.combined_mesh.copy()
+        finger_mesh = gripper.finger.tip.collision.combined_mesh.copy()
+        thumb_mesh.apply_transform(gripper.thumb.tip.global_transform.to_np())
+        finger_mesh.apply_transform(gripper.finger.tip.global_transform.to_np())
+        finger_points = trimesh.sample.sample_surface(finger_mesh, sample_size)[0]
+        thumb_points = trimesh.sample.sample_surface(thumb_mesh, sample_size)[0]
+        ray_tracer = gripper._world.ray_tracer
+        ray_tracer.update_scene()
+        _, ray_indices, bodies = ray_tracer.ray_test(finger_points, thumb_points)
+        finger_bodies = set(gripper.finger.bodies) | set(gripper.thumb.bodies)
+        samples = cls(sample_size=sample_size)
+        for ray_index, body in zip(ray_indices, bodies):
+            if body not in finger_bodies:
+                samples.hit_rays.setdefault(body, set()).add(int(ray_index))
+        return samples
+
+    def compute_fraction(self, body: Body) -> float:
+        """
+        Return the fraction of sampled rays intersecting the requested body.
+        """
+        return len(self.hit_rays.get(body, set())) / self.sample_size
+
+
+@symbolic_function
+def bodies_in_gripper(gripper: HasTwoFingers, sample_size: int = 100) -> list[Body]:
+    """
+    Return the distinct non-finger bodies intersecting rays between the fingers.
+
+    :param gripper: The gripper to inspect.
     :param sample_size: The number of rays to sample.
     """
-    # Retrieve meshes in local frames
-    thumb_mesh = gripper.thumb.tip.collision.combined_mesh.copy()
-    finger_mesh = gripper.finger.tip.collision.combined_mesh.copy()
-
-    # Transform copies of the meshes into the world frame
-    # body_mesh.apply_transform(body.global_transform.to_np())
-    thumb_mesh.apply_transform(gripper.thumb.tip.global_transform.to_np())
-    finger_mesh.apply_transform(gripper.finger.tip.global_transform.to_np())
-
-    # get random points from thumb mesh
-    finger_points = trimesh.sample.sample_surface(finger_mesh, sample_size)[0]
-    thumb_points = trimesh.sample.sample_surface(thumb_mesh, sample_size)[0]
-
-    rt = gripper._world.ray_tracer
-    rt.update_scene()
-
-    points, index_ray, bodies = rt.ray_test(finger_points, thumb_points)
-    return list(set(bodies) - set(gripper.finger.bodies) - set(gripper.thumb.bodies))
+    return list(GripperRaySamples.sample(gripper, sample_size).hit_rays)
 
 
 @symbolic_function
@@ -200,8 +229,7 @@ def is_body_in_gripper(
     :param sample_size: The number of rays to sample.
     :return: The percentage of rays between the fingers that hit the body.
     """
-    bodies = bodies_in_gripper(gripper, sample_size)
-    return len([b for b in bodies if b == body]) / sample_size
+    return GripperRaySamples.sample(gripper, sample_size).compute_fraction(body)
 
 
 @symbolic_function
