@@ -179,17 +179,82 @@ def live_bank_from_count(tilt: float) -> LiveBank:
     )
 
 
+STEADY_RATE = 1.0
+"""
+Grains per reading of a count rising steadily, ten readings a second.
+"""
+
+
+def _steady_count(bank: LiveBank, readings: int) -> float:
+    """
+    Feed a count rising by :data:`STEADY_RATE` per reading.
+
+    :return: The last count.
+    """
+    counted = 0.0
+    for step in range(readings):
+        counted = STEADY_RATE * step
+        bank.observe(_stream(0.1 * step, counted=counted))
+    return counted
+
+
 def test_the_receiver_is_reported_as_what_crossed_plus_what_is_still_in_flight():
     bank = live_bank_from_count(tilt=1.0)
-    counts = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
-    for step, counted in enumerate(counts):
-        bank.observe(_stream(0.1 * step, counted=counted))
-    crossed = bank.camera.grains_crossed(counts[-1])
-    rate = bank.camera.grains_crossed(counts[-1] - counts[-6]) / 0.5
-    expected = crossed * bank.coupling.inside_share + rate * STOP_LEAD_TIME
-    assert bank.trace[-1].in_flight_grains == pytest.approx(rate * STOP_LEAD_TIME)
+    counted = _steady_count(bank, readings=60)
+    crossed = bank.camera.grains_crossed(counted)
+    rate = bank.camera.grains_crossed(STEADY_RATE) / 0.1
+    in_flight = bank.trace[-1].in_flight_grains
+    assert in_flight == pytest.approx(rate * STOP_LEAD_TIME, rel=0.01)
+    expected = crossed * bank.coupling.inside_share + in_flight
     assert bank.trace[-1].told_grains == pytest.approx(expected)
     assert bank.receiver.fill_level == pytest.approx(expected / LOADED)
+
+
+def test_a_burst_in_the_count_raises_what_is_in_flight_only_gradually():
+    bank = live_bank_from_count(tilt=1.0)
+    for step in range(10):
+        bank.observe(_stream(0.1 * step, counted=0.0))
+    burst = 20.0
+    at_burst = bank.observe(_stream(1.0, counted=burst)).in_flight_grains
+    unfiltered = bank.camera.grains_crossed(burst) / 0.1 * STOP_LEAD_TIME
+    assert 0.0 < at_burst < unfiltered
+    for step in range(11, 21):
+        bank.observe(_stream(0.1 * step, counted=burst))
+    later = bank.trace[-1].in_flight_grains
+    assert 0.0 < later < at_burst
+
+
+IN_FLIGHT_LIMIT = 5.0
+"""
+The most grains the tests let the bank report in flight.
+"""
+
+
+def test_what_is_in_flight_never_exceeds_the_limit():
+    stream = tilted_source_above_receiver(tilt=1.0)
+    equation = stream.source.fill_equation
+    bank = LiveBank.for_cups(
+        source=stream.source,
+        receiver=stream.receiver,
+        world=stream.world,
+        built=ModelPoint(
+            repose_angle=equation.repose_angle,
+            discharge_coefficient=equation.discharge_coefficient,
+            outflow_rate_constant=equation.outflow_rate_constant,
+        ),
+        settings=BankSettings(),
+        camera=CameraCondition.POLE_COUNTING.model,
+        grains_per_fill=LOADED,
+        loaded_grains=LOADED,
+        goal_grains=0.7 * LOADED,
+        opening_radius=OPENING_RADIUS,
+        prediction_window=1.5,
+        fill_report=ReceiverFillReport.COUNTED,
+        stop_lead_time=STOP_LEAD_TIME,
+        in_flight_limit=IN_FLIGHT_LIMIT,
+    )
+    _steady_count(bank, readings=60)
+    assert bank.trace[-1].in_flight_grains == IN_FLIGHT_LIMIT
 
 
 def test_nothing_is_in_flight_while_the_count_stands_still():

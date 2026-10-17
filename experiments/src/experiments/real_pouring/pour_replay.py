@@ -7,6 +7,7 @@ perception saw and what the bank concluded can be looked at frame by frame.
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import zipfile
 from dataclasses import dataclass, field, replace
@@ -471,6 +472,7 @@ class PourReplay:
         settings: BankSettings,
         fill_report: Optional[ReceiverFillReport] = None,
         stop_lead_time: float = 0.0,
+        in_flight_limit: float = math.inf,
         outline: Optional[ReceiverOutline] = RECEIVER_OUTLINE,
         receiver: Optional[ReceivingCup] = None,
         goal_fill: Optional[float] = None,
@@ -483,6 +485,7 @@ class PourReplay:
         :param fill_report: What the controller is told the receiver holds, or ``None``
             for what the cup poured into calls for.
         :param stop_lead_time: How long grains keep arriving after a stop, in seconds.
+        :param in_flight_limit: The most grains ever reported as still in flight.
         :param outline: The Jeroen cup's outline the opening is moved onto, or ``None``
             to count where the opening projects.
         :param receiver: The cup poured into, or ``None`` for the one the recording
@@ -534,6 +537,7 @@ class PourReplay:
             prediction_window=PREDICTION_WINDOW,
             fill_report=fill_report,
             stop_lead_time=stop_lead_time,
+            in_flight_limit=in_flight_limit,
         )
         replay = cls(
             recording=recording,

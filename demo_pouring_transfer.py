@@ -273,10 +273,14 @@ How long the cup may stay at :data:`MAXIMUM_TILT` before the transfer ends whate
 fill estimate says, in seconds: a cup held there that long has poured all it will.
 """
 
-MAXIMUM_RETURN_TILT_RATE = math.radians(30.0)
+MAXIMUM_RETURN_TILT_RATE = math.radians(10.0)
 """
-The fastest the cup may tilt back, in radians per second: the return rate of the
-calibration ramps.
+The fastest the cup may tilt back, in radians per second.
+
+At the ramps' 30 degrees per second the arm lunged after every avalanche the count
+reported on 2026-10-16 and lost the cup's axis by up to 5 degrees; the pour approaches
+at :data:`APPROACH_TILT_RATE` and the stream stops within a few degrees of the onset, so
+the return needs no more than this.
 """
 
 LIVE_BANK_TRACE_FILE_NAME = "live_bank_trace.json"
@@ -618,6 +622,10 @@ if USE_LIVE_BANK:
             prediction_window=transfer_task.prediction_duration,
             fill_report=RECEIVER_FILL_REPORT,
             stop_lead_time=STOP_LEAD_TIME,
+            in_flight_limit=tolerance
+            * GRAINS_PER_FILL
+            * receiving_cup.capacity
+            / source_cup.capacity,
         ),
     )
     live_bank_listener.start()

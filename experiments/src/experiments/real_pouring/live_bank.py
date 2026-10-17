@@ -11,6 +11,7 @@ Nothing here depends on ROS: a node hands each reading to :meth:`LiveBank.observ
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy
@@ -134,13 +135,6 @@ class LiveBankStep(SubclassJSONSerializer):
 
 # %% the bank on the robot
 
-COUNT_RATE_WINDOW = 0.5
-"""
-Over how many seconds the camera's count is differenced for the rate the grains arrive
-at: long enough to smooth the frame-by-frame steps of the count at ten readings a
-second.
-"""
-
 
 @dataclass
 class LiveBank:
@@ -214,9 +208,18 @@ class LiveBank:
 
     stop_lead_time: float = field(default=0.0, kw_only=True)
     """
-    How long grains keep arriving once the controller stops, in seconds: the count's
-    rate over this time is reported as already in the receiver, so the controller stops
-    that much short of the goal.
+    How long grains keep arriving once the controller stops, in seconds: the rate the
+    grains arrive at, held for this time, is reported as already in the receiver, so the
+    controller stops that much short of the goal.
+
+    The rate is smoothed with this time as its time constant, so one avalanche in the
+    count raises it gradually.
+    """
+
+    in_flight_limit: float = field(default=math.inf, kw_only=True)
+    """
+    The most grains ever reported as still in flight: what the controller is to resolve,
+    so no burst of the count can push the receiver past the goal by more.
     """
 
     trace: List[LiveBankStep] = field(default_factory=list)
@@ -227,6 +230,11 @@ class LiveBank:
     _blend: Optional[ModelBlend] = field(init=False, default=None, repr=False)
     """
     The model the controller runs on, moving towards the one the bank calls for.
+    """
+
+    _arrival_rate: float = field(init=False, default=0.0)
+    """
+    How fast the grains arrive by the camera's count, smoothed, in grains per second.
     """
 
     @classmethod
@@ -246,6 +254,7 @@ class LiveBank:
         seed: int = 0,
         fill_report: ReceiverFillReport = ReceiverFillReport.ESTIMATED,
         stop_lead_time: float = 0.0,
+        in_flight_limit: float = math.inf,
     ) -> LiveBank:
         """
         :return: A bank over the hypotheses a plain cup is weighed against, reading only
@@ -293,6 +302,7 @@ class LiveBank:
             prediction_window=prediction_window,
             fill_report=fill_report,
             stop_lead_time=stop_lead_time,
+            in_flight_limit=in_flight_limit,
         )
 
     @property
@@ -387,26 +397,32 @@ class LiveBank:
     def _in_flight_grains(self, seen: StreamReading) -> float:
         """
         :param seen: The reading just taken.
-        :return: How many grains are still to arrive after a stop now: the rate the
-            camera's count rose at over :data:`COUNT_RATE_WINDOW`, held for
-            :attr:`stop_lead_time`; zero where the receiver is reported from the bank.
+        :return: How many grains are still to arrive after a stop now: the smoothed
+            rate the camera's count rises at, held for :attr:`stop_lead_time` and
+            capped at :attr:`in_flight_limit`; zero where the receiver is reported
+            from the bank.
         """
-        if self.fill_report is ReceiverFillReport.ESTIMATED:
+        if self.fill_report is ReceiverFillReport.ESTIMATED or not self.trace:
             return 0.0
-        earlier = [
-            step for step in self.trace if step.time <= seen.stamp - COUNT_RATE_WINDOW
-        ]
-        if not earlier:
-            return 0.0
-        reference = earlier[-1]
-        interval = seen.stamp - reference.time
-        if interval <= 0.0:
-            return 0.0
-        rate = (
-            self.camera.grains_crossed(seen.counted_grains - reference.counted_grains)
-            / interval
-        )
-        return max(0.0, rate) * self.stop_lead_time
+        previous = self.trace[-1]
+        interval = seen.stamp - previous.time
+        if interval > 0.0:
+            instant = (
+                max(
+                    0.0,
+                    self.camera.grains_crossed(
+                        seen.counted_grains - previous.counted_grains
+                    ),
+                )
+                / interval
+            )
+            share = (
+                1.0
+                if self.stop_lead_time <= 0.0
+                else min(1.0, interval / self.stop_lead_time)
+            )
+            self._arrival_rate += share * (instant - self._arrival_rate)
+        return min(self._arrival_rate * self.stop_lead_time, self.in_flight_limit)
 
     def _write_fill_levels(
         self, counted_grains: float, in_flight: float, heap_fill: Optional[float]
