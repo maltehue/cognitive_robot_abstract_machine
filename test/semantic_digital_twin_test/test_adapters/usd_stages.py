@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 try:
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
@@ -135,13 +137,10 @@ def build_stage_with_mesh_targeted_body0() -> Usd.Stage:
 
 def build_stage_with_textured_mesh(texture_file_path: str) -> Usd.Stage:
     """
-    A minimal in-memory stage with a single quad mesh, per-point ``st`` UV
-    coordinates, and a material whose ``diffuseColor`` is driven by a texture read
-    from ``texture_file_path`` - the layout
-    ``USDParser._diffuse_texture_path``/``_uv_coordinates`` read.
+    A quad mesh with per-point UV coordinates and a bound diffuse texture.
 
-    :param texture_file_path: Path to the texture image the material's
-        ``UsdUVTexture`` node reads.
+    :param texture_file_path: Path to the texture image the material's ``UsdUVTexture``
+        node reads.
     :return: The built in-memory stage.
     """
     stage = Usd.Stage.CreateInMemory()
@@ -349,4 +348,44 @@ def build_single_joint_stage_with_semantic_labels() -> Usd.Stage:
         ["seating"]
     )
 
+    return stage
+
+
+# %% authored scene placement
+
+
+class ScenePrimPath(StrEnum):
+    """
+    Prims used to exercise independent object transforms.
+    """
+
+    FIRST = "/object_a"
+    SECOND = "/object_b"
+    ROOT = "/object"
+    MESH = "/object/scaled/mesh"
+    CUBE = "/object/cube"
+
+
+def build_stage_with_placed_objects(up_axis: str, meters_per_unit: float) -> Usd.Stage:
+    """
+    Two translated and rotated objects in the declared stage coordinate system.
+    """
+    stage = build_jointless_stage_with_multiple_top_level_prims()
+    UsdGeom.SetStageUpAxis(stage, up_axis)
+    UsdGeom.SetStageMetersPerUnit(stage, meters_per_unit)
+    for index, path in enumerate((ScenePrimPath.FIRST, ScenePrimPath.SECOND)):
+        transform = UsdGeom.Xformable(stage.GetPrimAtPath(path))
+        transform.AddTranslateOp().Set(Gf.Vec3d(index + 1, 2, 3))
+        transform.AddRotateXYZOp().Set(Gf.Vec3f(10, 20, 30))
+    return stage
+
+
+def build_stage_with_scaled_root() -> Usd.Stage:
+    """
+    A root scale affecting both mesh vertices and a primitive's dimensions.
+    """
+    stage = build_stage_with_scaled_mesh(scale=(1.0, 1.0, 1.0))
+    root = UsdGeom.Xformable(stage.GetPrimAtPath(ScenePrimPath.ROOT))
+    root.AddScaleOp().Set(Gf.Vec3f(2, 3, 4))
+    UsdGeom.Cube.Define(stage, ScenePrimPath.CUBE)
     return stage

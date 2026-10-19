@@ -9,7 +9,11 @@ from semantic_digital_twin.adapters.usd.exceptions import (
     UnsupportedUsdPhysicsJointTypeError,
     UsdPhysicsJointMissingChildBodyError,
 )
-from semantic_digital_twin.adapters.usd.parser import USDParser, UsdMeshShapeBuilder
+from semantic_digital_twin.adapters.usd.parser import (
+    USDParser,
+    UsdMeshShapeBuilder,
+    UsdAxis,
+)
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.semantic_annotations.usd_semantics import UsdSemanticLabels
 from semantic_digital_twin.world import World
@@ -19,10 +23,13 @@ from semantic_digital_twin.world_description.connections import (
     PrismaticConnection,
     RevoluteConnection,
 )
-from semantic_digital_twin.world_description.geometry import Box, Cylinder, Sphere
+from semantic_digital_twin.world_description.geometry import Box, Cylinder, Mesh, Sphere
 from semantic_digital_twin.world_description.world_entity import Body
 
 from .usd_stages import (
+    ScenePrimPath,
+    build_stage_with_placed_objects,
+    build_stage_with_scaled_root,
     PXR_AVAILABLE,
     USD_SEMANTICS_AVAILABLE,
     build_jointless_stage_with_a_default_prim,
@@ -40,7 +47,7 @@ from .usd_stages import (
 )
 
 if PXR_AVAILABLE:
-    from pxr import Gf, UsdGeom
+    from pxr import Gf, Usd, UsdGeom
 
 pytestmark = pytest.mark.skipif(
     not PXR_AVAILABLE, reason="usd-core (pxr) not installed"
@@ -444,3 +451,107 @@ def test_triangulate_handles_multiple_faces_of_different_sizes():
     # A triangle followed by a quad, sharing no vertex indices.
     faces = UsdMeshShapeBuilder._triangulate([3, 4], [0, 1, 2, 3, 4, 5, 6])
     np.testing.assert_array_equal(faces, [[0, 1, 2], [3, 4, 5], [3, 5, 6]])
+
+
+# %% authored scene placement
+
+
+@pytest.mark.parametrize("up_axis", [UsdAxis.Y, UsdAxis.Z])
+@pytest.mark.parametrize("meters_per_unit", [0.01, 1.0])
+def test_parse_preserves_independent_object_poses_in_stage_coordinates(
+    up_axis: UsdAxis, meters_per_unit: float
+) -> None:
+    """
+    Independent objects retain their authored translation and rotation.
+    """
+    stage = build_stage_with_placed_objects(up_axis, meters_per_unit)
+
+    world = parse(stage)
+
+    for path in (ScenePrimPath.FIRST, ScenePrimPath.SECOND):
+        prim = stage.GetPrimAtPath(path)
+        expected = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        body = world.get_body_by_name(prim.GetName())
+        np.testing.assert_allclose(
+            body.global_transform.to_np(), np.array(expected).T, atol=1e-9
+        )
+
+
+def test_parse_bakes_root_scale_into_mesh_geometry() -> None:
+    """
+    A body frame excludes scale while its mesh retains the root's authored scale.
+    """
+    stage = build_stage_with_scaled_root()
+    mesh_prim = stage.GetPrimAtPath(ScenePrimPath.MESH)
+    expected_transform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()
+    )
+    expected_vertices = np.array(
+        [
+            expected_transform.Transform(Gf.Vec3d(point))
+            for point in UsdGeom.Mesh(mesh_prim).GetPointsAttr().Get()
+        ]
+    )
+
+    world = parse(stage)
+    mesh = next(shape for shape in world.root.visual.shapes if isinstance(shape, Mesh))
+
+    np.testing.assert_allclose(
+        mesh.unscaled_mesh.vertices, expected_vertices, atol=1e-9
+    )
+
+
+def test_parse_bakes_root_scale_into_primitive_dimensions() -> None:
+    """
+    Primitive dimensions include scale authored on their enclosing root.
+    """
+    stage = build_stage_with_scaled_root()
+    root_scale = Gf.Transform(
+        UsdGeom.Xformable(
+            stage.GetPrimAtPath(ScenePrimPath.ROOT)
+        ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    ).GetScale()
+    cube_size = (
+        UsdGeom.Cube(stage.GetPrimAtPath(ScenePrimPath.CUBE)).GetSizeAttr().Get()
+    )
+
+    world = parse(stage)
+    box = next(shape for shape in world.root.visual.shapes if isinstance(shape, Box))
+
+    np.testing.assert_allclose(
+        [box.scale.x, box.scale.y, box.scale.z],
+        np.array(root_scale) * cube_size,
+        atol=1e-9,
+    )
+
+
+def test_parse_places_scaled_mesh_vertices_in_the_authored_world_frame() -> None:
+    """
+    The body's rigid pose and baked mesh scale reconstruct the authored geometry.
+    """
+    stage = build_stage_with_placed_objects(UsdAxis.Z, 1.0)
+    prim = stage.GetPrimAtPath(ScenePrimPath.FIRST)
+    UsdGeom.Xformable(prim).AddScaleOp().Set(Gf.Vec3f(2, 3, 4))
+    mesh_prim = next(child for child in prim.GetChildren() if child.IsA(UsdGeom.Mesh))
+    expected_transform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()
+    )
+    expected_vertices = np.array(
+        [
+            expected_transform.Transform(Gf.Vec3d(point))
+            for point in UsdGeom.Mesh(mesh_prim).GetPointsAttr().Get()
+        ]
+    )
+
+    world = parse(stage)
+    body = world.get_body_by_name(prim.GetName())
+    mesh = next(shape for shape in body.visual.shapes if isinstance(shape, Mesh))
+    vertices = mesh.unscaled_mesh.vertices
+    homogeneous_vertices = np.column_stack((vertices, np.ones(len(vertices))))
+    world_vertices = (
+        body.global_transform.to_np() @ mesh.origin.to_np() @ homogeneous_vertices.T
+    ).T[:, :3]
+
+    np.testing.assert_allclose(world_vertices, expected_vertices, atol=1e-9)
