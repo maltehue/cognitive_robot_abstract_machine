@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from time import sleep
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 from krrood.adapters.json_serializer import from_json
 from semantic_digital_twin.adapters.ros.messages import StreamPosition
@@ -12,7 +12,15 @@ from semantic_digital_twin.adapters.ros.world_synchronizer import (
     WorldSynchronizer,
 )
 
-from giskardpy.middleware.ros2.exceptions import GiskardWorldUpdateNotReceivedError
+from giskardpy.middleware.ros2.exceptions import (
+    GiskardWorldUpdateNotReceivedError,
+    RequiredWorldUpdateNotReceivedError,
+)
+
+Sent = TypeVar("Sent")
+"""
+What sending a goal returns.
+"""
 
 # %% the world of Giskard
 
@@ -115,6 +123,37 @@ class ClientWorldUpdates:
         if self.world_synchronizer.published_sequence_number == 0:
             return None
         return self.world_synchronizer.latest_published_position
+
+    def republish_state(self) -> None:
+        """
+        Publish the whole state of this world again, as a new update.
+        """
+        self.world_synchronizer.on_state_change(
+            publish_changes=True, force_republish=True
+        )
+
+    def send_on_a_fresh_update(self, send: Callable[[], Sent]) -> Sent:
+        """
+        Publish the whole state of this world and send a goal built on it; a goal
+        Giskard refuses because that update never reached it is sent once more on
+        another one.
+
+        Giskard drops the oldest waiting updates while its world is busy, so the goal
+        names a fresh update carrying the whole state rather than whatever was published
+        last, and when that one is lost as well the state goes out again and the goal
+        with it.
+
+        :param send: Builds the goal on the world as it is and sends it.
+        :return: What sending returned.
+        :raises RequiredWorldUpdateNotReceivedError: If the second attempt is refused as
+            well.
+        """
+        self.republish_state()
+        try:
+            return send()
+        except RequiredWorldUpdateNotReceivedError:
+            self.republish_state()
+            return send()
 
     def wait_for_the_changes_of_a_goal(self, result: Dict[str, Any]) -> None:
         """

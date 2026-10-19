@@ -84,15 +84,17 @@ class PublicationProgress(ABC):
         raise NotImplementedError
 
 
-SYNC_QUEUE_DEPTH = 1000
+SYNC_QUEUE_DEPTH = 10
 """
 How many messages the synchronization topic queues on each side, in messages.
 
-Every synchronizer also receives its own publications and discards them only after
-taking them off the queue, so while a process is busy, finishing a goal for instance,
-its own state updates fill the queue at the control rate and whatever another process
-sent meanwhile is overwritten and lost for good once the queue is full. A thousand
-messages cover seconds of such a stall; they are small strings.
+A process whose world is busy, a controller in its loop, takes its queue down slower
+than its peers fill it; with a queue this short the oldest waiting updates are dropped
+and the latest one is applied within a fraction of a second, which a controller needs. A
+deep queue keeps every update instead and applies them seconds late (measured at five
+seconds on 2026-10-19). What a dropped update can cost, a goal naming it as the state it
+was built on, is covered on the client, which republishes its state and sends such a
+goal again.
 """
 
 

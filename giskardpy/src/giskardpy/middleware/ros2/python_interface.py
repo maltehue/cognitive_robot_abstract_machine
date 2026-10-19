@@ -97,7 +97,9 @@ class GiskardWrapper:
         :param motion_statechart: statechart to execute
         """
         motion_statechart.sanity_check()
-        result = self._send_action_goal(motion_statechart)
+        result = self.world_updates.send_on_a_fresh_update(
+            lambda: self._send_action_goal(motion_statechart)
+        )
         self._take_over_result(result, motion_statechart)
 
     def _take_over_result(

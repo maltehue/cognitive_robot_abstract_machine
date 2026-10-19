@@ -10,6 +10,7 @@ from giskardpy.middleware.ros2 import rospy
 from giskardpy.middleware.ros2.control_loop import ControlLoop
 from giskardpy.middleware.ros2.exceptions import (
     GiskardWorldUpdateNotReceivedError,
+    RequiredWorldUpdateNotReceivedError,
     WorldModelModifiedDuringMotionError,
 )
 from giskardpy.middleware.ros2.feedback_publisher import ActionFeedbackPublisher
@@ -116,6 +117,11 @@ class PublishingSynchronizerMimic:
     The position this world caught up with, for every publisher it is asked about.
     """
 
+    republished: int = 0
+    """
+    How often this world was asked to publish its whole state again.
+    """
+
     @property
     def latest_published_position(self) -> StreamPosition:
         return StreamPosition(
@@ -124,6 +130,13 @@ class PublishingSynchronizerMimic:
 
     def has_applied(self, position: StreamPosition) -> bool:
         return self.applied_sequence_number >= position.sequence_number
+
+    def on_state_change(
+        self, publish_changes: bool = True, force_republish: bool = False, **kwargs
+    ) -> None:
+        self.published_sequence_number += 1
+        if force_republish:
+            self.republished += 1
 
 
 @dataclass
@@ -243,6 +256,20 @@ class TestCatchingUp:
 # %% the world of a client around a goal
 
 
+def _lost_update(
+    synchronizer: PublishingSynchronizerMimic,
+) -> RequiredWorldUpdateNotReceivedError:
+    """
+    The error Giskard answers a goal with when the update it names never arrived.
+    """
+    return RequiredWorldUpdateNotReceivedError(
+        publisher_name=synchronizer.origin.node_name,
+        current_sequence_number=0,
+        awaited_sequence_number=synchronizer.published_sequence_number,
+        timeout=0.0,
+    )
+
+
 class TestClientWorldUpdates:
     """
     A goal is built against a world the client may just have changed, and running it
@@ -263,6 +290,42 @@ class TestClientWorldUpdates:
         assert world_updates.required_position() == StreamPosition(
             origin=synchronizer.origin, sequence_number=4
         )
+
+    def test_a_goal_is_sent_on_a_freshly_published_state(self):
+        synchronizer = PublishingSynchronizerMimic(published_sequence_number=4)
+        world_updates = ClientWorldUpdates(world_synchronizer=synchronizer)
+
+        sent_at = world_updates.send_on_a_fresh_update(
+            lambda: synchronizer.published_sequence_number
+        )
+
+        assert sent_at == 5
+        assert synchronizer.republished == 1
+
+    def test_a_goal_whose_update_was_lost_is_sent_again_on_a_new_one(self):
+        synchronizer = PublishingSynchronizerMimic(published_sequence_number=4)
+        world_updates = ClientWorldUpdates(world_synchronizer=synchronizer)
+        attempts = []
+
+        def send() -> int:
+            attempts.append(synchronizer.published_sequence_number)
+            if len(attempts) == 1:
+                raise _lost_update(synchronizer)
+            return synchronizer.published_sequence_number
+
+        assert world_updates.send_on_a_fresh_update(send) == 6
+        assert attempts == [5, 6]
+        assert synchronizer.republished == 2
+
+    def test_a_goal_lost_twice_is_given_up_on(self):
+        synchronizer = PublishingSynchronizerMimic(published_sequence_number=4)
+        world_updates = ClientWorldUpdates(world_synchronizer=synchronizer)
+
+        def send() -> int:
+            raise _lost_update(synchronizer)
+
+        with pytest.raises(RequiredWorldUpdateNotReceivedError):
+            world_updates.send_on_a_fresh_update(send)
 
     def test_a_result_without_changes_is_not_waited_for(self):
         world_updates = ClientWorldUpdates(
