@@ -182,3 +182,50 @@ def test_a_view_without_the_cup_on_the_mat_says_so():
     bare_mat = numpy.full((*IMAGE_SIZE, 3), MAT_BLUE, dtype=numpy.uint8)
     with pytest.raises(ReceiverNotFoundError):
         BLUE_MAT.offset(GAUGE.region_in(IMAGE_SIZE, NO_OFFSET), bare_mat)
+
+
+ELBOW_CAP_GREY = (190, 180, 170)
+"""
+The colour of a joint cap of the arm lying over the mat, BGR: unsaturated like the cup.
+"""
+
+CAP_SIZE = (22, 104)
+"""
+Rows and columns a joint cap covers of the mat in the empty view.
+"""
+
+
+def _cap_below_the_cup(
+    image: numpy.ndarray, rows_below: int, columns_left: int
+) -> None:
+    """
+    Paint a joint cap over the mat, its bottom the given rows below the projected cup's
+    bottom and its centre the given columns left of the cup's.
+    """
+    rows, columns = numpy.nonzero(GAUGE.region_in(IMAGE_SIZE, NO_OFFSET))
+    bottom = rows.max() + rows_below
+    centre = int(columns.mean()) - columns_left
+    image[
+        bottom - CAP_SIZE[0] : bottom,
+        centre - CAP_SIZE[1] // 2 : centre + CAP_SIZE[1] // 2,
+    ] = ELBOW_CAP_GREY
+
+
+def test_the_gap_nearest_the_projection_is_the_cup_not_the_largest():
+    shifted = PixelOffset(rows=10, columns=-12)
+    image = _cup_on_mat(shifted)
+    rows, columns = numpy.nonzero(GAUGE.region_in(IMAGE_SIZE, shifted))
+    # the arm hides all but the cup's lowest rows, as it does at the pre-tilt pose
+    image[: rows.max() - 20, columns.min() : columns.max() + 1] = MAT_BLUE
+    _cap_below_the_cup(image, rows_below=90, columns_left=60)
+    found = BLUE_MAT.offset(GAUGE.region_in(IMAGE_SIZE, NO_OFFSET), image)
+    assert (found.rows, found.columns) == pytest.approx(
+        (shifted.rows, shifted.columns), abs=1
+    )
+
+
+def test_a_gap_too_far_from_the_projection_is_not_the_cup():
+    image = numpy.full((*IMAGE_SIZE, 3), MAT_BLUE, dtype=numpy.uint8)
+    _cap_below_the_cup(image, rows_below=90, columns_left=60)
+    with pytest.raises(ReceiverNotFoundError):
+        BLUE_MAT.offset(GAUGE.region_in(IMAGE_SIZE, NO_OFFSET), image)

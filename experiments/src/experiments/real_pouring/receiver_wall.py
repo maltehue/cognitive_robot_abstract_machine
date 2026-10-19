@@ -5,6 +5,7 @@ and the opening.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -170,6 +171,20 @@ How many columns at either end of a row of the search window have to show the ma
 whatever interrupts it in that row to count as the cup standing on it, in pixels.
 """
 
+MINIMUM_GAP_PIXELS = 100
+"""
+How many pixels an interruption of the mat has to cover to be a thing standing on it
+rather than the mat's own texture: the cup's gap spans its width, dozens of pixels.
+"""
+
+MAXIMUM_CUP_OFFSET = 50.0
+"""
+How far the cup's gap may lie from where the cup projects and still be the cup, in
+pixels: the camera's pose is off by a few centimetres at most, a millimetre per pixel
+under the pole camera, while a joint cap of the arm interrupting the mat lies about a
+hundred pixels away.
+"""
+
 
 @dataclass(frozen=True)
 class CupOnMat:
@@ -213,8 +228,10 @@ class CupOnMat:
         :param empty_view: The empty view, BGR.
         :return: How far the cup has to move for the bottom of its projection to meet
             the bottom of the gap it makes in the mat, and the centres of the two
-            bottoms to meet.
-        :raises ReceiverNotFoundError: If the mat shows no gap near the projection.
+            bottoms to meet: of the gaps in the mat, the one nearest the projection,
+            since the arm can interrupt the mat too, further away.
+        :raises ReceiverNotFoundError: If the mat shows no gap within
+            :data:`MAXIMUM_CUP_OFFSET` of the projection.
         """
         rows, columns = numpy.nonzero(cup)
         height, width = cup.shape
@@ -232,18 +249,28 @@ class CupOnMat:
         count, labels, statistics, _ = cv2.connectedComponentsWithStats(
             gap.astype(numpy.uint8)
         )
-        if count < 2:
-            raise ReceiverNotFoundError()
-        largest = 1 + int(numpy.argmax(statistics[1:, cv2.CC_STAT_AREA]))
-        gap_rows, gap_columns = numpy.nonzero(labels == largest)
-        gap_bottom = gap_rows.max()
-        gap_centre = gap_columns[gap_rows > gap_bottom - TOP_EDGE_ROWS].mean() + left
         cup_bottom = rows.max()
         cup_centre = columns[rows > cup_bottom - TOP_EDGE_ROWS].mean()
-        return PixelOffset(
-            rows=int(gap_bottom + top - cup_bottom),
-            columns=int(round(gap_centre - cup_centre)),
-        )
+        nearest: Optional[PixelOffset] = None
+        nearest_distance = MAXIMUM_CUP_OFFSET
+        for label in range(1, count):
+            if statistics[label, cv2.CC_STAT_AREA] < MINIMUM_GAP_PIXELS:
+                continue
+            gap_rows, gap_columns = numpy.nonzero(labels == label)
+            gap_bottom = gap_rows.max()
+            gap_centre = (
+                gap_columns[gap_rows > gap_bottom - TOP_EDGE_ROWS].mean() + left
+            )
+            offset = PixelOffset(
+                rows=int(gap_bottom + top - cup_bottom),
+                columns=int(round(gap_centre - cup_centre)),
+            )
+            distance = math.hypot(offset.rows, offset.columns)
+            if distance <= nearest_distance:
+                nearest, nearest_distance = offset, distance
+        if nearest is None:
+            raise ReceiverNotFoundError()
+        return nearest
 
 
 BLUE_MAT = CupOnMat(minimum_hue=95, maximum_hue=125, minimum_saturation=150)
