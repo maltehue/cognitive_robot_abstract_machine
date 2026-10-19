@@ -186,13 +186,19 @@ class TerminalFillConstraintTask(Task, ABC):
         self, context: MotionStatechartContext
     ) -> Optional[ObservationStateValues]:
         """
-        Reports success once the fill reaches the goal and its rate has settled to zero.
+        Reports success once the fill reaches the goal and its rate has settled to zero:
+        the rate a sensor sees where one reports it, the model's prediction otherwise.
 
         :param context: The runtime context.
         :return: The observation state.
         """
         fill_level = float(self.fill_connection.position)
-        fill_rate = float(self._compiled_fill_velocity.evaluate()[0])
+        observed_rate = self.fill_connection.observed_inflow
+        fill_rate = (
+            float(self._compiled_fill_velocity.evaluate()[0])
+            if observed_rate is None
+            else observed_rate
+        )
         rate_settled = -self.outflow_tolerance < fill_rate < self.outflow_tolerance
         if rate_settled and self._fill_goal_reached(fill_level):
             return ObservationStateValues.TRUE

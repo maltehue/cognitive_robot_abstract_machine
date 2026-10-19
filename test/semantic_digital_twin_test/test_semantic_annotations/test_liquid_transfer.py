@@ -56,6 +56,7 @@ from semantic_digital_twin.spatial_types import (
 from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
+    UNOBSERVED_INFLOW,
     DrainCorrection,
     FixedConnection,
     LiquidConnection,
@@ -2051,3 +2052,48 @@ def test_copy_for_world_preserves_equations():
     assert copied_connection.raw_dof is world_copy.get_degree_of_freedom_by_id(
         connection.raw_dof.id
     )
+
+
+# %% the inflow a sensor sees as world state
+
+
+class TestObservedInflow:
+    """
+    The rate a sensor sees a container filling at, held as a passive degree of freedom
+    of the world for a controller in another process to read.
+    """
+
+    def _receiver(self) -> tuple[World, HasFillLevel]:
+        world, source, _ = _build_world(
+            source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0), couple=False
+        )
+        return world, source
+
+    def test_a_new_fill_level_starts_with_no_inflow_observed(self):
+        world, container = self._receiver()
+        connection = container.fill_connection
+        assert (
+            connection.observed_inflow_connection_in(world).position
+            == UNOBSERVED_INFLOW
+        )
+        assert connection.observed_inflow is None
+
+    def test_a_rate_written_for_the_container_reads_back_as_its_observed_inflow(self):
+        world, container = self._receiver()
+        connection = container.fill_connection
+        JointState.from_mapping(
+            {connection.observed_inflow_connection_in(world): 0.02}
+        ).apply_to(world)
+        assert connection.observed_inflow == pytest.approx(0.02)
+
+    def test_the_observed_inflow_connection_survives_json(self):
+        world, container = self._receiver()
+        connection = container.fill_connection
+        tracker = WorldEntityWithIDKwargsTracker.from_world(world)
+        restored = LiquidConnection.from_json(
+            connection.to_json(), **tracker.create_kwargs()
+        )
+        assert (
+            restored.observed_inflow_connection_name
+            == connection.observed_inflow_connection_name
+        )

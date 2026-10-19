@@ -1281,10 +1281,11 @@ class LiquidTransferCoupling(SubclassJSONSerializer):
 
 
 @dataclass(eq=False)
-class DrainCorrectionConnection(PrismaticConnection):
+class ModelValueConnection(PrismaticConnection):
     """
-    Prismatic connection whose degree of freedom holds one correction of a container's
-    drain, set from outside the pouring model while a controller runs.
+    Prismatic connection whose degree of freedom holds one value of a container's
+    pouring model set from outside the physics while a controller runs: a correction
+    of its drain, or what a sensor sees of it.
 
     The degree of freedom is passive: it is never commanded and nothing integrates it.
     Being world state, a value written in one process reaches every synchronized world,
@@ -1294,16 +1295,38 @@ class DrainCorrectionConnection(PrismaticConnection):
     @property
     def active_dofs(self) -> list[DegreeOfFreedom]:
         """
-        :return: Empty list, so no controller commands the correction.
+        :return: Empty list, so no controller commands the value.
         """
         return []
 
     @property
     def passive_dofs(self) -> list[DegreeOfFreedom]:
         """
-        :return: List containing the single correction DOF.
+        :return: List containing the single value DOF.
         """
         return [self.raw_dof]
+
+
+@dataclass(eq=False)
+class DrainCorrectionConnection(ModelValueConnection):
+    """
+    Holds one correction of a container's drain.
+    """
+
+
+UNOBSERVED_INFLOW = -1.0
+"""
+The value of a container's inflow observation where no sensor reports one: no rate a
+sensor sees is negative.
+"""
+
+
+@dataclass(eq=False)
+class ObservedInflowConnection(ModelValueConnection):
+    """
+    Holds the rate a sensor sees a container filling at, in normalized fill per second,
+    or :data:`UNOBSERVED_INFLOW` where no sensor watches it.
+    """
 
 
 @dataclass(frozen=True)
@@ -1424,6 +1447,14 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
     drain as the equation gives it.
     """
 
+    observed_inflow_connection_name: Optional[PrefixedName] = field(
+        default=None, kw_only=True, init=False
+    )
+    """
+    The connection holding the rate a sensor sees this container filling at, or
+    ``None`` for a container no sensor can watch.
+    """
+
     coupled_source_equation_json: Optional[Dict[str, Any]] = field(
         default=None, kw_only=True, init=False, repr=False, compare=False
     )
@@ -1477,6 +1508,11 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
             if self.drain_correction is not None
             else None
         )
+        result["observed_inflow_connection_name"] = (
+            to_json(self.observed_inflow_connection_name)
+            if self.observed_inflow_connection_name is not None
+            else None
+        )
         return result
 
     @classmethod
@@ -1488,6 +1524,9 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
         raw_correction = data.get("drain_correction")
         if raw_correction is not None:
             instance.drain_correction = from_json(raw_correction)
+        raw_observation = data.get("observed_inflow_connection_name")
+        if raw_observation is not None:
+            instance.observed_inflow_connection_name = from_json(raw_observation)
         return instance
 
     def copy_for_world(self, world: World) -> LiquidConnection:
@@ -1501,7 +1540,27 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
         copy.outflow_equation = self.outflow_equation
         copy.inflow_equation = self.inflow_equation
         copy.drain_correction = self.drain_correction
+        copy.observed_inflow_connection_name = self.observed_inflow_connection_name
         return copy
+
+    def observed_inflow_connection_in(self, world: World) -> ObservedInflowConnection:
+        """
+        :param world: The world to resolve the connection in.
+        :return: The connection holding the rate a sensor sees this container filling
+            at there.
+        """
+        return world.get_connection_by_name(self.observed_inflow_connection_name)
+
+    @property
+    def observed_inflow(self) -> Optional[float]:
+        """
+        The rate a sensor sees this container filling at, in normalized fill per second,
+        or ``None`` where no sensor reports one.
+        """
+        if self.observed_inflow_connection_name is None:
+            return None
+        rate = float(self.observed_inflow_connection_in(self._world).position)
+        return None if rate < 0.0 else rate
 
     @property
     def repose_correction(self) -> Scalar:

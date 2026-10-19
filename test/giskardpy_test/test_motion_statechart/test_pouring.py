@@ -647,6 +647,62 @@ class TestPouringTask:
 
         assert pouring_task.on_tick(context) is None
 
+    def test_on_tick_reports_true_when_a_sensor_sees_no_inflow_while_the_model_still_flows(
+        self, world_with_cup
+    ) -> None:
+        """
+        A sensor that sees the contents at rest outweighs a model that still predicts a
+        flow: the pour is over once the fill is in the goal band and nothing arrives.
+        """
+        world, cup = world_with_cup
+        goal_fill = 0.6
+        pouring_task = PouringTask(
+            fill_equation=cup.fill_equation,
+            fill_connection=cup.fill_connection,
+            root_link=world.root,
+            tip_link=cup.root,
+            goal_value=goal_fill,
+            fill_level_tolerance=0.05,
+        )
+        context = MotionStatechartContext(world=world)
+        pouring_task.build(context)
+        JointState.from_mapping(
+            {
+                cup.root.parent_connection: 1.3,
+                cup.fill_connection: goal_fill,
+                cup.fill_connection.observed_inflow_connection_in(world): 0.0,
+            }
+        ).apply_to(world)
+        assert (
+            abs(cup.fill_equation.symbolic_velocity(cup.fill_connection).evaluate()[0])
+            > pouring_task.outflow_tolerance
+        )
+        assert pouring_task.on_tick(context) is ObservationStateValues.TRUE
+
+    def test_on_tick_waits_while_a_sensor_still_sees_inflow(
+        self, world_with_cup
+    ) -> None:
+        world, cup = world_with_cup
+        goal_fill = 0.6
+        pouring_task = PouringTask(
+            fill_equation=cup.fill_equation,
+            fill_connection=cup.fill_connection,
+            root_link=world.root,
+            tip_link=cup.root,
+            goal_value=goal_fill,
+            fill_level_tolerance=0.05,
+        )
+        context = MotionStatechartContext(world=world)
+        pouring_task.build(context)
+        JointState.from_mapping(
+            {
+                cup.fill_connection: goal_fill,
+                cup.fill_connection.observed_inflow_connection_in(world): 10
+                * pouring_task.outflow_tolerance,
+            }
+        ).apply_to(world)
+        assert pouring_task.on_tick(context) is None
+
     def test_proactive_tilt_back(self, world_with_cup) -> None:
         """
         Verify that the linearized MPC starts reducing tilt before the fill level

@@ -224,6 +224,13 @@ of the goal.
 The ramps of 2026-10-12 relaxed within one to two seconds of reaching their tilt.
 """
 
+SETTLED_INFLOW = 0.005
+"""
+The inflow below which the receiver counts as no longer filling, in fill per second:
+
+one of the bank's grains a second, a stray kernel rather than a stream.
+"""
+
 APPROACH_TILT_RATE = math.radians(3.0)
 """
 How fast the cup keeps turning where the model predicts no flow, in radians per second:
@@ -544,6 +551,7 @@ transfer_task = FillByTransferTask(
     fill_level_tolerance=tolerance,
     reference_velocity=POURING_VELOCITY,
     stopping_velocity=STOPPING_VELOCITY,
+    outflow_tolerance=SETTLED_INFLOW,
 )
 # Keep the liquid's projectile landing in the receiver so the optimizer repositions the gripper
 # upstream as the source tilts and the arc reaches forward.
@@ -587,7 +595,7 @@ tilt_pacing = TiltPacing(
     maximum_return_rate=MAXIMUM_RETURN_TILT_RATE,
     ceiling_slowdown_width=CEILING_SLOWDOWN_WIDTH,
     receiver=receiving_cup,
-    approach_until_fill=goal_fill,
+    approach_until_fill=goal_fill - tolerance,
 )
 extended_motion = Parallel(
     [transfer_task, no_spill, keep_above, keep_plane, tilt_pacing]

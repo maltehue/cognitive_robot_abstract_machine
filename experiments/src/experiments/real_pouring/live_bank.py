@@ -429,7 +429,8 @@ class LiveBank:
     ) -> float:
         """
         Tell the controller what both cups hold: the source what was loaded less what
-        the camera counted leaving; the receiver what :attr:`fill_report` says.
+        the camera counted leaving; the receiver what :attr:`fill_report` says, and the
+        rate the camera sees the grains arrive at where the receiver is read from it.
 
         :param counted_grains: How many grains the camera has counted crossing.
         :param in_flight: How many grains are still to arrive after a stop now.
@@ -449,15 +450,22 @@ class LiveBank:
                 else heap_fill * self.grains_per_fill / capacity_ratio
             ),
         )
-        JointState.from_mapping(
-            {
-                self.source.fill_connection: max(0.0, source_grains)
-                / self.grains_per_fill,
-                self.receiver.fill_connection: min(
-                    1.0, receiver_grains / self.grains_per_fill * capacity_ratio
-                ),
-            }
-        ).apply_to(self.world)
+        values = {
+            self.source.fill_connection: max(0.0, source_grains) / self.grains_per_fill,
+            self.receiver.fill_connection: min(
+                1.0, receiver_grains / self.grains_per_fill * capacity_ratio
+            ),
+        }
+        if self.fill_report is not ReceiverFillReport.ESTIMATED:
+            values[
+                self.receiver.fill_connection.observed_inflow_connection_in(self.world)
+            ] = (
+                self._arrival_rate
+                * self.coupling.inside_share
+                / self.grains_per_fill
+                * capacity_ratio
+            )
+        JointState.from_mapping(values).apply_to(self.world)
         return receiver_grains
 
     def _receiver_grains(

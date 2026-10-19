@@ -76,6 +76,8 @@ from semantic_digital_twin.spatial_types import (
 from semantic_digital_twin.world_description.connections import (
     DrainCorrection,
     DrainCorrectionConnection,
+    ObservedInflowConnection,
+    UNOBSERVED_INFLOW,
     FixedConnection,
     LiquidConnection,
     LiquidTransferCoupling,
@@ -1476,6 +1478,12 @@ How far a drain correction may move from neutral: three radians on the repose an
 a factor between exp(-3) and exp(3) on the drain rate and the exit speed.
 """
 
+OBSERVED_INFLOW_LIMIT = 1.0
+"""
+The highest inflow a sensor may report, in normalized fill per second: a whole
+container a second, more than any pour.
+"""
+
 
 @dataclass(eq=False)
 class HasFillLevel(HasRootBody, LiquidSource):
@@ -1615,12 +1623,16 @@ class HasFillLevel(HasRootBody, LiquidSource):
             )
             connection.outflow_equation = fill_equation
             connection.drain_correction = self._add_drain_correction(world, phantom)
+            observation = self._add_inflow_observation(world, phantom)
+            connection.observed_inflow_connection_name = observation.name
             world.add_connection(connection)
             self.set_fill_connection(connection)
             self.add_fill_equation(fill_equation)
 
         with world.modify_world():
-            JointState.from_mapping({connection: initial_fill}).apply_to(world)
+            JointState.from_mapping(
+                {connection: initial_fill, observation: UNOBSERVED_INFLOW}
+            ).apply_to(world)
 
     def _add_drain_correction(self, world: World, phantom: Body) -> DrainCorrection:
         """
@@ -1658,6 +1670,32 @@ class HasFillLevel(HasRootBody, LiquidSource):
             drain_scale_connection_name=names[1],
             discharge_scale_connection_name=names[2],
         )
+
+    def _add_inflow_observation(
+        self, world: World, phantom: Body
+    ) -> ObservedInflowConnection:
+        """
+        Add the connection that holds the rate a sensor sees this container filling at,
+        on a frame of its own below the fill-level phantom.
+
+        :param world: The world to add it to, inside an open modification.
+        :param phantom: The fill-level phantom it hangs from.
+        :return: The connection, still at zero until the modification closes.
+        """
+        body = Body(name=PrefixedName(f"{self.root.name.name}_observed_inflow"))
+        world.add_body(body)
+        observation = ObservedInflowConnection.create_with_dofs(
+            world=world,
+            parent=phantom,
+            child=body,
+            axis=Vector3.Z(),
+            dof_limits=DegreeOfFreedomLimits(
+                lower=DerivativeMap(position=UNOBSERVED_INFLOW, velocity=-1.0),
+                upper=DerivativeMap(position=OBSERVED_INFLOW_LIMIT, velocity=1.0),
+            ),
+        )
+        world.add_connection(observation)
+        return observation
 
     def receive_outflow_from(
         self,

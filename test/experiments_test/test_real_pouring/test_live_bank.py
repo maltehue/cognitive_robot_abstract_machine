@@ -425,3 +425,23 @@ def test_a_count_above_what_the_wall_shows_is_what_the_receiver_holds():
     assert step.told_grains == pytest.approx(
         crossed * bank.coupling.inside_share + step.in_flight_grains
     )
+
+
+# %% the inflow the camera sees, told to the controller
+
+
+def test_the_receiver_is_told_the_rate_the_grains_arrive_at():
+    bank = live_bank_from_count(tilt=1.0)
+    _steady_count(bank, readings=60)
+    rate = bank.camera.grains_crossed(STEADY_RATE) / 0.1
+    capacity_ratio = bank.source.capacity / bank.receiver.capacity
+    assert bank.receiver.fill_connection.observed_inflow == pytest.approx(
+        rate * bank.coupling.inside_share / LOADED * capacity_ratio, rel=0.01
+    )
+
+
+def test_a_receiver_reported_from_the_bank_gets_no_observed_inflow():
+    bank = live_bank_tilted(tilt=1.0)
+    bank.observe(_no_stream(0.0))
+    bank.observe(_stream(0.1, counted=5.0))
+    assert bank.receiver.fill_connection.observed_inflow is None
