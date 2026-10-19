@@ -246,13 +246,19 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
     def subscription_callback(self, message: std_msgs.msg.String):
         """
         Wrap the origin subscription callback by self-skipping and disabling the next
-        world callback. Holds the world lock while deserializing to ensure no changes
-        happen while building the tracker and running from_json.
+        world callback. A message this synchronizer published itself is dropped on its
+        origin field alone, before the world lock is taken and the message read: it
+        hears its own state updates at the control rate, and reading each in full kept
+        it from keeping up with the other processes. Holds the world lock while
+        deserializing the rest to ensure no changes happen while building the tracker
+        and running from_json.
 
         :param message: The incoming ROS string message containing a serialized
             synchronization message.
         """
         content = json.loads(message.data)
+        if content.get(MessageField.META_DATA) == to_json(self.meta_data):
+            return
         with self._world._world_lock:
             tracker = WorldEntityWithIDKwargsTracker.from_world(self._world)
             for entity in self._buffered_world_entities().values():

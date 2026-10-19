@@ -29,6 +29,8 @@ from semantic_digital_twin.adapters.ros.messages import (
     StreamPosition,
     WorldUpdate,
 )
+from semantic_digital_twin.adapters.ros import world_synchronizer
+from semantic_digital_twin.adapters.ros.messages import MessageField
 from semantic_digital_twin.adapters.ros.world_synchronizer import (
     SYNC_QUEUE_DEPTH,
     ModelReloadSynchronizer,
@@ -239,6 +241,30 @@ def test_the_synchronizer_queues_a_long_burst_of_updates(rclpy_node):
     synchronizer = WorldSynchronizer(node=rclpy_node, _world=create_dummy_world())
     assert synchronizer.subscriber.qos_profile.depth == SYNC_QUEUE_DEPTH
     assert synchronizer.publisher.qos_profile.depth == SYNC_QUEUE_DEPTH
+    synchronizer.close()
+
+
+def test_a_synchronizer_drops_its_own_message_before_reading_it(
+    rclpy_node, monkeypatch
+):
+    """
+    A synchronizer hears its own publications at the control rate; reading them in full
+    before discarding them is what kept Giskard from keeping up with its clients.
+    """
+    synchronizer = WorldSynchronizer(node=rclpy_node, _world=create_dummy_world())
+
+    def no_reading_allowed(*args, **kwargs):
+        raise AssertionError("an own message was read in full")
+
+    monkeypatch.setattr(
+        world_synchronizer.WorldEntityWithIDKwargsTracker,
+        "from_world",
+        no_reading_allowed,
+    )
+    own_message = std_msgs.msg.String(
+        data=json.dumps({MessageField.META_DATA.value: to_json(synchronizer.meta_data)})
+    )
+    synchronizer.subscription_callback(own_message)
     synchronizer.close()
 
 
