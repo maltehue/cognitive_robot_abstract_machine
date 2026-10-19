@@ -625,6 +625,9 @@ class Reading:
     began, or ``None`` if it counts none.
     """
 
+    receiver_noise: Optional[float] = None
+    """Observation-specific receiver uncertainty in grains, overriding sensor noise."""
+
 
 @dataclass(frozen=True)
 class SensorKnowledge:
@@ -681,6 +684,9 @@ class SensorKnowledge:
     Relative standard deviation of the grains the camera counts crossing over a pour,
     or ``None`` if it counts none.
     """
+
+    conditions_receiver: bool = False
+    """Whether receiver observations also condition uncertain accumulated flow state."""
 
     def to_json(self) -> Dict[str, Any]:
         return dict(self.__dict__)
@@ -1126,6 +1132,12 @@ class HypothesisFilter:
     The grains bound for elsewhere at each kept time.
     """
 
+    _receiver_variance: numpy.ndarray = field(init=False)
+    """Unresolved received-flow variance within each parameter particle, in squared grains."""
+
+    _receiver_variances: List[numpy.ndarray] = field(init=False, default_factory=list)
+    """Received-flow variances at the retained state timestamps."""
+
     _last_tilt: Optional[float] = field(init=False, default=None)
     """
     The tilt of the previous reading.
@@ -1255,6 +1267,7 @@ class HypothesisFilter:
             received = 0.0
         self.committed = numpy.full(count, received)
         self.spilled = numpy.zeros(count)
+        self._receiver_variance = numpy.zeros(count)
         self.log_weights = numpy.full(count, -math.log(count))
         self.flowing = numpy.zeros(count, dtype=bool)
         self._last_tilt = reading.tilt
@@ -1272,11 +1285,13 @@ class HypothesisFilter:
         self._sources.append(self.source.copy())
         self._committed.append(self.committed.copy())
         self._spilled.append(self.spilled.copy())
+        self._receiver_variances.append(self._receiver_variance.copy())
         while self._times and self._times[0] < at - HISTORY:
             self._times.pop(0)
             self._sources.pop(0)
             self._committed.pop(0)
             self._spilled.pop(0)
+            self._receiver_variances.pop(0)
 
     def _state_at(self, states: List[numpy.ndarray], at: float) -> numpy.ndarray:
         """
@@ -1319,15 +1334,29 @@ class HypothesisFilter:
             source = source - flow
             drained = drained + flow
         noise = self.settings.rate_noise * self.inflation
-        factor = numpy.exp(self.random.normal(-(noise**2) / 2, noise, len(source)))
-        flowing = self.random.random(len(source)) >= self.settings.stall_probability
-        outflow = drained * factor * flowing
-        if self.hypothesis is Hypothesis.CATCH_ALL:
-            outflow = outflow + numpy.abs(
-                self.random.normal(
-                    0, self.settings.catch_all_leak * math.sqrt(interval), len(source)
-                )
+        variance = numpy.zeros_like(drained)
+        if self.sensors.conditions_receiver:
+            flowing_share = 1.0 - self.settings.stall_probability
+            outflow = drained * flowing_share
+            variance = drained**2 * (
+                flowing_share * math.exp(noise**2) - flowing_share**2
             )
+            if self.hypothesis is Hypothesis.CATCH_ALL:
+                leak_variance = self.settings.catch_all_leak**2 * interval
+                outflow = outflow + math.sqrt(leak_variance * 2 / math.pi)
+                variance = variance + leak_variance * (1 - 2 / math.pi)
+        else:
+            factor = numpy.exp(self.random.normal(-(noise**2) / 2, noise, len(source)))
+            flowing = self.random.random(len(source)) >= self.settings.stall_probability
+            outflow = drained * factor * flowing
+            if self.hypothesis is Hypothesis.CATCH_ALL:
+                outflow = outflow + numpy.abs(
+                    self.random.normal(
+                        0,
+                        self.settings.catch_all_leak * math.sqrt(interval),
+                        len(source),
+                    )
+                )
         outflow = numpy.minimum(self.source, outflow)
         inside = (
             numpy.ones_like(outflow)
@@ -1341,6 +1370,7 @@ class HypothesisFilter:
         self._last_interval = interval
         self.source = self.source - outflow
         self.committed = self.committed + outflow * inside
+        self._receiver_variance = self._receiver_variance + variance * inside**2
         self.spilled = self.spilled + outflow * (1 - inside)
         self._last_tilt = reading.tilt
         self._last_head = head
@@ -1449,12 +1479,15 @@ class HypothesisFilter:
         """
         floor, inflation = self.settings.reading_floor, self.inflation
         result = numpy.zeros(len(self.source))
-        if (
-            reading.receiver_grains is not None
-            and self.sensors.receiver_noise is not None
-        ):
+        receiver_noise = self._receiver_noise(reading)
+        if reading.receiver_grains is not None and receiver_noise is not None:
             receiver = self.receiver_reading_at(reading.time)
-            spread = inflation * math.hypot(self.sensors.receiver_noise, floor)
+            spread = inflation * math.hypot(receiver_noise, floor)
+            if self.sensors.conditions_receiver:
+                variance = self._state_at(
+                    self._receiver_variances, self._receiver_time(reading.time)
+                )
+                spread = numpy.sqrt(spread**2 + variance)
             result = result + _log_normal(reading.receiver_grains, receiver, spread)
         if reading.source_grains is not None and self.sensors.source_noise is not None:
             source = self._state_at(
@@ -1474,9 +1507,9 @@ class HypothesisFilter:
                 self.sensors.crossing_noise, self.settings.crossing_floor
             )
             result = result + _log_normal(reading.crossing_distance, predicted, spread)
-        return result + self._stream_log_likelihoods(reading)
+        return result + self.stream_log_likelihoods(reading)
 
-    def _stream_log_likelihoods(self, reading: Reading) -> numpy.ndarray:
+    def stream_log_likelihoods(self, reading: Reading) -> numpy.ndarray:
         """
         :param reading: The reading just taken.
         :return: The log likelihood under each particle of whether the camera saw a
@@ -1487,6 +1520,16 @@ class HypothesisFilter:
         dropout = self.sensors.stream_dropout
         if reading.stream_seen is not None and dropout is not None:
             some_grain = 1.0 - numpy.exp(-self._last_rate * self._last_interval)
+            if self.sensors.conditions_receiver:
+                flowing_share = 1.0 - self.settings.stall_probability
+                some_grain = flowing_share * (
+                    1.0
+                    - numpy.exp(
+                        -self._last_rate
+                        * self._last_interval
+                        / max(flowing_share, numpy.finfo(float).tiny)
+                    )
+                )
             seen = (
                 STREAM_FALSE_SIGHTING
                 + (1.0 - STREAM_FALSE_SIGHTING) * (1.0 - dropout) * some_grain
@@ -1516,10 +1559,59 @@ class HypothesisFilter:
         joint = self.log_weights + likelihoods
         evidence = float(logsumexp(joint))
         self.log_weights = joint - evidence
+        if self.sensors.conditions_receiver:
+            self.condition_receiver(reading)
         weights = numpy.exp(self.log_weights)
         if 1.0 / numpy.sum(weights**2) < RESAMPLING_SHARE * len(weights):
             self._resample(weights)
         return evidence
+
+    def _receiver_noise(self, reading: Reading) -> Optional[float]:
+        """Resolve receiver uncertainty from the observation or fixed sensor setting."""
+        return (
+            self.sensors.receiver_noise
+            if reading.receiver_noise is None
+            else reading.receiver_noise
+        )
+
+    def _receiver_time(self, at: float) -> float:
+        """Return the state time observed by the delayed receiver sensor."""
+        return (
+            at
+            - self.sensors.receiver_delay
+            - (0.0 if self.sensors.counts_falling_grains else self.sensors.fall_time)
+        )
+
+    def condition_receiver(self, reading: Reading) -> None:
+        """Condition uncertain received flow while conserving each particle's material."""
+        noise = self._receiver_noise(reading)
+        if reading.receiver_grains is None or noise is None:
+            return
+        at = self._receiver_time(reading.time)
+        variance = self._state_at(self._receiver_variances, at)
+        noise_variance = self.inflation**2 * (noise**2 + self.settings.reading_floor**2)
+        gain = variance / numpy.maximum(
+            variance + noise_variance, numpy.finfo(float).tiny
+        )
+        correction = gain * (
+            reading.receiver_grains - self.receiver_reading_at(reading.time)
+        )
+        first = max(0, int(numpy.searchsorted(self._times, at, side="right")) - 1)
+        least_received = numpy.minimum.reduce(self._committed[first:])
+        least_remaining = numpy.minimum.reduce(self._sources[first:])
+        correction = numpy.clip(correction, -least_received, least_remaining)
+        self.committed = self.committed + correction
+        self.source = self.source - correction
+        reduction = gain * variance
+        self._receiver_variance = numpy.maximum(
+            0.0, self._receiver_variance - reduction
+        )
+        for index in range(first, len(self._times)):
+            self._committed[index] = self._committed[index] + correction
+            self._sources[index] = self._sources[index] - correction
+            self._receiver_variances[index] = numpy.maximum(
+                0.0, self._receiver_variances[index] - reduction
+            )
 
     def _resample(self, weights: numpy.ndarray) -> None:
         """
@@ -1537,13 +1629,18 @@ class HypothesisFilter:
         )
         self.parameters = self.parameters[chosen]
         self.source = self.source[chosen]
+        self._loaded = self._loaded[chosen]
         self.committed = self.committed[chosen]
         self.spilled = self.spilled[chosen]
+        self._receiver_variance = self._receiver_variance[chosen]
         self.flowing = self.flowing[chosen]
         self._last_head = self._last_head[chosen]
         self._sources = [states[chosen] for states in self._sources]
         self._committed = [states[chosen] for states in self._committed]
         self._spilled = [states[chosen] for states in self._spilled]
+        self._receiver_variances = [
+            states[chosen] for states in self._receiver_variances
+        ]
         self.log_weights = numpy.full(count, -math.log(count))
         bandwidth = math.sqrt(1 - KERNEL_SHRINKAGE**2)
         for parameter in self.free:
@@ -1702,7 +1799,11 @@ class HypothesisFilter:
         )
         mean = numpy.average(final, weights=self.weights)
         return float(
-            math.sqrt(numpy.average((final - mean) ** 2, weights=self.weights))
+            math.sqrt(
+                numpy.average(
+                    (final - mean) ** 2 + self._receiver_variance, weights=self.weights
+                )
+            )
         )
 
 

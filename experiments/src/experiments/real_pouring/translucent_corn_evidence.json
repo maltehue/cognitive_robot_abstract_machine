@@ -1,0 +1,7 @@
+{
+  "__json_type__": "experiments.real_pouring.receiver_evidence.ReceiverEvidence",
+  "calibrated_noise": 0.0200507734363269,
+  "geometric_noise": 0.07216272714373828,
+  "delay": 0.33,
+  "interval": 0.33
+}

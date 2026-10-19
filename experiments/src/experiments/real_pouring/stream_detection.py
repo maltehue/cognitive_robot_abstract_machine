@@ -14,12 +14,18 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing_extensions import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy
 
 from experiments.real_pouring.receiver_heap import HeapGauge
+from experiments.real_pouring.wall_fill import (
+    InvalidWallCalibrationError,
+    WallFillCalibration,
+    WallFillEstimator,
+)
 from krrood.adapters.json_serializer import SubclassJSONSerializer
 
 if TYPE_CHECKING:
@@ -390,13 +396,20 @@ class Yellowing:
         :param background: What the same view showed before the pour, BGR.
         :return: Which pixels turned yellow enough to show corn.
         """
+        return self.difference(image, background) >= self.minimum
+
+    def difference(
+        self, image: numpy.ndarray, background: numpy.ndarray
+    ) -> numpy.ndarray:
+        """
+        Return signed yellowing relative to the empty view, in OpenCV Lab units.
+        """
         channel = LAB_BLUE_YELLOW_CHANNEL
-        yellowing = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[..., channel].astype(
+        return cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[..., channel].astype(
             numpy.int16
         ) - cv2.cvtColor(background, cv2.COLOR_BGR2LAB)[..., channel].astype(
             numpy.int16
         )
-        return yellowing >= self.minimum
 
 
 MINIMUM_YELLOW_MOVEMENT = 45
@@ -599,6 +612,13 @@ The blue Jeroen cups' outline: the hue band the receiving cup shows in the pole 
 # %% what the camera reports
 
 
+class StreamReadingField(StrEnum):
+    """Additional quality metadata in stream-reading messages."""
+
+    WALL_CALIBRATED = "wall_calibrated"
+    """Whether the fill came from the calibrated wall model."""
+
+
 @dataclass(frozen=True)
 class StreamReading(SubclassJSONSerializer):
     """
@@ -633,6 +653,9 @@ class StreamReading(SubclassJSONSerializer):
     too little of it shows to tell.
     """
 
+    wall_calibrated: bool = False
+    """Whether the reported fill is supported by the calibrated wall model."""
+
     def to_json(self) -> Dict[str, Any]:
         return {
             **super().to_json(),
@@ -641,6 +664,7 @@ class StreamReading(SubclassJSONSerializer):
             "counted_grains": self.counted_grains,
             "crossing": None if self.crossing is None else self.crossing.to_json(),
             "heap_fill": self.heap_fill,
+            StreamReadingField.WALL_CALIBRATED: self.wall_calibrated,
         }
 
     @classmethod
@@ -652,6 +676,7 @@ class StreamReading(SubclassJSONSerializer):
             counted_grains=data["counted_grains"],
             crossing=None if crossing is None else PlanePoint._from_json(crossing),
             heap_fill=data.get("heap_fill"),
+            wall_calibrated=data.get(StreamReadingField.WALL_CALIBRATED, False),
         )
 
 
@@ -769,6 +794,18 @@ class StreamDetector:
     not to read them.
     """
 
+    wall_calibration: Optional[WallFillCalibration] = None
+    """
+    Optional cup-specific colour calibration replacing the geometric wall-area reading.
+    """
+
+    _wall_estimator: Optional[WallFillEstimator] = field(
+        init=False, default=None, repr=False
+    )
+    """
+    Causal calibrated wall reader, reset whenever a new empty view is learned.
+    """
+
     _background: Optional[numpy.ndarray] = field(init=False, default=None, repr=False)
     """
     What the camera showed before the pour.
@@ -843,7 +880,12 @@ class StreamDetector:
     contents.
     """
 
+    _wall_calibrated: bool = field(init=False, default=False)
+    """Whether the most recent wall measurement used the calibrated model."""
+
     def __post_init__(self) -> None:
+        if self.wall_calibration is not None and self.wall_gauge is None:
+            raise InvalidWallCalibrationError()
         if self.heap_gauge is not None and self.wall_gauge is not None:
             raise TwoReceiverGaugesError()
         if self.cup_on_mat is not None and self.wall_gauge is None:
@@ -915,6 +957,12 @@ class StreamDetector:
         self._wall_region = region[self._wall_window]
         self._wall_background = empty_view[self._wall_window]
         self._wall_still_frames = numpy.zeros(self._wall_region.shape, dtype=int)
+        if self.wall_calibration is not None:
+            self._wall_estimator = WallFillEstimator(
+                calibration=self.wall_calibration,
+                region=self._wall_region,
+                window_frames=max(1, round(WALL_STILL_SECONDS / self.frame_period)),
+            )
 
     def wall_mask(self, image_size: Tuple[int, int]) -> numpy.ndarray:
         """
@@ -944,6 +992,7 @@ class StreamDetector:
         :return: The fill the contents lying still show, or ``None`` without a wall
             gauge or with too few of them to tell.
         """
+        self._wall_calibrated = False
         if self.wall_gauge is None:
             return None
         contents = (
@@ -953,6 +1002,15 @@ class StreamDetector:
             & self._wall_region
         )
         self._wall_still_frames = numpy.where(contents, self._wall_still_frames + 1, 0)
+        if self._wall_estimator is not None:
+            calibrated = self._wall_estimator.observe(
+                self.wall_gauge.yellowing.difference(
+                    image[self._wall_window], self._wall_background
+                )
+            )
+            if calibrated is not None:
+                self._wall_calibrated = True
+                return calibrated
         return self.wall_gauge.fill_for(self.wall_pixels)
 
     @property
@@ -1042,6 +1100,7 @@ class StreamDetector:
                 counted_grains=self._counted,
                 crossing=None,
                 heap_fill=heap_fill,
+                wall_calibrated=self._wall_calibrated,
             )
         rows, columns = numpy.nonzero(grains)
         crossing = self.view.on_plane(
@@ -1061,4 +1120,5 @@ class StreamDetector:
             counted_grains=self._counted,
             crossing=crossing,
             heap_fill=heap_fill,
+            wall_calibrated=self._wall_calibrated,
         )

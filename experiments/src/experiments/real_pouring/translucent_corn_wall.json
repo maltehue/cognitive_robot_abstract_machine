@@ -1,0 +1,12 @@
+{
+  "__json_type__": "experiments.real_pouring.wall_fill.WallFillCalibration",
+  "measurement": {
+    "__json_type__": "experiments.real_pouring.wall_fill.WallColourMeasurement",
+    "noise_floor": 2.0,
+    "yellowing_span": 32.0,
+    "height_power": 2.0
+  },
+  "scale": 15.309292169196675,
+  "minimum_signal": 0.007940178974067994,
+  "maximum_signal": 0.035201864629384017
+}

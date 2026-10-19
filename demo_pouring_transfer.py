@@ -44,6 +44,7 @@ from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank
 from experiments.real_pouring.live_bank_listener import LiveBankListener
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.pour_perception import PourPerception
 from experiments.real_pouring.receiving_cup import (
     RECEIVING_CUP_FILE_NAME,
     ReceivingCup,
@@ -205,14 +206,17 @@ Every hypothesis also estimates the trickle of single grains below the onset, so
 trickle neither moves the onset nor counts as the contents flowing.
 """
 
-RECEIVER_FILL_REPORT = RECEIVING_CUP.fill_report
+POUR_PERCEPTION = PourPerception.for_cup(RECEIVING_CUP, MATERIAL)
 """
-What the controller is told the receiver holds, as the cup poured into calls for: what
-the camera sees through the translucent cup's wall, what it counted crossing the opaque
-cup's rim; the grains still in flight are added to either.
+Matching camera model, receiver evidence and requested stopping tolerance.
+"""
 
-The count alone overstated the crossings 2.2 times on 2026-10-16 (its area per grain was
-calibrated on a far denser stream), while the wall read the fill within 0.03.
+RECEIVER_FILL_REPORT = POUR_PERCEPTION.fill_report
+"""
+The calibrated wall measurement determines received corn in the translucent cup.
+
+Other cup and material combinations retain their existing reporting policy. Predicted
+late arrivals are added separately.
 """
 
 STOP_LEAD_TIME = 1.0
@@ -543,7 +547,7 @@ move_left_tool_to(giskard, upright_carry_pose(giskard, tilt=TRANSFER_START_TILT)
 
 # ----- Transfer -----
 goal_fill = GOAL_FILL_CONST
-tolerance = 0.05
+tolerance = POUR_PERCEPTION.fill_tolerance
 # input("Press Enter to continue...")
 transfer_task = FillByTransferTask(
     receiver=receiving_cup,
@@ -631,6 +635,7 @@ if USE_LIVE_BANK:
             opening_radius=receiving_cup.opening_radius,
             prediction_window=transfer_task.prediction_duration,
             fill_report=RECEIVER_FILL_REPORT,
+            receiver_evidence=POUR_PERCEPTION.receiver_evidence,
             stop_lead_time=STOP_LEAD_TIME,
             in_flight_limit=tolerance
             * GRAINS_PER_FILL

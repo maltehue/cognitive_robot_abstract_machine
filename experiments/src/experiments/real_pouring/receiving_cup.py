@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import numpy
+from typing_extensions import TYPE_CHECKING
 
 from experiments.real_pouring.poured_material import (
     MaterialNotSeenThroughWallError,
@@ -16,6 +17,7 @@ from experiments.real_pouring.poured_material import (
 )
 from experiments.real_pouring.receiver_heap import HeapGauge
 from experiments.real_pouring.receiver_wall import BLUE_MAT, WallGauge
+from experiments.real_pouring.wall_fill import InvalidWallCalibrationError
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
@@ -24,6 +26,9 @@ from experiments.real_pouring.stream_detection import (
     MovingYellowSegmentation,
     StreamDetector,
 )
+
+if TYPE_CHECKING:
+    from experiments.real_pouring.wall_fill import WallFillCalibration
 
 JEROEN_CUP_HEIGHT = 0.16
 """
@@ -138,6 +143,12 @@ How far, relatively, two capacities may differ and still be the same cup's.
 class ReceiverFillReport(StrEnum):
     """
     What the controller is told the receiver holds.
+    """
+
+    MEASURED = "measured"
+    """
+    Measured receiver contents plus late arrivals; missing measurements continue from
+    the last measurement using subsequent count increments.
     """
 
     ESTIMATED = "estimated"
@@ -309,17 +320,21 @@ class ReceivingCup(StrEnum):
         view: CameraView,
         opening_centre: numpy.ndarray,
         frame_period: float,
+        wall_calibration: WallFillCalibration | None = None,
     ) -> StreamDetector:
         """
         :param material: What is poured.
         :param view: The camera's calibration.
         :param opening_centre: The centre of the cup's opening, in the world.
         :param frame_period: How long apart the camera takes its images, in seconds.
+        :param wall_calibration: Optional calibration for this cup, material and view.
         :return: A detector watching this cup's opening for the material, reading the
             cup's fill the way the cup lets the camera see it.
         :raises MaterialNotSeenThroughWallError: For a translucent cup and a material
             its wall hides.
         """
+        if wall_calibration is not None and self is not ReceivingCup.TRANSLUCENT_CUP:
+            raise InvalidWallCalibrationError()
         opening = OpeningRegion(centre=opening_centre, radius=self.inner_radius)
         common = dict(
             view=view,
@@ -344,6 +359,7 @@ class ReceivingCup(StrEnum):
             case ReceivingCup.TRANSLUCENT_CUP:
                 return StreamDetector(
                     **common,
+                    wall_calibration=wall_calibration,
                     cup_on_mat=BLUE_MAT,
                     wall_gauge=WallGauge.for_receiver(
                         view=view,

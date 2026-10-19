@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import numpy
 from typing_extensions import Any, Dict, List, Optional
@@ -35,6 +36,11 @@ from experiments.pouring_model_verification.scene import SourceCup
 from experiments.pouring_model_verification.sensor import CameraModel
 from experiments.pouring_model_verification.transfer_trial import ModelBlend
 from experiments.real_pouring.receiving_cup import ReceiverFillReport
+from experiments.real_pouring.receiver_evidence import (
+    ReceiverEvidence,
+    ReceiverObservation,
+    InvalidReceiverEvidenceError,
+)
 from experiments.real_pouring.stream_detection import StreamReading
 from krrood.adapters.json_serializer import SubclassJSONSerializer
 from semantic_digital_twin.datastructures.joint_state import JointState
@@ -42,6 +48,17 @@ from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.world import World
 
 # %% one step of the bank
+
+
+class BankTraceField(StrEnum):
+    """Receiver evidence and source state recorded with each bank update."""
+
+    RECEIVER_OBSERVATION = "receiver_observation"
+    """Receiver observation admitted to the likelihood, in grains."""
+    RECEIVER_NOISE = "receiver_noise"
+    """Error scale of the admitted receiver observation, in grains."""
+    SOURCE_GRAINS = "source_grains"
+    """Posterior estimate of remaining source contents, in grains."""
 
 
 @dataclass(frozen=True)
@@ -102,6 +119,15 @@ class LiveBankStep(SubclassJSONSerializer):
     included.
     """
 
+    receiver_observation: Optional[float] = None
+    """Measured contents admitted to the likelihood, or no observation this step."""
+
+    receiver_noise: Optional[float] = None
+    """Uncertainty of the admitted receiver observation, in grains."""
+
+    source_grains: Optional[float] = None
+    """Posterior source contents, or unavailable in older traces."""
+
     def to_json(self) -> Dict[str, Any]:
         return {
             **super().to_json(),
@@ -115,6 +141,9 @@ class LiveBankStep(SubclassJSONSerializer):
             "received_grains": self.received_grains,
             "in_flight_grains": self.in_flight_grains,
             "told_grains": self.told_grains,
+            BankTraceField.RECEIVER_OBSERVATION: self.receiver_observation,
+            BankTraceField.RECEIVER_NOISE: self.receiver_noise,
+            BankTraceField.SOURCE_GRAINS: self.source_grains,
         }
 
     @classmethod
@@ -130,6 +159,9 @@ class LiveBankStep(SubclassJSONSerializer):
             received_grains=data["received_grains"],
             in_flight_grains=data.get("in_flight_grains", 0.0),
             told_grains=data.get("told_grains", data["received_grains"]),
+            receiver_observation=data.get(BankTraceField.RECEIVER_OBSERVATION),
+            receiver_noise=data.get(BankTraceField.RECEIVER_NOISE),
+            source_grains=data.get(BankTraceField.SOURCE_GRAINS),
         )
 
 
@@ -216,6 +248,12 @@ class LiveBank:
     counted crossing, or what it sees through the receiver's wall.
     """
 
+    receiver_evidence: Optional[ReceiverEvidence] = field(default=None, kw_only=True)
+    """Receiver likelihood settings; absent when the bank learns from the count."""
+
+    _last_receiver_stamp: Optional[float] = field(init=False, default=None)
+    """Timestamp of the most recent receiver likelihood update."""
+
     stop_lead_time: float = field(default=0.0, kw_only=True)
     """
     How long grains keep arriving once the controller stops, in seconds: the rate the
@@ -247,6 +285,16 @@ class LiveBank:
     How fast the grains arrive by the camera's count, smoothed, in grains per second.
     """
 
+    _measured_grains: Optional[float] = field(init=False, default=None)
+    """
+    Most recent measured receiver contents, excluding late arrivals.
+    """
+
+    _count_at_measurement: float = field(init=False, default=0.0)
+    """
+    Cumulative crossing count at the most recent contents measurement.
+    """
+
     @classmethod
     def for_cups(
         cls,
@@ -265,6 +313,7 @@ class LiveBank:
         fill_report: ReceiverFillReport = ReceiverFillReport.ESTIMATED,
         stop_lead_time: float = 0.0,
         in_flight_limit: float = math.inf,
+        receiver_evidence: Optional[ReceiverEvidence] = None,
     ) -> LiveBank:
         """
         :return: A bank over the hypotheses a plain cup is weighed against, reading only
@@ -286,14 +335,17 @@ class LiveBank:
             base=built,
             sensors=SensorKnowledge(
                 receiver_noise=None,
-                receiver_delay=0.0,
+                receiver_delay=(
+                    0.0 if receiver_evidence is None else receiver_evidence.delay
+                ),
                 counts_falling_grains=False,
                 fall_time=0.0,
                 source_noise=None,
                 source_delay=0.0,
                 crossing_noise=camera.noise,
                 stream_dropout=camera.dropout,
-                count_noise=camera.count_noise,
+                count_noise=camera.count_noise if receiver_evidence is None else None,
+                conditions_receiver=receiver_evidence is not None,
             ),
             settings=settings,
             seed=seed,
@@ -313,6 +365,7 @@ class LiveBank:
             fill_report=fill_report,
             stop_lead_time=stop_lead_time,
             in_flight_limit=in_flight_limit,
+            receiver_evidence=receiver_evidence,
         )
 
     @property
@@ -334,10 +387,12 @@ class LiveBank:
         """
         stream = self.stream
         tilt = float(self.source.fill_connection.tilt_expression.evaluate()[0])
+        observation = self._receiver_observation(seen)
         reading = Reading(
             time=seen.stamp,
             tilt=tilt,
-            receiver_grains=None,
+            receiver_grains=None if observation is None else observation.grains,
+            receiver_noise=None if observation is None else observation.noise,
             source_grains=self.loaded_grains if not self.trace else None,
             crossing_distance=(
                 None
@@ -348,7 +403,9 @@ class LiveBank:
             ),
             stream=stream.geometry(self.opening_radius),
             stream_seen=seen.stream_seen,
-            counted_grains=seen.counted_grains,
+            counted_grains=(
+                seen.counted_grains if self.receiver_evidence is None else None
+            ),
         )
         received = self.coupling.received_grains if self.trace else 0.0
         self.coupling.observe(
@@ -380,9 +437,37 @@ class LiveBank:
             received_grains=self.coupling.received_grains,
             in_flight_grains=in_flight,
             told_grains=told,
+            receiver_observation=reading.receiver_grains,
+            receiver_noise=reading.receiver_noise,
+            source_grains=self.coupling.source_grains,
         )
         self.trace.append(step)
         return step
+
+    def _receiver_observation(
+        self, seen: StreamReading
+    ) -> Optional[ReceiverObservation]:
+        """Admit a finite receiver measurement after the preceding window has elapsed."""
+        evidence = self.receiver_evidence
+        if evidence is None or seen.heap_fill is None:
+            return None
+        if not math.isfinite(seen.heap_fill) or not 0 <= seen.heap_fill <= 1:
+            raise InvalidReceiverEvidenceError()
+        if (
+            self._last_receiver_stamp is not None
+            and seen.stamp - self._last_receiver_stamp < evidence.interval
+        ):
+            return None
+        self._last_receiver_stamp = seen.stamp
+        conversion = (
+            self.grains_per_fill * self.receiver.capacity / self.source.capacity
+        )
+        noise = (
+            evidence.calibrated_noise
+            if seen.wall_calibrated
+            else evidence.geometric_noise
+        )
+        return ReceiverObservation(seen.heap_fill * conversion, noise * conversion)
 
     def count_calibration_factor(self, weighed_grains: float) -> float:
         """
@@ -440,9 +525,8 @@ class LiveBank:
         self, counted_grains: float, in_flight: float, heap_fill: Optional[float]
     ) -> float:
         """
-        Tell the controller what both cups hold: the source what was loaded less what
-        the camera counted leaving; the receiver what :attr:`fill_report` says, and the
-        rate the camera sees the grains arrive at where the receiver is read from it.
+        Report source contents from the receiver-conditioned bank or crossing count,
+        receiver contents according to :attr:`fill_report`, and observed arrival rate.
 
         :param counted_grains: How many grains the camera has counted crossing.
         :param in_flight: How many grains are still to arrive after a stop now.
@@ -451,7 +535,11 @@ class LiveBank:
         :return: How many grains the receiver was told to hold.
         """
         crossed = self.camera.grains_crossed(counted_grains)
-        source_grains = self.loaded_grains - crossed
+        source_grains = (
+            self.loaded_grains - crossed
+            if self.receiver_evidence is None
+            else min(self.loaded_grains, self.coupling.source_grains)
+        )
         capacity_ratio = self.source.capacity / self.receiver.capacity
         receiver_grains = self._receiver_grains(
             crossed=crossed,
@@ -493,6 +581,18 @@ class LiveBank:
         """
         counted = crossed * self.coupling.inside_share
         match self.fill_report:
+            case ReceiverFillReport.MEASURED:
+                if lying is not None:
+                    self._measured_grains = lying
+                    self._count_at_measurement = crossed
+                if self._measured_grains is None:
+                    return counted + in_flight
+                return (
+                    self._measured_grains
+                    + max(0.0, crossed - self._count_at_measurement)
+                    * self.coupling.inside_share
+                    + in_flight
+                )
             case ReceiverFillReport.ESTIMATED:
                 reported = self.coupling.received_grains + self.coupling.margin
             case ReceiverFillReport.COUNTED:

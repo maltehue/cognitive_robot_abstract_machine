@@ -32,6 +32,7 @@ from experiments.pouring_model_verification.hypothesis_bank import (
 from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank, LiveBankStep
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.pour_perception import PourPerception
 from experiments.real_pouring.receiving_cup import (
     ReceiverFillReport,
     RECEIVING_CUP_FILE_NAME,
@@ -476,6 +477,7 @@ class PourReplay:
         outline: Optional[ReceiverOutline] = RECEIVER_OUTLINE,
         receiver: Optional[ReceivingCup] = None,
         goal_fill: Optional[float] = None,
+        use_receiver_measurements: bool = True,
     ) -> PourReplay:
         """
         :param recording: The pour to replay.
@@ -492,14 +494,17 @@ class PourReplay:
             names.
         :param goal_fill: The fill the receiver was poured to, or ``None`` for the
             demo's goal for that cup.
+        :param use_receiver_measurements: Whether measured reporting also supplies
+            receiver evidence to the internal bank; disable for count-model comparisons.
         :return: The replay, every reading weighed.
         """
         if receiver is None:
             receiver = recording.receiver
         if goal_fill is None:
             goal_fill = receiver.goal_fill
+        perception = PourPerception.for_cup(receiver, material)
         if fill_report is None:
-            fill_report = receiver.fill_report
+            fill_report = perception.fill_report
         goal_grains = goal_fill * GRAINS_PER_FILL * receiver.source_cups_held(material)
         world, source, source_joint = _replay_world(
             recording, drain, receiver, material
@@ -513,6 +518,11 @@ class PourReplay:
             opening_centre=recording.receiver_position
             + numpy.array([0.0, 0.0, receiver.height]),
             frame_period=FRAME_PERIOD,
+            wall_calibration=(
+                perception.wall_calibration
+                if fill_report is ReceiverFillReport.MEASURED
+                else None
+            ),
         )
         if receiver is ReceivingCup.JEROEN_CUP:
             detector = replace(detector, outline=outline)
@@ -538,6 +548,12 @@ class PourReplay:
             fill_report=fill_report,
             stop_lead_time=stop_lead_time,
             in_flight_limit=in_flight_limit,
+            receiver_evidence=(
+                perception.receiver_evidence
+                if use_receiver_measurements
+                and fill_report is ReceiverFillReport.MEASURED
+                else None
+            ),
         )
         replay = cls(
             recording=recording,

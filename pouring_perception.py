@@ -30,6 +30,7 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.pour_perception import PourPerception
 from experiments.real_pouring.receiving_cup import ReceivingCup
 from experiments.real_pouring.stream_detection import CameraView
 from krrood.adapters.json_serializer import to_json
@@ -195,6 +196,9 @@ class StreamDetectorNode(Node):
             ),
             opening_centre=opening_centre,
             frame_period=self._value(Parameter.FRAME_PERIOD),
+            wall_calibration=PourPerception.for_cup(
+                receiver, material
+            ).wall_calibration,
         )
         detector.learn_background(self.background)
         self.detector = detector
