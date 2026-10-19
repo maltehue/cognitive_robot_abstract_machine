@@ -445,3 +445,12 @@ def test_a_receiver_reported_from_the_bank_gets_no_observed_inflow():
     bank.observe(_no_stream(0.0))
     bank.observe(_stream(0.1, counted=5.0))
     assert bank.receiver.fill_connection.observed_inflow is None
+
+
+def test_a_rate_fallen_to_nothing_is_told_as_exactly_nothing():
+    bank = live_bank_from_count(tilt=1.0)
+    counted = _steady_count(bank, readings=20)
+    for step in range(20, 200):
+        bank.observe(_stream(0.1 * step, counted=counted, seen=False))
+    assert bank.trace[-1].in_flight_grains == 0.0
+    assert bank.receiver.fill_connection.observed_inflow == 0.0

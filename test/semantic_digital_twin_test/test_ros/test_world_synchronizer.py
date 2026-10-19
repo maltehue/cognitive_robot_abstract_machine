@@ -30,6 +30,7 @@ from semantic_digital_twin.adapters.ros.messages import (
     WorldUpdate,
 )
 from semantic_digital_twin.adapters.ros.world_synchronizer import (
+    SYNC_QUEUE_DEPTH,
     ModelReloadSynchronizer,
     Synchronizer,
     WorldSynchronizer,
@@ -228,6 +229,17 @@ def unique_topic(name: str) -> str:
     :param name: Says which scenario the topic belongs to.
     """
     return f"/{name}_{uuid4().hex}"
+
+
+def test_the_synchronizer_queues_a_long_burst_of_updates(rclpy_node):
+    """
+    A process busy finishing a goal must not lose the updates another one sends
+    meanwhile: the queue holds far more than the ten messages the default would.
+    """
+    synchronizer = WorldSynchronizer(node=rclpy_node, _world=create_dummy_world())
+    assert synchronizer.subscriber.qos_profile.depth == SYNC_QUEUE_DEPTH
+    assert synchronizer.publisher.qos_profile.depth == SYNC_QUEUE_DEPTH
+    synchronizer.close()
 
 
 def test_state_synchronization(rclpy_node):

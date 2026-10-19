@@ -84,6 +84,18 @@ class PublicationProgress(ABC):
         raise NotImplementedError
 
 
+SYNC_QUEUE_DEPTH = 1000
+"""
+How many messages the synchronization topic queues on each side, in messages.
+
+Every synchronizer also receives its own publications and discards them only after
+taking them off the queue, so while a process is busy, finishing a goal for instance,
+its own state updates fill the queue at the control rate and whatever another process
+sent meanwhile is overwritten and lost for good once the queue is full. A thousand
+messages cover seconds of such a stall; they are small strings.
+"""
+
+
 @dataclass
 class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
     """
@@ -165,10 +177,10 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
             std_msgs.msg.String,
             topic=self.topic_name,
             callback=self.subscription_callback,
-            qos_profile=10,
+            qos_profile=SYNC_QUEUE_DEPTH,
         )
         self.publisher = self.node.create_publisher(
-            std_msgs.msg.String, topic=self.topic_name, qos_profile=10
+            std_msgs.msg.String, topic=self.topic_name, qos_profile=SYNC_QUEUE_DEPTH
         )
         self.wait_until_connected()
 

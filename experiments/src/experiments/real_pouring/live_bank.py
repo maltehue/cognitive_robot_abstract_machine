@@ -136,6 +136,16 @@ class LiveBankStep(SubclassJSONSerializer):
 # %% the bank on the robot
 
 
+NEGLIGIBLE_ARRIVAL_RATE = 0.1
+"""
+The arrival rate below which the grains are taken to have stopped, in grains per second:
+a grain every ten seconds, well under a stray kernel a second.
+
+Below it the smoothed rate is set to zero rather than left decaying, so a receiver
+nothing arrives in is told nothing new.
+"""
+
+
 @dataclass
 class LiveBank:
     """
@@ -422,6 +432,8 @@ class LiveBank:
                 else min(1.0, interval / self.stop_lead_time)
             )
             self._arrival_rate += share * (instant - self._arrival_rate)
+            if self._arrival_rate < NEGLIGIBLE_ARRIVAL_RATE:
+                self._arrival_rate = 0.0
         return min(self._arrival_rate * self.stop_lead_time, self.in_flight_limit)
 
     def _write_fill_levels(
