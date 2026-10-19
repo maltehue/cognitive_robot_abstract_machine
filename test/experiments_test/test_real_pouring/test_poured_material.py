@@ -75,5 +75,19 @@ def test_a_drain_poured_with_a_material_takes_on_its_hysteresis(material):
         repose_angle=0.1, discharge_coefficient=0.2, outflow_rate_constant=0.8
     )
     assert material.drain_of(drain) == replace(
-        drain, repose_hysteresis=material.repose_hysteresis
+        drain,
+        repose_hysteresis=material.repose_hysteresis,
+        repose_hysteresis_growth=material.repose_hysteresis_growth,
     )
+
+
+def test_corn_keeps_flowing_further_back_the_emptier_the_cup_gets():
+    assert (
+        PouredMaterial.CORN.repose_hysteresis_growth
+        == poured_material.CORN_REPOSE_HYSTERESIS_GROWTH
+    )
+    assert PouredMaterial.CORN.repose_hysteresis_growth > 0.0
+
+
+def test_styrofoam_keeps_flowing_as_far_back_whatever_is_left():
+    assert PouredMaterial.STYROFOAM.repose_hysteresis_growth == 0.0

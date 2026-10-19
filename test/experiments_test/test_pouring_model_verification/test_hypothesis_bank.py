@@ -833,6 +833,93 @@ def test_without_hysteresis_the_contents_stop_where_they_started():
     assert hypothesis_filter.source_grains == before
 
 
+HYSTERESIS_GROWTH = 0.4
+"""
+How much further below the repose angle the contents of the tests keep flowing per share
+of the cup poured out, in radians: enough for the test's cups to part clearly.
+"""
+
+GROWING_HYSTERESIS = replace(
+    FLOWING_CONTENTS, repose_hysteresis_growth=HYSTERESIS_GROWTH
+)
+
+
+def test_the_hysteresis_grows_with_the_share_poured_out():
+    assert GROWING_HYSTERESIS.hysteresis_at(share_left=1.0) == HYSTERESIS
+    assert GROWING_HYSTERESIS.hysteresis_at(share_left=0.5) == pytest.approx(
+        HYSTERESIS + 0.5 * HYSTERESIS_GROWTH
+    )
+    assert GROWING_HYSTERESIS.while_flowing(
+        share_left=0.5
+    ).repose_angle == pytest.approx(
+        GIVEN.repose_angle - HYSTERESIS - 0.5 * HYSTERESIS_GROWTH
+    )
+
+
+def test_a_point_keeps_its_hysteresis_growth_through_json():
+    assert ModelPoint.from_json(GROWING_HYSTERESIS.to_json()) == GROWING_HYSTERESIS
+
+
+POURING_TILT = 1.2
+"""
+A tilt past the onset of a half-empty cup, in radians, so the cup drains that far.
+"""
+
+POURING_SECONDS = 60.0
+"""
+How long the tests pour at most before giving up on emptying the cup.
+"""
+
+POURING_STEP = 0.02
+"""
+How far apart the readings come while the tests pour, in seconds: fine enough to stop
+near half.
+"""
+
+
+def _half_poured(base: ModelPoint) -> HypothesisFilter:
+    """
+    A filter carried past the onset and held there until about half the cup is out.
+    """
+    hypothesis_filter = _filter_of(base)
+    hypothesis_filter.start(_at_tilt(0.0, 0.5))
+    time = 1.0
+    hypothesis_filter.predict(_at_tilt(time, POURING_TILT))
+    while hypothesis_filter.source_grains > 0.5 * float(hypothesis_filter._loaded[0]):
+        time += POURING_STEP
+        assert time < POURING_SECONDS, "the cup never got half empty"
+        hypothesis_filter.predict(_at_tilt(time, POURING_TILT))
+    return hypothesis_filter
+
+
+def _stop_tilt(hypothesis_filter: HypothesisFilter, base: ModelPoint) -> float:
+    """
+    :return: The highest tilt at which the contents of any particle stop flowing.
+    """
+    return max(
+        GEOMETRY.onset_tilt(grains, base.while_flowing(share_left=grains / loaded))
+        for grains, loaded in zip(hypothesis_filter.source, hypothesis_filter._loaded)
+    )
+
+
+def test_a_growing_hysteresis_keeps_a_half_poured_cup_flowing_further_back():
+    constant = _half_poured(FLOWING_CONTENTS)
+    growing = _half_poured(GROWING_HYSTERESIS)
+    stops_constant = _stop_tilt(constant, FLOWING_CONTENTS)
+    stops_growing = _stop_tilt(growing, GROWING_HYSTERESIS)
+    assert stops_growing < stops_constant
+    between = 0.5 * (stops_constant + stops_growing)
+    before = []
+    for hypothesis_filter in (constant, growing):
+        poured_until = hypothesis_filter._times[-1]
+        hypothesis_filter.predict(_at_tilt(poured_until + 0.1, between))
+        hypothesis_filter.predict(_at_tilt(poured_until + 0.2, between))
+        before.append(hypothesis_filter.source_grains)
+        hypothesis_filter.predict(_at_tilt(poured_until + 0.3, between))
+    assert constant.source_grains == before[0]
+    assert 0.0 < growing.source_grains < before[1]
+
+
 def test_contents_that_never_flowed_wait_for_the_repose_angle():
     hypothesis_filter = _filter_of(FLOWING_CONTENTS)
     full = GEOMETRY.grains_per_fill

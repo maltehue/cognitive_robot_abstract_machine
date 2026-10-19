@@ -68,7 +68,14 @@ class FixedParameter(StrEnum):
 
     REPOSE_HYSTERESIS = "repose_hysteresis"
     """
-    How far below the repose angle contents that flow keep flowing, in radians.
+    How far below the repose angle contents that flow keep flowing with the cup full,
+    in radians.
+    """
+
+    REPOSE_HYSTERESIS_GROWTH = "repose_hysteresis_growth"
+    """
+    How much further below the repose angle they keep flowing per share of the cup
+    poured out, in radians.
     """
 
 
@@ -238,17 +245,36 @@ class ModelPoint:
 
     repose_hysteresis: float = 0.0
     """
-    How far below the repose angle the contents keep flowing once they flow, in
-    radians: the static less the dynamic angle of repose of a granular material, zero
-    for a liquid.
+    How far below the repose angle the contents keep flowing once they flow, with the
+    cup full, in radians: the static less the dynamic angle of repose of a granular
+    material, zero for a liquid.
     """
 
-    def while_flowing(self) -> ModelPoint:
+    repose_hysteresis_growth: float = 0.0
+    """
+    How much further below the repose angle the contents keep flowing per share of
+    the cup poured out, in radians: a fuller cup's flow stops sooner on the way back.
+    """
+
+    def hysteresis_at(self, share_left: float | numpy.ndarray) -> float | numpy.ndarray:
         """
+        :param share_left: The share of the cup still in it, from 0 to 1.
+        :return: How far below the repose angle the contents keep flowing then, in
+            radians.
+        """
+        return self.repose_hysteresis + self.repose_hysteresis_growth * (
+            1.0 - share_left
+        )
+
+    def while_flowing(self, share_left: float = 1.0) -> ModelPoint:
+        """
+        :param share_left: The share of the cup still in it, from 0 to 1.
         :return: This point as it pours while the contents flow: its repose angle lowered
-            by the hysteresis.
+            by the hysteresis at that share.
         """
-        return replace(self, repose_angle=self.repose_angle - self.repose_hysteresis)
+        return replace(
+            self, repose_angle=self.repose_angle - self.hysteresis_at(share_left)
+        )
 
     def value_of(self, parameter: FreeParameter) -> float:
         """
@@ -281,6 +307,7 @@ class ModelPoint:
                 parameter.value: self.value_of(parameter) for parameter in FreeParameter
             },
             FixedParameter.REPOSE_HYSTERESIS.value: self.repose_hysteresis,
+            FixedParameter.REPOSE_HYSTERESIS_GROWTH.value: self.repose_hysteresis_growth,
         }
 
     @classmethod
@@ -297,6 +324,9 @@ class ModelPoint:
             slot_height=None if slot is None or math.isnan(slot) else slot,
             trickle_rate=data.get(FreeParameter.TRICKLE_RATE, 0.0),
             repose_hysteresis=data.get(FixedParameter.REPOSE_HYSTERESIS, 0.0),
+            repose_hysteresis_growth=data.get(
+                FixedParameter.REPOSE_HYSTERESIS_GROWTH, 0.0
+            ),
         )
 
 
@@ -1319,7 +1349,8 @@ class HypothesisFilter:
     def _flowing_head(self, tilt: float, source: numpy.ndarray) -> numpy.ndarray:
         """
         Start the contents of each particle flowing past its onset, and stop them where
-        the tilt falls below the onset lowered by the hysteresis.
+        the tilt falls below the onset lowered by the hysteresis at what is left in
+        the cup.
 
         :param tilt: The cup's tilt, in radians.
         :param source: The grains in the source, per particle.
@@ -1327,7 +1358,9 @@ class HypothesisFilter:
         """
         starting = self.geometry.head(tilt, source, self.parameters)
         continuing = self.geometry.head(
-            tilt, source, self._lowered_by(self.base.repose_hysteresis)
+            tilt,
+            source,
+            self._lowered_by(self.base.hysteresis_at(source / self._loaded)),
         )
         self.flowing = (starting > 0.0) | (self.flowing & (continuing > 0.0))
         return numpy.where(self.flowing, continuing, 0.0)
@@ -1353,9 +1386,11 @@ class HypothesisFilter:
     def _pouring_parameters(self) -> numpy.ndarray:
         """
         :return: The parameters each particle pours with now: the repose angle lowered
-            by the hysteresis where its contents flow.
+            by the hysteresis at what is left where its contents flow.
         """
-        return self._lowered_by(self.base.repose_hysteresis * self.flowing)
+        return self._lowered_by(
+            self.base.hysteresis_at(self.source / self._loaded) * self.flowing
+        )
 
     def _walk(self) -> None:
         """

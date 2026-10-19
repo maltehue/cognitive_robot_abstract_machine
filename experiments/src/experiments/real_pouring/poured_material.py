@@ -73,13 +73,27 @@ model's lip geometry puts 67, 59 and 53 degrees below the starting angle
 (experiments/results/real_pouring/analysis_2026-10-15/stop_angles.py).
 """
 
-CORN_REPOSE_HYSTERESIS = math.radians(45.0)
+STYROFOAM_REPOSE_HYSTERESIS_GROWTH = 0.0
 """
-How far below the repose angle the corn keeps flowing once it flows: the bulk starts at
-about 66 degrees with the cup full and stops on the way back at 92 degrees with 20 % left
-(2026-10-14 17:50), 45 degrees below the starting angle in the model's lip geometry; with
-85 % left (17:14) only 27 below, but a pour to the goal ends near a fifth left
+How much further the styrofoam balls keep flowing per share poured out: nothing, since
+the three recorded stops lie closer to the starting angle the emptier the cup, the
+opposite of corn, and no pour has been held part way to tell more.
+"""
+
+CORN_REPOSE_HYSTERESIS = math.radians(21.2)
+"""
+How far below the repose angle the corn keeps flowing once it flows, with the cup full:
+the line through the three recorded stops, 27 degrees below the starting angle in the
+model's lip geometry with 85 % left (2026-10-14 17:14), 32 with 45 % left (2026-10-19
+11:10, held at 93 degrees) and 45 with 20 % left (2026-10-14 17:50), taken to a full
+cup; the stops lie within 4 degrees of the line
 (experiments/results/real_pouring/analysis_2026-10-15/stop_angles.py).
+"""
+
+CORN_REPOSE_HYSTERESIS_GROWTH = math.radians(27.1)
+"""
+How much further below the repose angle the corn keeps flowing per share of the cup
+poured out: the slope of the same line through the three recorded stops.
 """
 
 
@@ -177,7 +191,7 @@ class PouredMaterial(StrEnum):
     def repose_hysteresis(self) -> float:
         """
         :return: How far below the repose angle this material keeps flowing once it
-            flows, in radians.
+            flows, with the cup full, in radians.
         """
         match self:
             case PouredMaterial.STYROFOAM:
@@ -185,12 +199,28 @@ class PouredMaterial(StrEnum):
             case PouredMaterial.CORN:
                 return CORN_REPOSE_HYSTERESIS
 
+    @property
+    def repose_hysteresis_growth(self) -> float:
+        """
+        :return: How much further below the repose angle this material keeps flowing
+            per share of the cup poured out, in radians.
+        """
+        match self:
+            case PouredMaterial.STYROFOAM:
+                return STYROFOAM_REPOSE_HYSTERESIS_GROWTH
+            case PouredMaterial.CORN:
+                return CORN_REPOSE_HYSTERESIS_GROWTH
+
     def drain_of(self, drain: ModelPoint) -> ModelPoint:
         """
         :param drain: A drain's parameters.
         :return: The drain as it pours this material: with its hysteresis.
         """
-        return replace(drain, repose_hysteresis=self.repose_hysteresis)
+        return replace(
+            drain,
+            repose_hysteresis=self.repose_hysteresis,
+            repose_hysteresis_growth=self.repose_hysteresis_growth,
+        )
 
     @property
     def full_cup_mass_grams(self) -> float:

@@ -5,11 +5,13 @@ geometry: the repose hysteresis in `poured_material.py`.
 
 The bags are replayed through the production detector. The bulk starts where the count
 first passes START_COUNT grains; it stops at the last reading after the highest tilt at
-which the count still rose by more than STILL_RISING grains. The cup holds what the
-scale says did not leave it.
+which the count still rose by more than STILL_RISING grains, or, for a pour that held
+still part way and poured on afterwards, at the given seconds after the pour's start.
+The cup holds what the scale says did not leave it; at a given stop, the share of it
+the count had seen cross by then.
 
-Usage: python stop_angles.py <material>::<bag dir or zip>::<grams out>::<full cup grams> ...
-Writes stop_angles.json next to this script.
+Usage: python stop_angles.py <material>::<bag dir or zip>::<grams out>::<full cup grams>[::<stop seconds>] ...
+Updates stop_angles.json next to this script.
 """
 
 import json
@@ -44,10 +46,12 @@ def lip_angle(left_share: float) -> float:
     return math.degrees(math.atan2(OPENING_HEIGHT * (1.0 - left_share), LIP_OFFSET))
 
 
-results = {}
+results_file = Path(__file__).with_name("stop_angles.json")
+results = json.loads(results_file.read_text()) if results_file.exists() else {}
 for argument in sys.argv[1:]:
-    material, bag, out, full = argument.split("::")
+    material, bag, out, full, *held = argument.split("::")
     material, out, full = PouredMaterial(material), float(out), float(full)
+    held_at = float(held[0]) if held else None
     steps = PourReplay.of(
         PourRecording.read(Path(bag)),
         material,
@@ -57,14 +61,21 @@ for argument in sys.argv[1:]:
     counts = [step.reading.counted_grains for step in steps]
     tilts = [math.degrees(step.tilt) for step in steps]
     start = next(index for index, count in enumerate(counts) if count > START_COUNT)
-    peak = max(range(len(tilts)), key=tilts.__getitem__)
-    stop = max(
-        index
-        for index in range(peak, len(steps) - 1)
-        if counts[index + 1] - counts[index] > STILL_RISING
-    )
+    if held_at is None:
+        peak = max(range(len(tilts)), key=tilts.__getitem__)
+        stop = max(
+            index
+            for index in range(peak, len(steps) - 1)
+            if counts[index + 1] - counts[index] > STILL_RISING
+        )
+        out_by_stop = out
+    else:
+        stop = min(
+            range(len(steps) - 1), key=lambda index: abs(steps[index].time - held_at)
+        )
+        out_by_stop = out * counts[stop] / counts[-1]
     start_left = 1.0 - counts[start] / GRAINS_PER_FILL
-    stop_left = 1.0 - out / full
+    stop_left = 1.0 - out_by_stop / full
     starting_repose = tilts[start] - lip_angle(start_left)
     stopping_repose = tilts[stop + 1] - lip_angle(stop_left)
     results[Path(bag).name] = dict(
@@ -75,4 +86,4 @@ for argument in sys.argv[1:]:
         hysteresis=starting_repose - stopping_repose,
     )
     print(Path(bag).name, json.dumps(results[Path(bag).name]))
-Path(__file__).with_name("stop_angles.json").write_text(json.dumps(results, indent=1))
+results_file.write_text(json.dumps(results, indent=1))
