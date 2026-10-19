@@ -165,10 +165,11 @@ class WallGauge:
 
 # %% finding the cup as the gap it makes in the mat it stands on
 
-MAT_EDGE_COLUMNS = 10
+MAT_BESIDE_PIXELS = 10
 """
-How many columns at either end of a row of the search window have to show the mat for
-whatever interrupts it in that row to count as the cup standing on it, in pixels.
+How many pixels of the mat have to show on either side of an interruption, in its row,
+for the interruption to be something standing on the mat rather than the mat's edge,
+the gripper reaching in over it, or its shadow.
 """
 
 MINIMUM_GAP_PIXELS = 100
@@ -242,10 +243,13 @@ class CupOnMat:
             width, columns.max() + OUTLINE_SEARCH_MARGIN
         )
         mat = self.shows_mat(empty_view[top:bottom, left:right])
-        on_mat = (mat[:, :MAT_EDGE_COLUMNS].mean(axis=1) > 0.5) & (
-            mat[:, -MAT_EDGE_COLUMNS:].mean(axis=1) > 0.5
+        mat_to_the_left = numpy.cumsum(mat, axis=1)
+        mat_to_the_right = mat.sum(axis=1, keepdims=True) - mat_to_the_left
+        gap = (
+            ~mat
+            & (mat_to_the_left >= MAT_BESIDE_PIXELS)
+            & (mat_to_the_right >= MAT_BESIDE_PIXELS)
         )
-        gap = ~mat & on_mat[:, numpy.newaxis]
         count, labels, statistics, _ = cv2.connectedComponentsWithStats(
             gap.astype(numpy.uint8)
         )

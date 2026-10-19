@@ -229,3 +229,21 @@ def test_a_gap_too_far_from_the_projection_is_not_the_cup():
     _cap_below_the_cup(image, rows_below=90, columns_left=60)
     with pytest.raises(ReceiverNotFoundError):
         BLUE_MAT.offset(GAUGE.region_in(IMAGE_SIZE, NO_OFFSET), image)
+
+
+GRIPPER_BLACK = (30, 30, 30)
+"""
+The colour of the gripper's finger lying over the edge of the mat, BGR.
+"""
+
+
+def test_a_finger_over_the_mats_edge_beside_the_cup_does_not_hide_the_cup():
+    shifted = PixelOffset(rows=10, columns=-12)
+    image = _cup_on_mat(shifted)
+    rows, columns = numpy.nonzero(GAUGE.region_in(IMAGE_SIZE, shifted))
+    # the finger covers the search window's left edge over the cup's rows
+    image[rows.min() : rows.max() + 1, : columns.min() - 40] = GRIPPER_BLACK
+    found = BLUE_MAT.offset(GAUGE.region_in(IMAGE_SIZE, NO_OFFSET), image)
+    assert (found.rows, found.columns) == pytest.approx(
+        (shifted.rows, shifted.columns), abs=1
+    )
