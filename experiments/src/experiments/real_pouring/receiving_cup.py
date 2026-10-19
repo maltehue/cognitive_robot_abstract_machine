@@ -60,12 +60,13 @@ TRANSLUCENT_CUP_CORN_MASS_GRAMS = 722.0
 What the corn kernels weigh when they fill the translucent cup to the brim, in grams.
 """
 
-TRANSLUCENT_CUP_CORN_PIXEL_SECONDS_PER_GRAIN = 9.7
+TRANSLUCENT_CUP_CORN_PIXEL_SECONDS_PER_GRAIN = 22.7
 """
 How much moving yellow area in the translucent cup's opening, times the time it shows,
-one of the live bank's grains of corn received adds: from the one weighed pour into the
-cup of 2026-10-15 18:33 (326 g received), less the count's creep while no stream fell
-(experiments/results/real_pouring/analysis_2026-10-15/translucent_calibration.py).
+one of the live bank's grains of corn received adds: the median over the six weighed
+pours of 2026-10-16 and 2026-10-19 of the count against the scale, 2.34 times the 9.7
+the full-cup pour of 2026-10-15 18:33 had given, which counted far fewer pixel-seconds
+per grain than any pour since.
 """
 
 TRANSLUCENT_CUP_CORN_WALL_DETECTED_SHARE = 0.68
@@ -153,8 +154,10 @@ class ReceiverFillReport(StrEnum):
 
     SEEN_THROUGH_WALL = "seen_through_wall"
     """
-    What the camera sees lying in the receiver through its wall, with the grains still
-    in flight added; what crossed until the wall shows anything.
+    What the camera sees lying in the receiver through its wall or what it counted
+    crossing, whichever is more, with the grains still in flight added: the wall under-
+    reads a heap whose top fades out through the frosted wall, the count over-reads a
+    stream denser than it was calibrated on.
     """
 
 

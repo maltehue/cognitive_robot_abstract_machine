@@ -478,5 +478,5 @@ class LiveBank:
             case ReceiverFillReport.COUNTED:
                 reported = counted + in_flight
             case ReceiverFillReport.SEEN_THROUGH_WALL:
-                return (counted if lying is None else lying) + in_flight
+                return (counted if lying is None else max(counted, lying)) + in_flight
         return reported if lying is None else max(reported, lying)

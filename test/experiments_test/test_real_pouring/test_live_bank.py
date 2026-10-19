@@ -406,3 +406,22 @@ def test_a_wall_showing_nothing_yet_leaves_the_receiver_at_what_crossed():
     assert step.told_grains == pytest.approx(
         crossed * bank.coupling.inside_share + step.in_flight_grains
     )
+
+
+def test_a_count_above_what_the_wall_shows_is_what_the_receiver_holds():
+    bank = live_bank_through_wall(tilt=1.0)
+    bank.observe(_no_stream(0.0))
+    counted = 30.0
+    step = bank.observe(
+        StreamReading(
+            stamp=0.1,
+            stream_seen=True,
+            counted_grains=counted,
+            crossing=None,
+            heap_fill=0.05,
+        )
+    )
+    crossed = bank.camera.grains_crossed(counted)
+    assert step.told_grains == pytest.approx(
+        crossed * bank.coupling.inside_share + step.in_flight_grains
+    )
