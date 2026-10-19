@@ -661,6 +661,17 @@ How long a pixel inside the receiver has to show the same grains to count as the
 lying there, in seconds: longer than any grain of the stream takes to fall through.
 """
 
+WALL_STILL_SECONDS = 0.33
+"""
+How long a pixel of a translucent receiver has to show its contents to count as contents
+lying in it, in seconds: long enough to drop the stream falling past the wall and the
+flicker at the threshold, short enough that the reading follows the heap under a dense
+stream, which resets the clock of every pixel it crosses.
+
+Held for a second, the reading stood still for three seconds of a pour on 2026-10-19
+while the receiver filled from 0.28 to 0.38.
+"""
+
 MINIMUM_STREAM_PIXELS = 30
 """
 How many grain pixels the opening has to show for a stream to count as seen: one grain
@@ -919,9 +930,9 @@ class StreamDetector:
     def wall_pixels(self) -> int:
         """
         :return: How many pixels of the translucent receiver have shown its contents
-            lying still for :data:`HEAP_STILL_SECONDS`.
+            lying still for :data:`WALL_STILL_SECONDS`.
         """
-        still_for = round(HEAP_STILL_SECONDS / self.frame_period)
+        still_for = round(WALL_STILL_SECONDS / self.frame_period)
         return int((self._wall_still_frames >= still_for).sum())
 
     def _watch_wall(self, image: numpy.ndarray) -> Optional[float]:

@@ -20,6 +20,7 @@ from .test_receiver_wall import (
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     HEAP_STILL_SECONDS,
+    WALL_STILL_SECONDS,
     CupOnMatWithoutWallGaugeError,
     NO_OFFSET,
     CameraView,
@@ -633,9 +634,9 @@ def test_contents_lying_still_behind_the_wall_tell_the_fill():
     assert reading.heap_fill == pytest.approx(0.5, abs=0.02)
 
 
-def test_contents_not_yet_still_for_a_second_tell_no_fill():
+def test_contents_not_yet_shown_through_the_wall_long_enough_tell_no_fill():
     detector = _detector_on_a_translucent_cup()
-    for frame in range(STILL_FRAMES - 1):
+    for frame in range(round(WALL_STILL_SECONDS / FRAME_PERIOD) - 1):
         reading = detector.observe(_contents_up_to(0.5), stamp=frame * FRAME_PERIOD)
     assert reading.heap_fill is None
 
@@ -712,6 +713,30 @@ def test_the_contents_lying_still_are_counted_pixel_by_pixel():
         detector.observe(image, stamp=frame * FRAME_PERIOD)
     painted = (image == CORN_BEHIND_THE_WALL).all(axis=2)
     assert detector.wall_pixels == int(painted.sum())
+
+
+WALL_STILL_FRAMES = round(WALL_STILL_SECONDS / FRAME_PERIOD)
+"""
+How many frames the contents have to show through the wall to count.
+"""
+
+
+def test_contents_shown_through_the_wall_for_a_third_of_a_second_count():
+    detector = _detector_on_a_translucent_cup()
+    image = _contents_up_to(0.5)
+    for frame in range(WALL_STILL_FRAMES):
+        detector.observe(image, stamp=frame * FRAME_PERIOD)
+    painted = (image == CORN_BEHIND_THE_WALL).all(axis=2)
+    assert WALL_STILL_FRAMES < STILL_FRAMES
+    assert detector.wall_pixels == int(painted.sum())
+
+
+def test_contents_not_yet_shown_that_long_do_not_count():
+    detector = _detector_on_a_translucent_cup()
+    image = _contents_up_to(0.5)
+    for frame in range(WALL_STILL_FRAMES - 1):
+        detector.observe(image, stamp=frame * FRAME_PERIOD)
+    assert detector.wall_pixels == 0
 
 
 def test_the_translucent_cup_is_drawn_where_it_was_found():
