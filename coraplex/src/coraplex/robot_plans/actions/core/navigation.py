@@ -37,6 +37,8 @@ from semantic_digital_twin.spatial_types.spatial_types import (
 )
 from semantic_digital_twin.world_description.geometry import VolumetricBoundingBox
 
+# %% navigation targets
+
 
 @dataclass
 class NavigateAction(ActionDescription):
@@ -52,8 +54,15 @@ class NavigateAction(ActionDescription):
 
     @property
     def _action_plan(self) -> PlanNode:
+        """
+        Move the root to the requested heading at its standing height.
+        """
         return execute_single(
-            MoveMotion(self.robot.mobile_base.pose_facing(self.target_location))
+            MoveMotion(
+                self.robot.resolve_standing_pose(
+                    self.robot.mobile_base.pose_facing(self.target_location)
+                )
+            )
         )
 
     @staticmethod
@@ -72,14 +81,16 @@ class NavigateAction(ActionDescription):
 
     @staticmethod
     def post_condition(
-        variables: Dict[str, Variable], context: Context, kwargs: Dict[str, Any]
+        variables: dict[str, Variable], context: Context, kwargs: dict[str, Any]
     ) -> ConditionType:
         """
-        The robot needs to be within 3 cm of where the heading puts its base.
+        The robot needs to be within 3 cm of the standing root target.
         """
         return allclose(
             variable_from(context.robot.root).global_pose,
-            context.robot.mobile_base.pose_facing(kwargs["target_location"]),
+            context.robot.resolve_standing_pose(
+                context.robot.mobile_base.pose_facing(kwargs["target_location"])
+            ),
             atol=0.03,
         )
 
