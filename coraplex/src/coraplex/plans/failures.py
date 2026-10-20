@@ -316,3 +316,22 @@ class EndEffectorDidNotReachTarget(PlanFailure):
 
     def suggest_correction(self) -> str:
         return ""
+
+
+# %% navigation reachability
+
+
+@dataclass
+class NavigationPathNotFound(PlanFailure):
+    """The floor's free regions do not connect the current pose to the target."""
+
+    target: Pose
+    """The unreachable requested pose."""
+
+    def error_message(self) -> str:
+        """Identify the pose for which no route exists."""
+        return f"No collision-free navigation path reaches {self.target}."
+
+    def suggest_correction(self) -> str:
+        """Suggest changes that can make the route reachable."""
+        return "Choose a reachable target or change the carrying posture or obstacles."

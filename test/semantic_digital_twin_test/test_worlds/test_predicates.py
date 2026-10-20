@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from typing import List
 from uuid import UUID
 
 import numpy as np
+import pytest
+from unittest.mock import MagicMock
+
+import semantic_digital_twin.reasoning.robot_predicates as robot_predicates
 
 from semantic_digital_twin.datastructures.field_of_view import FieldOfView
 from semantic_digital_twin.datastructures.joint_state import JointState
@@ -35,6 +41,7 @@ from semantic_digital_twin.reasoning.robot_predicates import (
     robot_holds_body,
     blocking,
     is_body_in_gripper,
+    is_body_gripped,
     bodies_in_gripper,
     is_pose_free_for_robot,
     is_gripper_holding_something,
@@ -43,6 +50,7 @@ from semantic_digital_twin.reasoning.robot_predicates import (
 )
 from semantic_digital_twin.robots.robot_parts import Camera, EndEffector, TCamera
 from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.robots.robot_part_mixins import HasFingers
 from semantic_digital_twin.spatial_types.spatial_types import Pose
 from semantic_digital_twin.testing import *
 from semantic_digital_twin.world import World
@@ -91,7 +99,8 @@ def _supported_by_default(field_name: str) -> float:
 
 RESTING_CONTACT_TOLERANCE = _supported_by_default("contact_tolerance")
 """
-How far above a surface a body may stand and still rest on it, as the predicate defaults it.
+How far above a surface a body may stand and still rest on it, as the predicate defaults
+it.
 """
 
 CONTAINER_WALL_HEIGHT = 0.5
@@ -850,9 +859,10 @@ def test_a_body_hovering_beyond_the_contact_tolerance_is_not_supported(two_block
 
 def test_a_body_inside_another_s_bounding_box_but_not_touching_it_is_not_supported():
     """
-    A body rests on what it touches. A large or hollow shape, such as a wall, has a
-    bounding box enclosing a great deal of empty space, and a body standing in that
-    space is held up by nothing.
+    A body rests on what it touches.
+
+    A large or hollow shape, such as a wall, has a bounding box enclosing a great deal
+    of empty space, and a body standing in that space is held up by nothing.
     """
     world = World()
     ball = Body(name=PrefixedName("ball"))
@@ -1090,7 +1100,8 @@ def test_a_body_on_a_slope_steeper_than_the_steepest_allowed_is_not_supported():
 
 def test_a_body_standing_upside_down_is_supported_by_what_it_stands_on():
     """
-    Up is the world's up: a body turned over rests on what is underneath it all the same.
+    Up is the world's up: a body turned over rests on what is underneath it all the
+    same.
     """
     world = World()
     table = _box_body("table", Scale(2.0, 2.0, 0.1))
@@ -1116,8 +1127,8 @@ def test_a_body_rests_on_a_surface_whichever_of_the_two_is_checked_first(
     crate_identifier: UUID, table_identifier: UUID
 ):
     """
-    A collision check lists the two bodies in an order of its own, which does not
-    change what rests on what.
+    A collision check lists the two bodies in an order of its own, which does not change
+    what rests on what.
     """
     world = World()
     table = _box_body("table", Scale(2.0, 2.0, 0.1), table_identifier)
@@ -1330,3 +1341,253 @@ def test_a_relation_named_for_its_object_still_reads_as_a_sentence(relation, sen
     operands.update(relation._example_operand_values_())
 
     assert verbalize_expression(relation(**operands)) == sentence
+
+
+# %% sampled grasp confidence
+
+
+@dataclass
+class GraspRaySamples:
+    """
+    A real gripper whose sampled ray results are controlled by the test.
+    """
+
+    gripper: EndEffector
+    """
+    The gripper supplying the finger geometry.
+    """
+
+    target_body: Body
+    """
+    The body returned by the sampled rays.
+    """
+
+    ray_test: MagicMock
+    """
+    The mocked ray query with deterministic hit indices.
+    """
+
+    sample_size: int
+    """
+    The number of rays requested by the predicate.
+    """
+
+
+@pytest.fixture
+def grasp_ray_samples(pr2_world_copy, mocker) -> GraspRaySamples:
+    """
+    Control the ray query while retaining the existing public gripper fixture.
+    """
+    gripper = pr2_world_copy.get_semantic_annotations_by_type(PR2)[
+        0
+    ].left_arm.end_effector
+    sample_size = 4
+    mocker.patch.object(pr2_world_copy.ray_tracer, "update_scene")
+    ray_test = mocker.patch.object(pr2_world_copy.ray_tracer, "ray_test")
+    mocker.patch.object(
+        robot_predicates.trimesh.sample,
+        "sample_surface",
+        return_value=(np.zeros((sample_size, 3)), np.zeros(sample_size)),
+    )
+    return GraspRaySamples(gripper, Body(), ray_test, sample_size)
+
+
+@pytest.mark.parametrize(
+    "indices, expected", [([0, 1, 2], 0.75), ([0, 0, 1], 0.5), ([], 0.0)]
+)
+def test_grasp_confidence_counts_distinct_hit_rays(
+    grasp_ray_samples: GraspRaySamples, indices: list[int], expected: float
+) -> None:
+    """
+    Repeated body hits count per ray, while duplicate hits of one ray count once.
+    """
+    samples = grasp_ray_samples
+    samples.ray_test.return_value = (
+        np.zeros((len(indices), 3)),
+        np.array(indices),
+        [samples.target_body] * len(indices),
+    )
+
+    assert (
+        is_body_in_gripper(samples.target_body, samples.gripper, samples.sample_size)
+        == expected
+    )
+
+
+def test_full_ray_coverage_can_satisfy_the_default_grasp_threshold(
+    grasp_ray_samples: GraspRaySamples,
+) -> None:
+    """
+    An object hit by every sampled ray can pass the existing default threshold.
+    """
+    samples = grasp_ray_samples
+    samples.ray_test.return_value = (
+        np.zeros((samples.sample_size, 3)),
+        np.arange(samples.sample_size),
+        [samples.target_body] * samples.sample_size,
+    )
+
+    assert (
+        is_body_gripped(
+            samples.target_body, samples.gripper, sample_size=samples.sample_size
+        )
+        is True
+    )
+
+
+def test_bodies_between_fingers_remain_a_distinct_body_query(
+    grasp_ray_samples: GraspRaySamples,
+) -> None:
+    """
+    The body-list predicate still returns each object once.
+    """
+    samples = grasp_ray_samples
+    samples.ray_test.return_value = (
+        np.zeros((samples.sample_size, 3)),
+        np.arange(samples.sample_size),
+        [samples.target_body] * samples.sample_size,
+    )
+
+    assert bodies_in_gripper(samples.gripper, samples.sample_size) == [
+        samples.target_body
+    ]
+
+
+def test_grasp_confidence_excludes_the_grippers_own_finger_bodies(
+    grasp_ray_samples: GraspRaySamples,
+) -> None:
+    """
+    Finger self-intersections do not count as an object held by the gripper.
+    """
+    samples = grasp_ray_samples
+    thumb = samples.gripper.thumb.tip
+    samples.ray_test.return_value = (
+        np.zeros((samples.sample_size, 3)),
+        np.arange(samples.sample_size),
+        [thumb] * samples.sample_size,
+    )
+
+    assert is_body_in_gripper(thumb, samples.gripper, samples.sample_size) == 0.0
+
+
+# %% thumb-opposed finger sampling
+
+
+@dataclass(eq=False)
+class GraspFinger:
+    """
+    A finger path with real geometry and explicit body membership.
+    """
+
+    tip: Body
+    """
+    The body providing the fingertip geometry.
+    """
+
+    bodies: list[Body]
+    """
+    The bodies excluded from object-hit confidence.
+    """
+
+
+@dataclass(eq=False)
+class GraspThumb(GraspFinger):
+    """
+    The finger opposing every other finger in the hand.
+    """
+
+
+@dataclass(eq=False)
+class ThumbOpposedFingers(HasFingers[GraspThumb, GraspFinger]):
+    """
+    A general hand without the two-finger-only convenience property.
+    """
+
+    _world: World
+    """
+    The world supplying ray intersections and transforms.
+    """
+
+
+@pytest.fixture
+def thumb_opposed_fingers(grasp_ray_samples: GraspRaySamples) -> ThumbOpposedFingers:
+    """
+    Reuse public fingertip geometry for a hand with four opposing fingers.
+    """
+    samples = grasp_ray_samples
+    thumb = GraspThumb(samples.gripper.thumb.tip, list(samples.gripper.thumb.bodies))
+    fingers = [
+        GraspFinger(samples.gripper.finger.tip, list(samples.gripper.finger.bodies))
+        for _ in range(4)
+    ]
+    return ThumbOpposedFingers(_world=samples.gripper._world, fingers=[thumb, *fingers])
+
+
+def test_grasp_detection_samples_every_finger_opposing_the_thumb(
+    thumb_opposed_fingers: ThumbOpposedFingers, grasp_ray_samples: GraspRaySamples
+) -> None:
+    """
+    Each opposing finger contributes equally to the hand's grasp confidence.
+    """
+    samples = grasp_ray_samples
+    samples.ray_test.side_effect = [
+        (
+            np.zeros((samples.sample_size, 3)),
+            np.arange(samples.sample_size),
+            [samples.target_body] * samples.sample_size,
+        ),
+        (
+            np.zeros((samples.sample_size, 3)),
+            np.arange(samples.sample_size),
+            [samples.target_body] * samples.sample_size,
+        ),
+        (np.zeros((0, 3)), np.array([], dtype=int), []),
+        (np.zeros((0, 3)), np.array([], dtype=int), []),
+    ]
+
+    assert (
+        is_body_in_gripper(
+            samples.target_body, thumb_opposed_fingers, samples.sample_size
+        )
+        == 0.5
+    )
+    assert samples.ray_test.call_count == len(thumb_opposed_fingers.fingers) - 1
+
+
+def test_grasp_detection_keeps_ray_indices_distinct_across_finger_pairs(
+    thumb_opposed_fingers: ThumbOpposedFingers, grasp_ray_samples: GraspRaySamples
+) -> None:
+    """
+    A reused local ray index is a separate sample for every opposing finger.
+    """
+    samples = grasp_ray_samples
+    samples.ray_test.return_value = (
+        np.zeros((samples.sample_size, 3)),
+        np.arange(samples.sample_size),
+        [samples.target_body] * samples.sample_size,
+    )
+
+    assert (
+        is_body_in_gripper(
+            samples.target_body, thumb_opposed_fingers, samples.sample_size
+        )
+        == 1.0
+    )
+
+
+def test_grasp_detection_excludes_fingers_outside_the_current_ray_pair(
+    thumb_opposed_fingers: ThumbOpposedFingers, grasp_ray_samples: GraspRaySamples
+) -> None:
+    """
+    All hand fingers are excluded even when they intersect another pair's rays.
+    """
+    samples = grasp_ray_samples
+    other_finger_body = samples.gripper.root
+    thumb_opposed_fingers.fingers[-1].bodies = [other_finger_body]
+    samples.ray_test.return_value = (
+        np.zeros((samples.sample_size, 3)),
+        np.arange(samples.sample_size),
+        [other_finger_body] * samples.sample_size,
+    )
+
+    assert bodies_in_gripper(thumb_opposed_fingers, samples.sample_size) == []

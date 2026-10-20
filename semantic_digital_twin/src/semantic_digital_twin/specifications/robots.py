@@ -4,8 +4,8 @@ Specifications of robots placed into a world.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Type, cast
+from dataclasses import dataclass, field
+from typing_extensions import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from semantic_digital_twin.adapters.urdf import URDFParser
@@ -38,7 +38,7 @@ class RobotSpecification:
     a mobile base.
     """
 
-    semantic_annotation_type: Type[AbstractRobot]
+    semantic_annotation_type: type[AbstractRobot]
     """
     The robot to merge into the world.
     """
@@ -55,6 +55,13 @@ class RobotSpecification:
     The start pose of the robot in its ``odom`` frame.
 
     If None, identity is used.
+    """
+
+    prefix: str | None = field(default=None, kw_only=True)
+    """
+    Namespace for the robot's bodies, connections and degrees of freedom.
+
+    ``None`` retains the description's robot name.
     """
 
     drive_translation_velocity_limits: float | None = None
@@ -97,6 +104,7 @@ class RobotSpecification:
 
         robot_world = URDFParser.from_file(
             self.semantic_annotation_type.get_ros_file_path(),
+            prefix=self.prefix,
             use_visual_as_collision_backup=(
                 self.semantic_annotation_type.uses_visual_as_collision_backup
             ),
@@ -143,7 +151,7 @@ class RobotSpecification:
         return robot
 
     def _drive_velocity_limits(
-        self, connection_type: Type[Connection]
+        self, connection_type: type[Connection]
     ) -> dict[str, float]:
         """
         Collect the velocity limits to create the drive connection with.

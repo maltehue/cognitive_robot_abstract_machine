@@ -1,4 +1,7 @@
 from copy import deepcopy
+from contextlib import ExitStack
+from dataclasses import dataclass, field
+from enum import StrEnum
 
 import numpy as np
 import pytest
@@ -22,10 +25,14 @@ from coraplex.plans.executables import MoveBranchExecutable
 from giskardpy.motion_statechart.monitors.overwrite_state_monitors import SetOdometry
 from coraplex.plans.factories import sequential, execute_single
 from coraplex.plans.plan_node import MotionNode, ActionNode
-from coraplex.robot_plans.actions.core.navigation import NavigateAction
+from coraplex.robot_plans.actions.core.navigation import (
+    NavigateAction,
+    PathPlanningNavigateAction,
+)
 from coraplex.robot_plans.actions.core.pick_up import GraspingAction, PickUpAction
 from coraplex.robot_plans.actions.core.placing import PlaceAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction
+from coraplex.robot_plans.motions.navigation import MoveMotion
 from coraplex.robot_plans.motions.container import ClosingMotion, OpeningMotion
 from coraplex.robot_plans.motions.gripper import (
     MoveFingersToWidthMotion,
@@ -57,6 +64,13 @@ from giskardpy.motion_statechart.tasks.joint_tasks import (
     JointVelocityLimit,
 )
 from giskardpy.motion_statechart.tasks.pointing import Pointing
+from krrood.entity_query_language.factories import evaluate_condition
+from semantic_digital_twin.robots.pr2 import PR2
+from semantic_digital_twin.world import World
+from semantic_digital_twin.callbacks.callback import StateChangeCallback
+from semantic_digital_twin.world_description.world_entity import Body
+from giskardpy.motion_statechart.monitors.overwrite_state_monitors import SetOdometry
+from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.datastructures.definitions import GripperState, TorsoState
 from semantic_digital_twin.grasping.grasp_candidates import GraspCandidate
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
@@ -332,7 +346,9 @@ def _motion_task(motion_chart, robot):
     return task
 
 
-def test_an_arm_motion_holds_the_base_of_a_robot_that_stands_still(pr2_apartment_context):
+def test_an_arm_motion_holds_the_base_of_a_robot_that_stands_still(
+    pr2_apartment_context,
+):
     """
     A base that is not full body controlled stands still while an arm moves, so the
     motion has to hold it there rather than leave it for another task to command.
@@ -354,7 +370,9 @@ def test_an_arm_motion_holds_the_base_of_a_robot_that_stands_still(pr2_apartment
     assert hold_base.weight == DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE
 
 
-def test_an_arm_motion_leaves_a_full_body_controlled_base_free(full_body_controlled_pr2):
+def test_an_arm_motion_leaves_a_full_body_controlled_base_free(
+    full_body_controlled_pr2,
+):
     """
     A robot that may move its whole body drives while it reaches, so its base is not
     held.
@@ -1082,6 +1100,137 @@ def test_grasping_action_frees_the_gripper_for_its_whole_approach(
     )
     assert len(reach_nodes) == 2
     assert all(node.designator.allow_gripper_collision is True for node in reach_nodes)
+
+
+# %% navigation targets for roots above the drive plane
+
+
+def test_navigation_motion_preserves_root_height(pr2_world_copy: World) -> None:
+    """
+    Navigation sends an elevated root to its standing height instead of the floor.
+    """
+    world = pr2_world_copy
+    robot = world.get_semantic_annotations_by_type(PR2)[0]
+    with world.modify_world():
+        robot.root.parent_connection.connection_T_child_expression = (
+            HomogeneousTransformationMatrix.from_xyz_rpy(z=0.9)
+        )
+    target = Pose.from_xyz_rpy(1.3, 2.0, reference_frame=world.root)
+    action = NavigateAction(target)
+    execute_single(action, context=Context(world=world, robot=robot))
+
+    motion = action._action_plan.plan.get_nodes_by_designator_type(MoveMotion)[
+        0
+    ].designator
+
+    assert float(motion.target.z) == pytest.approx(float(robot.root.global_pose.z))
+
+
+class NavigationParameter(StrEnum):
+    """
+    Parameters consumed by navigation conditions.
+    """
+
+    TARGET_LOCATION = "target_location"
+
+
+def test_navigation_completion_accepts_standing_root(pr2_world_copy: World) -> None:
+    """
+    A root above the floor satisfies completion when its planar target is reached.
+    """
+    world = pr2_world_copy
+    robot = world.get_semantic_annotations_by_type(PR2)[0]
+    with world.modify_world():
+        robot.root.parent_connection.connection_T_child_expression = (
+            HomogeneousTransformationMatrix.from_xyz_rpy(z=0.9)
+        )
+    target = Pose.from_xyz_rpy(reference_frame=world.root)
+
+    condition = NavigateAction.post_condition(
+        {},
+        Context(world=world, robot=robot),
+        {NavigationParameter.TARGET_LOCATION: target},
+    )
+
+    assert evaluate_condition(condition) is True
+
+
+# %% continuous base motion
+
+
+@dataclass(eq=False)
+class TranslationSamples(StateChangeCallback):
+    """
+    Record the root translation observed during simulated motion.
+    """
+
+    root: Body = field(kw_only=True)
+    """
+    The moving root whose world translation is measured.
+    """
+
+    positions: list[float] = field(default_factory=list, init=False)
+    """
+    The observed world x coordinates.
+    """
+
+    def on_state_change(self, **kwargs) -> None:
+        """
+        Record the position after each state update.
+        """
+        self.positions.append(float(self.root.global_pose.x))
+
+
+def test_continuous_simulated_navigation_visits_intermediate_poses(pr2_world_copy):
+    """
+    Opt-in navigation advances through a trajectory instead of setting odometry.
+    """
+    world = pr2_world_copy
+    robot = world.get_semantic_annotations_by_type(PR2)[0]
+    start = float(robot.root.global_pose.x)
+    target = Pose.from_xyz_rpy(x=start + 0.2, reference_frame=world.root)
+    observer = TranslationSamples(_world=world, root=robot.root)
+    with ExitStack() as cleanup:
+        cleanup.callback(observer.stop)
+        motion = MoveMotion(target, use_trajectory=True)
+        plan = execute_single(motion, context=Context(world, robot))
+        with kinematically_simulated_robot:
+            plan.perform()
+
+    assert any(start < position < float(target.x) for position in observer.positions)
+    assert float(robot.root.global_pose.x) == pytest.approx(float(target.x), abs=0.01)
+
+
+@pytest.mark.parametrize("environment", [kinematically_simulated_robot, real_robot])
+def test_continuous_navigation_uses_cartesian_motion(environment, pr2_world_copy):
+    """
+    The trajectory option builds the same task for real and simulated motion.
+    """
+    world = pr2_world_copy
+    robot = world.get_semantic_annotations_by_type(PR2)[0]
+    motion = MoveMotion(Pose(reference_frame=world.root), use_trajectory=True)
+    execute_single(motion, context=Context(world, robot))
+
+    with environment:
+        assert isinstance(motion._motion_chart, CartesianPose)
+    with kinematically_simulated_robot:
+        legacy = MoveMotion(motion.target)
+        execute_single(legacy, context=Context(world, robot))
+        assert isinstance(legacy._motion_chart, SetOdometry)
+
+
+def test_path_navigation_passes_the_trajectory_option(pr2_apartment_context):
+    """
+    Every path leg receives the requested execution policy.
+    """
+    world, robot, context = pr2_apartment_context
+    action = PathPlanningNavigateAction(
+        Pose.from_xyz_rpy(5, 1, 0, reference_frame=world.root), use_trajectory=True
+    )
+    execute_single(action, context=context)
+    motions = [node.designator for node in action._action_plan.children]
+
+    assert all(motion.use_trajectory for motion in motions)
 
 
 # %% sending the fingers to a width

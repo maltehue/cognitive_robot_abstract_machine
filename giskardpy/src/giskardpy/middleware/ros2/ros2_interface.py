@@ -1,6 +1,11 @@
+from __future__ import annotations
+
+import asyncio
 import json
 import threading
-from typing import List, Tuple, Union, Any
+from typing import List, Tuple, Union
+
+from typing_extensions import Any
 
 from action_msgs.msg import GoalStatus
 from rcl_interfaces.srv._get_parameters import (
@@ -21,9 +26,10 @@ from giskardpy.middleware.ros2.exceptions import (
     ExecutionCanceledException,
 )
 from giskardpy.middleware.ros2 import rospy
-from giskardpy.middleware.ros2.event_loop_manager import get_event_loop
 from krrood.adapters.exceptions import JSONSerializationError
 from krrood.adapters.json_serializer import from_json
+
+# %% ROS messages
 
 
 def msg_type_as_str(msg_type) -> str:
@@ -158,6 +164,9 @@ def wait_for_publisher(publisher):
     #     rospy.sleep(0.1)
 
 
+# %% action client
+
+
 class MyActionClient:
     _goal_handle: ClientGoalHandle | None
     _result_future: Future | None
@@ -185,13 +194,22 @@ class MyActionClient:
         future.add_done_callback(self.__goal_accepted_cb)
         return future
 
-    def send_goal(self, goal):
-        async def muh():
-            rospy.wait_for_future_to_complete(self.send_goal_async(goal))
-            result = await self.get_result()
-            return result
+    def send_goal(self, goal: Any) -> Any:
+        """
+        Send a goal and wait for its result independently of other clients.
 
-        return get_event_loop().run_until_complete(muh())
+        :param goal: Goal message sent to the action server.
+        :return: Result of the completed goal.
+        """
+
+        async def send_and_wait_for_result() -> Any:
+            """
+            Wait for goal acceptance and the server's final result.
+            """
+            rospy.wait_for_future_to_complete(self.send_goal_async(goal))
+            return await self.get_result()
+
+        return asyncio.run(send_and_wait_for_result())
 
     async def get_result(self):
         goal_id = self._current_goal_id

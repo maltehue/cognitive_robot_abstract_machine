@@ -25,6 +25,8 @@ from semantic_digital_twin.robots.minimal_robot import MinimalRobot
 from semantic_digital_twin.semantic_annotations.semantic_annotations import *
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     Handle,
+    Floor,
+    Table,
     Drawer,
     Wardrobe,
     Door,
@@ -696,3 +698,67 @@ def test_every_kitchen_drawer_stands_closed_at_the_lower_limit_of_its_rails(
     kitchen_environment_world.notify_state_change()
 
     assert [drawer.opening_ratio for drawer in drawers] == [0] * len(drawers)
+
+
+# %% body annotation membership
+
+
+def test_body_annotation_lookup_finds_annotations_added_to_its_world(
+    mini_world: World,
+) -> None:
+    """
+    A body finds its annotation without a separately populated backreference set.
+    """
+    floor = Floor(root=mini_world.root)
+    with mini_world.modify_world():
+        mini_world.add_semantic_annotation(floor)
+
+    assert mini_world.root.get_semantic_annotations_by_type(Floor) == [floor]
+
+
+def test_body_annotation_lookup_filters_type_and_body_membership(
+    mini_world: World,
+) -> None:
+    """
+    Only annotations of the requested type referring to this body are returned.
+    """
+    root = mini_world.root
+    child = next(body for body in mini_world.bodies if body is not root)
+    own_floor = Floor(root=root)
+    foreign_floor = Floor(root=child)
+    own_table = Table(root=root)
+    with mini_world.modify_world():
+        mini_world.add_semantic_annotations([own_floor, foreign_floor, own_table])
+
+    assert root.get_semantic_annotations_by_type(Floor) == [own_floor]
+
+
+def test_body_annotation_lookup_finds_nested_annotation_membership(
+    mini_world: World,
+) -> None:
+    """
+    A body also belongs to an annotation containing its annotated part.
+    """
+    nested = TestSemanticAnnotation(public_annotation=Table(root=mini_world.root))
+    with mini_world.modify_world():
+        mini_world.add_semantic_annotation_recursively(nested)
+
+    assert mini_world.root.get_semantic_annotations_by_type(TestSemanticAnnotation) == [
+        nested
+    ]
+
+
+def test_body_annotation_lookup_drops_removed_world_annotations(
+    mini_world: World,
+) -> None:
+    """
+    Removing an annotation from the world removes it from subsequent body queries.
+    """
+    floor = Floor(root=mini_world.root)
+    with mini_world.modify_world():
+        mini_world.add_semantic_annotation(floor)
+    mini_world.root.get_semantic_annotations_by_type(Floor)
+    with mini_world.modify_world():
+        mini_world.remove_semantic_annotation(floor)
+
+    assert mini_world.root.get_semantic_annotations_by_type(Floor) == []

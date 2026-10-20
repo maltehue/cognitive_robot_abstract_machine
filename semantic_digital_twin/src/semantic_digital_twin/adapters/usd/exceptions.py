@@ -105,3 +105,81 @@ class UnsupportedUsdGeometryTypeError(ParsingError):
         if not self.supported_types:
             return ""
         return f"Use one of the supported types: {', '.join(sorted(self.supported_types))}."
+
+
+# %% scene topology
+
+
+@dataclass
+class UsdSceneTopologyError(ParsingError):
+    """
+    Raised when scene relationships cannot form a supported connection tree.
+    """
+
+    prim_path: str = field(kw_only=True)
+    """
+    The prim whose relationship cannot be represented.
+    """
+
+    def error_message(self) -> str:
+        """
+        Identify the unsupported scene relationship.
+        """
+        return f"Stage '{self.file_path}' has unsupported scene topology at '{self.prim_path}'."
+
+    def suggest_correction(self) -> str:
+        """
+        Describe the supported scene structure.
+        """
+        return "Use valid single-target joints forming a tree, without closed loops or multiple parents."
+
+
+@dataclass
+class UsdScaledJointFrameError(ParsingError):
+    """
+    Raised when a joint endpoint has scale or shear that its anchors cannot represent.
+    """
+
+    prim_path: str = field(kw_only=True)
+    """
+    The joint endpoint with a non-rigid world transform.
+    """
+
+    def error_message(self) -> str:
+        """
+        Identify the unsupported joint frame.
+        """
+        return f"Stage '{self.file_path}' has a scaled or sheared joint frame at '{self.prim_path}'."
+
+    def suggest_correction(self) -> str:
+        """
+        Describe how to make joint anchors representable.
+        """
+        return "Bake scale into geometry and author joints in unscaled rigid frames."
+
+
+# %% inferred mass properties
+
+
+@dataclass
+class UsdInertialGeometryError(ParsingError):
+    """
+    Raised when unspecified mass properties lack closed collision geometry.
+    """
+
+    prim_path: str = field(kw_only=True)
+    """
+    Prim requiring geometric mass-property inference.
+    """
+
+    def error_message(self) -> str:
+        """
+        Identify the prim whose mass properties cannot be inferred.
+        """
+        return f"Cannot infer unspecified mass properties at '{self.prim_path}' in '{self.file_path}'."
+
+    def suggest_correction(self) -> str:
+        """
+        Describe valid authored or geometric mass properties.
+        """
+        return "Author a finite centre and nonzero inertia, or provide closed collision geometry with positive volume."
