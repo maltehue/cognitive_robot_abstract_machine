@@ -1878,6 +1878,11 @@ class ModelBlend:
     How far the slot edge is switched on now, between zero and one.
     """
 
+    time_constant: float = field(default=SWITCH_TIME_CONSTANT, kw_only=True)
+    """
+    Seconds for the remaining parameter error to decay by a factor of e.
+    """
+
     def towards(self, target: ModelPoint, at: float) -> ModelPoint:
         """
         :param target: The model called for.
@@ -1885,7 +1890,7 @@ class ModelBlend:
         :return: The model moved part of the way towards it: the repose angle and the
             slot edge's height in step, the coefficient and the rate by their ratio.
         """
-        share = 1.0 - math.exp(-max(0.0, at - self.time) / SWITCH_TIME_CONSTANT)
+        share = 1.0 - math.exp(-max(0.0, at - self.time) / self.time_constant)
         self.time = at
         current = self.point
 

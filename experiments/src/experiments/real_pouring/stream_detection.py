@@ -612,6 +612,10 @@ The blue Jeroen cups' outline: the hue band the receiving cup shows in the pole 
 # %% what the camera reports
 
 
+OBSERVATION_QUEUE_DEPTH = 1
+"""Keep the latest camera observation while its consumer is busy."""
+
+
 class StreamReadingField(StrEnum):
     """Additional quality metadata in stream-reading messages."""
 

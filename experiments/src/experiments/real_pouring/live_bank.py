@@ -12,7 +12,7 @@ Nothing here depends on ROS: a node hands each reading to :meth:`LiveBank.observ
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 import numpy
@@ -48,6 +48,10 @@ from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.world import World
 
 # %% one step of the bank
+
+
+LIVE_MODEL_TIME_CONSTANT = 0.1
+"""Model response in seconds; applies 95 percent of a correction within 0.3 seconds."""
 
 
 class BankTraceField(StrEnum):
@@ -166,6 +170,23 @@ class LiveBankStep(SubclassJSONSerializer):
 
 
 # %% the bank on the robot
+
+
+@dataclass
+class InvalidStallProbabilityError(ValueError):
+    """Raised when a stall probability cannot yield a positive expected capacity."""
+
+
+@dataclass
+class UnsupportedTrickleFlowError(ValueError):
+    """Raised when a live bank uses trickle flow absent from its controller equation."""
+
+    def __str__(self) -> str:
+        """Explain which flow component cannot be transferred to the controller."""
+        return (
+            "The live controller cannot represent tilt-independent trickle flow. "
+            "Disable tracks_trickle and use a reference model with zero trickle_rate."
+        )
 
 
 NEGLIGIBLE_ARRIVAL_RATE = 0.1
@@ -295,6 +316,18 @@ class LiveBank:
     Cumulative crossing count at the most recent contents measurement.
     """
 
+    def __post_init__(self) -> None:
+        """Require flow terms that the controller's tilt-dependent drain represents."""
+        bank = self.coupling.bank
+        if not 0.0 <= bank.settings.stall_probability < 1.0:
+            raise InvalidStallProbabilityError()
+        if (
+            bank.settings.tracks_trickle
+            or bank.base.trickle_rate != 0.0
+            or self.built.trickle_rate != 0.0
+        ):
+            raise UnsupportedTrickleFlowError()
+
     @classmethod
     def for_cups(
         cls,
@@ -420,9 +453,14 @@ class LiveBank:
         corrections = DrainCorrectionValues.between(
             self._blended(seen.stamp), self.built, self.coupling.cautious
         )
-        corrections.write_to(self.world, self.source.fill_connection.drain_correction)
         in_flight = self._in_flight_grains(seen)
-        told = self._write_fill_levels(seen.counted_grains, in_flight, seen.heap_fill)
+        with self.world.batch_state_changes():
+            corrections.write_to(
+                self.world, self.source.fill_connection.drain_correction
+            )
+            told = self._write_fill_levels(
+                seen.counted_grains, in_flight, seen.heap_fill
+            )
         step = LiveBankStep(
             time=seen.stamp,
             tilt=tilt,
@@ -482,12 +520,21 @@ class LiveBank:
     def _blended(self, at: float) -> ModelPoint:
         """
         :param at: The time of the reading, in seconds.
-        :return: The model the controller runs on now, moving towards the one the bank
-            calls for.
+        :return: The smoothed model with capacity weighted by the non-stall probability.
         """
         if self._blend is None:
-            self._blend = ModelBlend(point=self.coupling.bank.base, time=at)
-        return self._blend.towards(self.coupling.point, at)
+            self._blend = ModelBlend(
+                point=self.coupling.bank.base,
+                time=at,
+                time_constant=LIVE_MODEL_TIME_CONSTANT,
+            )
+        physical = self.coupling.point
+        expected = replace(
+            physical,
+            outflow_rate_constant=physical.outflow_rate_constant
+            * (1.0 - self.coupling.bank.settings.stall_probability),
+        )
+        return self._blend.towards(expected, at)
 
     def _in_flight_grains(self, seen: StreamReading) -> float:
         """

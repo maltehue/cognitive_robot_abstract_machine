@@ -194,7 +194,7 @@ drain while it runs.
 Needs ``pouring_perception.py`` running for :attr:`MATERIAL`.
 """
 
-BANK_SETTINGS = BankSettings(tracks_onset=True, trickle=0.0, tracks_trickle=True)
+BANK_SETTINGS = BankSettings(tracks_onset=True, trickle=0.0)
 """
 How the live bank weighs the pour: every hypothesis estimates the onset, so a hand-over
 keeps what the pour showed of it and a stream that stops where the model pours moves it
@@ -202,8 +202,8 @@ again; the controller runs on the onset the bank estimates, not on one held just
 the tilt, since the tilt pacing turns the cup at :data:`APPROACH_TILT_RATE` where the
 model pours nothing.
 
-Every hypothesis also estimates the trickle of single grains below the onset, so a
-trickle neither moves the onset nor counts as the contents flowing.
+Every hypothesis explains flow through the tilt-dependent drain represented by the
+controller's equation.
 """
 
 POUR_PERCEPTION = PourPerception.for_cup(RECEIVING_CUP, MATERIAL)

@@ -19,6 +19,7 @@ from typing_extensions import Optional
 
 from experiments.real_pouring.live_bank import LiveBank
 from experiments.real_pouring.poured_material import PouredMaterial
+from experiments.real_pouring.stream_detection import OBSERVATION_QUEUE_DEPTH
 from krrood.adapters.json_serializer import from_json
 
 # %% the detector's interface
@@ -174,7 +175,10 @@ class LiveBankListener:
         if self.material is not None and reported != self.material.value:
             raise MaterialMismatchError(expected=self.material, reported=reported)
         self._subscription = self.node.create_subscription(
-            String, DetectorInterface.READING_TOPIC.value, self._on_reading, 10
+            String,
+            DetectorInterface.READING_TOPIC.value,
+            self._on_reading,
+            OBSERVATION_QUEUE_DEPTH,
         )
         deadline = time.monotonic() + self.first_reading_timeout
         while not self.bank.trace:

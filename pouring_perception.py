@@ -32,7 +32,10 @@ from tf2_ros import Buffer, TransformListener
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.pour_perception import PourPerception
 from experiments.real_pouring.receiving_cup import ReceivingCup
-from experiments.real_pouring.stream_detection import CameraView
+from experiments.real_pouring.stream_detection import (
+    CameraView,
+    OBSERVATION_QUEUE_DEPTH,
+)
 from krrood.adapters.json_serializer import to_json
 
 # %% settings
@@ -114,7 +117,9 @@ class StreamDetectorNode(Node):
         self.waiting_reported = False
         self.detector = None
         self.background = []
-        self.publisher = self.create_publisher(String, "~/reading", 10)
+        self.publisher = self.create_publisher(
+            String, "~/reading", OBSERVATION_QUEUE_DEPTH
+        )
         self.create_subscription(
             CameraInfo,
             self._value(Parameter.CAMERA_INFO_TOPIC),
@@ -122,7 +127,10 @@ class StreamDetectorNode(Node):
             1,
         )
         self.create_subscription(
-            CompressedImage, self._value(Parameter.IMAGE_TOPIC), self._on_image, 10
+            CompressedImage,
+            self._value(Parameter.IMAGE_TOPIC),
+            self._on_image,
+            OBSERVATION_QUEUE_DEPTH,
         )
         self.create_service(Trigger, "~/learn_background", self._on_learn_background)
 

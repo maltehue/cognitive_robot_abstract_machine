@@ -818,6 +818,11 @@ class DrainRateSpread(ParameterSpread):
 # %% the settings of the bank
 
 
+@dataclass
+class InvalidFlowTransitionRateError(ValueError):
+    """Raised for a nonfinite or negative physical flow-state transition rate."""
+
+
 @dataclass(frozen=True)
 class BankSettings:
     """
@@ -845,6 +850,9 @@ class BankSettings:
     The chance that the grains hold still for one reading where the model says they
     flow: granular flow starts late and comes in avalanches.
     """
+
+    flow_transition_rate: float = 1.0
+    """Prior rate of changing flow state within the hysteresis interval, in 1/s."""
 
     reading_floor: float = 1.0
     """
@@ -980,6 +988,14 @@ class BankSettings:
     drifting from reading to reading, so grains seen below the onset need not move it.
     """
 
+    def __post_init__(self) -> None:
+        """Require a finite nonnegative flow-state transition rate."""
+        if (
+            not math.isfinite(self.flow_transition_rate)
+            or self.flow_transition_rate < 0
+        ):
+            raise InvalidFlowTransitionRateError()
+
     def to_json(self) -> Dict[str, Any]:
         return {
             name: value
@@ -1021,6 +1037,33 @@ grains already leaving keep arriving once the cup stops.
 
 
 # %% one hypothesis, followed by a particle filter
+
+
+@dataclass(frozen=True)
+class FlowStateEvidence:
+    """Marginal observation evidence and conditional state probabilities."""
+
+    eligible: numpy.ndarray
+    """Particles whose physical head permits either stopped or continuing flow."""
+    prior: numpy.ndarray
+    """Flowing probability before observing the stream."""
+    flowing_likelihood: numpy.ndarray
+    """Probability of the stream observation given continuing flow."""
+    stopped_likelihood: numpy.ndarray
+    """Probability of the stream observation given stopped bulk flow."""
+
+    @property
+    def likelihood(self) -> numpy.ndarray:
+        """Return observation probability marginalized over the two flow states."""
+        return (
+            self.prior * self.flowing_likelihood
+            + (1.0 - self.prior) * self.stopped_likelihood
+        )
+
+    @property
+    def posterior(self) -> numpy.ndarray:
+        """Return flowing probability conditional on the stream observation."""
+        return self.prior * self.flowing_likelihood / self.likelihood
 
 
 @dataclass
@@ -1101,6 +1144,9 @@ class HypothesisFilter:
     Whether the contents flow, per particle: they keep flowing down to the repose angle
     less the hysteresis.
     """
+
+    _flow_state_inferred: bool = field(init=False, default=False)
+    """Whether stream evidence has conditioned the physical mode distribution."""
 
     clipped: int = field(init=False, default=0)
     """
@@ -1509,6 +1555,58 @@ class HypothesisFilter:
             result = result + _log_normal(reading.crossing_distance, predicted, spread)
         return result + self.stream_log_likelihoods(reading)
 
+    def flow_state_evidence(self, reading: Reading) -> Optional[FlowStateEvidence]:
+        """Infer current flow mode where both states satisfy the physical head limits."""
+        dropout = self.sensors.stream_dropout
+        if (
+            reading.stream_seen is None
+            or dropout is None
+            or self._last_interval <= 0.0
+            or self.settings.flow_transition_rate == 0.0
+        ):
+            return None
+        starting = self.geometry.head(reading.tilt, self.source, self.parameters)
+        continuing = self.geometry.head(
+            reading.tilt,
+            self.source,
+            self._lowered_by(self.base.hysteresis_at(self.source / self._loaded)),
+        )
+        eligible = (starting <= 0.0) & (continuing > 0.0) & (self.source > 0.0)
+        if not numpy.any(eligible):
+            return None
+        transition = -0.5 * math.expm1(
+            -2.0 * self.settings.flow_transition_rate * self._last_interval
+        )
+        prior = numpy.where(self.flowing, 1.0 - transition, transition)
+        rates = numpy.stack(
+            (
+                self.geometry.outflow(continuing, self.parameters),
+                self._trickle_rates,
+            )
+        )
+        flowing_share = 1.0 - self.settings.stall_probability
+        if self.hypothesis is Hypothesis.CATCH_ALL and flowing_share > 0.0:
+            rates = rates + (
+                self.settings.catch_all_leak
+                * math.sqrt(2.0 / (math.pi * self._last_interval))
+                / flowing_share
+            )
+        some_grain = flowing_share * (-numpy.expm1(-rates * self._last_interval))
+        seen = STREAM_FALSE_SIGHTING + (
+            (1.0 - STREAM_FALSE_SIGHTING) * (1.0 - dropout) * some_grain
+        )
+        likelihoods = seen if reading.stream_seen else 1.0 - seen
+        return FlowStateEvidence(eligible, prior, likelihoods[0], likelihoods[1])
+
+    def infer_flow_state(self, reading: Reading) -> None:
+        """Sample the current physical mode from its observation-conditioned posterior."""
+        evidence = self.flow_state_evidence(reading)
+        if evidence is None:
+            return
+        self._flow_state_inferred = True
+        chosen = self.random.random(int(numpy.sum(evidence.eligible)))
+        self.flowing[evidence.eligible] = chosen < evidence.posterior[evidence.eligible]
+
     def stream_log_likelihoods(self, reading: Reading) -> numpy.ndarray:
         """
         :param reading: The reading just taken.
@@ -1534,7 +1632,13 @@ class HypothesisFilter:
                 STREAM_FALSE_SIGHTING
                 + (1.0 - STREAM_FALSE_SIGHTING) * (1.0 - dropout) * some_grain
             )
-            result = result + numpy.log(seen if reading.stream_seen else 1.0 - seen)
+            likelihood = seen if reading.stream_seen else 1.0 - seen
+            evidence = self.flow_state_evidence(reading)
+            if evidence is not None:
+                likelihood = numpy.where(
+                    evidence.eligible, evidence.likelihood, likelihood
+                )
+            result = result + numpy.log(likelihood)
         if reading.counted_grains is not None and self.sensors.count_noise is not None:
             left = self._loaded - self._state_at(
                 self._sources, reading.time - self.sensors.fall_time
@@ -1559,6 +1663,7 @@ class HypothesisFilter:
         joint = self.log_weights + likelihoods
         evidence = float(logsumexp(joint))
         self.log_weights = joint - evidence
+        self.infer_flow_state(reading)
         if self.sensors.conditions_receiver:
             self.condition_receiver(reading)
         weights = numpy.exp(self.log_weights)
@@ -1690,14 +1795,21 @@ class HypothesisFilter:
     def repose_angle_now(self, share: float) -> float:
         """
         :param share: The share of the posterior below the value asked for.
-        :return: That quantile of the repose angle each particle pours with now: lowered
-            by the hysteresis where its contents flow.
+        :return: Effective repose quantile, conditional on the most probable mode when
+            stream evidence has inferred the flow state.
         """
         pouring = self._pouring_parameters[
             :, PARAMETER_ORDER.index(FreeParameter.REPOSE_ANGLE)
         ]
+        weights = self.weights
+        if self._flow_state_inferred:
+            selected_mode = numpy.sum(weights[self.flowing]) > 0.5
+            selected = self.flowing == selected_mode
+            pouring = pouring[selected]
+            weights = weights[selected]
+            weights = weights / numpy.sum(weights)
         order = numpy.argsort(pouring)
-        cumulative = numpy.cumsum(self.weights[order])
+        cumulative = numpy.cumsum(weights[order])
         index = min(int(numpy.searchsorted(cumulative, share)), len(pouring) - 1)
         return float(pouring[order][index])
 
