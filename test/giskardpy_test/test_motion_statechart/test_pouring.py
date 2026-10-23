@@ -25,6 +25,7 @@ from giskardpy.motion_statechart.data_types import (
     LifeCycleValues,
 )
 from giskardpy.motion_statechart.exceptions import (
+    NonPositiveTiltAccelerationError,
     NonPositiveTiltRateError,
     MissingExitSpeedError,
     MissingInflowEquationError,
@@ -1982,6 +1983,12 @@ PACED_TILT_CAP = math.radians(1.0)
 A cap well below the rate the fill task turns the cup at on its own.
 """
 
+PACED_TILT_ACCELERATION = math.radians(5.0)
+"""
+A tilt acceleration limit, in radians per second squared, well below the rate change the
+fill task asks for when it starts the cup turning.
+"""
+
 NO_FLOW_REPOSE_ANGLE = math.radians(85.0)
 """
 A repose angle far above the fixture's start tilt, so the model pours nothing and the
@@ -2231,6 +2238,58 @@ class TestTiltPacing:
         close = rates[history[1:] > pacing.maximum_tilt - math.radians(0.5)]
         assert close.max() <= 0.5 * PACED_APPROACH_RATE
         assert history.max() <= pacing.maximum_tilt + math.radians(0.1)
+
+    def test_the_tilt_rate_changes_no_faster_than_the_acceleration_limit(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The fill task alone turns the cup from rest at once; with an acceleration limit
+        its tilt rate ramps up instead.
+        """
+        _, source_cup, _, _ = tracy_transfer_world
+        unlimited = np.diff(
+            _rates(
+                _tilt_history(
+                    _build_transfer_motion(tracy_transfer_world), PACING_TICKS
+                )
+            )
+        )
+        assert np.abs(unlimited).max() * _POURING_TARGET_FREQUENCY > (
+            PACED_TILT_ACCELERATION
+        )
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+            maximum_acceleration=PACED_TILT_ACCELERATION,
+        )
+        limited = np.diff(
+            _rates(
+                _tilt_history(
+                    _build_transfer_motion(tracy_transfer_world, extra_tasks=[pacing]),
+                    PACING_TICKS,
+                )
+            )
+        )
+        assert np.abs(limited).max() * _POURING_TARGET_FREQUENCY <= (
+            PACED_TILT_ACCELERATION * 1.1
+        )
+
+    def test_a_non_positive_acceleration_limit_is_rejected(
+        self, tracy_transfer_world
+    ) -> None:
+        world, source_cup, _, _ = tracy_transfer_world
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+            maximum_acceleration=0.0,
+        )
+        with pytest.raises(NonPositiveTiltAccelerationError) as error_info:
+            pacing.build(_pouring_context(world))
+        assert error_info.value.acceleration == pacing.maximum_acceleration
 
     def test_non_positive_rates_are_rejected(self, tracy_transfer_world) -> None:
         world, source_cup, _, _ = tracy_transfer_world

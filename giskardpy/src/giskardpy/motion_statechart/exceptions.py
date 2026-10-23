@@ -171,6 +171,28 @@ class NonPositiveTiltRateError(NodeInitializationError):
 
 
 @dataclass
+class NonPositiveTiltAccelerationError(NodeInitializationError):
+    """
+    Raised when a tilt pacing task is given an acceleration limit that could not change
+    the cup's tilt rate.
+    """
+
+    acceleration: float
+    """
+    The rejected acceleration limit, in radians per second squared.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f'the acceleration limit of node "{self.node.name}" must be positive to '
+            f"turn the cup, got {self.acceleration}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Choose an acceleration limit above zero, or none."
+
+
+@dataclass
 class EmptyMotionStatechartError(MotionStatechartError):
     """
     Raised when a motion statechart without any node is executed.

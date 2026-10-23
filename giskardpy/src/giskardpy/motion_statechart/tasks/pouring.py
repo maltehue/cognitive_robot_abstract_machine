@@ -33,6 +33,7 @@ from giskardpy.motion_statechart.exceptions import (
     MissingExitSpeedError,
     MissingInflowEquationError,
     NonPositiveClearanceError,
+    NonPositiveTiltAccelerationError,
     NonPositiveTiltRateError,
     RootLinkNotWorldRootError,
 )
@@ -740,6 +741,15 @@ class TiltPacing(Task):
     The fastest the cup may tilt back, in radians per second.
     """
 
+    maximum_acceleration: Optional[float] = field(default=None, kw_only=True)
+    """
+    The fastest the cup's tilt rate may change, in radians per second squared, or
+    ``None`` to let it change as fast as the arm allows.
+
+    Chosen within what the joint that tilts the cup can do alone, a change of direction
+    leaves the other joints, and with them the cup's position and axis, alone.
+    """
+
     fast_rate: Optional[float] = field(default=None, kw_only=True)
     """
     The rate the cup approaches and may tilt at below :attr:`fast_until_tilt`, in
@@ -803,12 +813,17 @@ class TiltPacing(Task):
     def build(self, context: MotionStatechartContext) -> NodeArtifacts:
         """
         :param context: The build context.
-        :return: Two rows on the tilt's speed: the caps and the ceiling, and the approach
-            preference. The task never holds the motion open.
+        :return: Rows on the tilt's speed: the caps and the ceiling, the approach
+            preference and, with :attr:`maximum_acceleration`, the limit on its change.
+            The task never holds the motion open.
         """
         for rate in self.rates:
             if rate <= 0.0:
                 raise NonPositiveTiltRateError(node=self, rate=rate)
+        if self.maximum_acceleration is not None and self.maximum_acceleration <= 0.0:
+            raise NonPositiveTiltAccelerationError(
+                node=self, acceleration=self.maximum_acceleration
+            )
         tilt = self.source.pour_tilt_expression
         cap, approach = sm.Scalar(self.maximum_rate), sm.Scalar(self.approach_rate)
         if self.fast_rate is not None:
@@ -843,6 +858,15 @@ class TiltPacing(Task):
             velocity_limit=self.approach_rate,
             name=f"{self.name}_tilt_approach",
         )
+        if self.maximum_acceleration is not None:
+            artifacts.constraints.add_acceleration_constraint(
+                lower_acceleration_limit=-self.maximum_acceleration,
+                upper_acceleration_limit=self.maximum_acceleration,
+                quadratic_weight=self.cap_weight,
+                task_expression=tilt,
+                acceleration_limit=self.maximum_acceleration * CAP_NORMALIZATION_SHARE,
+                name=f"{self.name}_tilt_acceleration",
+            )
         return artifacts
 
     @staticmethod

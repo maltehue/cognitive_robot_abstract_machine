@@ -6,7 +6,7 @@ columns, and bounds (:class:`EnforcementStrategy` and subclasses).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -463,6 +463,92 @@ class VelocityStrategy(ExpressionEnforcementStrategy):
             for c in self.constraints:
                 names.append(f"t{t:03}/{c.name}")
         return names
+
+
+@dataclass
+class AccelerationStrategy(VelocityStrategy):
+    """
+    The constraint is applied to the change of the expression's rate from one horizon
+    step to the next, the first step measured against the rate the expression changes at
+    now.
+
+    Inequality rows have the form:
+
+    .. math::
+
+        l \\, \\Delta t^2 \\le J_{f} (v_k - v_{k-1}) \\, \\Delta t \\le u \\, \\Delta t^2
+
+    where :math:`v_{-1}` is the current velocity, so the row of the first step reads
+    :math:`J_{f} v_0 \\Delta t` between the current rate's :math:`J_{f} v_c \\Delta t` plus
+    :math:`l \\Delta t^2` and plus :math:`u \\Delta t^2`.
+    """
+
+    def create_matrix(self) -> Matrix:
+        """
+        Builds the rows reading each step's velocity minus the previous step's, padding
+        the jerk columns with zeros.
+        """
+        control_horizon = self.qp_controller_config.control_horizon
+        if len(self.constraints) == 0 or control_horizon == 0:
+            return sm.Matrix()
+        jacobian = (
+            sm.Vector([c.expression for c in self.constraints]).jacobian(
+                variables=self.position_variables
+            )
+            * self.qp_controller_config.model_predictive_control_time_step
+        )
+        difference = sm.Matrix(
+            np.eye(control_horizon) - np.eye(control_horizon, k=-1)
+        ).kron(jacobian)
+        return sm.hstack(
+            [
+                difference,
+                sm.Matrix.zeros(difference.shape[0], self.number_of_jerk_columns),
+            ]
+        )
+
+    def create_bounds(
+        self, bounds_getter: Callable[[GiskardConstraint], Scalar]
+    ) -> Vector:
+        """
+        Builds one bound per constraint and control step, the first step's shifted by
+        the expression's current rate.
+        """
+        time_step = self.qp_controller_config.model_predictive_control_time_step
+        bounds = []
+        for step in range(self.qp_controller_config.control_horizon):
+            for constraint in self.constraints:
+                bound = bounds_getter(constraint) * time_step * time_step
+                if step == 0:
+                    bound = bound + self._current_rate(constraint) * time_step
+                bounds.append(bound)
+        return Vector(bounds)
+
+    def create_slack_variables(self) -> DirectLimits:
+        """
+        Creates one slack variable per constraint and step, normalized by the change of
+        rate its limit allows within one step.
+        """
+        time_step = self.qp_controller_config.model_predictive_control_time_step
+        limits = super().create_slack_variables()
+        weights = [
+            normalize_slack_weight(
+                c.quadratic_weight, c.normalization_factor * time_step
+            )
+            for _ in range(self.qp_controller_config.control_horizon)
+            for c in self.constraints
+        ]
+        return replace(limits, quadratic_weights=sm.Vector(weights))
+
+    def _current_rate(self, constraint: GiskardConstraint) -> Scalar:
+        """
+        :return: The rate the constraint's expression changes at with the current
+            velocities.
+        """
+        jacobian = sm.Vector([constraint.expression]).jacobian(
+            variables=self.position_variables
+        )
+        return (jacobian @ self.velocity_variables)[0]
 
 
 @dataclass

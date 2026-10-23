@@ -305,6 +305,17 @@ at :data:`APPROACH_TILT_RATE` and the stream stops within a few degrees of the o
 the return needs no more than this.
 """
 
+MAXIMUM_TILT_ACCELERATION = math.radians(30.0)
+"""
+The fastest the cup's tilt rate may change, in radians per second squared.
+
+Without a limit the fill task turned the cup back at once; faster than the wrist joint
+that tilts it could follow, so the other joints joined in and moved the cup by
+centimetres and its axis by up to 2.7 degrees (bag 2026-10-23_16-02-07). Replayed
+through the controller, 30 degrees per second squared kept the other joints at the speed
+they move at during the steady pour while tilting back nearly as far within two seconds.
+"""
+
 LIVE_BANK_TRACE_FILE_NAME = "live_bank_trace.json"
 """
 Name the bank's trace gets inside the bag.
@@ -619,6 +630,7 @@ tilt_pacing = TiltPacing(
     maximum_rate=MAXIMUM_TILT_RATE,
     maximum_tilt=MAXIMUM_TILT,
     maximum_return_rate=MAXIMUM_RETURN_TILT_RATE,
+    maximum_acceleration=MAXIMUM_TILT_ACCELERATION,
     ceiling_slowdown_width=CEILING_SLOWDOWN_WIDTH,
     receiver=receiving_cup,
     approach_until_fill=goal_fill - tolerance,

@@ -72,6 +72,8 @@ class ProbeSettings:
     """Maximum permitted source angle."""
     return_rate: float = math.radians(10)
     """Maximum tilt-back speed."""
+    tilt_acceleration: float = math.radians(30)
+    """Maximum change of the tilt speed, per second."""
     ceiling_width: float = math.radians(5)
     """Angular slowdown band below the ceiling."""
     minimum_clearance: float = 0.07
@@ -246,6 +248,7 @@ class ControllerProbe:
                     maximum_rate=settings.approach_rate,
                     maximum_tilt=settings.maximum_tilt,
                     maximum_return_rate=settings.return_rate,
+                    maximum_acceleration=settings.tilt_acceleration,
                     ceiling_slowdown_width=settings.ceiling_width,
                     receiver=receiver,
                     approach_until_fill=goal - settings.fill_tolerance,

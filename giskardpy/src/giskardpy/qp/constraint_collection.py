@@ -20,6 +20,7 @@ from giskardpy.qp.constraint import (
     LargeNumber,
 )
 from giskardpy.qp.enforcement_strategy import (
+    AccelerationStrategy,
     EnforcementStrategy,
     IntegralStrategy,
     VelocityStrategy,
@@ -288,6 +289,41 @@ class ConstraintCollection:
             linear_weight=0,
         )
         self.add_constraint(constraint)
+
+    def add_acceleration_constraint(
+        self,
+        lower_acceleration_limit: sm.ScalarData,
+        upper_acceleration_limit: sm.ScalarData,
+        quadratic_weight: sm.ScalarData,
+        task_expression: sm.SymbolicScalar,
+        acceleration_limit: sm.ScalarData,
+        name: Optional[str] = None,
+    ) -> None:
+        """
+        Add a constraint on how fast the rate of ``task_expression`` may change, over
+        every step of the horizon and from its current rate on.
+
+        :param lower_acceleration_limit: The fastest the rate may fall, as a negative
+            rate per second.
+        :param upper_acceleration_limit: The fastest the rate may rise, per second.
+        :param quadratic_weight: Weight of the constraint's slack.
+        :param task_expression: The expression whose rate is limited.
+        :param acceleration_limit: Used for normalizing the expression's acceleration;
+            must be positive.
+        :param name: Name of the constraint.
+        """
+        self.add_constraint(
+            GiskardInequalityConstraint(
+                name=name,
+                enforcement_strategy=AccelerationStrategy,
+                expression=task_expression,
+                lower_bound=lower_acceleration_limit,
+                upper_bound=upper_acceleration_limit,
+                quadratic_weight=quadratic_weight,
+                normalization_factor=acceleration_limit,
+                linear_weight=0,
+            )
+        )
 
     def add_velocity_eq_constraint(
         self,
