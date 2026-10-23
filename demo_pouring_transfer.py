@@ -86,6 +86,7 @@ from tracy_pouring_setup import (
     connect_to_giskard,
     move_left_tool_to,
     park_arms,
+    turn_cup_upright_in_place,
     upright_carry_pose,
 )
 from semantic_digital_twin.world_description.connections import (
@@ -702,7 +703,14 @@ while time.time() < settle_deadline:
 print(f"receiving cup fill level: {receiving_cup.fill_level}")
 print(f"source cup fill level: {source_cup.fill_level}")
 
-
+# ----- Turn the cup upright over the receiver before carrying it away -----
+# A pose goal turns and moves the cup at once, carrying it off the receiver while it is
+# still tilted far enough to pour.
+turn_cup_upright_in_place(
+    giskard,
+    tilt=float(source_cup.pour_tilt_expression.evaluate()[0]),
+    rate=MAXIMUM_RETURN_TILT_RATE,
+)
 move_left_tool_to(giskard, upright_pose)
 
 recording.stop()

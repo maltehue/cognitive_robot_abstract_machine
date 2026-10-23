@@ -6,6 +6,7 @@ and holding the left gripper's cup upright above the table.
 from __future__ import annotations
 
 import threading
+import time
 
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -15,7 +16,10 @@ from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.monitors.monitors import LocalMinimumReached
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
-from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList
+from giskardpy.motion_statechart.tasks.joint_tasks import (
+    JointPositionList,
+    JointVelocityLimit,
+)
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Pose
 
@@ -56,6 +60,11 @@ _RIGHT_ARM_JOINT_NAMES = [
     "right_wrist_3_joint",
 ]
 _RIGHT_ARM_PARK_POSITIONS = [3.72, -2.07, -1.17, 4.0, 0.82, 0.75]
+
+STATE_SETTLE_TIME = 0.5
+"""
+Seconds to wait after a motion before reading the joint state Giskard synchronized.
+"""
 
 # %% connection
 
@@ -134,3 +143,41 @@ def move_left_tool_to(giskard: GiskardWrapper, pose: Pose) -> None:
     motion.add_node(minimum_reached := LocalMinimumReached())
     motion.add_node(EndMotion.when_true(minimum_reached))
     giskard.execute(motion)
+
+
+# %% turning only the tilt joint
+
+
+def turn_tilt_joint_to(giskard: GiskardWrapper, position: float, rate: float) -> None:
+    """
+    Turn only the tilt joint to ``position``, in radians, no faster than ``rate``, in
+    radians per second.
+    """
+    joint = giskard.world.get_connection_by_name(LEFT_TILT_JOINT)
+    task = JointPositionList(
+        goal_state=JointState.from_mapping({joint: position}), max_velocity=rate
+    )
+    motion = MotionStatechart()
+    motion.add_node(task)
+    motion.add_node(JointVelocityLimit(connections=[joint], max_velocity=rate))
+    motion.add_node(EndMotion.when_true(task))
+    giskard.execute(motion)
+
+
+def tilt_joint_position(giskard: GiskardWrapper) -> float:
+    """
+    :return: The tilt joint's current position, in radians, once the state has settled.
+    """
+    time.sleep(STATE_SETTLE_TIME)
+    return float(giskard.world.get_connection_by_name(LEFT_TILT_JOINT).position)
+
+
+def turn_cup_upright_in_place(
+    giskard: GiskardWrapper, tilt: float, rate: float
+) -> None:
+    """
+    Turn the held cup back by ``tilt``, in radians, about the tool's axis, no faster
+    than ``rate``, in radians per second: only the tilt joint moves, so the cup stays
+    where it is while it still pours.
+    """
+    turn_tilt_joint_to(giskard, tilt_joint_position(giskard) - tilt, rate)

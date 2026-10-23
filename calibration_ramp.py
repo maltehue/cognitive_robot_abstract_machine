@@ -31,18 +31,12 @@ from giskardpy.middleware.ros2.rosbag_recording import (
     DEFAULT_BAG_DIRECTORY,
     RosbagRecording,
 )
-from giskardpy.motion_statechart.graph_node import EndMotion
-from giskardpy.motion_statechart.motion_statechart import MotionStatechart
-from giskardpy.motion_statechart.tasks.joint_tasks import (
-    JointPositionList,
-    JointVelocityLimit,
-)
-from semantic_digital_twin.datastructures.joint_state import JointState
 from tracy_pouring_setup import (
-    LEFT_TILT_JOINT,
     connect_to_giskard,
     move_left_tool_to,
     park_arms,
+    tilt_joint_position,
+    turn_tilt_joint_to,
     upright_carry_pose,
 )
 
@@ -61,11 +55,6 @@ Name the ramp's record gets inside the bag, next to the recorded messages.
 BAG_DIRECTORY = DEFAULT_BAG_DIRECTORY / "calibration_ramps"
 """
 Where the ramps' bags are written, apart from the transfer demo's bags.
-"""
-
-STATE_SETTLE_TIME = 0.5
-"""
-Seconds to wait after a motion before reading the joint state Giskard synchronized.
 """
 
 
@@ -157,32 +146,6 @@ class RampRecord:
 # %% motion
 
 
-def turn_tilt_joint_to(
-    giskard: GiskardWrapper, position: float, rate_deg_s: float
-) -> None:
-    """
-    Turn only the tilt joint to ``position`` (radians), no faster than ``rate_deg_s``.
-    """
-    joint = giskard.world.get_connection_by_name(LEFT_TILT_JOINT)
-    rate = math.radians(rate_deg_s)
-    task = JointPositionList(
-        goal_state=JointState.from_mapping({joint: position}), max_velocity=rate
-    )
-    motion = MotionStatechart()
-    motion.add_node(task)
-    motion.add_node(JointVelocityLimit(connections=[joint], max_velocity=rate))
-    motion.add_node(EndMotion.when_true(task))
-    giskard.execute(motion)
-
-
-def tilt_joint_position(giskard: GiskardWrapper) -> float:
-    """
-    :return: The tilt joint's current position, in radians, once the state has settled.
-    """
-    time.sleep(STATE_SETTLE_TIME)
-    return float(giskard.world.get_connection_by_name(LEFT_TILT_JOINT).position)
-
-
 def run_ramp(
     giskard: GiskardWrapper, settings: RampSettings, recording: RosbagRecording
 ) -> RampRecord:
@@ -199,12 +162,12 @@ def run_ramp(
     turn_tilt_joint_to(
         giskard,
         upright + math.radians(settings.final_tilt_deg),
-        settings.tilt_rate_deg_s,
+        math.radians(settings.tilt_rate_deg_s),
     )
     final_tilt_reached_at = time.time()
     time.sleep(settings.hold_s)
     hold_ended_at = time.time()
-    turn_tilt_joint_to(giskard, upright, settings.return_rate_deg_s)
+    turn_tilt_joint_to(giskard, upright, math.radians(settings.return_rate_deg_s))
     upright_again_at = time.time()
     recording.stop()
     weighed = WeighedRamp(drained_mass_grams=ask_for_mass(input, DRAINED_MASS_PROMPT))
