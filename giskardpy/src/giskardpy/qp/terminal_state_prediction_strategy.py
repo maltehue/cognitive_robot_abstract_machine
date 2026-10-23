@@ -13,6 +13,11 @@ are taken to rest after the last commanded block, which is what the controller's
 assume, and the state keeps evolving until the window ends. The window is therefore a property
 of the constraint, while the control horizon stays a property of the controller.
 
+A state may feed on further passive states that keep changing while the joints are held,
+such as a receiver filled from a draining source. Those coupled states are linearized and
+unrolled together with the predicted state, so the prediction does not hold their current rates
+over the whole window.
+
 The mechanism is domain-agnostic: any scalar state governed by ``ẋ = f(x, q)`` whose terminal
 value should reach a goal (e.g. a container fill level driven by a tilt or a valve angle) can use
 it by supplying the symbolic state velocity and the passive state variable.
@@ -24,7 +29,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 import krrood.symbolic_math.symbolic_math as sm
-from krrood.symbolic_math.symbolic_math import Matrix, Scalar, Vector
+from krrood.symbolic_math.symbolic_math import FloatVariable, Matrix, Scalar, Vector
 
 from giskardpy.qp.constraint import GiskardEqualityConstraint, LargeNumber
 from giskardpy.qp.dof_limits import DirectLimits
@@ -175,6 +180,61 @@ class LinearizedScalarStateModel:
 
 
 @dataclass
+class CoupledState:
+    """
+    A passive state the predicted state's rate depends on, evolving by its own rate while
+    the joints are held.
+    """
+
+    variable: FloatVariable
+    """Symbolic current value of the coupled state (passive DOF position variable)."""
+
+    velocity: Scalar
+    """Symbolic rate of the coupled state."""
+
+
+@dataclass
+class LinearizedCoupledFreeResponse:
+    """
+    Held-joint terminal value of a state together with the passive states its rate depends
+    on.
+
+    Linearizes their joint ODE at the current operating point,
+    ``x_{k+1} = (I + dt·J)·x_k + dt·(f₀ − J·x₀)``, and unrolls it over the prediction steps.
+    """
+
+    state_variables: list[FloatVariable]
+    """Current values; the predicted state first, then its coupled states."""
+
+    state_velocities: list[Scalar]
+    """Rates, in the order of :attr:`state_variables`."""
+
+    time_step: float
+    """MPC discretization step dt in seconds."""
+
+    prediction_steps: int
+    """Number of state steps the terminal value is predicted over."""
+
+    def terminal_value(self) -> Scalar:
+        """
+        :return: The predicted state's value after :attr:`prediction_steps` held-joint
+            steps.
+        """
+        jacobian = sm.Vector(self.state_velocities).jacobian(self.state_variables)
+        current = sm.Vector(self.state_variables)
+        transition = (
+            sm.Matrix.eye(len(self.state_variables)) + jacobian * self.time_step
+        )
+        offset = (
+            sm.Vector(self.state_velocities) - jacobian @ current
+        ) * self.time_step
+        state = current
+        for _ in range(self.prediction_steps):
+            state = transition @ state + offset
+        return state[0]
+
+
+@dataclass
 class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
     """
     Equality constraint carrying the operating point that
@@ -204,6 +264,12 @@ class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
     How fast the state may be brought back against the change it makes on its own, in
     state units per second; ``None`` brings it back no faster than the normalization
     factor drives it.
+    """
+
+    coupled_states: list[CoupledState] = field(default_factory=list, kw_only=True)
+    """
+    Passive states the rate depends on that keep evolving while the joints are held;
+    empty holds every other state at its current value over the window.
     """
 
     bound: Scalar = field(default_factory=lambda: sm.Scalar(0.0), kw_only=True)
@@ -280,6 +346,22 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
             ),
         )
 
+    def _free_response(self) -> Scalar:
+        """
+        Held-joint terminal value of the state, evolving its coupled states with it.
+        """
+        constraint = self._constraint
+        if not constraint.coupled_states:
+            return self._state_model.free_response()
+        return LinearizedCoupledFreeResponse(
+            state_variables=[constraint.state_variable]
+            + [state.variable for state in constraint.coupled_states],
+            state_velocities=[constraint.expression]
+            + [state.velocity for state in constraint.coupled_states],
+            time_step=self.qp_controller_config.model_predictive_control_time_step,
+            prediction_steps=self._prediction_steps,
+        ).terminal_value()
+
     def create_matrix(self) -> Matrix:
         """
         Builds the constraint row by scaling the state-rate jacobian per horizon block with the
@@ -321,7 +403,7 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
             in time and the state overshoots the goal.
         """
         constraint = self._constraint
-        free_response = self._state_model.free_response()
+        free_response = self._free_response()
         bound = sm.Scalar(constraint.goal_value) - free_response
         window = (
             self.qp_controller_config.model_predictive_control_time_step

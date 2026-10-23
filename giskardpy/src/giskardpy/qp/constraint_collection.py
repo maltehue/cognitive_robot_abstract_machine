@@ -25,6 +25,7 @@ from giskardpy.qp.enforcement_strategy import (
     VelocityStrategy,
 )
 from giskardpy.qp.terminal_state_prediction_strategy import (
+    CoupledState,
     TerminalStatePredictionConstraint,
     TerminalStatePredictionStrategy,
 )
@@ -335,6 +336,7 @@ class ConstraintCollection:
         name: Optional[str] = None,
         prediction_duration: float | None = None,
         stopping_velocity: float | None = None,
+        coupled_states: list[CoupledState] | None = None,
     ) -> None:
         """
         Add a terminal-state prediction constraint using a linearized first-order ODE.
@@ -364,6 +366,8 @@ class ConstraintCollection:
             control horizon when ``None``.
         :param stopping_velocity: How fast the state may be brought back against the
             change it makes on its own; ``reference_velocity`` when ``None``.
+        :param coupled_states: Passive states the rate depends on that keep evolving
+            while the joints are held; none when ``None``.
         """
         constraint = TerminalStatePredictionConstraint(
             name=name,
@@ -376,5 +380,6 @@ class ConstraintCollection:
             goal_value=goal_value,
             prediction_duration=prediction_duration,
             stopping_velocity=stopping_velocity,
+            coupled_states=list(coupled_states or []),
         )
         self.add_constraint(constraint)

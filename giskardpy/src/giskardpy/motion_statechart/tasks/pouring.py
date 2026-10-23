@@ -42,6 +42,7 @@ from giskardpy.motion_statechart.graph_node import (
     NodeArtifacts,
     Task,
 )
+from giskardpy.qp.terminal_state_prediction_strategy import CoupledState
 
 
 @dataclass(eq=False, repr=False)
@@ -179,8 +180,17 @@ class TerminalFillConstraintTask(Task, ABC):
             reference_velocity=self.reference_velocity,
             prediction_duration=self.prediction_duration,
             stopping_velocity=self.stopping_velocity,
+            coupled_states=self._coupled_states(context),
         )
         return artifacts
+
+    def _coupled_states(self, context: MotionStatechartContext) -> list[CoupledState]:
+        """
+        :param context: The build context.
+        :return: The passive fill levels the fill velocity depends on that keep changing
+            over the prediction window; none, unless a task predicts them.
+        """
+        return []
 
     def on_tick(
         self, context: MotionStatechartContext
@@ -293,6 +303,12 @@ class FillByTransferTask(TerminalFillConstraintTask):
     The container whose fill level is driven up to :attr:`goal_value`.
     """
 
+    couple_source_fill: bool = field(default=True, kw_only=True)
+    """
+    Whether the prediction lets the source's fill level drain along with the receiver's,
+    instead of holding the source's current outflow over the whole window.
+    """
+
     _gate_value: FloatVariable = field(init=False, repr=False)
     """
     The transfer gate's value at the last tick, standing in for the symbolic gate in the
@@ -336,6 +352,28 @@ class FillByTransferTask(TerminalFillConstraintTask):
         context.float_variable_data.bind_argument(self._compiled_gate, 1)
         self._read_gate(context)
         return self._gate_value * inflow_equation.ungated_velocity(self.fill_connection)
+
+    def _coupled_states(self, context: MotionStatechartContext) -> list[CoupledState]:
+        """
+        :param context: The build context.
+        :return: The fill levels of the containers feeding the receiver, each changing by
+            its own fill equations, so a source that empties is not predicted to pour on
+            at its current rate.
+        """
+        if not self.couple_source_fill:
+            return []
+        rate_variables = {
+            variable.id for variable in self.fill_velocity_expression.free_variables()
+        }
+        return [
+            CoupledState(
+                variable=connection.raw_dof.variables.position,
+                velocity=connection.symbolic_fill_velocity(),
+            )
+            for connection in context.world.get_connections_by_type(LiquidConnection)
+            if connection is not self.fill_connection
+            and connection.raw_dof.variables.position.id in rate_variables
+        ]
 
     def _read_gate(self, context: MotionStatechartContext) -> None:
         """

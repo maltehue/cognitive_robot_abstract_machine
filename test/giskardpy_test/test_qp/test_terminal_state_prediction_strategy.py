@@ -16,6 +16,7 @@ from giskardpy.qp.exceptions import (
 )
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.qp.terminal_state_prediction_strategy import (
+    CoupledState,
     LinearizedScalarStateModel,
     TerminalStatePredictionConstraint,
     TerminalStatePredictionStrategy,
@@ -1004,3 +1005,187 @@ class TestIncreasingFillLinearization:
             fill_level + _CONTROL_HORIZON * _TIME_STEP * inflow_rate
         )
         assert predicted > fill_level
+
+
+# %% a source the predicted receiver feeds on
+
+
+_SOURCE_POSITION = 0.8
+"""
+Fill of the source the receiver is fed from, at the operating point.
+"""
+
+_DRAIN_CONSTANT = 2.0
+"""
+Share of the source draining per second and per unit of joint position.
+"""
+
+
+@dataclass
+class FedReceiverSetup:
+    """
+    A receiver fed by a source that drains with it: ``ṡ = -k·q·s`` and ``ẋ = k·q·s``.
+    """
+
+    world: World
+    """
+    The world owning the joint, the receiver and the source.
+    """
+
+    source_variable: sm.FloatVariable
+    """
+    The source's fill, a passive state the receiver's rate depends on.
+    """
+
+    source_velocity: sm.Scalar
+    """
+    The source's own fill rate.
+    """
+
+    receiver_degree_of_freedom: DegreeOfFreedom
+    """
+    The receiver's fill, whose terminal value is constrained.
+    """
+
+    joint_degree_of_freedom: DegreeOfFreedom
+    """
+    The controlled joint.
+    """
+
+
+@pytest.fixture
+def fed_receiver_setup() -> FedReceiverSetup:
+    """
+    A joint, a receiver state and a source state at the operating point.
+    """
+    world, joint_degree_of_freedom, receiver_degree_of_freedom = (
+        _world_with_joint_and_state()
+    )
+    with world.modify_world():
+        source_body = Body(name=PrefixedName("source_body"))
+        world.add_body(source_body)
+        source_connection = PrismaticConnection.create_with_dofs(
+            world=world, parent=world.root, child=source_body, axis=Vector3.X()
+        )
+        world.add_connection(source_connection)
+    JointState.from_mapping({source_connection: _SOURCE_POSITION}).apply_to(world)
+    source_variable = source_connection.dof.variables.position
+    return FedReceiverSetup(
+        world=world,
+        source_variable=source_variable,
+        source_velocity=-sm.Scalar(_DRAIN_CONSTANT)
+        * joint_degree_of_freedom.variables.position
+        * source_variable,
+        receiver_degree_of_freedom=receiver_degree_of_freedom,
+        joint_degree_of_freedom=joint_degree_of_freedom,
+    )
+
+
+def _fed_receiver_strategy(
+    setup: FedReceiverSetup, coupled_states: list[CoupledState], goal_value: float
+) -> TerminalStatePredictionStrategy:
+    """
+    Builds the strategy over the receiver's rate ``k·q·s``, coupling the given states.
+    """
+    constraint = TerminalStatePredictionConstraint(
+        name="receiver_goal",
+        expression=-setup.source_velocity,
+        quadratic_weight=1.0,
+        normalization_factor=1.0,
+        enforcement_strategy=TerminalStatePredictionStrategy,
+        state_variable=setup.receiver_degree_of_freedom.variables.position,
+        goal_value=goal_value,
+        coupled_states=coupled_states,
+    )
+    return _strategy([constraint], setup.joint_degree_of_freedom)
+
+
+def _fed_receiver_recursion(steps: int, time_step: float) -> float:
+    """
+    The receiver's fill after the given held-joint Euler steps, the source draining
+    along.
+    """
+    source, receiver = _SOURCE_POSITION, _STATE_POSITION
+    rate = _DRAIN_CONSTANT * _JOINT_POSITION
+    for _ in range(steps):
+        source, receiver = (
+            source - time_step * rate * source,
+            receiver + time_step * rate * source,
+        )
+    return receiver
+
+
+class TestCoupledSourceInThePrediction:
+    """
+    A receiver's prediction lets the source it feeds on drain over the window instead of
+    holding the source's current outflow.
+    """
+
+    def test_coupled_free_response_follows_both_states(
+        self, fed_receiver_setup: FedReceiverSetup
+    ) -> None:
+        """
+        The coupled system is linear in its states here, so the linearized prediction
+        equals the held-joint recursion of source and receiver together.
+        """
+        strategy = _fed_receiver_strategy(
+            fed_receiver_setup,
+            [
+                CoupledState(
+                    variable=fed_receiver_setup.source_variable,
+                    velocity=fed_receiver_setup.source_velocity,
+                )
+            ],
+            goal_value=_GOAL_VALUE,
+        )
+        config = strategy.qp_controller_config
+
+        predicted = strategy._free_response().evaluate()[0]
+
+        assert predicted == pytest.approx(
+            _fed_receiver_recursion(
+                config.control_horizon, config.model_predictive_control_time_step
+            )
+        )
+
+    def test_without_coupled_states_the_source_rate_is_held(
+        self, fed_receiver_setup: FedReceiverSetup
+    ) -> None:
+        """
+        Without the coupling the receiver is predicted to gain the source's current
+        outflow over the whole window.
+        """
+        strategy = _fed_receiver_strategy(fed_receiver_setup, [], _GOAL_VALUE)
+        config = strategy.qp_controller_config
+        window = config.control_horizon * config.model_predictive_control_time_step
+
+        predicted = strategy._free_response().evaluate()[0]
+
+        assert predicted == pytest.approx(
+            _STATE_POSITION
+            + window * _DRAIN_CONSTANT * _JOINT_POSITION * _SOURCE_POSITION
+        )
+
+    def test_equality_bound_uses_the_coupled_prediction(
+        self, fed_receiver_setup: FedReceiverSetup
+    ) -> None:
+        """
+        The bound is the goal minus the prediction with the source draining along.
+        """
+        coupled = [
+            CoupledState(
+                variable=fed_receiver_setup.source_variable,
+                velocity=fed_receiver_setup.source_velocity,
+            )
+        ]
+        strategy = _fed_receiver_strategy(fed_receiver_setup, coupled, _STATE_POSITION)
+        config = strategy.qp_controller_config
+        predicted = _fed_receiver_recursion(
+            config.control_horizon, config.model_predictive_control_time_step
+        )
+        goal = predicted + 0.001
+        strategy = _fed_receiver_strategy(fed_receiver_setup, coupled, goal)
+
+        bound = strategy.create_equality_bounds().evaluate()[0]
+
+        assert bound == pytest.approx(goal - predicted)

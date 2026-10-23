@@ -1617,6 +1617,17 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
         """
         return self.dof.variables.position
 
+    def symbolic_fill_velocity(self) -> Scalar:
+        """
+        :return: The fill level's rate from :attr:`outflow_equation` and
+            :attr:`inflow_equation` together, zero without either.
+        """
+        velocity = sm.Scalar(0.0)
+        for equation in (self.outflow_equation, self.inflow_equation):
+            if equation is not None:
+                velocity = velocity + equation.symbolic_velocity(self)
+        return velocity
+
     def update_state(self, dt: float):
         """
         Advances the fill level by one physics step, clamped to the fill DOF's limits.
@@ -1634,11 +1645,7 @@ class LiquidConnection(PrismaticConnection, HasUpdateState):
         if limits.lower.position is None or limits.upper.position is None:
             raise MissingFillLevelLimitsError(connection_name=self.name)
         state = self._world.state
-        velocity = sum(
-            equation.symbolic_velocity(self).evaluate()[0]
-            for equation in (self.outflow_equation, self.inflow_equation)
-            if equation is not None
-        )
+        velocity = self.symbolic_fill_velocity().evaluate()[0]
         integrated_position = state[self.raw_dof.id].position + velocity * dt
         state[self.raw_dof.id].position = min(
             max(integrated_position, limits.lower.position), limits.upper.position

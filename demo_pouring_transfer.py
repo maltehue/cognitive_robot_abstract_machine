@@ -228,6 +228,13 @@ of the goal.
 The ramps of 2026-10-12 relaxed within one to two seconds of reaching their tilt.
 """
 
+COUPLE_SOURCE_FILL = True
+"""
+Let the source cup's fill drain along in the receiver's fill prediction, instead of
+holding the source's current outflow over the whole prediction window; ``False`` for the
+baseline of an A/B comparison.
+"""
+
 SETTLED_INFLOW = 0.005
 """
 The inflow below which the receiver counts as no longer filling, in fill per second:
@@ -405,7 +412,8 @@ print(
     f"{math.degrees(MATERIAL.repose_hysteresis):.0f} deg below the repose angle with "
     f"the cup full, {math.degrees(MATERIAL.repose_hysteresis + MATERIAL.repose_hysteresis_growth):.0f} "
     "deg empty; "
-    f"live bank {'on' if USE_LIVE_BANK else 'off'}; transfer from "
+    f"live bank {'on' if USE_LIVE_BANK else 'off'}; source fill "
+    f"{'drains along in' if COUPLE_SOURCE_FILL else 'held in'} the prediction; transfer from "
     f"{math.degrees(TRANSFER_START_TILT):.0f} deg at most "
     f"{math.degrees(MAXIMUM_TILT_RATE):.0f} deg/s, never past "
     f"{math.degrees(MAXIMUM_TILT):.0f} deg."
@@ -556,6 +564,7 @@ transfer_task = FillByTransferTask(
     reference_velocity=POURING_VELOCITY,
     stopping_velocity=STOPPING_VELOCITY,
     outflow_tolerance=SETTLED_INFLOW,
+    couple_source_fill=COUPLE_SOURCE_FILL,
 )
 # Keep the liquid's projectile landing in the receiver so the optimizer repositions the gripper
 # upstream as the source tilts and the arc reaches forward.

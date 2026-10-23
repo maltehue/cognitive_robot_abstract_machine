@@ -355,6 +355,42 @@ class TestGatedInflowEquation:
         ] == pytest.approx(-source_drain * source_capacity / receiver_capacity)
 
 
+# %% a fill level's rate from all its equations
+
+
+class TestSymbolicFillVelocity:
+    """
+    A fill connection's rate sums its drain and its inflow.
+    """
+
+    def test_a_receiver_fills_at_its_inflow(self):
+        """
+        A receiver without a drain changes at the rate its inflow equation gives.
+        """
+        world, _source, receiver = _build_world()
+        connection = receiver.fill_connection
+        assert connection.symbolic_fill_velocity().evaluate()[0] == pytest.approx(
+            connection.inflow_equation.symbolic_velocity(connection).evaluate()[0]
+        )
+
+    def test_a_source_drains_at_its_outflow(self):
+        """
+        A source without an inflow changes at the rate its drain equation gives.
+        """
+        world, source, _receiver = _build_world()
+        connection = source.fill_connection
+        assert connection.symbolic_fill_velocity().evaluate()[0] == pytest.approx(
+            connection.outflow_equation.symbolic_velocity(connection).evaluate()[0]
+        )
+
+    def test_a_connection_without_equations_stands_still(self):
+        """
+        A fill level with neither equation does not change.
+        """
+        world, _source, receiver = _build_world(couple=False)
+        assert receiver.fill_connection.symbolic_fill_velocity().evaluate()[0] == 0.0
+
+
 # %% gated source outflow
 
 

@@ -1572,6 +1572,61 @@ class TestFillRowLeavesPlacementToTheOtherTasks:
         assert float(transfer_task._compiled_fill_velocity.evaluate()[0]) > 0.0
 
 
+class TestTransferPredictionDrainsTheSource:
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` lets the
+    source's fill drain over the prediction window, so a source that empties is not
+    predicted to pour on at its current rate.
+    """
+
+    def test_the_source_fill_evolves_in_the_receivers_prediction(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The fill row carries the source's fill level as a coupled state, moving at the
+        source's own drain rate.
+        """
+        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        transfer_task = FillByTransferTask(
+            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
+        )
+
+        artifacts = transfer_task.build(MotionStatechartContext(world=world))
+
+        [row] = [
+            constraint
+            for constraint in artifacts.constraints.equality_constraints
+            if isinstance(constraint, TerminalStatePredictionConstraint)
+        ]
+        [coupled] = row.coupled_states
+        source_connection = source_cup.fill_connection
+        assert coupled.variable.id == source_connection.raw_dof.variables.position.id
+        assert coupled.velocity.evaluate()[0] == pytest.approx(
+            source_connection.symbolic_fill_velocity().evaluate()[0]
+        )
+
+    def test_the_source_fill_can_be_held_instead(self, tracy_transfer_world) -> None:
+        """
+        Without the coupling the prediction holds every other fill level.
+        """
+        world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        transfer_task = FillByTransferTask(
+            receiver=receiving_cup,
+            goal_value=0.7,
+            fill_level_tolerance=0.05,
+            couple_source_fill=False,
+        )
+
+        artifacts = transfer_task.build(MotionStatechartContext(world=world))
+
+        [row] = [
+            constraint
+            for constraint in artifacts.constraints.equality_constraints
+            if isinstance(constraint, TerminalStatePredictionConstraint)
+        ]
+        assert row.coupled_states == []
+
+
 class TestProjectileAimingErrorIsHorizontal:
     """
     :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInReceiver`
