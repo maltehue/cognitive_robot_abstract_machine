@@ -121,7 +121,7 @@ class WallFillSample:
 @dataclass(frozen=True)
 class WallFillCalibration:
     """
-    A proportional colour-to-fill calibration for one cup, material and camera view.
+    A linear colour-to-fill calibration for one cup, material and camera view.
     """
 
     measurement: WallColourMeasurement
@@ -132,6 +132,13 @@ class WallFillCalibration:
     scale: float
     """
     Fill per unit colour evidence, fitted from independent weighed recordings.
+    """
+
+    offset: float = 0.0
+    """
+    Fill at zero colour evidence on the fitted line, applied only to nonempty evidence:
+
+    negative where faint colour shows before any contents do.
     """
 
     minimum_signal: float = 0.0
@@ -150,6 +157,8 @@ class WallFillCalibration:
         """
         if not math.isfinite(self.scale) or self.scale <= 0:
             raise InvalidWallCalibrationError()
+        if not math.isfinite(self.offset):
+            raise InvalidWallCalibrationError()
         if not 0 <= self.minimum_signal <= self.maximum_signal <= 1:
             raise InvalidWallCalibrationError()
 
@@ -158,17 +167,25 @@ class WallFillCalibration:
         cls, measurement: WallColourMeasurement, samples: Sequence[WallFillSample]
     ) -> WallFillCalibration:
         """
-        Fit one scale by least squares, giving each recording equal weight.
+        Fit scale and offset by least squares, giving each recording equal weight.
+
+        Samples of a single colour level cannot separate an offset from the scale; their
+        line passes through the origin.
         """
-        squared_signal = sum(sample.signal**2 for sample in samples)
-        if squared_signal <= 0:
+        signals = numpy.array([sample.signal for sample in samples])
+        fills = numpy.array([sample.fill for sample in samples])
+        if not (signals > 0).any():
             raise InvalidWallCalibrationError()
-        scale = sum(sample.signal * sample.fill for sample in samples) / squared_signal
+        if len(numpy.unique(signals)) < 2:
+            scale, offset = float(signals @ fills / (signals @ signals)), 0.0
+        else:
+            scale, offset = numpy.polyfit(signals, fills, 1)
         return cls(
             measurement=measurement,
-            scale=scale,
-            minimum_signal=min(sample.signal for sample in samples),
-            maximum_signal=max(sample.signal for sample in samples),
+            scale=float(scale),
+            offset=float(offset),
+            minimum_signal=float(signals.min()),
+            maximum_signal=float(signals.max()),
         )
 
     def fill_for(self, signal: float) -> float | None:
@@ -181,7 +198,7 @@ class WallFillCalibration:
             return 0.0
         if not self.minimum_signal <= signal <= self.maximum_signal:
             return None
-        return min(1.0, self.scale * signal)
+        return min(1.0, max(0.0, self.scale * signal + self.offset))
 
 
 # %% causal rejection of transient yellow pixels

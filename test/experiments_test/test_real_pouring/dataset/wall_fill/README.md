@@ -1,6 +1,6 @@
 # Recorded wall-fill regression evidence
 
-These are original per-frame colour measurements and weighings for corn in the translucent receiver. They are data fixtures, not generated target predictions. Each `.npz` contains the last 39 frames' signed Lab yellowing, receiver mask, timestamps and legacy geometric lookup. The adjacent JSON is the bag's original `weighed_particles.json`, renamed to match the recording. `dataset.json` declares the 15 development and three validation recordings and their feature configuration.
+These are original per-frame colour measurements and weighings for corn in the translucent receiver. They are data fixtures, not generated target predictions. Each `.npz` contains 39 frames' signed Lab yellowing, receiver mask, timestamps and legacy geometric lookup: the frames ending three frames before the source cup turns back from the tilt it held at the end of the transfer, which is when the controller reads the wall. The wall reads more while the tilted source stands above the receiver than once it is upright (+3.2 pp on 2026-10-23, +1 pp before, with the upright-fitted calibration). The adjacent JSON is the bag's original `weighed_particles.json`, renamed to match the recording. `dataset.json` declares the 21 development and three validation recordings and their feature configuration.
 
 Sources in `~/Downloads`:
 
@@ -17,9 +17,10 @@ Sources in `~/Downloads`:
 | `2026-10-19_15-27-50.zip` | 2026-10-19 15:27:50 |
 | `corn-transparent-underpour.zip` | 2026-10-19 15:46:48 |
 | `pouring-goals-03-03-04-01.zip` | 2026-10-19 16:07:31, 16:10:56, 16:25:52 |
+| `pouring-corn-chatgpt-perception-03-03-02-02-04-04.zip` | 2026-10-23 09:24:30, 09:31:07, 09:36:03, 09:39:13, 09:41:49, 09:47:39 |
 
 The 16:13:33 recording is explicitly excluded following the user's correction. The 2026-10-15 calibration archive was inspected but had no `weighed_particles.json`, so its handover-only weighing was not introduced as a training label. Failed, unweighed recordings and other receiver/material combinations were not mixed into this calibration.
 
-Extraction used `experiments/results/real_pouring/analysis_2026-10-19/cache_wall_yellowing.py`, followed by retaining the final one-second scoring window plus its causal history. No cache value reached the extractor's ±100 clipping limits. The pixelwise temporal minimum is recomputed in the production estimator; the fixture does not contain precomputed new-model estimates.
+Extraction used `experiments/results/real_pouring/analysis_2026-10-19/cache_wall_yellowing.py` for the whole pour, followed by `experiments/scripts/retain_held_tilt_frames.py`, which keeps the one-second scoring window at the held tilt plus its causal history. No cache value reached the extractor's ±100 clipping limits. The pixelwise temporal minimum is recomputed in the production estimator; the fixture does not contain precomputed new-model estimates.
 
 Latest recordings were excluded from fitting but inspected during development; this is a regression corpus, not a permanently blind test set. See `experiments/results/real_pouring/perception_2026-10-19/README.md` for evaluation limits and reproduction commands.

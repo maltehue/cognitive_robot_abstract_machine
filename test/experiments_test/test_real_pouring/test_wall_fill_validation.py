@@ -21,6 +21,11 @@ from experiments.real_pouring.wall_fill_validation import (
     WallFillRecording,
     WallFillArtifact,
     SETTLED_FRAMES,
+    RETURN_MARGIN_FRAMES,
+    HeldTiltFrames,
+    SourceReturn,
+    WallCacheKey,
+    causal_window_frames,
     main,
 )
 from krrood.adapters.json_serializer import from_json
@@ -136,7 +141,8 @@ Require at least a thirty-percent error reduction against the legacy wall gauge.
 @pytest.fixture
 def recording_directory() -> Path:
     """
-    Compact final camera windows and the original weighing for eighteen pours.
+    Compact camera windows at the held tilt and the original weighing for twenty-four
+    pours.
     """
     return Path(__file__).parent / "dataset" / "wall_fill"
 
@@ -240,3 +246,81 @@ def test_command_writes_reloadable_calibration(
     assert (
         tuple(row.recording for row in result.validation) == result.dataset.validation
     )
+
+
+# %% frames read while the source is still held over the receiver
+
+
+@pytest.fixture
+def held_tilts() -> numpy.ndarray:
+    """
+    A source turned to its pouring tilt, held there with jitter, returned upright and
+    left standing.
+    """
+    rising = numpy.linspace(40.0, 85.0, 50)
+    holding = 85.0 + 0.01 * numpy.sin(numpy.arange(40))
+    returning = numpy.linspace(84.0, 0.0, 30)
+    standing = numpy.zeros(20)
+    return numpy.concatenate([rising, holding, returning, standing])
+
+
+def test_hold_ends_before_the_source_turns_back(held_tilts: numpy.ndarray) -> None:
+    """
+    The last held frame is the one before the return, less the margin.
+    """
+    last_held = 50 + 40 - 1
+    assert SourceReturn(held_tilts).held_tilt_end() == last_held - RETURN_MARGIN_FRAMES
+
+
+def test_a_source_that_never_returns_is_rejected(held_tilts: numpy.ndarray) -> None:
+    """
+    A recording cut before the return has no known end of the hold.
+    """
+    with pytest.raises(InvalidWallDatasetError):
+        SourceReturn(held_tilts[:90]).held_tilt_end()
+
+
+def test_a_source_that_never_tilts_is_rejected() -> None:
+    """
+    A recording without a pour has no hold.
+    """
+    with pytest.raises(InvalidWallDatasetError):
+        SourceReturn(numpy.zeros(30)).held_tilt_end()
+
+
+def test_retained_frames_end_at_the_held_tilt(
+    held_tilts: numpy.ndarray, tmp_path: Path
+) -> None:
+    """
+    A compact cache keeps the scored frames and their causal history up to the end of
+    the hold, labelled here by each frame's index.
+    """
+    count = len(held_tilts)
+    times = numpy.arange(count) / 30.0
+    full = tmp_path / "full.npz"
+    numpy.savez_compressed(
+        full,
+        **{
+            WallCacheKey.DIFFERENCES: numpy.arange(count, dtype=numpy.int16)[
+                :, None, None
+            ]
+            * numpy.ones((1, 2, 2), dtype=numpy.int16),
+            WallCacheKey.REGION: numpy.ones((2, 2), dtype=bool),
+            WallCacheKey.TIMES: times,
+            WallCacheKey.TILTS: held_tilts,
+            WallCacheKey.FILLS: numpy.linspace(0.0, 1.0, 3),
+            WallCacheKey.AREAS: numpy.linspace(0.0, 10.0, 3),
+            WallCacheKey.DETECTED_SHARE: numpy.array(0.5),
+        },
+    )
+    compact = tmp_path / "compact.npz"
+    HeldTiltFrames(full).write(compact)
+    end = SourceReturn(held_tilts).held_tilt_end()
+    with numpy.load(compact) as cache:
+        retained = cache[WallCacheKey.DIFFERENCES][:, 0, 0]
+        assert WallCacheKey.TILTS not in cache.files
+        assert cache[WallCacheKey.TIMES] == pytest.approx(
+            times[end + 1 - len(retained) : end + 1]
+        )
+    assert retained[-1] == end
+    assert len(retained) == SETTLED_FRAMES + causal_window_frames(times) - 1

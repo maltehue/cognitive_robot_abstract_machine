@@ -182,6 +182,70 @@ def test_no_colour_still_means_empty_after_calibration(
     assert calibration.fill_for(0.0) == 0.0
 
 
+# %% offset of the colour-to-fill conversion
+
+
+def test_offset_is_fitted_from_weighed_samples(
+    measurement: WallColourMeasurement,
+) -> None:
+    """
+    Readings that lie on a line not through the origin determine its scale and offset.
+    """
+    samples = [
+        WallFillSample(signal=0.1, fill=0.15),
+        WallFillSample(signal=0.2, fill=0.35),
+        WallFillSample(signal=0.3, fill=0.55),
+    ]
+    calibration = WallFillCalibration.fit(measurement, samples)
+    scale = (samples[1].fill - samples[0].fill) / (
+        samples[1].signal - samples[0].signal
+    )
+    assert calibration.scale == pytest.approx(scale)
+    assert calibration.offset == pytest.approx(
+        samples[0].fill - scale * samples[0].signal
+    )
+    assert calibration.fill_for(samples[2].signal) == pytest.approx(samples[2].fill)
+
+
+def test_one_recording_fits_no_offset(measurement: WallColourMeasurement) -> None:
+    """
+    A single colour level cannot tell an offset from a scale, so the line keeps the
+    origin.
+    """
+    sample = WallFillSample(signal=0.1, fill=0.2)
+    calibration = WallFillCalibration.fit(measurement, [sample])
+    assert calibration.offset == 0.0
+    assert calibration.scale == pytest.approx(sample.fill / sample.signal)
+
+
+def test_offset_never_reports_a_negative_fill(
+    measurement: WallColourMeasurement,
+) -> None:
+    """
+    Faint colour below the offset reads as an empty receiver, not less than empty.
+    """
+    calibration = WallFillCalibration(measurement=measurement, scale=2.0, offset=-0.3)
+    assert calibration.fill_for(0.1) == 0.0
+
+
+def test_calibration_with_offset_round_trips(
+    measurement: WallColourMeasurement,
+) -> None:
+    """
+    Saved calibration retains its fitted offset.
+    """
+    calibration = WallFillCalibration(measurement=measurement, scale=2.0, offset=-0.02)
+    assert from_json(to_json(calibration)) == calibration
+
+
+def test_non_finite_offset_is_rejected(measurement: WallColourMeasurement) -> None:
+    """
+    An undefined offset cannot convert colour into fill.
+    """
+    with pytest.raises(InvalidWallCalibrationError):
+        WallFillCalibration(measurement=measurement, scale=2.0, offset=float("nan"))
+
+
 # %% causal filtering
 
 

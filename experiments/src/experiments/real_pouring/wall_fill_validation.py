@@ -30,7 +30,16 @@ from krrood.adapters.json_serializer import from_json, to_json
 
 
 SETTLED_FRAMES = 30
-"""Final one-second camera window used for each recording's weighed comparison."""
+"""One-second camera window used for each recording's weighed comparison."""
+
+RETURNED_TILT = 30.0
+"""Source tilt, in degrees, below which the source has left its pouring tilt for good."""
+
+RETURN_STEP = 0.02
+"""Least drop in source tilt between frames, in degrees, that counts as turning back."""
+
+RETURN_MARGIN_FRAMES = 3
+"""Frames kept clear between the scored window and the first frame of the return."""
 
 
 class WallFillPartition(StrEnum):
@@ -57,6 +66,8 @@ class WallCacheKey(StrEnum):
     """Projected contents areas in the geometric lookup."""
     DETECTED_SHARE = "share"
     """Legacy detected fraction of projected contents."""
+    TILTS = "tilts"
+    """Source tilt per frame, in degrees; only in caches of a whole pour."""
 
 
 class WallFillArtifact(StrEnum):
@@ -88,6 +99,70 @@ class WallFillArgument(StrEnum):
 @dataclass
 class InvalidWallDatasetError(ValueError):
     """Raised when recording identities, partitions, or settled observations are invalid."""
+
+
+# %% the scored window while the source is still held over the receiver
+
+
+def causal_window_frames(times: numpy.ndarray) -> int:
+    """Return the causal stillness window at the camera frequency of these frame times."""
+    intervals = numpy.diff(times)
+    if (
+        not len(intervals)
+        or not numpy.isfinite(intervals).all()
+        or (intervals <= 0).any()
+    ):
+        raise InvalidWallDatasetError()
+    return max(1, round(WALL_STILL_SECONDS / float(numpy.median(intervals))))
+
+
+@dataclass(frozen=True)
+class SourceReturn:
+    """
+    The source's final turn back from the tilt it held over the receiver.
+
+    The wall reads more while the tilted source stands above the receiver than once it
+    is upright, and the controller decides to stop while it is still tilted.
+    """
+
+    tilts: numpy.ndarray
+    """Source tilt per camera frame, in degrees."""
+
+    def held_tilt_end(self) -> int:
+        """Return the index of the last frame scored at the held tilt, before the return."""
+        tilted = numpy.flatnonzero(self.tilts > RETURNED_TILT)
+        if not len(tilted) or tilted[-1] == len(self.tilts) - 1:
+            raise InvalidWallDatasetError()
+        start = int(tilted[-1])
+        while start > 0 and self.tilts[start - 1] > self.tilts[start] + RETURN_STEP:
+            start -= 1
+        if start < RETURN_MARGIN_FRAMES:
+            raise InvalidWallDatasetError()
+        return start - RETURN_MARGIN_FRAMES
+
+
+@dataclass(frozen=True)
+class HeldTiltFrames:
+    """The scored frames at the source's held tilt, taken from a whole pour's cache."""
+
+    cache: Path
+    """Wall cache of a whole pour, with the source tilt per frame."""
+
+    def write(self, destination: Path) -> None:
+        """
+        Write a compact cache of the scored window ending at the held tilt, with its
+        causal history.
+        """
+        with numpy.load(self.cache, allow_pickle=False) as whole:
+            arrays = {key: whole[key] for key in whole.files}
+        end = SourceReturn(arrays.pop(WallCacheKey.TILTS)).held_tilt_end()
+        times = arrays[WallCacheKey.TIMES]
+        start = end + 1 - (SETTLED_FRAMES + causal_window_frames(times) - 1)
+        if start < 0:
+            raise InvalidWallDatasetError()
+        for key in (WallCacheKey.DIFFERENCES, WallCacheKey.TIMES):
+            arrays[key] = arrays[key][start : end + 1]
+        numpy.savez_compressed(destination, **arrays)
 
 
 # %% weighed endpoint observations
@@ -223,14 +298,7 @@ class WallFillRecording:
     @property
     def window_frames(self) -> int:
         """Return the causal stillness window at the recorded camera frequency."""
-        intervals = numpy.diff(self.times)
-        if (
-            not len(intervals)
-            or not numpy.isfinite(intervals).all()
-            or (intervals <= 0).any()
-        ):
-            raise InvalidWallDatasetError()
-        return max(1, round(WALL_STILL_SECONDS / float(numpy.median(intervals))))
+        return causal_window_frames(self.times)
 
     def baseline_for(self, persistent: numpy.ndarray) -> float | None:
         """Apply the legacy threshold and geometric conversion to persistent colour."""
@@ -240,7 +308,7 @@ class WallFillRecording:
         return float(numpy.interp(pixels / self.detected_share, self.areas, self.fills))
 
     def observe(self, measurement: WallColourMeasurement) -> WallFillObservation:
-        """Summarize final frames without using their weighing to derive image features."""
+        """Summarize the cached frames without using their weighing to derive image features."""
         required = SETTLED_FRAMES + self.window_frames - 1
         if len(self.differences) < required:
             raise InvalidWallDatasetError()
