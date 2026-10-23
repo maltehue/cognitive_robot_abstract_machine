@@ -45,6 +45,10 @@ from experiments.real_pouring.live_bank import LiveBank
 from experiments.real_pouring.live_bank_listener import LiveBankListener
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.pour_perception import PourPerception
+from experiments.real_pouring.pour_settings import (
+    POUR_SETTINGS_FILE_NAME,
+    PourSettings,
+)
 from experiments.real_pouring.receiving_cup import (
     RECEIVING_CUP_FILE_NAME,
     ReceivingCup,
@@ -565,6 +569,15 @@ transfer_task = FillByTransferTask(
     stopping_velocity=STOPPING_VELOCITY,
     outflow_tolerance=SETTLED_INFLOW,
     couple_source_fill=COUPLE_SOURCE_FILL,
+)
+recording.add_file(
+    POUR_SETTINGS_FILE_NAME,
+    PourSettings(
+        goal_fill=transfer_task.goal_value,
+        fill_tolerance=transfer_task.fill_level_tolerance,
+        couple_source_fill=transfer_task.couple_source_fill,
+        prediction_duration=transfer_task.prediction_duration,
+    ).as_json_text(),
 )
 # Keep the liquid's projectile landing in the receiver so the optimizer repositions the gripper
 # upstream as the source tilts and the arc reaches forward.
