@@ -19,6 +19,8 @@ from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.pour_settings import (
     POUR_SETTINGS_FILE_NAME,
     MissingPourSettingsError,
+    PourLabel,
+    PourLabelMarker,
     PourSettings,
     RepositoryState,
     TiltPacingSettings,
@@ -142,3 +144,45 @@ def test_the_commit_checked_out_is_recorded(repository: Path) -> None:
 def test_uncommitted_changes_are_noticed(repository: Path) -> None:
     (repository / "file.txt").write_text("changed")
     assert RepositoryState.of_working_tree(repository).has_uncommitted_changes
+
+
+# %% the label a pour's bag is named with
+
+
+def test_the_label_names_material_cups_goal_start_and_approach() -> None:
+    label = PourLabel(
+        material=PouredMaterial.CORN,
+        receiving_cup=ReceivingCup.TRANSLUCENT_CUP,
+        goal_fill=0.3,
+        start_fill=1.0,
+        approach_tilt_rate=math.radians(3.0),
+        live_bank=True,
+        learned_head=False,
+    )
+
+    assert label.text() == (
+        f"{PouredMaterial.CORN}_{ReceivingCup.TRANSLUCENT_CUP}_goal30_start100_approach3"
+    )
+
+
+def test_the_label_marks_a_fractional_rate_and_departures_from_the_usual_setup() -> (
+    None
+):
+    """
+    A run without the live bank or with the learned head says so; a fractional rate
+    keeps its decimal without a dot, which a ROS name would refuse.
+    """
+    label = PourLabel(
+        material=PouredMaterial.CORN,
+        receiving_cup=ReceivingCup.TRANSLUCENT_CUP,
+        goal_fill=0.2,
+        start_fill=0.7,
+        approach_tilt_rate=math.radians(1.5),
+        live_bank=False,
+        learned_head=True,
+    )
+
+    assert label.text() == (
+        f"{PouredMaterial.CORN}_{ReceivingCup.TRANSLUCENT_CUP}_goal20_start70_approach1p5"
+        f"_{PourLabelMarker.WITHOUT_BANK}_{PourLabelMarker.WITH_LEARNED_HEAD}"
+    )

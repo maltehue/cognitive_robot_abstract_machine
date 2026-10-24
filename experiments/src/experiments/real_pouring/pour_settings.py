@@ -5,8 +5,10 @@ What a demo pour was asked to do, kept in its bag next to what it delivered.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 from typing_extensions import Optional
@@ -234,3 +236,98 @@ class PourSettings:
         if not path.exists():
             raise MissingPourSettingsError(bag)
         return from_json(json.loads(path.read_text()))
+
+
+# %% the label a pour's bag is named with
+
+LABEL_SEPARATOR = "_"
+"""
+Separates the parts of a pour's label.
+"""
+
+DECIMAL_MARK = "p"
+"""
+Stands for the decimal point in a label: a ROS node named after the bag may not hold a
+dot.
+"""
+
+
+class PourLabelMarker(StrEnum):
+    """
+    Words a label adds where a run departs from the usual setup.
+    """
+
+    WITHOUT_BANK = "nobank"
+    """
+    The live bank did not run.
+    """
+
+    WITH_LEARNED_HEAD = "learnedhead"
+    """
+    The learned head drove the transfer.
+    """
+
+
+@dataclass(frozen=True)
+class PourLabel:
+    """
+    What tells pours apart at a glance, for naming their bags.
+    """
+
+    material: PouredMaterial
+    """
+    What was poured.
+    """
+
+    receiving_cup: ReceivingCup
+    """
+    The cup poured into.
+    """
+
+    goal_fill: float
+    """
+    Fill of the receiving cup the pour aims for.
+    """
+
+    start_fill: float
+    """
+    Fill of the source cup when the pour started.
+    """
+
+    approach_tilt_rate: float
+    """
+    How fast the cup kept turning where the model predicted no flow, in radians per
+    second.
+    """
+
+    live_bank: bool
+    """
+    Whether the live bank ran.
+    """
+
+    learned_head: bool
+    """
+    Whether the learned head drove the transfer.
+    """
+
+    def text(self) -> str:
+        """
+        :return: Material, receiving cup, goal and start fill in percent, and the
+            approach rate in degrees per second, followed by a marker for each
+            departure from the usual setup.
+        """
+        approach = f"{round(math.degrees(self.approach_tilt_rate), 1):g}".replace(
+            ".", DECIMAL_MARK
+        )
+        parts = [
+            self.material,
+            self.receiving_cup,
+            f"goal{round(self.goal_fill * 100)}",
+            f"start{round(self.start_fill * 100)}",
+            f"approach{approach}",
+        ]
+        if not self.live_bank:
+            parts.append(PourLabelMarker.WITHOUT_BANK)
+        if self.learned_head:
+            parts.append(PourLabelMarker.WITH_LEARNED_HEAD)
+        return LABEL_SEPARATOR.join(parts)

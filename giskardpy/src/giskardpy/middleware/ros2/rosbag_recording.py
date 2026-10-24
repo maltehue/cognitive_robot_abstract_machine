@@ -5,6 +5,7 @@ Recording of a demo run into a timestamped rosbag.
 from __future__ import annotations
 
 import atexit
+import re
 import signal
 import subprocess
 import time
@@ -30,6 +31,16 @@ Directory the pouring demos write their bags into.
 BAG_NAME_FORMAT = "%Y-%m-%d_%H-%M-%S"
 """
 Timestamp format naming one bag, ordering the bags of a session by name.
+"""
+
+BAG_LABEL_SEPARATOR = "_"
+"""
+Separates a bag's start time from its label.
+"""
+
+NOT_IN_A_ROS_NAME = re.compile(r"[^A-Za-z0-9_]")
+"""
+Characters a ROS node name may not contain.
 """
 
 RECORDER_NODE_NAME_PREFIX = "pouring_bag_recorder_"
@@ -287,6 +298,11 @@ class RosbagRecording:
     The topics to record.
     """
 
+    label: str = field(default="", kw_only=True)
+    """
+    What the bag's name says after its start time, to tell runs apart; empty for none.
+    """
+
     graph_watcher: RosGraphWatcher = field(default_factory=RosGraphWatcher)
     """
     Tells which topics the recorder has subscribed to.
@@ -307,7 +323,20 @@ class RosbagRecording:
         """
         :return: Name of the recorder's node, unique to this bag.
         """
-        return RECORDER_NODE_NAME_PREFIX + self.bag_path.name.replace("-", "_")
+        return RECORDER_NODE_NAME_PREFIX + NOT_IN_A_ROS_NAME.sub(
+            "_", self.bag_path.name
+        )
+
+    def bag_name(self, moment: datetime) -> str:
+        """
+        :param moment: When the recording starts.
+        :return: The name of a bag started then: its start time, followed by
+            :attr:`label` where there is one.
+        """
+        started = moment.strftime(BAG_NAME_FORMAT)
+        if not self.label:
+            return started
+        return f"{started}{BAG_LABEL_SEPARATOR}{self.label}"
 
     @property
     def command(self) -> list[str]:
@@ -329,7 +358,7 @@ class RosbagRecording:
 
     def start(self) -> Path:
         """
-        Start recording into a bag named after the current time.
+        Start recording into a bag named after the current time and the label.
 
         Returns once the recorder is subscribed to every topic, so the messages of
         whatever runs next are captured from the first one.
@@ -339,7 +368,7 @@ class RosbagRecording:
         if self._recorder is not None:
             raise RecordingAlreadyStartedError(self.bag_path)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.bag_path = self.directory / datetime.now().strftime(BAG_NAME_FORMAT)
+        self.bag_path = self.directory / self.bag_name(datetime.now())
         # A session of its own keeps the recorder from receiving the terminal's Ctrl-C,
         # so the bag is closed by the stop below instead of dying mid-write.
         self._recorder = subprocess.Popen(self.command, start_new_session=True)

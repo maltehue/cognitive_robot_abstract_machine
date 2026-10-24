@@ -49,6 +49,7 @@ from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.pour_perception import PourPerception
 from experiments.real_pouring.pour_settings import (
     POUR_SETTINGS_FILE_NAME,
+    PourLabel,
     PourSettings,
     RepositoryState,
     TiltPacingSettings,
@@ -427,7 +428,17 @@ def _spawn_receiving_cup_body(cup: ReceivingCup) -> Body:
 
 
 # ----- Record the run; the bag is closed again at the end of the script -----
-recording = RosbagRecording()
+recording = RosbagRecording(
+    label=PourLabel(
+        material=MATERIAL,
+        receiving_cup=RECEIVING_CUP,
+        goal_fill=GOAL_FILL_CONST,
+        start_fill=START_FILL,
+        approach_tilt_rate=APPROACH_TILT_RATE,
+        live_bank=USE_LIVE_BANK,
+        learned_head=USE_LEARNED_HEAD,
+    ).text()
+)
 print(f"Recording into {recording.start()}.")
 recording.add_file(RECEIVING_CUP_FILE_NAME, RECEIVING_CUP.value)
 print(
