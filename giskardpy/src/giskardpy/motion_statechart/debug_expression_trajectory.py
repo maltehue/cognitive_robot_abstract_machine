@@ -54,14 +54,20 @@ class RecordedDebugExpression:
         """
         return self.debug_expression.name
 
-    def record(self) -> None:
+    def current_value(self) -> np.ndarray:
         """
-        Evaluate the expression against the current world state and store the result.
+        :return: The expression evaluated against the current world state, flattened.
         """
         arguments = np.array(
             [variable.resolve() for variable in self._free_variables], dtype=np.float64
         )
-        self._values.append(self._compiled_function(arguments).flatten())
+        return self._compiled_function(arguments).flatten()
+
+    def record(self) -> None:
+        """
+        Evaluate the expression against the current world state and store the result.
+        """
+        self._values.append(self.current_value())
 
     @property
     def values(self) -> np.ndarray:

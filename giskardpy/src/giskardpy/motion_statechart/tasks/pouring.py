@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
+from enum import StrEnum
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
 
@@ -44,6 +45,23 @@ from giskardpy.motion_statechart.graph_node import (
     Task,
 )
 from giskardpy.qp.terminal_state_prediction_strategy import CoupledState
+
+
+class FillDebugValue(StrEnum):
+    """
+    What a fill task exposes for a control-cycle recording, each a debug expression
+    named after the task and this value.
+    """
+
+    PREDICTED_FILL = "predicted_fill"
+    """
+    The fill the task's row predicts for the end of its window, the joints held.
+    """
+
+    FILL_RATE = "fill_rate"
+    """
+    The fill rate the task's model gives now, in fill per second.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -172,7 +190,7 @@ class TerminalFillConstraintTask(Task, ABC):
             0, context.world.state.positions
         )
         context.float_variable_data.bind_argument(self._compiled_fill_velocity, 1)
-        artifacts.constraints.add_terminal_state_prediction_constraint(
+        row = artifacts.constraints.add_terminal_state_prediction_constraint(
             name=f"{self.fill_connection.name}",
             state_velocity=self.fill_velocity_expression,
             state_variable=self.fill_connection.dof.variables.position,
@@ -182,6 +200,18 @@ class TerminalFillConstraintTask(Task, ABC):
             prediction_duration=self.prediction_duration,
             stopping_velocity=self.stopping_velocity,
             coupled_states=self._coupled_states(context),
+        )
+        artifacts.debug_expressions.extend(
+            [
+                DebugExpression(
+                    f"{self.name}/{FillDebugValue.PREDICTED_FILL}",
+                    row.predicted_value(context.qp_controller_config),
+                ),
+                DebugExpression(
+                    f"{self.name}/{FillDebugValue.FILL_RATE}",
+                    self.fill_velocity_expression,
+                ),
+            ]
         )
         return artifacts
 

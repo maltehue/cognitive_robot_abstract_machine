@@ -26,6 +26,7 @@ Watch the stop button while the cup is above about 90 degrees.
 
 import json
 import math
+import shutil
 import time
 from importlib.resources import files
 from pathlib import Path
@@ -35,6 +36,7 @@ from giskardpy.middleware.ros2.particle_weighing import (
     WEIGHED_PARTICLES_FILE_NAME,
     WeighedParticles,
 )
+from giskardpy.middleware.ros2.post_goal_plotters import GoalControlCycleRecorder
 from giskardpy.middleware.ros2.rosbag_recording import RosbagRecording
 from experiments.pouring_model_verification.hypothesis_bank import (
     BankSettings,
@@ -317,6 +319,12 @@ that tilts it could follow, so the other joints joined in and moved the cup by
 centimetres and its axis by up to 2.7 degrees (bag 2026-10-23_16-02-07). Replayed
 through the controller, 30 degrees per second squared kept the other joints at the speed
 they move at during the steady pour while tilting back nearly as far within two seconds.
+"""
+
+CONTROL_CYCLES_FILE_NAME = "transfer_control_cycles.npz"
+"""
+Name the transfer's control-cycle recording gets inside the bag: what the controller was
+asked and predicted every cycle, including the fill task's predicted fill and fill rate.
 """
 
 LIVE_BANK_TRACE_FILE_NAME = "live_bank_trace.json"
@@ -703,9 +711,20 @@ if USE_LIVE_BANK:
     )
     live_bank_listener.start()
 print("Start transfer.")
+transfer_started_at = time.time()
 giskard.execute(msc)
 if live_bank_listener is not None:
     live_bank_listener.stop()
+transfer_control_cycles = GoalControlCycleRecorder.recording_written_since(
+    transfer_started_at
+)
+if transfer_control_cycles is None:
+    print(
+        "No control-cycle recording of the transfer on this machine: start Giskard "
+        "with record_control_cycles:=true on this machine to keep it in the bag."
+    )
+else:
+    shutil.copy(transfer_control_cycles, recording.bag_path / CONTROL_CYCLES_FILE_NAME)
 
 
 # ``giskard.execute`` returns on the action result, but the final fill levels are synchronized

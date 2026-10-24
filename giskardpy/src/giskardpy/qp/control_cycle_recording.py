@@ -7,11 +7,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import numpy as np
 import scipy.sparse as sp
-from typing_extensions import Self
+from typing_extensions import Self, Sequence, TYPE_CHECKING
 
+from giskardpy.motion_statechart.debug_expression_trajectory import (
+    RecordedDebugExpression,
+)
 from giskardpy.qp.control_cycle_solution import ControlCycleSolution
 from giskardpy.qp.exceptions import (
     EmptyControlCycleRecordingError,
@@ -22,9 +26,34 @@ from giskardpy.qp.qp_data import QPDataExplicit
 from giskardpy.qp.qp_data_symbolic import QPDataSymbolic
 from giskardpy.utils.utils import create_path
 
+if TYPE_CHECKING:
+    from giskardpy.motion_statechart.graph_node import DebugExpression
+
 RECORDING_FORMAT_VERSION = 4
 """
 Version of the stored recording layout, raised whenever stored fields change meaning.
+"""
+
+
+class ControlCycleArchiveKey(StrEnum):
+    """
+    Entries of a stored recording that recordings written before them lack.
+    """
+
+    DEBUG_VALUES = "debug_values"
+    """
+    The debug values of every cycle.
+    """
+
+    DEBUG_COLUMNS = "debug_columns"
+    """
+    The names of the debug value columns, kept with the metadata.
+    """
+
+
+DEBUG_COMPONENT_SEPARATOR = "/"
+"""
+Separates a debug expression's name from the index of one of its components.
 """
 
 NODE_NAME_SEPARATOR = "/"
@@ -249,6 +278,12 @@ class RecordedControlCycle:
     a replay can put the objects the robot interacts with back where they were too.
     """
 
+    debug_values: np.ndarray
+    """
+    Every component of every debug expression of the motion, shaped ``(debug
+    columns,)``.
+    """
+
 
 # %% recording
 
@@ -335,12 +370,32 @@ class ControlCycleRecording:
     degrees of freedom)``.
     """
 
+    debug_columns: list[str] = field(default_factory=list)
+    """
+    Name of every debug value column: a debug expression's name, followed by the index
+    of the component where the expression has more than one.
+    """
+
+    debug_values: np.ndarray | None = None
+    """
+    Per-cycle value of every debug column, shaped ``(cycles, debug columns)``; empty
+    columns for recordings made without debug expressions.
+    """
+
+    def __post_init__(self) -> None:
+        """
+        Gives a recording without debug values its empty debug columns.
+        """
+        if self.debug_values is None:
+            self.debug_values = np.zeros((len(self.times), 0))
+
     @classmethod
     def from_cycles(
         cls,
         structure: ConstraintProblemStructure,
         world_degree_of_freedom_names: list[str],
         cycles: list[RecordedControlCycle],
+        debug_columns: Sequence[str] = (),
     ) -> Self:
         """
         Stacks the recorded cycles into one time series.
@@ -367,6 +422,8 @@ class ControlCycleRecording:
             ),
             world_degree_of_freedom_names=list(world_degree_of_freedom_names),
             world_positions=np.stack([cycle.world_positions for cycle in cycles]),
+            debug_columns=list(debug_columns),
+            debug_values=np.stack([cycle.debug_values for cycle in cycles]),
         )
 
     @property
@@ -386,6 +443,7 @@ class ControlCycleRecording:
                 "format_version": RECORDING_FORMAT_VERSION,
                 "structure": self.structure.to_json(),
                 "world_degree_of_freedom_names": self.world_degree_of_freedom_names,
+                ControlCycleArchiveKey.DEBUG_COLUMNS: self.debug_columns,
             }
         )
         np.savez_compressed(
@@ -402,6 +460,7 @@ class ControlCycleRecording:
             velocity_lower_limits=self.velocity_lower_limits,
             velocity_upper_limits=self.velocity_upper_limits,
             world_positions=self.world_positions,
+            **{ControlCycleArchiveKey.DEBUG_VALUES: self.debug_values},
         )
 
     @classmethod
@@ -437,6 +496,14 @@ class ControlCycleRecording:
                     metadata["world_degree_of_freedom_names"]
                 ),
                 world_positions=archive["world_positions"],
+                debug_columns=list(
+                    metadata.get(ControlCycleArchiveKey.DEBUG_COLUMNS, [])
+                ),
+                debug_values=(
+                    archive[ControlCycleArchiveKey.DEBUG_VALUES]
+                    if ControlCycleArchiveKey.DEBUG_VALUES in archive.files
+                    else None
+                ),
             )
 
 
@@ -474,8 +541,23 @@ class ControlCycleRecorder:
     Name of every degree of freedom of the world, in world state column order.
     """
 
+    _debug_expressions: list[RecordedDebugExpression] = field(
+        init=False, default_factory=list
+    )
+    """
+    The motion's debug expressions, compiled once, evaluated every cycle.
+    """
+
+    debug_columns: list[str] = field(init=False, default_factory=list)
+    """
+    Name of every recorded debug value column.
+    """
+
     def reset(
-        self, qp_data: QPDataSymbolic, world_degree_of_freedom_names: list[str]
+        self,
+        qp_data: QPDataSymbolic,
+        world_degree_of_freedom_names: list[str],
+        debug_expressions: Sequence[DebugExpression] = (),
     ) -> None:
         """
         Prepares to record the given problem, discarding any previous cycles.
@@ -483,9 +565,18 @@ class ControlCycleRecorder:
         :param qp_data: The compiled problem whose rows are recorded.
         :param world_degree_of_freedom_names: Name of every degree of freedom of the
             world, in the column order of the positions handed to :meth:`record`.
+        :param debug_expressions: The motion's debug expressions, evaluated every cycle.
         """
         self.structure = ConstraintProblemStructure.from_symbolic_problem(qp_data)
         self.world_degree_of_freedom_names = list(world_degree_of_freedom_names)
+        self._debug_expressions = [
+            RecordedDebugExpression(expression) for expression in debug_expressions
+        ]
+        self.debug_columns = [
+            column
+            for recorded in self._debug_expressions
+            for column in self._columns_of(recorded)
+        ]
         self._cycles = []
         self._degree_of_freedom_aggregator = self._create_aggregator()
 
@@ -511,6 +602,20 @@ class ControlCycleRecorder:
             ),
             shape=(number_of_velocity_columns, number_of_degrees_of_freedom),
         )
+
+    @staticmethod
+    def _columns_of(recorded: RecordedDebugExpression) -> list[str]:
+        """
+        :return: The column names of one debug expression: its name alone for a single
+            value, its name and each component's index otherwise.
+        """
+        size = len(recorded.current_value())
+        if size == 1:
+            return [recorded.name]
+        return [
+            f"{recorded.name}{DEBUG_COMPONENT_SEPARATOR}{index}"
+            for index in range(size)
+        ]
 
     @property
     def has_recorded_cycles(self) -> bool:
@@ -572,6 +677,10 @@ class ControlCycleRecorder:
                     qp_data.box_upper_constraints[:number_of_degrees_of_freedom]
                 ),
                 world_positions=np.array(world_positions),
+                debug_values=np.concatenate(
+                    [np.zeros(0)]
+                    + [recorded.current_value() for recorded in self._debug_expressions]
+                ),
             )
         )
 
@@ -584,7 +693,10 @@ class ControlCycleRecorder:
         if not self.has_recorded_cycles:
             raise EmptyControlCycleRecordingError()
         return ControlCycleRecording.from_cycles(
-            self.structure, self.world_degree_of_freedom_names, self._cycles
+            self.structure,
+            self.world_degree_of_freedom_names,
+            self._cycles,
+            self.debug_columns,
         )
 
     def _number_of_non_slack_variables(self, qp_data: QPDataExplicit) -> int:

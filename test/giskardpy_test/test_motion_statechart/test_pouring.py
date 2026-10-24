@@ -12,6 +12,7 @@ from krrood.symbolic_math.float_variable_data import FloatVariableData
 from krrood.symbolic_math.symbolic_math import FloatVariable
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
+from giskardpy.qp.control_cycle_recording import ControlCycleRecorder
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.qp.terminal_state_prediction_strategy import (
     TerminalStatePredictionConstraint,
@@ -39,6 +40,7 @@ from giskardpy.motion_statechart.tasks.cartesian_tasks import (
     CartesianPosition,
 )
 from giskardpy.motion_statechart.tasks.pouring import (
+    FillDebugValue,
     HeldAtTilt,
     TiltPacing,
     FillByTransferTask,
@@ -1628,6 +1630,64 @@ class TestTransferPredictionDrainsTheSource:
         assert row.coupled_states == []
 
 
+class TestTransferPredictionIsRecorded:
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` exposes what
+    its row predicts and the fill rate its model gives, for a control-cycle recording to
+    keep next to what the robot did.
+    """
+
+    def test_the_prediction_and_the_rate_are_debug_expressions(
+        self, tracy_transfer_world
+    ) -> None:
+        world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
+        transfer_task = FillByTransferTask(
+            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
+        )
+        context = _pouring_context(world)
+
+        artifacts = transfer_task.build(context)
+
+        [row] = [
+            constraint
+            for constraint in artifacts.constraints.equality_constraints
+            if isinstance(constraint, TerminalStatePredictionConstraint)
+        ]
+        expressions = {
+            expression.name: expression for expression in artifacts.debug_expressions
+        }
+        predicted = expressions[f"{transfer_task.name}/{FillDebugValue.PREDICTED_FILL}"]
+        rate = expressions[f"{transfer_task.name}/{FillDebugValue.FILL_RATE}"]
+        assert predicted.expression.evaluate()[0] == pytest.approx(
+            row.predicted_value(context.qp_controller_config).evaluate()[0]
+        )
+        assert rate.expression.evaluate()[0] == pytest.approx(
+            transfer_task.fill_velocity_expression.evaluate()[0]
+        )
+
+    def test_a_recorded_transfer_keeps_the_prediction_every_cycle(
+        self, tracy_transfer_world
+    ) -> None:
+        transfer = _build_transfer_motion(tracy_transfer_world)
+        recorder = ControlCycleRecorder()
+        executor = Executor(
+            _pouring_context(transfer.world), control_cycle_recorder=recorder
+        )
+        executor.compile(motion_statechart=transfer.motion_statechart)
+        for _ in range(RECORDED_TRANSFER_TICKS):
+            executor.tick()
+
+        recording = recorder.build_recording()
+
+        [column] = [
+            index
+            for index, name in enumerate(recording.debug_columns)
+            if name.endswith(f"/{FillDebugValue.PREDICTED_FILL}")
+        ]
+        assert recording.debug_values.shape[0] == RECORDED_TRANSFER_TICKS
+        assert np.isfinite(recording.debug_values[:, column]).all()
+
+
 class TestProjectileAimingErrorIsHorizontal:
     """
     :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInReceiver`
@@ -1972,6 +2032,11 @@ class TestFillingFromAFaucet:
 
 
 # %% pacing the tilt
+
+RECORDED_TRANSFER_TICKS = 20
+"""
+Control cycles of the transfer the recording test runs.
+"""
 
 PACED_APPROACH_RATE = math.radians(3.0)
 """

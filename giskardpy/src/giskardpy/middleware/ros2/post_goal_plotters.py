@@ -4,6 +4,9 @@ import os
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from typing_extensions import Optional
 
 from giskardpy.executor import Executor
 from giskardpy.middleware.ros2 import rospy
@@ -12,6 +15,11 @@ from giskardpy.utils.utils import create_path
 from semantic_digital_twin.world_description.world_state_trajectory_plotter import (
     WorldStateTrajectoryPlotter,
 )
+
+CONTROL_CYCLES_FOLDER = "control_cycles"
+"""
+Folder, inside the temporary directory, the control-cycle recordings are written to.
+"""
 
 
 @dataclass
@@ -125,9 +133,29 @@ class GoalControlCycleRecorder(PostGoalPlotter):
     def plot(self, goal_id: int) -> None:
         if not self.control_cycle_recorder.has_recorded_cycles:
             return
-        file_name = self.create_file_name("control_cycles", goal_id, extension=".npz")
+        file_name = self.create_file_name(
+            CONTROL_CYCLES_FOLDER, goal_id, extension=".npz"
+        )
         self.control_cycle_recorder.build_recording().save(file_name)
         rospy.get_node().get_logger().info(f"saved {file_name}")
+
+    @staticmethod
+    def recording_written_since(moment: float) -> Optional[Path]:
+        """
+        :param moment: A time, in seconds since the epoch.
+        :return: The newest recording on this machine written at or after ``moment``, or
+            ``None`` where none was.
+        """
+        recordings = [
+            path
+            for path in (Path(tempfile.gettempdir()) / CONTROL_CYCLES_FOLDER).glob(
+                "goal_*.npz"
+            )
+            if path.stat().st_mtime >= moment
+        ]
+        if not recordings:
+            return None
+        return max(recordings, key=lambda path: path.stat().st_mtime)
 
 
 @dataclass

@@ -1189,3 +1189,41 @@ class TestCoupledSourceInThePrediction:
         bound = strategy.create_equality_bounds().evaluate()[0]
 
         assert bound == pytest.approx(goal - predicted)
+
+
+# %% the prediction as the constraint states it
+
+
+def test_the_constraint_predicts_what_the_strategy_bounds_with(
+    linear_state_rate_setup: LinearStateRateSetup,
+) -> None:
+    """
+    A recorder reads the prediction off the constraint; it is the one the bound uses.
+    """
+    strategy = linear_state_rate_setup.strategy
+    [constraint] = strategy.constraints
+
+    predicted = constraint.predicted_value(strategy.qp_controller_config)
+
+    assert predicted.evaluate()[0] == pytest.approx(
+        strategy._free_response().evaluate()[0]
+    )
+
+
+def test_the_constraint_predicts_with_its_coupled_states(
+    fed_receiver_setup: FedReceiverSetup,
+) -> None:
+    coupled = [
+        CoupledState(
+            variable=fed_receiver_setup.source_variable,
+            velocity=fed_receiver_setup.source_velocity,
+        )
+    ]
+    strategy = _fed_receiver_strategy(fed_receiver_setup, coupled, _GOAL_VALUE)
+    [constraint] = strategy.constraints
+
+    predicted = constraint.predicted_value(strategy.qp_controller_config)
+
+    assert predicted.evaluate()[0] == pytest.approx(
+        strategy._free_response().evaluate()[0]
+    )

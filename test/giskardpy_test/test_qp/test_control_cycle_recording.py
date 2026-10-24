@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 
@@ -12,6 +14,7 @@ from giskardpy.motion_statechart.tasks.cartesian_tasks import (
 from giskardpy.qp.control_cycle_analysis import ControlCycleAnalysis
 from giskardpy.qp.control_cycle_recording import (
     ConstraintProblemStructure,
+    ControlCycleArchiveKey,
     ControlCycleRecorder,
     ControlCycleRecording,
     RECORDING_FORMAT_VERSION,
@@ -23,6 +26,11 @@ from giskardpy.qp.exceptions import (
 from semantic_digital_twin.spatial_types.spatial_types import Point3
 
 MAXIMUM_LINEAR_VELOCITY = 0.05
+
+GOAL_COORDINATES = (0.6, -0.3, 1.0)
+"""
+Where the recorded motion moves the PR2's hand, in the world root.
+"""
 
 
 def _run_recorded_motion(world) -> ControlCycleRecording:
@@ -37,7 +45,7 @@ def _run_recorded_motion(world) -> ControlCycleRecording:
     reach = CartesianPosition(
         root_link=root_link,
         tip_link=tip_link,
-        goal_point=Point3(0.6, -0.3, 1.0, reference_frame=root_link),
+        goal_point=Point3(*GOAL_COORDINATES, reference_frame=root_link),
     )
     speed_limit = CartesianPositionVelocityLimit(
         root_link=root_link,
@@ -190,6 +198,35 @@ def test_running_rows_carry_a_weight(recording):
     assert np.all(recording.row_weights[0] > 0)
 
 
+# %% debug expressions
+
+
+def test_every_debug_expression_is_recorded_every_cycle(recording):
+    """
+    The point goal's goal and current point are recorded as one column per coordinate.
+    """
+    goal_columns = [
+        column for column in recording.debug_columns if column.endswith("/goal/0")
+    ]
+    assert len(goal_columns) == 1
+    assert recording.debug_values.shape == (
+        recording.number_of_cycles,
+        len(recording.debug_columns),
+    )
+
+
+def test_a_debug_value_holds_what_its_expression_evaluated_to(recording):
+    """
+    The goal point does not move, so each of its coordinate columns holds the goal's
+    coordinate in every cycle.
+    """
+    [goal_x] = [c for c in recording.debug_columns if c.endswith("/goal/0")]
+    prefix = goal_x[: -len("0")]
+    for index, coordinate in enumerate(GOAL_COORDINATES):
+        column = recording.debug_columns.index(f"{prefix}{index}")
+        np.testing.assert_allclose(recording.debug_values[:, column], coordinate)
+
+
 # %% replaying the pose
 
 
@@ -241,6 +278,35 @@ def test_stored_recording_reads_back_unchanged(recording, tmp_path):
     assert (
         loaded.world_degree_of_freedom_names == recording.world_degree_of_freedom_names
     )
+
+
+def test_stored_debug_values_read_back_unchanged(recording, tmp_path):
+    file_path = str(tmp_path / "goal_0.npz")
+
+    recording.save(file_path)
+    loaded = ControlCycleRecording.load(file_path)
+
+    assert loaded.debug_columns == recording.debug_columns
+    np.testing.assert_allclose(loaded.debug_values, recording.debug_values)
+
+
+def test_a_recording_stored_without_debug_values_reads_with_none(recording, tmp_path):
+    """
+    Recordings written before debug values were kept read back with no debug columns.
+    """
+    file_path = str(tmp_path / "goal_0.npz")
+    recording.save(file_path)
+    archive = dict(np.load(file_path, allow_pickle=False))
+    del archive[ControlCycleArchiveKey.DEBUG_VALUES]
+    metadata = json.loads(str(archive["metadata"].item()))
+    del metadata[ControlCycleArchiveKey.DEBUG_COLUMNS]
+    archive["metadata"] = np.array(json.dumps(metadata))
+    np.savez_compressed(file_path, **archive)
+
+    loaded = ControlCycleRecording.load(file_path)
+
+    assert loaded.debug_columns == []
+    assert loaded.debug_values.shape == (loaded.number_of_cycles, 0)
 
 
 def test_recording_of_an_unknown_format_version_is_rejected(recording, tmp_path):

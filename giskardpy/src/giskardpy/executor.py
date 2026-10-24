@@ -239,6 +239,7 @@ class Executor:
                     str(world.get_degree_of_freedom_by_id(dof_id).name)
                     for dof_id in world.state
                 ],
+                self.motion_statechart.collect_debug_expressions(),
             )
         if self.trajectory_plotter is not None:
             self.trajectory_plotter.reset(self.context.world.state, self.time)

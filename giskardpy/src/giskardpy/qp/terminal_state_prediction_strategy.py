@@ -28,6 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cached_property
 
+from typing_extensions import TYPE_CHECKING
+
 import krrood.symbolic_math.symbolic_math as sm
 from krrood.symbolic_math.symbolic_math import FloatVariable, Matrix, Scalar, Vector
 
@@ -36,13 +38,16 @@ from giskardpy.qp.dof_limits import DirectLimits
 from giskardpy.qp.enforcement_strategy import IntegralStrategy, normalize_slack_weight
 from giskardpy.qp.exceptions import MultipleTerminalStateConstraintsError
 
+if TYPE_CHECKING:
+    from giskardpy.qp.qp_controller_config import QPControllerConfig
+
 WEIGHT_SUM_MAGNITUDE_EPSILON: float = 1e-9
 """
 Smallest lookahead-weight sum magnitude that is still normalized.
 
-A stiff or oscillatory linearization can nearly cancel the raw weight sum; dividing by such
-a sum would inject enormous or non-finite coefficients into the QP matrix, so below this
-magnitude the raw weights are kept instead.
+A stiff or oscillatory linearization can nearly cancel the raw weight sum; dividing by
+such a sum would inject enormous or non-finite coefficients into the QP matrix, so below
+this magnitude the raw weights are kept instead.
 """
 
 
@@ -123,19 +128,27 @@ class LinearizedScalarStateModel:
     """
 
     state_value: Scalar
-    """Current state value x₀ (passive DOF position)."""
+    """
+    Current state value x₀ (passive DOF position).
+    """
 
     state_velocity: Scalar
     """Current ODE rate f₀ = f(x₀, q₀)."""
 
     state_sensitivity: Scalar
-    """Partial derivative ∂f/∂x at the operating point."""
+    """
+    Partial derivative ∂f/∂x at the operating point.
+    """
 
     time_step: float
-    """MPC discretization step dt in seconds."""
+    """
+    MPC discretization step dt in seconds.
+    """
 
     control_horizon: int
-    """Number of velocity decision steps M over which commands are applied."""
+    """
+    Number of velocity decision steps M over which commands are applied.
+    """
 
     prediction_steps: int | None = None
     """
@@ -156,8 +169,8 @@ class LinearizedScalarStateModel:
         """
         Predicted terminal state if the control is held constant (zero joint velocity).
 
-        This is the autonomous evolution of the linearized system, not a frozen-state assumption:
-        the state keeps evolving at the held control.
+        This is the autonomous evolution of the linearized system, not a frozen-state
+        assumption: the state keeps evolving at the held control.
         """
         decay_to_horizon = _compute_power(self.decay, self.prediction_steps)
         series = _geometric_series(self.decay, self.prediction_steps - 1)
@@ -169,9 +182,9 @@ class LinearizedScalarStateModel:
         """
         Geometric lookahead weight ``G_{N-2-i}`` of each velocity block.
 
-        Block ``i`` (earliest first) raises the control for the remaining ``N-1-i`` state steps,
-        so the terminal state is more sensitive to early decisions. A block no state step follows
-        has weight zero.
+        Block ``i`` (earliest first) raises the control for the remaining ``N-1-i``
+        state steps, so the terminal state is more sensitive to early decisions. A block
+        no state step follows has weight zero.
         """
         return [
             _geometric_series(self.decay, self.prediction_steps - 2 - block)
@@ -182,15 +195,19 @@ class LinearizedScalarStateModel:
 @dataclass
 class CoupledState:
     """
-    A passive state the predicted state's rate depends on, evolving by its own rate while
-    the joints are held.
+    A passive state the predicted state's rate depends on, evolving by its own rate
+    while the joints are held.
     """
 
     variable: FloatVariable
-    """Symbolic current value of the coupled state (passive DOF position variable)."""
+    """
+    Symbolic current value of the coupled state (passive DOF position variable).
+    """
 
     velocity: Scalar
-    """Symbolic rate of the coupled state."""
+    """
+    Symbolic rate of the coupled state.
+    """
 
 
 @dataclass
@@ -204,16 +221,24 @@ class LinearizedCoupledFreeResponse:
     """
 
     state_variables: list[FloatVariable]
-    """Current values; the predicted state first, then its coupled states."""
+    """
+    Current values; the predicted state first, then its coupled states.
+    """
 
     state_velocities: list[Scalar]
-    """Rates, in the order of :attr:`state_variables`."""
+    """
+    Rates, in the order of :attr:`state_variables`.
+    """
 
     time_step: float
-    """MPC discretization step dt in seconds."""
+    """
+    MPC discretization step dt in seconds.
+    """
 
     prediction_steps: int
-    """Number of state steps the terminal value is predicted over."""
+    """
+    Number of state steps the terminal value is predicted over.
+    """
 
     def terminal_value(self) -> Scalar:
         """
@@ -248,14 +273,22 @@ class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
     """
 
     state_variable: Scalar = field(kw_only=True)
-    """Symbolic current state x₀ (passive DOF position variable); the rate is differentiated w.r.t. it."""
+    """
+    Symbolic current state x₀ (passive DOF position variable); the rate is
+    differentiated w.r.t.
+
+    it.
+    """
 
     goal_value: float = field(kw_only=True)
-    """Target state value at the end of the prediction window."""
+    """
+    Target state value at the end of the prediction window.
+    """
 
     prediction_duration: float | None = field(default=None, kw_only=True)
     """
     Length of the prediction window in seconds; the state is predicted this far ahead.
+
     ``None`` predicts to the end of the control horizon.
     """
 
@@ -272,8 +305,55 @@ class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
     empty holds every other state at its current value over the window.
     """
 
+    def prediction_steps(self, config: QPControllerConfig) -> int:
+        """
+        :param config: The controller the constraint runs in.
+        :return: Number of state steps the prediction window spans, at least one; the
+            control horizon when the constraint names no window.
+        """
+        if self.prediction_duration is None:
+            return config.control_horizon
+        return max(
+            1,
+            round(self.prediction_duration / config.model_predictive_control_time_step),
+        )
+
+    def state_model(self, config: QPControllerConfig) -> LinearizedScalarStateModel:
+        """
+        :param config: The controller the constraint runs in.
+        :return: The state's own ODE linearized at the current operating point.
+        """
+        return LinearizedScalarStateModel(
+            state_value=self.state_variable,
+            state_velocity=self.expression,
+            state_sensitivity=self.expression.jacobian([self.state_variable])[0, 0],
+            time_step=config.model_predictive_control_time_step,
+            control_horizon=config.control_horizon,
+            prediction_steps=self.prediction_steps(config),
+        )
+
+    def predicted_value(self, config: QPControllerConfig) -> Scalar:
+        """
+        :param config: The controller the constraint runs in.
+        :return: The state's value at the end of the prediction window with the joints
+            held, its coupled states evolving with it.
+        """
+        if not self.coupled_states:
+            return self.state_model(config).free_response()
+        return LinearizedCoupledFreeResponse(
+            state_variables=[self.state_variable]
+            + [state.variable for state in self.coupled_states],
+            state_velocities=[self.expression]
+            + [state.velocity for state in self.coupled_states],
+            time_step=config.model_predictive_control_time_step,
+            prediction_steps=self.prediction_steps(config),
+        ).terminal_value()
+
     bound: Scalar = field(default_factory=lambda: sm.Scalar(0.0), kw_only=True)
-    """Unused inherited equality bound; the strategy computes the terminal bound ``goal − x_free`` instead."""
+    """
+    Unused inherited equality bound; the strategy computes the terminal bound ``goal −
+    x_free`` instead.
+    """
 
 
 @dataclass
@@ -298,9 +378,11 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
         """
         Validates and returns the single constraint this strategy enforces.
 
-        :raises ConstraintTypeMismatchError: If a constraint is not a terminal-state constraint.
-        :raises MultipleTerminalStateConstraintsError: If more than one constraint was grouped
-            into this block; the single-row terminal prediction cannot represent that.
+        :raises ConstraintTypeMismatchError: If a constraint is not a terminal-state
+            constraint.
+        :raises MultipleTerminalStateConstraintsError: If more than one constraint was
+            grouped into this block; the single-row terminal prediction cannot represent
+            that.
         """
         self._require_constraint_type(TerminalStatePredictionConstraint)
         if len(self.constraints) != 1:
@@ -312,60 +394,28 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
     @cached_property
     def _state_model(self) -> LinearizedScalarStateModel:
         """
-        Linearizes the single constraint's ODE at the current operating point, built once per solve.
-
-        The state sensitivity ``∂f/∂x`` is differentiated here from the constraint's state-rate
-        expression w.r.t. its own state variable, keeping all jacobian computation in one layer.
+        The single constraint's ODE linearized at the current operating point, built
+        once per solve.
         """
-        constraint = self._constraint
-        state_sensitivity = constraint.expression.jacobian([constraint.state_variable])[
-            0, 0
-        ]
-        return LinearizedScalarStateModel(
-            state_value=constraint.state_variable,
-            state_velocity=constraint.expression,
-            state_sensitivity=state_sensitivity,
-            time_step=self.qp_controller_config.model_predictive_control_time_step,
-            control_horizon=self.qp_controller_config.control_horizon,
-            prediction_steps=self._prediction_steps,
-        )
+        return self._constraint.state_model(self.qp_controller_config)
 
     @cached_property
     def _prediction_steps(self) -> int:
         """
-        Number of state steps the constraint's prediction window spans, at least one;
-        the control horizon when the constraint names no window.
+        Number of state steps the constraint's prediction window spans.
         """
-        duration = self._constraint.prediction_duration
-        if duration is None:
-            return self.qp_controller_config.control_horizon
-        return max(
-            1,
-            round(
-                duration / self.qp_controller_config.model_predictive_control_time_step
-            ),
-        )
+        return self._constraint.prediction_steps(self.qp_controller_config)
 
     def _free_response(self) -> Scalar:
         """
         Held-joint terminal value of the state, evolving its coupled states with it.
         """
-        constraint = self._constraint
-        if not constraint.coupled_states:
-            return self._state_model.free_response()
-        return LinearizedCoupledFreeResponse(
-            state_variables=[constraint.state_variable]
-            + [state.variable for state in constraint.coupled_states],
-            state_velocities=[constraint.expression]
-            + [state.velocity for state in constraint.coupled_states],
-            time_step=self.qp_controller_config.model_predictive_control_time_step,
-            prediction_steps=self._prediction_steps,
-        ).terminal_value()
+        return self._constraint.predicted_value(self.qp_controller_config)
 
     def create_matrix(self) -> Matrix:
         """
-        Builds the constraint row by scaling the state-rate jacobian per horizon block with the
-        geometric velocity weights, padding the jerk columns with zeros.
+        Builds the constraint row by scaling the state-rate jacobian per horizon block
+        with the geometric velocity weights, padding the jerk columns with zeros.
 
         Scaling contract: the jacobian carries a single ``time_step`` factor and the lookahead
         weights are normalized to the prediction window by :func:`window_normalized_weights`, so
@@ -424,8 +474,8 @@ class TerminalStatePredictionStrategy(IntegralStrategy):
 
     def create_slack_variables(self) -> DirectLimits:
         """
-        Creates one slack variable for the single terminal-state constraint, normalized over
-        the prediction window like its bound.
+        Creates one slack variable for the single terminal-state constraint, normalized
+        over the prediction window like its bound.
         """
         constraint = self._constraint
         return DirectLimits(

@@ -1,7 +1,9 @@
+import os
 from pathlib import Path
 
 from giskardpy.executor import Executor, NoPacing
 from giskardpy.middleware.ros2.post_goal_plotters import (
+    CONTROL_CYCLES_FOLDER,
     GoalControlCycleRecorder,
 )
 from giskardpy.motion_statechart.context import MotionStatechartContext
@@ -80,3 +82,32 @@ def test_a_recording_with_cycles_is_written(
     recorder.plot(goal_id=3)
 
     assert (Path(tmp_path) / "control_cycles" / "goal_3.npz").exists()
+
+
+# %% finding the recording of a goal that finished
+
+
+def _write_recording_file(directory: Path, goal_id: int, modified_at: float) -> Path:
+    """
+    Put an empty recording file where the recorder writes its goal's recording.
+    """
+    path = directory / CONTROL_CYCLES_FOLDER / f"goal_{goal_id}.npz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    os.utime(path, (modified_at, modified_at))
+    return path
+
+
+def test_the_recording_written_since_a_moment_is_found(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    _write_recording_file(tmp_path, 1, modified_at=100.0)
+    newer = _write_recording_file(tmp_path, 2, modified_at=200.0)
+
+    assert GoalControlCycleRecorder.recording_written_since(150.0) == newer
+
+
+def test_no_recording_written_since_a_moment_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    _write_recording_file(tmp_path, 1, modified_at=100.0)
+
+    assert GoalControlCycleRecorder.recording_written_since(150.0) is None

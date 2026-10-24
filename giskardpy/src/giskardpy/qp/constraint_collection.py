@@ -373,7 +373,7 @@ class ConstraintCollection:
         prediction_duration: float | None = None,
         stopping_velocity: float | None = None,
         coupled_states: list[CoupledState] | None = None,
-    ) -> None:
+    ) -> TerminalStatePredictionConstraint:
         """
         Add a terminal-state prediction constraint using a linearized first-order ODE.
 
@@ -404,6 +404,7 @@ class ConstraintCollection:
             change it makes on its own; ``reference_velocity`` when ``None``.
         :param coupled_states: Passive states the rate depends on that keep evolving
             while the joints are held; none when ``None``.
+        :return: The constraint added.
         """
         constraint = TerminalStatePredictionConstraint(
             name=name,
@@ -419,3 +420,4 @@ class ConstraintCollection:
             coupled_states=list(coupled_states or []),
         )
         self.add_constraint(constraint)
+        return constraint
