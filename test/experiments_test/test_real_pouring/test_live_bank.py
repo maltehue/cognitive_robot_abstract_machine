@@ -155,7 +155,7 @@ it to the bank.
 """
 
 
-def live_bank_from_count(tilt: float) -> LiveBank:
+def live_bank_from_count(tilt: float, corrects_drain: bool = True) -> LiveBank:
     stream = tilted_source_above_receiver(tilt=tilt)
     equation = stream.source.fill_equation
     return LiveBank.for_cups(
@@ -176,6 +176,7 @@ def live_bank_from_count(tilt: float) -> LiveBank:
         prediction_window=1.5,
         fill_report=ReceiverFillReport.COUNTED,
         stop_lead_time=STOP_LEAD_TIME,
+        corrects_drain=corrects_drain,
     )
 
 
@@ -454,3 +455,41 @@ def test_a_rate_fallen_to_nothing_is_told_as_exactly_nothing():
         bank.observe(_stream(0.1 * step, counted=counted, seen=False))
     assert bank.trace[-1].in_flight_grains == 0.0
     assert bank.receiver.fill_connection.observed_inflow == 0.0
+
+
+# %% feedback on the fills alone
+
+
+def _stream_that_stops(bank: LiveBank) -> None:
+    """
+    Feed a small stream that stops where the model pours, which moves the bank's onset.
+    """
+    for step in range(20):
+        bank.observe(_stream(0.1 * step, counted=SMALL_STREAM * step))
+    for step in range(20, 60):
+        bank.observe(_stream(0.1 * step, counted=SMALL_STREAM * 19, seen=False))
+
+
+def _drain_corrections(bank: LiveBank) -> list[float]:
+    correction = bank.source.fill_connection.drain_correction
+    return [connection.position for connection in correction.connections_in(bank.world)]
+
+
+def test_without_drain_correction_the_drain_stays_as_built():
+    correcting = live_bank_from_count(tilt=1.0)
+    fills_only = live_bank_from_count(tilt=1.0, corrects_drain=False)
+    _stream_that_stops(correcting)
+    _stream_that_stops(fills_only)
+    assert _drain_corrections(correcting) != [0.0, 0.0, 0.0]
+    assert _drain_corrections(fills_only) == [0.0, 0.0, 0.0]
+
+
+def test_without_drain_correction_the_fills_are_told_as_with_it():
+    correcting = live_bank_from_count(tilt=1.0)
+    fills_only = live_bank_from_count(tilt=1.0, corrects_drain=False)
+    _stream_that_stops(correcting)
+    _stream_that_stops(fills_only)
+    assert (fills_only.source.fill_level, fills_only.receiver.fill_level) == (
+        correcting.source.fill_level,
+        correcting.receiver.fill_level,
+    )

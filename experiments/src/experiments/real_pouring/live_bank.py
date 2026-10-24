@@ -272,6 +272,12 @@ class LiveBank:
     receiver_evidence: Optional[ReceiverEvidence] = field(default=None, kw_only=True)
     """Receiver likelihood settings; absent when the bank learns from the count."""
 
+    corrects_drain: bool = field(default=True, kw_only=True)
+    """
+    Whether the controller's drain is corrected as the bank calls for; without, the
+    controller is told only the fills, and pours on the drain as built.
+    """
+
     _last_receiver_stamp: Optional[float] = field(init=False, default=None)
     """Timestamp of the most recent receiver likelihood update."""
 
@@ -347,6 +353,7 @@ class LiveBank:
         stop_lead_time: float = 0.0,
         in_flight_limit: float = math.inf,
         receiver_evidence: Optional[ReceiverEvidence] = None,
+        corrects_drain: bool = True,
     ) -> LiveBank:
         """
         :return: A bank over the hypotheses a plain cup is weighed against, reading only
@@ -399,6 +406,7 @@ class LiveBank:
             stop_lead_time=stop_lead_time,
             in_flight_limit=in_flight_limit,
             receiver_evidence=receiver_evidence,
+            corrects_drain=corrects_drain,
         )
 
     @property
@@ -450,8 +458,12 @@ class LiveBank:
                 / (2 * self.prediction_window),
             ),
         )
-        corrections = DrainCorrectionValues.between(
-            self._blended(seen.stamp), self.built, self.coupling.cautious
+        corrections = (
+            DrainCorrectionValues.between(
+                self._blended(seen.stamp), self.built, self.coupling.cautious
+            )
+            if self.corrects_drain
+            else DrainCorrectionValues.between(self.built, self.built, cautious=False)
         )
         in_flight = self._in_flight_grains(seen)
         with self.world.batch_state_changes():

@@ -209,6 +209,11 @@ class PourSettings:
     How long grains were taken to keep arriving after a stop, in seconds.
     """
 
+    corrects_drain: Optional[bool] = field(default=None, kw_only=True)
+    """
+    Whether the live bank corrected the controller's drain, or told it only the fills.
+    """
+
     learned_head: Optional[bool] = field(default=None, kw_only=True)
     """
     Whether the learned head drove the transfer instead of the analytic one.
@@ -267,6 +272,11 @@ class PourLabelMarker(StrEnum):
     The learned head drove the transfer.
     """
 
+    FILLS_ONLY = "fillsonly"
+    """
+    The live bank told the controller the fills but left its drain as built.
+    """
+
 
 @dataclass(frozen=True)
 class PourLabel:
@@ -310,6 +320,12 @@ class PourLabel:
     Whether the learned head drove the transfer.
     """
 
+    corrects_drain: bool = field(default=True, kw_only=True)
+    """
+    Whether the live bank corrected the controller's drain as well as telling it the
+    fills.
+    """
+
     def text(self) -> str:
         """
         :return: Material, receiving cup, goal and start fill in percent, and the
@@ -328,6 +344,8 @@ class PourLabel:
         ]
         if not self.live_bank:
             parts.append(PourLabelMarker.WITHOUT_BANK)
+        elif not self.corrects_drain:
+            parts.append(PourLabelMarker.FILLS_ONLY)
         if self.learned_head:
             parts.append(PourLabelMarker.WITH_LEARNED_HEAD)
         return LABEL_SEPARATOR.join(parts)

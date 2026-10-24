@@ -62,6 +62,7 @@ def settings() -> PourSettings:
         ),
         bank=BankSettings(tracks_onset=True, trickle=0.0),
         stop_lead_time=1.0,
+        corrects_drain=False,
         learned_head=False,
         repository=RepositoryState(commit="0" * 40, has_uncommitted_changes=True),
     )
@@ -185,4 +186,22 @@ def test_the_label_marks_a_fractional_rate_and_departures_from_the_usual_setup()
     assert label.text() == (
         f"{PouredMaterial.CORN}_{ReceivingCup.TRANSLUCENT_CUP}_goal20_start70_approach1p5"
         f"_{PourLabelMarker.WITHOUT_BANK}_{PourLabelMarker.WITH_LEARNED_HEAD}"
+    )
+
+
+def test_the_label_marks_a_bank_that_tells_only_the_fills() -> None:
+    label = PourLabel(
+        material=PouredMaterial.CORN,
+        receiving_cup=ReceivingCup.TRANSLUCENT_CUP,
+        goal_fill=0.3,
+        start_fill=1.0,
+        approach_tilt_rate=math.radians(3.0),
+        live_bank=True,
+        learned_head=False,
+        corrects_drain=False,
+    )
+
+    assert label.text() == (
+        f"{PouredMaterial.CORN}_{ReceivingCup.TRANSLUCENT_CUP}_goal30_start100_approach3"
+        f"_{PourLabelMarker.FILLS_ONLY}"
     )

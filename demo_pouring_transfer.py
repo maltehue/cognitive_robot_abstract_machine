@@ -12,7 +12,7 @@ How to run it on the robot:
    The translucent cup stands on the blue mat where the Jeroen cup stood; the
    perception finds it by the gap it makes in the mat, so keep the mat around it clear.
 3. Set the switches below (:data:`MATERIAL`, :data:`RECEIVING_CUP`, :data:`DRAIN`,
-   :data:`USE_LIVE_BANK`) and run this script for every pour; after changing
+   :data:`USE_LIVE_BANK`, :data:`CORRECT_DRAIN`) and run this script for every pour; after changing
    :data:`RECEIVING_CUP`, restart Giskard so it creates the cups anew. It prints what it runs with before the robot
    moves, refuses to start the live bank against a perception watching for another
    material, and records a bag with the bank's trace and the weighed result.
@@ -202,6 +202,12 @@ Let the hypothesis bank watch the pour through the camera and correct the contro
 drain while it runs.
 
 Needs ``pouring_perception.py`` running for :attr:`MATERIAL`.
+"""
+
+CORRECT_DRAIN = True
+"""
+Let the live bank correct the controller's drain; without, it tells the controller only
+the fills the camera measures, and the controller pours on :data:`DRAIN` as built.
 """
 
 BANK_SETTINGS = BankSettings(tracks_onset=True, trickle=0.0)
@@ -437,6 +443,7 @@ recording = RosbagRecording(
         approach_tilt_rate=APPROACH_TILT_RATE,
         live_bank=USE_LIVE_BANK,
         learned_head=USE_LEARNED_HEAD,
+        corrects_drain=CORRECT_DRAIN,
     ).text()
 )
 print(f"Recording into {recording.start()}.")
@@ -449,7 +456,7 @@ print(
     f"{math.degrees(MATERIAL.repose_hysteresis):.0f} deg below the repose angle with "
     f"the cup full, {math.degrees(MATERIAL.repose_hysteresis + MATERIAL.repose_hysteresis_growth):.0f} "
     "deg empty; "
-    f"live bank {'on' if USE_LIVE_BANK else 'off'}; source fill "
+    f"live bank {'off' if not USE_LIVE_BANK else 'on' if CORRECT_DRAIN else 'on, telling only the fills'}; source fill "
     f"{'drains along in' if COUPLE_SOURCE_FILL else 'held in'} the prediction; transfer from "
     f"{math.degrees(TRANSFER_START_TILT):.0f} deg at most "
     f"{math.degrees(MAXIMUM_TILT_RATE):.0f} deg/s, never past "
@@ -674,6 +681,7 @@ recording.add_file(
         drain=MATERIAL.drain_of(DRAIN),
         bank=BANK_SETTINGS if USE_LIVE_BANK else None,
         stop_lead_time=STOP_LEAD_TIME if USE_LIVE_BANK else None,
+        corrects_drain=CORRECT_DRAIN if USE_LIVE_BANK else None,
         learned_head=USE_LEARNED_HEAD,
         repository=RepositoryState.of_working_tree(Path(__file__).parent),
     ).as_json_text(),
@@ -714,6 +722,7 @@ if USE_LIVE_BANK:
             fill_report=RECEIVER_FILL_REPORT,
             receiver_evidence=POUR_PERCEPTION.receiver_evidence,
             stop_lead_time=STOP_LEAD_TIME,
+            corrects_drain=CORRECT_DRAIN,
             in_flight_limit=tolerance
             * GRAINS_PER_FILL
             * receiving_cup.capacity
