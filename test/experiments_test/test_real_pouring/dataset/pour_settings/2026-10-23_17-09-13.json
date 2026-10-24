@@ -1,0 +1,7 @@
+{
+  "__json_type__": "experiments.real_pouring.pour_settings.PourSettings",
+  "goal_fill": 0.3,
+  "fill_tolerance": 0.01,
+  "couple_source_fill": true,
+  "prediction_duration": 1.5
+}

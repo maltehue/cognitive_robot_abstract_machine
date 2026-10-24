@@ -48,6 +48,8 @@ from experiments.real_pouring.pour_perception import PourPerception
 from experiments.real_pouring.pour_settings import (
     POUR_SETTINGS_FILE_NAME,
     PourSettings,
+    RepositoryState,
+    TiltPacingSettings,
 )
 from experiments.real_pouring.receiving_cup import (
     RECEIVING_CUP_FILE_NAME,
@@ -582,15 +584,6 @@ transfer_task = FillByTransferTask(
     outflow_tolerance=SETTLED_INFLOW,
     couple_source_fill=COUPLE_SOURCE_FILL,
 )
-recording.add_file(
-    POUR_SETTINGS_FILE_NAME,
-    PourSettings(
-        goal_fill=transfer_task.goal_value,
-        fill_tolerance=transfer_task.fill_level_tolerance,
-        couple_source_fill=transfer_task.couple_source_fill,
-        prediction_duration=transfer_task.prediction_duration,
-    ).as_json_text(),
-)
 # Keep the liquid's projectile landing in the receiver so the optimizer repositions the gripper
 # upstream as the source tilts and the arc reaches forward.
 no_spill = KeepProjectileInReceiver(
@@ -635,6 +628,36 @@ tilt_pacing = TiltPacing(
     ceiling_slowdown_width=CEILING_SLOWDOWN_WIDTH,
     receiver=receiving_cup,
     approach_until_fill=goal_fill - tolerance,
+)
+recording.add_file(
+    POUR_SETTINGS_FILE_NAME,
+    PourSettings(
+        goal_fill=transfer_task.goal_value,
+        fill_tolerance=transfer_task.fill_level_tolerance,
+        couple_source_fill=transfer_task.couple_source_fill,
+        prediction_duration=transfer_task.prediction_duration,
+        start_fill=START_FILL,
+        material=MATERIAL,
+        receiving_cup=RECEIVING_CUP,
+        pouring_velocity=transfer_task.reference_velocity,
+        stopping_velocity=transfer_task.stopping_velocity,
+        settled_inflow=transfer_task.outflow_tolerance,
+        tilt_pacing=TiltPacingSettings(
+            approach_rate=tilt_pacing.approach_rate,
+            maximum_rate=tilt_pacing.maximum_rate,
+            maximum_return_rate=tilt_pacing.maximum_return_rate,
+            maximum_acceleration=tilt_pacing.maximum_acceleration,
+            maximum_tilt=tilt_pacing.maximum_tilt,
+            ceiling_slowdown_width=tilt_pacing.ceiling_slowdown_width,
+            transfer_start_tilt=TRANSFER_START_TILT,
+            ceiling_hold_seconds=CEILING_HOLD_SECONDS,
+        ),
+        drain=MATERIAL.drain_of(DRAIN),
+        bank=BANK_SETTINGS if USE_LIVE_BANK else None,
+        stop_lead_time=STOP_LEAD_TIME if USE_LIVE_BANK else None,
+        learned_head=USE_LEARNED_HEAD,
+        repository=RepositoryState.of_working_tree(Path(__file__).parent),
+    ).as_json_text(),
 )
 extended_motion = Parallel(
     [transfer_task, no_spill, keep_above, keep_plane, tilt_pacing]
