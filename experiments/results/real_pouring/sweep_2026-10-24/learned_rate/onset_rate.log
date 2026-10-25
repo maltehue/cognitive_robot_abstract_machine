@@ -1,0 +1,15 @@
+leave-one-pour-out done in 233s
+== all: 6965 samples, gain sd 0.027
+   onset model, along the recorded tilt         rmse 0.0217 bias +0.0011 explained +0.35
+   onset model, tilt held (controller's view)   rmse 0.0214 bias +0.0004 explained +0.36
+== tilt >= 85: 2458 samples, gain sd 0.032
+   onset model, along the recorded tilt         rmse 0.0255 bias +0.0021 explained +0.37
+   onset model, tilt held (controller's view)   rmse 0.0251 bias +0.0025 explained +0.40
+== tilt >= 85, not turning back: 1675 samples, gain sd 0.033
+   onset model, along the recorded tilt         rmse 0.0245 bias +0.0051 explained +0.46
+   onset model, tilt held (controller's view)   rmse 0.0222 bias -0.0012 explained +0.54
+fitted on all pours: source fill -> full rate (fill/s), onset (deg), width (deg); inflow at 80/85/90/95/100 deg
+  s=0.9: max 0.017, onset 60.6, width 3.0 | 0.017 0.017 0.017 0.017 0.017
+  s=0.7: max 0.033, onset 87.3, width 3.0 | 0.003 0.011 0.023 0.031 0.033
+  s=0.5: max 0.154, onset 99.9, width 3.0 | 0.000 0.001 0.006 0.025 0.079
+  s=0.3: max 0.071, onset 100.0, width 3.0 | 0.000 0.000 0.002 0.011 0.035

@@ -1,0 +1,7 @@
+{
+  "__json_type__": "giskardpy.middleware.ros2.particle_weighing.WeighedParticles",
+  "received_mass_grams": 1.76,
+  "spilled_mass_grams": 0.46,
+  "received_fill_level": 0.6641509433962265,
+  "full_cup_mass_grams": 2.65
+}

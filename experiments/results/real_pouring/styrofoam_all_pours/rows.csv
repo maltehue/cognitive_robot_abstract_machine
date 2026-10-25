@@ -1,0 +1,41 @@
+mode,peak_tilt_deg,share_out_of_source,pour
+"open loop, uncalibrated drain",91.31851263658517,0.3584905660377358,2026-10-12_15-35-41
+"open loop, uncalibrated drain",91.19791202621965,0.33207547169811324,2026-10-12_15-38-01
+"open loop, uncalibrated drain",91.23074961061134,0.3358490566037736,2026-10-12_15-40-29
+"open loop, uncalibrated drain",91.14467025840003,0.3283018867924528,2026-10-12_15-42-23
+"open loop, uncalibrated drain",91.17766008561433,0.34716981132075475,2026-10-12_15-44-51
+"open loop, fitted drain",105.95024704281198,0.9924528301886794,"open loop, fitted drain"
+live bank (2026-10-14),94.49587936707414,0.6830188679245284,"live bank, fitted drain"
+live bank (2026-10-14),107.6692037682387,0.9584905660377359,"live bank, demo drain"
+live bank (2026-10-14),106.71720848615446,0.9358490566037736,"live bank, demo drain, rule B"
+"fixed-rate ramp, held tilt",110.0,1.0,r01
+"fixed-rate ramp, held tilt",110.0,1.0,r02
+"fixed-rate ramp, held tilt",90.0,0.317,r03
+"fixed-rate ramp, held tilt",90.0,0.392,r04
+"fixed-rate ramp, held tilt",100.0,0.86,r05
+no bank: own belief (ladder),74.68754924263487,0.064,nobank 0.6
+no bank: own belief (ladder),70.26911445354546,0.061,nobank 0.5
+no bank: own belief (ladder),64.40287634611721,0.041999999999999996,nobank 0.4
+no bank: own belief (ladder),56.40361682757243,0.008,nobank 0.3
+no bank: own belief (ladder),46.62031021351203,0.004,nobank 0.2
+no bank: own belief (ladder),40.82624466416363,0.004,nobank 0.1
+fills only: bank silent (ladder),94.4,0.593,fillsonly 0.6
+fills only: bank silent (ladder),87.6,0.325,fillsonly 0.5
+fills only: bank silent (ladder),84.1,0.249,fillsonly 0.4
+fills only: bank silent (ladder),74.2,0.17400000000000002,fillsonly 0.3
+fills only: bank silent (ladder),64.5,0.095,fillsonly 0.2
+fills only: bank silent (ladder),40.8,0.008,fillsonly 0.1
+bank (sweep),94.8,0.6302,bank 0.5
+bank (sweep),94.2,0.5019,bank 0.4
+bank (sweep),102.7,0.8151,bank 0.3
+bank (sweep),96.2,0.6,bank 0.3
+bank (sweep),102.0,0.8378,bank 0.4
+bank (sweep),93.8,0.5736,bank 0.5
+bank (sweep),94.0,0.4755,bank 0.2
+bank (sweep),96.0,0.5772999999999999,bank 0.2
+bank (sweep),86.0,0.2189,bank 0.1
+bank (sweep),86.0,0.2264,bank 0.1
+bank (sweep),106.1,0.9736,bank 0.6
+bank (sweep),108.8,0.9925,bank 0.6
+bank (sweep),93.75696552658552,0.7018867924528301,2026-10-24_16-24-23
+bank (sweep),96.09768047007262,0.7283018867924529,2026-10-24_16-27-52

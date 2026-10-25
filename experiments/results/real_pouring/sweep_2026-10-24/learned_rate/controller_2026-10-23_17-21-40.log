@@ -1,0 +1,15 @@
+Unknown tag "material" in /robot[@name='tracy']/link[@name='table']/collision[1]
+Unknown tag "material" in /robot[@name='tracy']/link[@name='table']/collision[2]
+Unknown tag "material" in /robot[@name='tracy']/link[@name='camera_pole']/collision[1]
+Unknown tag "material" in /robot[@name='tracy']/link[@name='camera_pole']/collision[2]
+Unknown tag "material" in /robot[@name='tracy']/link[@name='camera_pole']/collision[3]
+Unknown tag "material" in /robot[@name='tracy']/link[@name='camera_link']/collision[1]
+Unknown tag "surface" in /robot[@name='tracy']/link[@name='left_robotiq_85_left_finger_tip_link']/collision[1]
+Unknown tag "surface" in /robot[@name='tracy']/link[@name='left_robotiq_85_right_finger_tip_link']/collision[1]
+Unknown tag "surface" in /robot[@name='tracy']/link[@name='right_robotiq_85_left_finger_tip_link']/collision[1]
+Unknown tag "surface" in /robot[@name='tracy']/link[@name='right_robotiq_85_right_finger_tip_link']/collision[1]
+Unknown tag "ros2_control" in /robot[@name='tracy']
+Unknown tag "ros2_control" in /robot[@name='tracy']
+2026-10-23_17-21-40: goal 0.3; window 1.5 s
+    t   tilt seen  told   inflow/s  pred_held pred_coupled  bound   told+1.5s  rep  srcfill
+SUMMARY 2026-10-23_17-21-40 0.5-27.5s: modeled inflow integrated 0.542, measured fill gain 0.347, ratio 1.56; model rate while it predicts flow: mean 0.043/s; seconds model flowing 12.6

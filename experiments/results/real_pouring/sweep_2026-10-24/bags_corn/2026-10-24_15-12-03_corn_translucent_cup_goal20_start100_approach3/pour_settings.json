@@ -1,0 +1,78 @@
+{
+  "__json_type__": "experiments.real_pouring.pour_settings.PourSettings",
+  "goal_fill": 0.2,
+  "fill_tolerance": 0.01,
+  "couple_source_fill": true,
+  "prediction_duration": 1.5,
+  "start_fill": 1.0,
+  "material": {
+    "__json_type__": "experiments.real_pouring.poured_material.PouredMaterial",
+    "name": "CORN"
+  },
+  "receiving_cup": {
+    "__json_type__": "experiments.real_pouring.receiving_cup.ReceivingCup",
+    "name": "TRANSLUCENT_CUP"
+  },
+  "pouring_velocity": 0.03,
+  "stopping_velocity": 1.0,
+  "settled_inflow": 0.005,
+  "tilt_pacing": {
+    "__json_type__": "experiments.real_pouring.pour_settings.TiltPacingSettings",
+    "approach_rate": 0.05235987755982989,
+    "maximum_rate": 0.05235987755982989,
+    "maximum_return_rate": 0.17453292519943295,
+    "maximum_acceleration": 0.5235987755982988,
+    "maximum_tilt": 1.9198621771937625,
+    "ceiling_slowdown_width": 0.08726646259971647,
+    "transfer_start_tilt": 0.6981317007977317,
+    "ceiling_hold_seconds": 5.0
+  },
+  "drain": {
+    "__json_type__": "experiments.pouring_model_verification.hypothesis_bank.ModelPoint",
+    "repose_angle": 0.0,
+    "discharge_coefficient": 0.2,
+    "outflow_rate_constant": 0.8,
+    "slot_height": null,
+    "trickle_rate": 0.0,
+    "repose_hysteresis": 0.3700098014227979,
+    "repose_hysteresis_growth": 0.47298422729046335
+  },
+  "bank": {
+    "__json_type__": "experiments.pouring_model_verification.hypothesis_bank.BankSettings",
+    "label": "bank",
+    "particles": 200,
+    "rate_noise": 0.5,
+    "stall_probability": 0.2,
+    "flow_transition_rate": 1.0,
+    "reading_floor": 1.0,
+    "crossing_floor": 0.005,
+    "stream_spread": 0.01,
+    "repose_walk": 0.005,
+    "factor_walk": 0.01,
+    "slot_walk": 0.0005,
+    "trickle_walk": 0.1,
+    "switching_probability": 0.01,
+    "catch_all_inflation": 3.0,
+    "catch_all_leak": 2.0,
+    "commit_threshold": 0.9,
+    "confirmations": 3,
+    "trickle": 0.0,
+    "onset_quantile": 0.1,
+    "margin_factor": 1.0,
+    "frees_rate": false,
+    "adapts_onset": false,
+    "outflow_capacity": false,
+    "checks_consistency": false,
+    "static_onset": false,
+    "adapts_drain_rate": false,
+    "tracks_onset": true,
+    "tracks_trickle": false
+  },
+  "stop_lead_time": 1.0,
+  "learned_head": false,
+  "repository": {
+    "__json_type__": "experiments.real_pouring.pour_settings.RepositoryState",
+    "commit": "918254f00ef728127706798b87133d5e3cf0137e",
+    "has_uncommitted_changes": true
+  }
+}

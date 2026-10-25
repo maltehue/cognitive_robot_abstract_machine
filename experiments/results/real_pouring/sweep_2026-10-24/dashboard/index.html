@@ -1,0 +1,558 @@
+<style>
+.sw { display: flex; flex-direction: column; gap: var(--cds-gap-xl); font-family: var(--font-anthropic-sans); }
+.sw-head { display: flex; flex-direction: column; gap: var(--cds-gap-sm); }
+.sw-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+.sw-takeaway { margin: 0; max-width: 70ch; color: var(--color-fg); font-size: var(--cds-font-size-body); line-height: 1.5; }
+.sw-note { margin: 0; max-width: 70ch; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); line-height: 1.5; }
+.sw-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: var(--cds-gap-md); }
+.sw-material { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-sm); }
+.sw-material h2 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); display: flex; align-items: center; gap: var(--cds-gap-sm); }
+.sw-swatch { width: 0.625rem; height: 0.625rem; border-radius: 50%; display: inline-block; }
+.sw-big { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); font-variant-numeric: tabular-nums; }
+.sw-pairs { display: grid; grid-template-columns: 1fr auto; gap: var(--cds-gap-xs) var(--cds-gap-md); font-size: var(--cds-font-size-caption); }
+.sw-pairs dt { color: var(--color-fg-muted); }
+.sw-pairs dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.sw-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: var(--cds-gap-md); }
+.sw-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
+.sw-card h3 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+.sw-chart { position: relative; min-height: 300px; }
+.sw-chart svg { display: block; }
+.sw-chart-small { min-height: 200px; }
+.sw-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.sw-legend span { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); }
+.sw-line-key { width: 1rem; height: 2px; display: inline-block; }
+.sw-tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 2; }
+.sw-tip .sw-tip-head { color: var(--cds-text-secondary); }
+.sw-controls { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); align-items: center; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.sw-controls select { font: inherit; color: var(--color-fg); background: var(--color-bg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-xs) var(--cds-pad-sm); max-width: 100%; }
+.sw-table-box { overflow: auto; max-height: 32rem; }
+.sw-table { border-collapse: collapse; width: 100%; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+.sw-table th, .sw-table td { padding: var(--cds-pad-xs) var(--cds-pad-sm); text-align: right; border-bottom: 1px solid var(--color-border-line); white-space: nowrap; }
+.sw-table th { position: sticky; top: 0; background: var(--color-panel); color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); }
+.sw-table th:first-child, .sw-table td:first-child, .sw-table th:nth-child(2), .sw-table td:nth-child(2) { text-align: left; }
+.sw-table tr.sw-excluded td { color: var(--color-fg-muted); }
+.sw-over { color: var(--color-bad); }
+[data-dash-source-state=empty] { color: transparent; }
+[data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+.sw-failed { display: flex; align-items: center; justify-content: center; gap: var(--cds-gap-xs); min-height: inherit; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.sw-failed::before { content: ""; width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--color-bad); }
+</style>
+
+<div class="sw">
+  <header class="sw-head" id="summary">
+    <h1 class="sw-title">Corn vs styrofoam goal sweeps</h1>
+    <p class="sw-takeaway dash-skeleton" id="takeaway" data-source="summary">—</p>
+    <p class="sw-note">Tracy, 2026-10-24. Same controller and settings for both: uncalibrated drain, live bank, 3°/s approach, 10°/s return cap, 30°/s² tilt acceleration limit, a full source (Jeroen) cup. Corn poured into the translucent cup (holds two source cups, fill read through the wall), styrofoam into a Jeroen cup (fill counted at the opening). Fills are shares of the receiving cup unless a figure says source cup. The summary uses goals up to 0.6, two pours each; the two styrofoam 0.7 pours are in the table and the charts.</p>
+  </header>
+
+  <section class="sw-figures" id="figures">
+    <div class="sw-material" id="figures-corn">
+      <h2><span class="sw-swatch" data-material="corn"></span>Corn</h2>
+      <div><span class="sw-big dash-skeleton" data-source="summary" data-field="mae" data-where="material=corn">—</span> <span class="sw-note">mean absolute error</span></div>
+      <dl class="sw-pairs">
+        <dt>Pours</dt><dd class="dash-skeleton" data-source="summary" data-field="pours" data-where="material=corn">—</dd>
+        <dt>Mean error</dt><dd class="dash-skeleton" data-source="summary" data-field="mean_error" data-where="material=corn">—</dd>
+        <dt>Mean absolute error, share of the goal</dt><dd class="dash-skeleton" data-source="summary" data-field="mae_share_of_goal" data-where="material=corn">—</dd>
+        <dt>Mean absolute error, in source cups</dt><dd class="dash-skeleton" data-source="summary" data-field="mae_source_cups" data-where="material=corn">—</dd>
+        <dt>Controller part, mean</dt><dd class="dash-skeleton" data-source="summary" data-field="control_mean" data-where="material=corn">—</dd>
+        <dt>Perception part, mean</dt><dd class="dash-skeleton" data-source="summary" data-field="perception_mean" data-where="material=corn">—</dd>
+        <dt>Spill, largest</dt><dd class="dash-skeleton" data-source="summary" data-field="spill_max" data-where="material=corn">—</dd>
+      </dl>
+    </div>
+    <div class="sw-material" id="figures-styrofoam">
+      <h2><span class="sw-swatch" data-material="styrofoam"></span>Styrofoam</h2>
+      <div><span class="sw-big dash-skeleton" data-source="summary" data-field="mae" data-where="material=styrofoam">—</span> <span class="sw-note">mean absolute error</span></div>
+      <dl class="sw-pairs">
+        <dt>Pours</dt><dd class="dash-skeleton" data-source="summary" data-field="pours" data-where="material=styrofoam">—</dd>
+        <dt>Mean error</dt><dd class="dash-skeleton" data-source="summary" data-field="mean_error" data-where="material=styrofoam">—</dd>
+        <dt>Mean absolute error, share of the goal</dt><dd class="dash-skeleton" data-source="summary" data-field="mae_share_of_goal" data-where="material=styrofoam">—</dd>
+        <dt>Mean absolute error, in source cups</dt><dd class="dash-skeleton" data-source="summary" data-field="mae_source_cups" data-where="material=styrofoam">—</dd>
+        <dt>Controller part, mean</dt><dd class="dash-skeleton" data-source="summary" data-field="control_mean" data-where="material=styrofoam">—</dd>
+        <dt>Perception part, mean</dt><dd class="dash-skeleton" data-source="summary" data-field="perception_mean" data-where="material=styrofoam">—</dd>
+        <dt>Spill, largest</dt><dd class="dash-skeleton" data-source="summary" data-field="spill_max" data-where="material=styrofoam">—</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section class="sw-grid" id="outcome">
+    <div class="sw-card" id="card-goal">
+      <h3>Weighed fill against the goal</h3>
+      <p class="sw-note">Each dot is one pour; the diagonal is a perfect hit. Corn sits on it, styrofoam above it at every goal.</p>
+      <div class="sw-legend" data-legend="materials"></div>
+      <div class="sw-chart dash-skeleton" id="chart-goal" data-source="pours"></div>
+    </div>
+    <div class="sw-card" id="card-split">
+      <h3>Where each pour's error comes from</h3>
+      <p class="sw-note">Controller part: the fill the controller was told at the end minus the goal. Perception part: weighed minus told. They add up to the weighed error.</p>
+      <div class="sw-legend" data-legend="split"></div>
+      <div class="sw-chart dash-skeleton" id="chart-split" data-source="pours"></div>
+    </div>
+  </section>
+
+  <section class="sw-grid" id="mechanism">
+    <div class="sw-card" id="card-tails">
+      <h3>What arrives after the cup turns back</h3>
+      <p class="sw-note">Each dot is one turn-back: how far the tilt fell before the stream stopped, and how much was counted after the peak, in shares of the source cup. Corn's count over-reads and styrofoam's under-reads, so corn's tails are drawn somewhat large and styrofoam's somewhat small.</p>
+      <dl class="sw-pairs" id="tail-figures">
+        <dt>Corn, median fall to stop</dt><dd class="dash-skeleton" data-source="tail_summary" data-field="median_fall" data-where="material=corn">—</dd>
+        <dt>Styrofoam, median fall to stop</dt><dd class="dash-skeleton" data-source="tail_summary" data-field="median_fall" data-where="material=styrofoam">—</dd>
+        <dt>Styrofoam, largest tail after the peak</dt><dd class="dash-skeleton" data-source="tail_summary" data-field="max_after" data-where="material=styrofoam">—</dd>
+      </dl>
+      <div class="sw-legend" data-legend="materials"></div>
+      <div class="sw-chart dash-skeleton" id="chart-tails" data-source="turnbacks"></div>
+    </div>
+    <div class="sw-card" id="card-spill">
+      <h3>Spill and peak tilt</h3>
+      <p class="sw-note">Spilled mass as a share of the receiving cup. Corn's spill was 1 g on every pour, the scale's resolution. Styrofoam spills most when the cup passed 100°.</p>
+      <div class="sw-legend" data-legend="materials"></div>
+      <div class="sw-chart dash-skeleton" id="chart-spill" data-source="pours"></div>
+    </div>
+  </section>
+
+  <section class="sw-grid" id="beliefs">
+    <div class="sw-card" id="card-bank-end">
+      <h3>The bank's receiver belief at the end against the scale</h3>
+      <p class="sw-note">What the hypothesis bank believed had arrived in the receiver when the pour ended, against the weighed fill. Above the diagonal the bank believed more than arrived.</p>
+      <div class="sw-legend" data-legend="materials"></div>
+      <div class="sw-chart dash-skeleton" id="chart-bank-end" data-source="pours"></div>
+    </div>
+    <div class="sw-card" id="card-source-end">
+      <h3>The bank's source belief at the end against the scale</h3>
+      <p class="sw-note">What the bank believed was left in the source cup, against one full cup minus what was weighed in and beside the receiver. Spill is invisible to the bank, so pours that spilled sit above the diagonal.</p>
+      <div class="sw-legend" data-legend="materials"></div>
+      <div class="sw-chart dash-skeleton" id="chart-source-end" data-source="pours"></div>
+    </div>
+    <div class="sw-card" id="card-max-predicted">
+      <h3>Largest fill the controller predicted against the outcome</h3>
+      <p class="sw-note">The highest end-of-window fill the controller's model predicted during the pour. Corn's prediction runs far above what arrives, so the cup turns back early and creeps up again; styrofoam's lies closer, because the avalanches really do deliver it.</p>
+      <div class="sw-legend" data-legend="materials"></div>
+      <div class="sw-chart dash-skeleton" id="chart-max-predicted" data-source="pours"></div>
+    </div>
+  </section>
+
+  <section class="sw-card" id="card-discharge">
+    <h3>Did the bank correct the discharge coefficient?</h3>
+    <p class="sw-note">The discharge coefficient c<sub>D</sub> (started at 0.2) sets only how far the stream is thrown, and the bank corrects it from where the camera sees the stream cross the opening. It does so only while the aim hypothesis (H2) leads. Filled dot: the factor on c<sub>D</sub> at the end of the pour; ring: its median while the count rose.</p>
+    <dl class="sw-pairs" id="discharge-figures">
+      <dt>Corn, median factor at the end</dt><dd class="dash-skeleton" data-source="discharge_summary" data-field="median_factor" data-where="material=corn">—</dd>
+      <dt>Corn, pours never corrected</dt><dd class="dash-skeleton" data-source="discharge_summary" data-field="never" data-where="material=corn">—</dd>
+      <dt>Corn, median time the aim hypothesis first led</dt><dd class="dash-skeleton" data-source="discharge_summary" data-field="median_first_aim" data-where="material=corn">—</dd>
+      <dt>Styrofoam, median factor at the end</dt><dd class="dash-skeleton" data-source="discharge_summary" data-field="median_factor" data-where="material=styrofoam">—</dd>
+      <dt>Styrofoam, pours never corrected</dt><dd class="dash-skeleton" data-source="discharge_summary" data-field="never" data-where="material=styrofoam">—</dd>
+      <dt>Styrofoam, median time the aim hypothesis first led</dt><dd class="dash-skeleton" data-source="discharge_summary" data-field="median_first_aim" data-where="material=styrofoam">—</dd>
+    </dl>
+    <div class="sw-legend" data-legend="materials"></div>
+    <div class="sw-chart dash-skeleton" id="chart-discharge" data-source="pours"></div>
+  </section>
+
+  <section class="sw-card" id="card-series">
+    <h3>One pour over time</h3>
+    <p class="sw-note">Fill told to the controller, fill counted at the opening, the wall reading (corn only), and the fill the controller predicted for the end of its 1.5 s window, against the source cup's tilt. The prediction is on the controller's clock, which starts with the transfer; it can lead the bank's clock by a fraction of a second.</p>
+    <div class="sw-controls"><label for="pour-select">Pour</label><select id="pour-select" data-source="pours"></select></div>
+    <div class="sw-legend" data-legend="series"></div>
+    <div class="sw-chart dash-skeleton" id="chart-series" data-source="series"></div>
+    <h3>Inflow: predicted against counted</h3>
+    <p class="sw-note">The receiver inflow the controller's model predicted, against the rate of the counted fill (smoothed over about one second).</p>
+    <div class="sw-legend" data-legend="rates"></div>
+    <div class="sw-chart sw-chart-small dash-skeleton" id="chart-rate" data-source="series"></div>
+    <h3>The bank's corrections</h3>
+    <p class="sw-note">The factor on the discharge coefficient and the onset (repose) correction the controller ran with, and which hypothesis led: the band along the top shows the aim hypothesis H2.</p>
+    <div class="sw-legend" data-legend="model"></div>
+    <div class="sw-chart sw-chart-small dash-skeleton" id="chart-model" data-source="series"></div>
+  </section>
+
+  <section class="sw-card" id="card-table">
+    <h3>Every pour</h3>
+    <p class="sw-note">Bursts: counted flow episodes of at least 0.03 of the source cup. Muted rows are outside the summary.</p>
+    <div class="sw-table-box">
+      <table class="sw-table" id="pour-table" data-source="pours" data-row-key="pour">
+        <thead><tr>
+          <th data-field="pour">Pour</th><th data-field="material">Material</th><th data-field="goal">Goal</th><th data-field="weighed">Weighed</th><th data-field="error">Error</th><th data-field="told_end">Told at end</th><th data-field="control_error">Controller part</th><th data-field="perception_error">Perception part</th><th data-field="spill">Spill</th><th data-field="peak_tilt">Peak tilt</th><th data-field="bursts">Bursts</th><th data-field="duration">Transfer</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+dash.calc('summary', {
+  title: 'Sweep summary by material',
+  description: 'Per material, over pours with a goal up to 0.6: errors of the weighed fill, split into the controller and perception parts, and the largest spill.',
+  inputs: ['pours'],
+  fn: (pours) => {
+    const cups = { corn: 722 / 361.83, styrofoam: 1 };
+    return ['corn', 'styrofoam'].map((material) => {
+      const rows = pours.filter((r) => r.material === material && r.in_sweep);
+      const mean = (f) => rows.reduce((s, r) => s + f(r), 0) / rows.length;
+      return {
+        material,
+        pours: rows.length,
+        mae: mean((r) => Math.abs(r.error)),
+        mean_error: mean((r) => r.error),
+        mae_share_of_goal: mean((r) => Math.abs(r.error) / r.goal),
+        mae_source_cups: mean((r) => Math.abs(r.error)) * cups[material],
+        control_mean: mean((r) => r.control_error),
+        perception_mean: mean((r) => r.perception_error),
+        perception_mae: mean((r) => Math.abs(r.perception_error)),
+        spill_max: Math.max(...rows.map((r) => r.spill)),
+        over: rows.filter((r) => r.error > 0).length,
+      };
+    });
+  },
+});
+
+dash.calc('tail_summary', {
+  title: 'Turn-back tails by material',
+  description: 'Per material: the median tilt fall before the stream stopped, the median and largest amount counted after the peak (source cups).',
+  inputs: ['turnbacks'],
+  fn: (turnbacks) => ['corn', 'styrofoam'].map((material) => {
+    const rows = turnbacks.filter((r) => r.material === material);
+    const median = (f) => { const v = rows.map(f).sort((a, b) => a - b); const m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+    return { material, turnbacks: rows.length, median_fall: median((r) => r.tilt_fall), median_seconds: median((r) => r.seconds_to_stop), median_after: median((r) => r.after_peak), max_after: Math.max(...rows.map((r) => r.after_peak)) };
+  }),
+});
+
+dash.calc('discharge_summary', {
+  title: 'Discharge coefficient corrections',
+  description: 'Per material: the median factor on the discharge coefficient at the end of a pour, how many pours the aim hypothesis never led, and the median time it first led (s).',
+  inputs: ['pours'],
+  fn: (pours) => ['corn', 'styrofoam'].map((material) => {
+    const rows = pours.filter((r) => r.material === material);
+    const median = (v) => { const s = [...v].sort((a, b) => a - b); const m = s.length >> 1; return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : null; };
+    const firsts = rows.filter((r) => r.first_aim !== null).map((r) => r.first_aim);
+    return { material, pours: rows.length, median_factor: median(rows.map((r) => r.discharge_factor_end)), never: rows.filter((r) => r.aim_share === 0).length, median_first_aim: median(firsts) };
+  }),
+});
+
+window.sw = (() => {
+  const fill = d3.format('.3f');
+  const signed = d3.format('+.3f');
+  const pct = d3.format('.0%');
+  const color = (m) => (m === 'corn' ? dash.colors[0] : dash.colors[1]);
+  const label = (m) => (m === 'corn' ? 'Corn' : 'Styrofoam');
+
+  const failed = (el) => { el.replaceChildren(); const d = document.createElement('div'); d.className = 'sw-failed'; d.textContent = 'Failed to load'; el.append(d); };
+
+  const frame = (el, height, margin) => {
+    el.replaceChildren();
+    const width = Math.max(280, el.clientWidth);
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${width} ${height}`);
+    const tip = d3.select(el).append('div').attr('class', 'sw-tip').style('display', 'none');
+    return { svg, tip, width, height, x0: margin.left, x1: width - margin.right, y0: height - margin.bottom, y1: margin.top };
+  };
+
+  const axes = (f, x, y, xLabel, yLabel, xFormat, yFormat) => {
+    const gx = f.svg.append('g').attr('transform', `translate(0,${f.y0})`).call(d3.axisBottom(x).ticks(Math.max(3, Math.floor((f.x1 - f.x0) / 70))).tickFormat(xFormat).tickSizeOuter(0));
+    const gy = f.svg.append('g').attr('transform', `translate(${f.x0},0)`).call(d3.axisLeft(y).ticks(5).tickFormat(yFormat).tickSize(-(f.x1 - f.x0)));
+    for (const g of [gx, gy]) {
+      g.attr('font-size', null).attr('font-family', null).selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+      g.select('.domain').attr('stroke', 'var(--cds-chart-axis)');
+    }
+    gx.selectAll('line').attr('stroke', 'var(--cds-chart-axis)');
+    gy.select('.domain').remove();
+    gy.selectAll('line').attr('stroke', 'var(--cds-chart-grid)');
+    f.svg.append('text').attr('x', (f.x0 + f.x1) / 2).attr('y', f.height - 4).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(xLabel);
+    f.svg.append('text').attr('transform', `translate(12,${(f.y0 + f.y1) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(yLabel);
+  };
+
+  const showTip = (f, event, el, head, lines) => {
+    const [mx, my] = d3.pointer(event, el);
+    f.tip.style('display', null);
+    const node = f.tip.node(); node.replaceChildren();
+    const h = document.createElement('div'); h.className = 'sw-tip-head'; h.textContent = head; node.append(h);
+    for (const l of lines) { const d = document.createElement('div'); d.textContent = l; node.append(d); }
+    const w = node.offsetWidth, hh = node.offsetHeight, W = el.clientWidth;
+    node.style.left = `${Math.min(Math.max(0, mx + 12), W - w)}px`;
+    node.style.top = `${Math.max(0, my - hh - 8)}px`;
+  };
+  const hideTip = (f) => f.tip.style('display', 'none');
+
+  const legends = () => {
+    document.querySelectorAll('[data-legend]').forEach((el) => {
+      const kind = el.dataset.legend;
+      const items = kind === 'materials' ? [['Corn', dash.colors[0], 'dot'], ['Styrofoam', dash.colors[1], 'dot']]
+        : kind === 'split' ? [['Controller part', dash.colors[2], 'dot'], ['Perception part', dash.colors[3], 'dot']]
+        : kind === 'rates' ? [['Predicted inflow', dash.colors[2], 'line'], ['Counted inflow', dash.colors[4], 'line']]
+        : kind === 'model' ? [['Factor on c_D (left)', dash.colors[1], 'line'], ['Onset correction (right)', dash.colors[3], 'line'], ['Aim hypothesis leads', 'var(--cds-chart-muted)', 'dot']]
+        : [['Told', dash.colors[0], 'line'], ['Counted', dash.colors[4], 'line'], ['Wall', dash.colors[5], 'line'], ['Predicted', dash.colors[2], 'line'], ['Tilt (right axis)', 'var(--cds-chart-muted)', 'line'], ['Goal', 'var(--cds-chart-reference)', 'line']];
+      el.replaceChildren(...items.map(([name, c, shape]) => {
+        const s = document.createElement('span');
+        const k = document.createElement('span');
+        k.className = shape === 'dot' ? 'sw-swatch' : 'sw-line-key';
+        k.style.background = c;
+        s.append(k, document.createTextNode(name));
+        return s;
+      }));
+    });
+    document.querySelectorAll('.sw-swatch[data-material]').forEach((el) => { el.style.background = color(el.dataset.material); });
+  };
+
+  return { fill, signed, pct, color, label, failed, frame, axes, showTip, hideTip, legends };
+})();
+</script>
+
+<script>
+let selectedPour = null;
+const select = document.getElementById('pour-select');
+select.addEventListener('change', () => { selectedPour = select.value; drawSeries(); });
+
+function drawGoal(pours) {
+  const el = document.getElementById('chart-goal');
+  const f = sw.frame(el, 300, { top: 12, right: 12, bottom: 40, left: 52 });
+  const x = d3.scaleLinear([0, 0.75], [f.x0, f.x1]);
+  const y = d3.scaleLinear([0, 0.9], [f.y0, f.y1]);
+  sw.axes(f, x, y, 'Goal fill', 'Weighed fill', d3.format('.1f'), d3.format('.1f'));
+  f.svg.append('line').attr('x1', x(0)).attr('y1', y(0)).attr('x2', x(0.75)).attr('y2', y(0.75)).attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 4');
+  const offset = (r) => (r.material === 'corn' ? -0.008 : 0.008);
+  f.svg.append('g').selectAll('circle').data(pours).join('circle')
+    .attr('cx', (r) => x(r.goal + offset(r))).attr('cy', (r) => y(r.weighed)).attr('r', 5)
+    .attr('fill', (r) => sw.color(r.material)).attr('fill-opacity', (r) => (r.in_sweep ? 0.9 : 0.4)).attr('stroke', 'var(--color-panel)')
+    .on('mousemove', (event, r) => sw.showTip(f, event, el, `${sw.label(r.material)}, ${r.pour.slice(11)}`, [`Goal ${sw.fill(r.goal)}`, `Weighed ${sw.fill(r.weighed)} (${sw.signed(r.error)})`]))
+    .on('mouseleave', () => sw.hideTip(f));
+}
+
+function drawSplit(pours) {
+  const el = document.getElementById('chart-split');
+  const rows = pours.filter((r) => r.in_sweep).sort((a, b) => d3.ascending(a.material, b.material) || a.goal - b.goal || d3.ascending(a.pour, b.pour));
+  const f = sw.frame(el, 300, { top: 12, right: 12, bottom: 40, left: 52 });
+  const x = d3.scaleBand(rows.map((r) => r.pour), [f.x0, f.x1]).paddingInner(0.25).paddingOuter(0.1);
+  const lo = d3.min(rows, (r) => Math.min(0, r.control_error, r.perception_error));
+  const hi = d3.max(rows, (r) => Math.max(0, r.control_error, r.perception_error));
+  const y = d3.scaleLinear([lo, hi], [f.y0, f.y1]).nice();
+  f.svg.append('g').attr('transform', `translate(${f.x0},0)`).call(d3.axisLeft(y).ticks(5).tickFormat(d3.format('+.1f')).tickSize(-(f.x1 - f.x0)))
+    .call((g) => { g.attr('font-size', null).attr('font-family', null); g.select('.domain').remove(); g.selectAll('line').attr('stroke', 'var(--cds-chart-grid)'); g.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)'); });
+  f.svg.append('line').attr('x1', f.x0).attr('x2', f.x1).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
+  const half = x.bandwidth() / 2;
+  const parts = rows.flatMap((r) => [{ r, part: 'control', v: r.control_error, dx: 0, c: dash.colors[2] }, { r, part: 'perception', v: r.perception_error, dx: half, c: dash.colors[3] }]);
+  f.svg.append('g').selectAll('rect').data(parts).join('rect')
+    .attr('x', (p) => x(p.r.pour) + p.dx).attr('width', Math.max(1, half - 1))
+    .attr('y', (p) => y(Math.max(0, p.v))).attr('height', (p) => Math.abs(y(p.v) - y(0))).attr('rx', 2).attr('fill', (p) => p.c)
+    .on('mousemove', (event, p) => sw.showTip(f, event, el, `${sw.label(p.r.material)}, goal ${sw.fill(p.r.goal)}, ${p.r.pour.slice(11)}`, [`Controller part ${sw.signed(p.r.control_error)}`, `Perception part ${sw.signed(p.r.perception_error)}`, `Weighed error ${sw.signed(p.r.error)}`]))
+    .on('mouseleave', () => sw.hideTip(f));
+  for (const m of ['corn', 'styrofoam']) {
+    const g = rows.filter((r) => r.material === m);
+    if (!g.length) continue;
+    const a = x(g[0].pour), b = x(g[g.length - 1].pour) + x.bandwidth();
+    f.svg.append('line').attr('x1', a).attr('x2', b).attr('y1', f.y0 + 10).attr('y2', f.y0 + 10).attr('stroke', sw.color(m)).attr('stroke-width', 3).attr('stroke-linecap', 'round');
+    f.svg.append('text').attr('x', (a + b) / 2).attr('y', f.y0 + 28).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(`${sw.label(m)}, goals ${d3.format('.1f')(g[0].goal)}–${d3.format('.1f')(g[g.length - 1].goal)}`);
+  }
+  f.svg.append('text').attr('transform', `translate(12,${(f.y0 + f.y1) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Fill error');
+}
+
+function drawTails(turns) {
+  const el = document.getElementById('chart-tails');
+  const f = sw.frame(el, 300, { top: 12, right: 12, bottom: 40, left: 52 });
+  const x = d3.scaleLinear([0, d3.max(turns, (r) => r.tilt_fall)], [f.x0, f.x1]).nice();
+  const y = d3.scaleLinear([0, d3.max(turns, (r) => r.after_peak)], [f.y0, f.y1]).nice();
+  sw.axes(f, x, y, 'Tilt fall until the stream stopped (°)', 'After the peak (source cups)', d3.format('d'), d3.format('.2f'));
+  f.svg.append('g').selectAll('circle').data(turns).join('circle')
+    .attr('cx', (r) => x(r.tilt_fall)).attr('cy', (r) => y(r.after_peak)).attr('r', (r) => (r.peak_tilt >= 96 ? 6 : 4))
+    .attr('fill', (r) => sw.color(r.material)).attr('fill-opacity', 0.85).attr('stroke', 'var(--color-panel)')
+    .on('mousemove', (event, r) => sw.showTip(f, event, el, `${sw.label(r.material)}, goal ${sw.fill(r.goal)}, turn-back ${r.number}`, [`Peak ${d3.format('.0f')(r.peak_tilt)}°`, `After the peak ${sw.fill(r.after_peak)}`, `Stopped ${d3.format('.1f')(r.tilt_fall)}° / ${d3.format('.1f')(r.seconds_to_stop)} s later`]))
+    .on('mouseleave', () => sw.hideTip(f));
+}
+
+function drawSpill(pours) {
+  const el = document.getElementById('chart-spill');
+  const f = sw.frame(el, 300, { top: 12, right: 12, bottom: 40, left: 52 });
+  const x = d3.scaleLinear(d3.extent(pours, (r) => r.peak_tilt), [f.x0, f.x1]).nice();
+  const y = d3.scaleLinear([0, d3.max(pours, (r) => r.spill)], [f.y0, f.y1]).nice();
+  sw.axes(f, x, y, 'Peak tilt (°)', 'Spill (receiving cup)', d3.format('d'), d3.format('.2f'));
+  f.svg.append('g').selectAll('circle').data(pours).join('circle')
+    .attr('cx', (r) => x(r.peak_tilt)).attr('cy', (r) => y(r.spill)).attr('r', 5)
+    .attr('fill', (r) => sw.color(r.material)).attr('fill-opacity', 0.85).attr('stroke', 'var(--color-panel)')
+    .on('mousemove', (event, r) => sw.showTip(f, event, el, `${sw.label(r.material)}, goal ${sw.fill(r.goal)}, ${r.pour.slice(11)}`, [`Peak ${d3.format('.0f')(r.peak_tilt)}°`, `Spill ${sw.fill(r.spill)}`]))
+    .on('mouseleave', () => sw.hideTip(f));
+}
+
+function drawAgainst(id, pours, xField, yField, xLabel, yLabel, lines) {
+  const el = document.getElementById(id);
+  const f = sw.frame(el, 300, { top: 12, right: 12, bottom: 40, left: 52 });
+  const hi = Math.max(d3.max(pours, (r) => r[xField]), d3.max(pours, (r) => r[yField]));
+  const x = d3.scaleLinear([0, hi], [f.x0, f.x1]).nice();
+  const y = d3.scaleLinear([0, hi], [f.y0, f.y1]).nice();
+  sw.axes(f, x, y, xLabel, yLabel, d3.format('.1f'), d3.format('.1f'));
+  const top = Math.min(x.domain()[1], y.domain()[1]);
+  f.svg.append('line').attr('x1', x(0)).attr('y1', y(0)).attr('x2', x(top)).attr('y2', y(top)).attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 4');
+  f.svg.append('g').selectAll('circle').data(pours).join('circle')
+    .attr('cx', (r) => x(r[xField])).attr('cy', (r) => y(r[yField])).attr('r', 5)
+    .attr('fill', (r) => sw.color(r.material)).attr('fill-opacity', 0.85).attr('stroke', 'var(--color-panel)')
+    .on('mousemove', (event, r) => sw.showTip(f, event, el, `${sw.label(r.material)}, goal ${sw.fill(r.goal)}, ${r.pour.slice(11)}`, lines(r)))
+    .on('mouseleave', () => sw.hideTip(f));
+}
+
+function drawDischarge(pours) {
+  const el = document.getElementById('chart-discharge');
+  const rows = [...pours].sort((a, b) => d3.ascending(a.material, b.material) || a.goal - b.goal || d3.ascending(a.pour, b.pour));
+  const f = sw.frame(el, 300, { top: 12, right: 12, bottom: 48, left: 52 });
+  const x = d3.scaleBand(rows.map((r) => r.pour), [f.x0, f.x1]).padding(0.3);
+  const y = d3.scaleLog([0.1, 1.2], [f.y0, f.y1]);
+  const gy = f.svg.append('g').attr('transform', `translate(${f.x0},0)`).call(d3.axisLeft(y).tickValues([0.1, 0.2, 0.5, 1]).tickFormat((v) => `×${v}`).tickSize(-(f.x1 - f.x0)));
+  gy.attr('font-size', null).attr('font-family', null); gy.select('.domain').remove(); gy.selectAll('line').attr('stroke', 'var(--cds-chart-grid)'); gy.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+  f.svg.append('text').attr('transform', `translate(12,${(f.y0 + f.y1) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Factor on c_D');
+  const cx = (r) => x(r.pour) + x.bandwidth() / 2;
+  f.svg.append('g').selectAll('line').data(rows).join('line').attr('x1', cx).attr('x2', cx).attr('y1', (r) => y(r.discharge_factor_flowing)).attr('y2', (r) => y(r.discharge_factor_end)).attr('stroke', (r) => sw.color(r.material)).attr('stroke-opacity', 0.5);
+  f.svg.append('g').selectAll('circle.ring').data(rows).join('circle').attr('class', 'ring').attr('cx', cx).attr('cy', (r) => y(r.discharge_factor_flowing)).attr('r', 5).attr('fill', 'var(--color-panel)').attr('stroke', (r) => sw.color(r.material)).attr('stroke-width', 1.5);
+  f.svg.append('g').selectAll('circle.end').data(rows).join('circle').attr('class', 'end').attr('cx', cx).attr('cy', (r) => y(r.discharge_factor_end)).attr('r', 4.5).attr('fill', (r) => sw.color(r.material))
+    .on('mousemove', (event, r) => sw.showTip(f, event, el, `${sw.label(r.material)}, goal ${sw.fill(r.goal)}, ${r.pour.slice(11)}`, [`c_D at the end ${d3.format('.3f')(r.discharge_end)} (×${d3.format('.2f')(r.discharge_factor_end)})`, `Median while flowing ×${d3.format('.2f')(r.discharge_factor_flowing)}`, `Aim hypothesis led ${sw.pct(r.aim_share)} of the pour`, r.first_aim === null ? 'Aim hypothesis never led' : `First led at ${d3.format('.1f')(r.first_aim)} s`, `Stream seen ${sw.pct(r.seen_while_flowing)} of the time the count rose`]))
+    .on('mouseleave', () => sw.hideTip(f));
+  const gx = f.svg.append('g').attr('transform', `translate(0,${f.y0})`).call(d3.axisBottom(x).tickFormat((p) => d3.format('.1f')(rows.find((r) => r.pour === p).goal)).tickSizeOuter(0));
+  gx.attr('font-size', null).attr('font-family', null); gx.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)'); gx.selectAll('line,.domain').attr('stroke', 'var(--cds-chart-axis)');
+  if (x.bandwidth() < 14) gx.selectAll('text').filter((d, i) => i % 2).remove();
+  f.svg.append('text').attr('x', (f.x0 + f.x1) / 2).attr('y', f.height - 4).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Pours by material and goal');
+}
+
+function drawRate(rows) {
+  const el = document.getElementById('chart-rate');
+  const f = sw.frame(el, 200, { top: 12, right: 52, bottom: 32, left: 52 });
+  const x = d3.scaleLinear([0, d3.max(rows, (r) => r.time)], [f.x0, f.x1]);
+  const y = d3.scaleLinear([Math.min(0, d3.min(rows, (r) => Math.min(r.predicted_rate, r.measured_rate))), d3.max(rows, (r) => Math.max(r.predicted_rate, r.measured_rate))], [f.y0, f.y1]).nice();
+  sw.axes(f, x, y, '', 'Fill per second', d3.format('d'), d3.format('.2f'));
+  for (const [field, c] of [['predicted_rate', dash.colors[2]], ['measured_rate', dash.colors[4]]]) {
+    f.svg.append('path').datum(rows).attr('fill', 'none').attr('stroke', c).attr('stroke-width', 1.75).attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round').attr('d', d3.line().x((r) => x(r.time)).y((r) => y(r[field])));
+  }
+  hover(f, el, x, rows, (r) => [`Predicted ${d3.format('.3f')(r.predicted_rate)}/s`, `Counted ${d3.format('.3f')(r.measured_rate)}/s`]);
+}
+
+function drawModel(rows) {
+  const el = document.getElementById('chart-model');
+  const f = sw.frame(el, 200, { top: 18, right: 52, bottom: 32, left: 52 });
+  const x = d3.scaleLinear([0, d3.max(rows, (r) => r.time)], [f.x0, f.x1]);
+  const y = d3.scaleLinear([0, Math.max(1.05, d3.max(rows, (r) => r.discharge_factor))], [f.y0, f.y1]).nice();
+  const yr = d3.scaleLinear([Math.min(0, d3.min(rows, (r) => r.repose_correction)), Math.max(10, d3.max(rows, (r) => r.repose_correction))], [f.y0, f.y1]).nice();
+  sw.axes(f, x, y, '', 'Factor on c_D', d3.format('d'), (v) => `×${d3.format('.1f')(v)}`);
+  const gr = f.svg.append('g').attr('transform', `translate(${f.x1},0)`).call(d3.axisRight(yr).ticks(4).tickFormat((v) => `${v}°`));
+  gr.attr('font-size', null).attr('font-family', null).selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+  gr.selectAll('line,.domain').attr('stroke', 'var(--cds-chart-axis)');
+  const step = rows.length > 1 ? x(rows[1].time) - x(rows[0].time) : 2;
+  f.svg.append('g').selectAll('rect').data(rows.filter((r) => r.hypothesis === 'H2')).join('rect').attr('x', (r) => x(r.time)).attr('width', Math.max(1, step)).attr('y', 4).attr('height', 8).attr('fill', 'var(--cds-chart-muted)');
+  f.svg.append('path').datum(rows).attr('fill', 'none').attr('stroke', dash.colors[3]).attr('stroke-width', 1.5).attr('stroke-linejoin', 'round').attr('d', d3.line().x((r) => x(r.time)).y((r) => yr(r.repose_correction)));
+  f.svg.append('path').datum(rows).attr('fill', 'none').attr('stroke', dash.colors[1]).attr('stroke-width', 2).attr('stroke-linejoin', 'round').attr('d', d3.line().x((r) => x(r.time)).y((r) => y(r.discharge_factor)));
+  hover(f, el, x, rows, (r) => [`Factor on c_D ×${d3.format('.2f')(r.discharge_factor)}`, `Onset correction ${d3.format('.0f')(r.repose_correction)}°`, `Leading: ${r.hypothesis}`]);
+}
+
+function hover(f, el, x, rows, lines) {
+  const rule = f.svg.append('line').attr('y1', f.y1).attr('y2', f.y0).attr('stroke', 'var(--cds-chart-axis)').style('display', 'none');
+  f.svg.append('rect').attr('x', f.x0).attr('y', f.y1).attr('width', f.x1 - f.x0).attr('height', f.y0 - f.y1).attr('fill', 'transparent')
+    .on('mousemove', (event) => {
+      const [mx] = d3.pointer(event);
+      const r = rows[Math.min(rows.length - 1, d3.bisector((d) => d.time).center(rows, x.invert(mx)))];
+      rule.style('display', null).attr('x1', x(r.time)).attr('x2', x(r.time));
+      sw.showTip(f, event, el, `${d3.format('.1f')(r.time)} s`, lines(r));
+    })
+    .on('mouseleave', () => { rule.style('display', 'none'); sw.hideTip(f); });
+}
+
+function drawSeries() {
+  const el = document.getElementById('chart-series');
+  const s = dash.data('series'), p = dash.data('pours');
+  const others = [document.getElementById('chart-rate'), document.getElementById('chart-model')];
+  if (s.status === 'error' || p.status === 'error') { for (const e of [el, ...others]) { e.classList.remove('dash-skeleton'); sw.failed(e); } return; }
+  if (s.status !== 'ok' || p.status !== 'ok') { for (const e of [el, ...others]) e.replaceChildren(); return; }
+  for (const e of [el, ...others]) e.classList.remove('dash-skeleton');
+  const pour = p.data.find((r) => r.pour === selectedPour);
+  const rows = s.data.filter((r) => r.pour === selectedPour);
+  if (!pour || !rows.length) { el.replaceChildren(); return; }
+  const f = sw.frame(el, 320, { top: 12, right: 52, bottom: 40, left: 52 });
+  const x = d3.scaleLinear([0, d3.max(rows, (r) => r.time)], [f.x0, f.x1]);
+  const top = Math.min(1, Math.max(pour.goal + 0.1, pour.weighed, d3.max(rows, (r) => Math.max(r.told, r.counted, r.wall ?? 0, r.predicted))));
+  const y = d3.scaleLinear([0, top], [f.y0, f.y1]).nice();
+  const yt = d3.scaleLinear([30, 115], [f.y0, f.y1]);
+  sw.axes(f, x, y, 'Time since the transfer started (s)', 'Fill (receiving cup)', d3.format('d'), d3.format('.1f'));
+  const gr = f.svg.append('g').attr('transform', `translate(${f.x1},0)`).call(d3.axisRight(yt).ticks(5).tickFormat((v) => `${v}°`));
+  gr.attr('font-size', null).attr('font-family', null).selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+  gr.selectAll('line,.domain').attr('stroke', 'var(--cds-chart-axis)');
+  f.svg.append('line').attr('x1', f.x0).attr('x2', f.x1).attr('y1', y(pour.goal)).attr('y2', y(pour.goal)).attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 4');
+  f.svg.append('line').attr('x1', f.x1 - 4).attr('x2', f.x1).attr('y1', y(pour.weighed)).attr('y2', y(pour.weighed)).attr('stroke', 'var(--color-fg)').attr('stroke-width', 3);
+  const line = (field, c, width) => {
+    const pts = rows.filter((r) => r[field] !== null);
+    if (!pts.length) return;
+    f.svg.append('path').datum(pts).attr('fill', 'none').attr('stroke', c).attr('stroke-width', width).attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round')
+      .attr('d', d3.line().x((r) => x(r.time)).y((r) => (field === 'tilt' ? yt(r.tilt) : y(r[field]))));
+  };
+  line('tilt', 'var(--cds-chart-muted)', 1.5);
+  line('predicted', dash.colors[2], 1.5);
+  line('wall', dash.colors[5], 1.5);
+  line('counted', dash.colors[4], 2);
+  line('told', dash.colors[0], 2);
+  const rule = f.svg.append('line').attr('y1', f.y1).attr('y2', f.y0).attr('stroke', 'var(--cds-chart-axis)').style('display', 'none');
+  f.svg.append('rect').attr('x', f.x0).attr('y', f.y1).attr('width', f.x1 - f.x0).attr('height', f.y0 - f.y1).attr('fill', 'transparent')
+    .on('mousemove', (event) => {
+      const [mx] = d3.pointer(event);
+      const t = x.invert(mx);
+      const r = rows[Math.min(rows.length - 1, d3.bisector((d) => d.time).center(rows, t))];
+      rule.style('display', null).attr('x1', x(r.time)).attr('x2', x(r.time));
+      const lines = [`Tilt ${d3.format('.1f')(r.tilt)}°`, `Told ${sw.fill(r.told)}`, `Counted ${sw.fill(r.counted)}`];
+      if (r.wall !== null) lines.push(`Wall ${sw.fill(r.wall)}`);
+      lines.push(`Predicted ${sw.fill(r.predicted)}`);
+      sw.showTip(f, event, el, `${d3.format('.1f')(r.time)} s`, lines);
+    })
+    .on('mouseleave', () => { rule.style('display', 'none'); sw.hideTip(f); });
+  drawRate(rows);
+  drawModel(rows);
+  f.svg.append('text').attr('x', f.x1 - 6).attr('y', y(pour.weighed) - 6).attr('text-anchor', 'end').attr('fill', 'var(--color-fg)').style('font-size', 'var(--cds-font-size-caption)').text(`weighed ${sw.fill(pour.weighed)}`);
+}
+
+function drawTable(pours) {
+  const body = document.querySelector('#pour-table tbody');
+  const rows = [...pours].sort((a, b) => d3.ascending(a.material, b.material) || a.goal - b.goal || d3.ascending(a.pour, b.pour));
+  body.replaceChildren(...rows.map((r) => {
+    const tr = document.createElement('tr');
+    if (!r.in_sweep) tr.className = 'sw-excluded';
+    const cells = [r.pour, r.material, sw.fill(r.goal), sw.fill(r.weighed), sw.signed(r.error), sw.fill(r.told_end), sw.signed(r.control_error), sw.signed(r.perception_error), sw.fill(r.spill), `${d3.format('.0f')(r.peak_tilt)}°`, String(r.bursts), `${d3.format('.0f')(r.duration)} s`];
+    cells.forEach((v, i) => { const td = document.createElement('td'); td.textContent = v; if (i === 4 && r.error > 0.01) td.className = 'sw-over'; tr.append(td); });
+    return tr;
+  }));
+}
+
+dash.onData(() => {
+  sw.legends();
+  const sum = dash.data('summary'), p = dash.data('pours'), t = dash.data('turnbacks'), ts = dash.data('tail_summary');
+  const take = document.getElementById('takeaway');
+  if (sum.status === 'ok') {
+    take.classList.remove('dash-skeleton');
+    const c = sum.data.find((r) => r.material === 'corn'), s = sum.data.find((r) => r.material === 'styrofoam');
+    take.textContent = `The same controller lands corn within ${sw.fill(c.mae)} of the goal on average (${sw.pct(c.mae_share_of_goal)} of the goal), an error the wall reading sets. Styrofoam overpours ${s.over} of ${s.pours} pours by ${sw.fill(s.mean_error)} on average: the controller was told ${sw.signed(s.control_mean)} past the goal, because avalanches keep running after the turn-back.`;
+    document.querySelectorAll('[data-source="summary"][data-field]').forEach((el) => {
+      const m = el.dataset.where.split('=')[1]; const r = sum.data.find((x) => x.material === m); const f = el.dataset.field;
+      el.classList.remove('dash-skeleton');
+      el.textContent = f === 'pours' ? String(r[f]) : f === 'mae_share_of_goal' ? sw.pct(r[f]) : (f === 'mean_error' || f.endsWith('_mean')) ? sw.signed(r[f]) : sw.fill(r[f]);
+    });
+  } else if (sum.status === 'error') { take.textContent = '—'; }
+  if (ts.status === 'ok') {
+    document.querySelectorAll('[data-source="tail_summary"][data-field]').forEach((el) => {
+      const m = el.dataset.where.split('=')[1]; const r = ts.data.find((x) => x.material === m); const f = el.dataset.field;
+      el.classList.remove('dash-skeleton');
+      el.textContent = f === 'median_fall' ? `${d3.format('.1f')(r[f])}°` : sw.fill(r[f]);
+    });
+  }
+  const ds = dash.data('discharge_summary');
+  if (ds.status === 'ok') {
+    document.querySelectorAll('[data-source="discharge_summary"][data-field]').forEach((el) => {
+      const m = el.dataset.where.split('=')[1]; const r = ds.data.find((x) => x.material === m); const f = el.dataset.field;
+      el.classList.remove('dash-skeleton');
+      el.textContent = f === 'median_factor' ? `×${d3.format('.2f')(r[f])}` : f === 'never' ? `${r[f]} of ${r.pours}` : r[f] === null ? '—' : `${d3.format('.1f')(r[f])} s`;
+    });
+  }
+  const charts = [['chart-goal', p, drawGoal], ['chart-split', p, drawSplit], ['chart-spill', p, drawSpill], ['chart-tails', t, drawTails],
+    ['chart-bank-end', p, (rows) => drawAgainst('chart-bank-end', rows, 'weighed', 'bank_received_end', 'Weighed fill', 'Bank belief', (r) => [`Weighed ${sw.fill(r.weighed)}`, `Bank believed ${sw.fill(r.bank_received_end)}`])],
+    ['chart-source-end', p, (rows) => drawAgainst('chart-source-end', rows, 'source_left_weighed', 'source_left_belief', 'Left in the source, from the scale', 'Bank belief', (r) => [`From the scale ${sw.fill(r.source_left_weighed)}`, `Bank believed ${sw.fill(r.source_left_belief)}`, `Spill ${sw.fill(r.spill)}`])],
+    ['chart-max-predicted', p, (rows) => drawAgainst('chart-max-predicted', rows, 'weighed', 'max_predicted', 'Weighed fill', 'Largest predicted fill', (r) => [`Weighed ${sw.fill(r.weighed)}`, `Largest prediction ${sw.fill(r.max_predicted)}`, `Goal ${sw.fill(r.goal)}`])],
+    ['chart-discharge', p, drawDischarge]];
+  for (const [id, d, draw] of charts) {
+    const el = document.getElementById(id);
+    if (d.status === 'ok') { el.classList.remove('dash-skeleton'); draw(d.data); }
+    else if (d.status === 'error') { el.classList.remove('dash-skeleton'); sw.failed(el); }
+    else el.replaceChildren();
+  }
+  if (p.status === 'ok') {
+    drawTable(p.data);
+    const sorted = [...p.data].sort((a, b) => d3.ascending(a.material, b.material) || a.goal - b.goal || d3.ascending(a.pour, b.pour));
+    if (!selectedPour) selectedPour = (sorted.find((r) => r.material === 'styrofoam' && r.goal === 0.3) ?? sorted[0]).pour;
+    select.replaceChildren(...sorted.map((r) => new Option(`${sw.label(r.material)}, goal ${d3.format('.1f')(r.goal)}, ${r.pour.slice(11, 16)}`, r.pour)));
+    select.value = selectedPour;
+  }
+  drawSeries();
+});
+</script>
