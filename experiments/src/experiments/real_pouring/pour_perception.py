@@ -26,10 +26,27 @@ class PerceptionCalibration(StrEnum):
     """Packaged calibrations for a particular receiver and material."""
 
     TRANSLUCENT_CORN = "translucent_corn_wall.json"
-    """Wall model fitted to the development pours of October 2026."""
+    """
+    Wall model fitted to the development pours of October 2026, with the receiver
+    modelled standing on the table top (at 0.875 m in the world root).
+    """
 
     RECEIVER_EVIDENCE = "translucent_corn_evidence.json"
-    """Measurement error scales from development-pour cross-validation."""
+    """Measurement error scales from cross-validating :attr:`TRANSLUCENT_CORN`."""
+
+    TRANSLUCENT_CORN_LIFTED_RECEIVER = "translucent_corn_wall_lifted_receiver.json"
+    """
+    Wall model for the receiver modelled 5 cm above the table top (at 0.925 m), as in
+    every bag recorded before 2026-10-25 14:31.
+
+    .. note:: The wall reading depends on where the receiver is modelled: replaying such
+        a bag with :attr:`TRANSLUCENT_CORN` reads about 0.09 low. To analyse those bags,
+        have :meth:`PourPerception.for_cup` read this file and
+        :attr:`RECEIVER_EVIDENCE_LIFTED_RECEIVER` instead.
+    """
+
+    RECEIVER_EVIDENCE_LIFTED_RECEIVER = "translucent_corn_evidence_lifted_receiver.json"
+    """Measurement error scales from cross-validating :attr:`TRANSLUCENT_CORN_LIFTED_RECEIVER`."""
 
 
 @dataclass(frozen=True)

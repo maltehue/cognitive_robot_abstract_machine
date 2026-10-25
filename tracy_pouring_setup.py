@@ -25,9 +25,19 @@ from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix,
 
 # %% robot and table
 
-TABLE_SURFACE_Z = 0.875 + 0.05
+TABLE_SURFACE_Z = 0.875
 """
 Height of the table top in the world root, in metres.
+
+The wall calibration of the translucent cup is fitted for the receiver standing here;
+see :class:`experiments.real_pouring.pour_perception.PerceptionCalibration`.
+"""
+
+CARRY_HEIGHT = 0.21
+"""
+Height of the left tool above the table top while it carries the cup and tilts it to the
+transfer start, in metres: with the cup gripped at its middle, it puts the lip inside
+the clearance band above the receiver when the transfer starts.
 """
 
 LEFT_TOOL_FRAME = "l_gripper_tool_frame"
@@ -116,7 +126,7 @@ def upright_carry_pose(giskard: GiskardWrapper, tilt: float = 0.0) -> Pose:
     root_T_upright = HomogeneousTransformationMatrix.from_xyz_quaternion(
         pos_x=1,
         pos_y=0.3,
-        pos_z=TABLE_SURFACE_Z + 0.15,
+        pos_z=TABLE_SURFACE_Z + CARRY_HEIGHT,
         quat_z=0.5,
         quat_x=0.5,
         quat_y=0.5,
