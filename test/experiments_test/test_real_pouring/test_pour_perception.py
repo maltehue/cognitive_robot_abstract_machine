@@ -28,3 +28,16 @@ def test_opaque_cup_preserves_its_counted_reporting() -> None:
     perception = PourPerception.for_cup(ReceivingCup.JEROEN_CUP, PouredMaterial.CORN)
     assert perception.fill_report is ReceivingCup.JEROEN_CUP.fill_report
     assert perception.wall_calibration is None
+
+
+def test_water_in_the_translucent_cup_reports_its_fill_from_the_count() -> None:
+    """
+    Water does not show through the frosted wall, so its fill comes from the count.
+    """
+    perception = PourPerception.for_cup(
+        ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER
+    )
+    assert (perception.fill_report, perception.wall_calibration) == (
+        ReceiverFillReport.COUNTED,
+        None,
+    )

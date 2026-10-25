@@ -96,6 +96,36 @@ How much further below the repose angle the corn keeps flowing per share of the 
 poured out: the slope of the same line through the three recorded stops.
 """
 
+WATER_FULL_CUP_MASS_GRAMS = 400.0
+"""
+What the water filling the cup weighs, in grams: 400 ml, the most the cup was filled
+with for the hand-poured water videos of 2026-10-25.
+"""
+
+WATER_REPOSE_HYSTERESIS = 0.0
+"""
+How far below the repose angle water keeps flowing once it flows: not at all, since a
+liquid stops pouring as soon as its surface sinks back below the lip; no robot pour of
+water has been recorded to tell otherwise.
+"""
+
+WATER_REPOSE_HYSTERESIS_GROWTH = 0.0
+"""
+How much further water keeps flowing per share poured out: nothing, for the same reason.
+"""
+
+GRAIN_DRY_TILT = math.radians(60.0)
+"""
+The tilt below which nothing but stray heap grains has left the cup in any recorded pour
+(first bulk stream at 66 to 80 degrees), in radians.
+"""
+
+WATER_DRY_TILT = 0.0
+"""
+The tilt below which no water leaves the cup, in radians: none, since the 400 ml filling
+the cup reach so close to its rim that it spills as soon as it tilts.
+"""
+
 
 @dataclass
 class MaterialNotSeenThroughWallError(Exception):
@@ -113,6 +143,25 @@ class MaterialNotSeenThroughWallError(Exception):
         return (
             f"{self.material} does not turn the translucent cup's frosted wall yellow, "
             f"so its fill cannot be read through it: pour it into the Jeroen cup."
+        )
+
+
+@dataclass
+class JeroenCupCalibrationUnknownError(Exception):
+    """
+    Raised when the camera is to count a material poured into the Jeroen cup that
+    nobody has calibrated the count of in that cup.
+    """
+
+    material: PouredMaterial
+    """
+    The material not calibrated for the Jeroen cup.
+    """
+
+    def __str__(self) -> str:
+        return (
+            f"Nobody has calibrated how the camera counts {self.material} poured into "
+            f"the Jeroen cup: pour it into the translucent cup."
         )
 
 
@@ -151,6 +200,11 @@ class PouredMaterial(StrEnum):
     Corn kernels, yellow to brownish.
     """
 
+    WATER = "water"
+    """
+    Clear tap water.
+    """
+
     @property
     def segmentation(self) -> GrainSegmentation:
         """
@@ -159,7 +213,7 @@ class PouredMaterial(StrEnum):
             than the empty view's, so only the calibration differs.
         """
         match self:
-            case PouredMaterial.STYROFOAM | PouredMaterial.CORN:
+            case PouredMaterial.STYROFOAM | PouredMaterial.CORN | PouredMaterial.WATER:
                 return MovingGrainSegmentation()
 
     @property
@@ -168,24 +222,32 @@ class PouredMaterial(StrEnum):
         :return: How much stream area, times the time it shows, one of the live bank's
             grains of this material adds; the demo prints the factor to correct it by
             after a weighed pour.
+        :raises JeroenCupCalibrationUnknownError: For a material nobody calibrated the
+            count of in the Jeroen cup.
         """
         match self:
             case PouredMaterial.STYROFOAM:
                 return STYROFOAM_PIXEL_SECONDS_PER_GRAIN
             case PouredMaterial.CORN:
                 return CORN_PIXEL_SECONDS_PER_GRAIN
+            case PouredMaterial.WATER:
+                raise JeroenCupCalibrationUnknownError(material=self)
 
     @property
     def heap_pixels_per_share(self) -> float:
         """
         :return: How many heap pixels the camera would see of this material's surface
             filling the whole receiver: the scale of the heap gauge.
+        :raises JeroenCupCalibrationUnknownError: For a material nobody calibrated the
+            heap of in the Jeroen cup.
         """
         match self:
             case PouredMaterial.STYROFOAM:
                 return STYROFOAM_HEAP_PIXELS_PER_SHARE
             case PouredMaterial.CORN:
                 return CORN_HEAP_PIXELS_PER_SHARE
+            case PouredMaterial.WATER:
+                raise JeroenCupCalibrationUnknownError(material=self)
 
     @property
     def repose_hysteresis(self) -> float:
@@ -198,6 +260,8 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_REPOSE_HYSTERESIS
             case PouredMaterial.CORN:
                 return CORN_REPOSE_HYSTERESIS
+            case PouredMaterial.WATER:
+                return WATER_REPOSE_HYSTERESIS
 
     @property
     def repose_hysteresis_growth(self) -> float:
@@ -210,6 +274,20 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_REPOSE_HYSTERESIS_GROWTH
             case PouredMaterial.CORN:
                 return CORN_REPOSE_HYSTERESIS_GROWTH
+            case PouredMaterial.WATER:
+                return WATER_REPOSE_HYSTERESIS_GROWTH
+
+    @property
+    def dry_tilt(self) -> float:
+        """
+        :return: The tilt of a full cup below which none of this material leaves it,
+            in radians.
+        """
+        match self:
+            case PouredMaterial.STYROFOAM | PouredMaterial.CORN:
+                return GRAIN_DRY_TILT
+            case PouredMaterial.WATER:
+                return WATER_DRY_TILT
 
     def drain_of(self, drain: ModelPoint) -> ModelPoint:
         """
@@ -235,3 +313,5 @@ class PouredMaterial(StrEnum):
                 return CORN_FULL_CUP_MASS_GRAMS
             case PouredMaterial.CORN:
                 raise FullCupMassUnknownError(material=self)
+            case PouredMaterial.WATER:
+                return WATER_FULL_CUP_MASS_GRAMS

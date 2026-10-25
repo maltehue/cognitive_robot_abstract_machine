@@ -3,6 +3,7 @@ import pytest
 
 from experiments.real_pouring import poured_material, receiving_cup
 from experiments.real_pouring.poured_material import (
+    JeroenCupCalibrationUnknownError,
     MaterialNotSeenThroughWallError,
     PouredMaterial,
 )
@@ -16,6 +17,7 @@ from experiments.real_pouring.receiver_wall import BLUE_MAT
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
+    MovingWaterSegmentation,
     MovingYellowSegmentation,
 )
 
@@ -159,3 +161,39 @@ def test_the_translucent_cup_reports_its_fill_through_its_wall():
 
 def test_the_jeroen_cup_reports_its_fill_from_the_count():
     assert ReceivingCup.JEROEN_CUP.fill_report is ReceiverFillReport.COUNTED
+
+
+# %% water
+
+
+def test_water_falling_into_the_translucent_cup_is_counted_by_its_flicker():
+    detector = _detector(ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER)
+    assert (
+        type(detector.segmentation),
+        detector.pixel_seconds_per_grain,
+    ) == (
+        MovingWaterSegmentation,
+        receiving_cup.TRANSLUCENT_CUP_WATER_PIXEL_SECONDS_PER_GRAIN,
+    )
+
+
+def test_water_in_the_translucent_cup_is_watched_where_the_opening_projects():
+    detector = _detector(ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER)
+    assert (
+        detector.outline,
+        detector.cup_on_mat,
+        detector.wall_gauge,
+        detector.heap_gauge,
+    ) == (None, None, None, None)
+
+
+def test_the_translucent_cup_holds_as_many_source_cups_of_water_as_its_scale_says():
+    assert ReceivingCup.TRANSLUCENT_CUP.source_cups_held(PouredMaterial.WATER) == (
+        receiving_cup.TRANSLUCENT_CUP_WATER_MASS_GRAMS
+        / poured_material.WATER_FULL_CUP_MASS_GRAMS
+    )
+
+
+def test_water_poured_into_the_jeroen_cup_says_it_is_not_calibrated():
+    with pytest.raises(JeroenCupCalibrationUnknownError):
+        _detector(ReceivingCup.JEROEN_CUP, PouredMaterial.WATER)

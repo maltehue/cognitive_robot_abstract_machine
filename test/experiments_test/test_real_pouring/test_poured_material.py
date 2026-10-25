@@ -7,6 +7,7 @@ from experiments.pouring_model_verification.hypothesis_bank import ModelPoint
 from experiments.real_pouring import poured_material
 from experiments.real_pouring.poured_material import (
     FullCupMassUnknownError,
+    JeroenCupCalibrationUnknownError,
     PouredMaterial,
 )
 from experiments.real_pouring.stream_detection import MovingGrainSegmentation
@@ -91,3 +92,45 @@ def test_corn_keeps_flowing_further_back_the_emptier_the_cup_gets():
 
 def test_styrofoam_keeps_flowing_as_far_back_whatever_is_left():
     assert PouredMaterial.STYROFOAM.repose_hysteresis_growth == 0.0
+
+
+# %% water
+
+
+def test_a_full_cup_of_water_weighs_what_was_set_for_it():
+    assert (
+        PouredMaterial.WATER.full_cup_mass_grams
+        == poured_material.WATER_FULL_CUP_MASS_GRAMS
+    )
+
+
+def test_water_poured_into_the_jeroen_cup_has_no_count_calibration():
+    with pytest.raises(JeroenCupCalibrationUnknownError):
+        PouredMaterial.WATER.pixel_seconds_per_grain
+
+
+def test_water_poured_into_the_jeroen_cup_has_no_heap_scale():
+    with pytest.raises(JeroenCupCalibrationUnknownError):
+        PouredMaterial.WATER.heap_pixels_per_share
+
+
+def test_water_keeps_flowing_below_its_repose_angle_by_its_own_hysteresis():
+    assert (
+        PouredMaterial.WATER.repose_hysteresis,
+        PouredMaterial.WATER.repose_hysteresis_growth,
+    ) == (
+        poured_material.WATER_REPOSE_HYSTERESIS,
+        poured_material.WATER_REPOSE_HYSTERESIS_GROWTH,
+    )
+
+
+# %% the tilt up to which a material stays in the cup
+
+
+@pytest.mark.parametrize("material", [PouredMaterial.STYROFOAM, PouredMaterial.CORN])
+def test_grains_stay_in_the_cup_up_to_the_tilt_the_recorded_pours_showed(material):
+    assert material.dry_tilt == poured_material.GRAIN_DRY_TILT
+
+
+def test_water_stays_in_the_cup_up_to_its_own_tilt():
+    assert PouredMaterial.WATER.dry_tilt == poured_material.WATER_DRY_TILT
