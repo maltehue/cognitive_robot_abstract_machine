@@ -219,6 +219,11 @@ class PourSettings:
     Whether the learned head drove the transfer instead of the analytic one.
     """
 
+    transfer_time_limit: Optional[float] = field(default=None, kw_only=True)
+    """
+    How long the transfer could run before it was ended, in seconds.
+    """
+
     repository: Optional[RepositoryState] = field(default=None, kw_only=True)
     """
     The code the pour ran with.

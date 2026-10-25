@@ -64,6 +64,7 @@ def settings() -> PourSettings:
         stop_lead_time=1.0,
         corrects_drain=False,
         learned_head=False,
+        transfer_time_limit=60.0,
         repository=RepositoryState(commit="0" * 40, has_uncommitted_changes=True),
     )
 

@@ -45,6 +45,11 @@ from experiments.pouring_model_verification.hypothesis_bank import (
 from experiments.pouring_model_verification.sensor import CameraCondition
 from experiments.real_pouring.live_bank import LiveBank
 from experiments.real_pouring.live_bank_listener import LiveBankListener
+from experiments.real_pouring.transfer_ending import (
+    TRANSFER_ENDING_FILE_NAME,
+    CancelOnInterrupt,
+    TransferEnding,
+)
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.pour_perception import PourPerception
 from experiments.real_pouring.pour_settings import (
@@ -58,7 +63,14 @@ from experiments.real_pouring.receiving_cup import (
     RECEIVING_CUP_FILE_NAME,
     ReceivingCup,
 )
-from giskardpy.motion_statechart.data_types import DefaultWeights
+from giskardpy.middleware.ros2.exceptions import ExecutionCanceledException
+from giskardpy.motion_statechart.data_types import (
+    DefaultWeights,
+    ObservationStateValues,
+)
+from giskardpy.motion_statechart.monitors.payload_monitors import (
+    CountSimulationTimeSeconds,
+)
 from krrood.adapters.json_serializer import to_json
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.graph_node import EndMotion
@@ -326,6 +338,15 @@ that tilts it could follow, so the other joints joined in and moved the cup by
 centimetres and its axis by up to 2.7 degrees (bag 2026-10-23_16-02-07). Replayed
 through the controller, 30 degrees per second squared kept the other joints at the speed
 they move at during the steady pour while tilting back nearly as far within two seconds.
+"""
+
+TRANSFER_TIME_LIMIT = 60.0
+"""
+How long the transfer may run before it is ended, in seconds, so a pour that stalls ends
+by itself and the bag gets all its files; the longest pour of 2026-10-24 took 45 s.
+
+Ctrl+C during the transfer ends it the same way: the robot stops and the script goes on
+to weigh and save.
 """
 
 CONTROL_CYCLES_FILE_NAME = "transfer_control_cycles.npz"
@@ -683,6 +704,7 @@ recording.add_file(
         stop_lead_time=STOP_LEAD_TIME if USE_LIVE_BANK else None,
         corrects_drain=CORRECT_DRAIN if USE_LIVE_BANK else None,
         learned_head=USE_LEARNED_HEAD,
+        transfer_time_limit=TRANSFER_TIME_LIMIT,
         repository=RepositoryState.of_working_tree(Path(__file__).parent),
     ).as_json_text(),
 )
@@ -699,6 +721,9 @@ msc.add_node(extended_motion)
 msc.add_node(EndMotion.when_true(extended_motion))
 msc.add_node(held_at_ceiling)
 msc.add_node(EndMotion.when_true(held_at_ceiling))
+time_limit = CountSimulationTimeSeconds(seconds=TRANSFER_TIME_LIMIT)
+msc.add_node(time_limit)
+msc.add_node(EndMotion.when_true(time_limit))
 live_bank_listener = None
 if USE_LIVE_BANK:
     live_bank_listener = LiveBankListener(
@@ -732,7 +757,21 @@ if USE_LIVE_BANK:
     live_bank_listener.start()
 print("Start transfer.")
 transfer_started_at = time.time()
-giskard.execute(msc)
+with CancelOnInterrupt(giskard.cancel_goal_async) as interruption:
+    try:
+        giskard.execute(msc)
+    except ExecutionCanceledException:
+        pass
+if interruption.interrupted:
+    transfer_ending = TransferEnding.STOPPED_BY_OPERATOR
+elif msc.observation_state[held_at_ceiling] == ObservationStateValues.TRUE:
+    transfer_ending = TransferEnding.HELD_AT_CEILING
+elif msc.observation_state[time_limit] == ObservationStateValues.TRUE:
+    transfer_ending = TransferEnding.TIME_LIMIT
+else:
+    transfer_ending = TransferEnding.GOAL_REACHED
+print(f"Transfer ended: {transfer_ending}.")
+recording.add_file(TRANSFER_ENDING_FILE_NAME, transfer_ending)
 if live_bank_listener is not None:
     live_bank_listener.stop()
 transfer_control_cycles = GoalControlCycleRecorder.recording_written_since(
