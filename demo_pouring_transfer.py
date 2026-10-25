@@ -617,6 +617,17 @@ assert receiving_cup.fill_level == 0.0
 # ----- Tilt through the dry stretch with a plain pose goal -----
 print(f"Tilting to the transfer start at {math.degrees(TRANSFER_START_TILT):.1f} deg.")
 move_left_tool_to(giskard, upright_carry_pose(giskard, tilt=TRANSFER_START_TILT))
+# Giskard integrates the drain during the pose goal too, and the uncalibrated drain lets a
+# full cup flow at any tilt: start the transfer from the loaded cups again, as the live
+# bank would tell them, so a pour without the bank does not count a phantom stream.
+print(
+    f"Fills believed after the tilt: source {source_cup.fill_level:.3f}, "
+    f"receiver {receiving_cup.fill_level:.3f}; resetting them."
+)
+with world.modify_world():
+    JointState.from_mapping(
+        {source_cup.fill_connection: START_FILL, receiving_cup.fill_connection: 0.0}
+    ).apply_to(world)
 
 # ----- Transfer -----
 goal_fill = GOAL_FILL_CONST
