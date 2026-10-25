@@ -553,7 +553,7 @@ else:
                 child=source_cup_body,
                 name=PrefixedName("l_gripper_T_source_cup"),
                 parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    roll=-math.pi / 2.0, y=-0.00
+                    roll=-math.pi / 2.0, y=-0.08
                 ),
             )
         )
