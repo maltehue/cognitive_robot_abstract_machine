@@ -478,6 +478,20 @@ cut what the person reaching for the cup and walking away counted to a third, an
 nine tenths of the stream.
 """
 
+COLOURED_OBJECT_SATURATION = 100
+"""
+The least saturation, from 0 to 255, of a pixel showing a coloured object such as the
+blue source cup and the plastic bag around it: the frosted inside and the water lie
+below 60.
+"""
+
+COLOURED_EDGE_DISTANCE = 6
+"""
+How close to a coloured object, in pixels, a pale pixel is taken for a highlight on its
+edge: on the water pours of 2026-10-26 the bag around the source cup swinging over the
+opening counted 2.7 and 2.9 grains less, while the streams lost at most 0.3.
+"""
+
 
 @dataclass(frozen=True)
 class MovingWaterSegmentation(GrainSegmentation):
@@ -486,7 +500,8 @@ class MovingWaterSegmentation(GrainSegmentation):
     view, but were pale in both frames: a clear stream has no colour of its own and
     shows only as the lit inside of the receiver flickering behind it, which the
     coloured source cup, a hand or a dark shirt moving over the opening does not pass
-    for.
+    for. Pale pixels right beside a coloured object are highlights on its edge, not
+    water.
 
     .. note:: Ripples on water already lying in the receiver flicker too, so they count
         for as long as they show through the opening.
@@ -506,6 +521,17 @@ class MovingWaterSegmentation(GrainSegmentation):
     minimum_brightness: int = MINIMUM_WATER_BRIGHTNESS
     """
     The least brightness a pixel showing water has.
+    """
+
+    coloured_saturation: int = COLOURED_OBJECT_SATURATION
+    """
+    The least saturation of a pixel showing a coloured object.
+    """
+
+    coloured_edge_distance: int = COLOURED_EDGE_DISTANCE
+    """
+    How close to a coloured object, in pixels, a pale pixel is taken for a highlight on
+    its edge rather than for water.
     """
 
     def pale(self, image: numpy.ndarray) -> numpy.ndarray:
@@ -532,7 +558,22 @@ class MovingWaterSegmentation(GrainSegmentation):
             & self.changed(image, background)
             & self.pale(image)
             & self.pale(previous)
+            & ~self.beside_coloured_object(image)
         )
+
+    def beside_coloured_object(self, image: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :return: Which pixels lie within :attr:`coloured_edge_distance` of a pixel
+            showing a coloured object.
+        """
+        coloured = (
+            cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[..., 1] >= self.coloured_saturation
+        )
+        size = 2 * self.coloured_edge_distance + 1
+        return cv2.dilate(
+            coloured.astype(numpy.uint8), numpy.ones((size, size), numpy.uint8)
+        ).astype(bool)
 
 
 # %% the receiver's rim seen in the image

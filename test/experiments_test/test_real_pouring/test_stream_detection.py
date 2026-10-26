@@ -21,6 +21,7 @@ from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     HEAP_STILL_SECONDS,
     WALL_STILL_SECONDS,
+    COLOURED_EDGE_DISTANCE,
     CupOnMatWithoutWallGaugeError,
     FLICKER_MARGIN,
     NO_OFFSET,
@@ -894,3 +895,37 @@ def test_a_stream_beside_the_pixels_that_flickered_is_counted():
     frosted = _frosted_opening()
     stream = [_grain_at(offset, WATER_GLINT, frosted) for offset in (0, 10, 20)]
     assert _counted(detector, stream) == pytest.approx(len(stream) - 1)
+
+
+# %% highlights on the edge of the coloured source cup
+
+
+def _glint_beside_the_source_cup(gap: int) -> numpy.ndarray:
+    """
+    The frosted inside with the blue source cup at :data:`CENTRE` and a glint ``gap``
+    pixels to its right.
+    """
+    image = _frosted_opening()
+    row, column = CENTRE
+    image[row : row + GRAIN_SIZE, column : column + GRAIN_SIZE] = BLUE
+    glint = column + GRAIN_SIZE + gap
+    image[row : row + GRAIN_SIZE, glint : glint + GRAIN_SIZE] = WATER_GLINT
+    return image
+
+
+def test_a_glint_on_the_edge_of_the_coloured_source_cup_is_no_water():
+    frosted = _frosted_opening()
+    water = MOVING_WATER.grains(
+        _glint_beside_the_source_cup(gap=0), frosted, previous=frosted
+    )
+    assert water.sum() == 0
+
+
+def test_a_glint_beyond_the_edge_of_the_coloured_source_cup_is_water():
+    frosted = _frosted_opening()
+    water = MOVING_WATER.grains(
+        _glint_beside_the_source_cup(gap=COLOURED_EDGE_DISTANCE + 1),
+        frosted,
+        previous=frosted,
+    )
+    assert water.sum() == GRAIN_SIZE**2
