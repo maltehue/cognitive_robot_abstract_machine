@@ -24,7 +24,7 @@ def main():
             "package://iai_tracy_description/urdf/tracy.urdf.xacro"
         )
     records_control_cycles = (
-        rospy.get_node().declare_parameter(RECORD_CONTROL_CYCLES_PARAMETER, False).value
+        rospy.get_node().declare_parameter(RECORD_CONTROL_CYCLES_PARAMETER, True).value
     )
     giskard = Giskard(
         world_config=WorldWithTracyConfig(urdf=robot_description),

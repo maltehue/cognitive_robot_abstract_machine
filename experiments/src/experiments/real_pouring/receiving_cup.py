@@ -23,6 +23,7 @@ from experiments.real_pouring.stream_detection import (
     CameraView,
     OpeningRegion,
     GrainSegmentation,
+    MovingWaterSegmentation,
     MovingYellowSegmentation,
     StreamDetector,
 )
@@ -80,6 +81,22 @@ The share of the corn's projected area the pole camera picks out through the
 translucent cup's frosted wall: from the same pour, the corn lying still at its end
 against the area the weighed fill of 0.45 projects to
 (experiments/results/real_pouring/analysis_2026-10-15/translucent_calibration.py).
+"""
+
+TRANSLUCENT_CUP_WATER_MASS_GRAMS = 750.0
+"""
+What the water filling the translucent cup weighs, in grams: 750 ml, the top of the
+scale printed on the cup.
+"""
+
+TRANSLUCENT_CUP_WATER_PIXEL_SECONDS_PER_GRAIN = 27.2
+"""
+How much flickering pale area in the translucent cup's opening, times the time it shows,
+one of the live bank's grains of water received adds: 6.8 pixel-seconds per millilitre,
+from two hand-poured 400 ml pours of 2026-10-25 that counted 2973 and 2477 pixel-seconds
+while their streams fell (within 9 % of their mean), times the 4 ml a grain of the
+400 ml source cup holds. Ripples on the water lying in the cup keep counting for about
+three seconds after the stream stops.
 """
 
 
@@ -248,6 +265,8 @@ class ReceivingCup(StrEnum):
                 return material.full_cup_mass_grams
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
                 return TRANSLUCENT_CUP_CORN_MASS_GRAMS
+            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER:
+                return TRANSLUCENT_CUP_WATER_MASS_GRAMS
         raise ReceiverFullMassUnknownError(cup=self, material=material)
 
     def source_cups_held(self, material: PouredMaterial) -> float:
@@ -285,6 +304,8 @@ class ReceivingCup(StrEnum):
                 return material.segmentation
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
                 return MovingYellowSegmentation()
+            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER:
+                return MovingWaterSegmentation()
         raise MaterialNotSeenThroughWallError(material=material)
 
     def pixel_seconds_per_grain(self, material: PouredMaterial) -> float:
@@ -300,6 +321,8 @@ class ReceivingCup(StrEnum):
                 return material.pixel_seconds_per_grain
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
                 return TRANSLUCENT_CUP_CORN_PIXEL_SECONDS_PER_GRAIN
+            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER:
+                return TRANSLUCENT_CUP_WATER_PIXEL_SECONDS_PER_GRAIN
         raise MaterialNotSeenThroughWallError(material=material)
 
     def wall_detected_share(self, material: PouredMaterial) -> float:
@@ -329,9 +352,12 @@ class ReceivingCup(StrEnum):
         :param frame_period: How long apart the camera takes its images, in seconds.
         :param wall_calibration: Optional calibration for this cup, material and view.
         :return: A detector watching this cup's opening for the material, reading the
-            cup's fill the way the cup lets the camera see it.
+            cup's fill the way the cup lets the camera see it; water, which does not
+            show through the translucent cup's wall, only where the opening projects.
         :raises MaterialNotSeenThroughWallError: For a translucent cup and a material
             its wall hides.
+        :raises JeroenCupCalibrationUnknownError: For the Jeroen cup and a material
+            nobody calibrated the count of in it.
         """
         if wall_calibration is not None and self is not ReceivingCup.TRANSLUCENT_CUP:
             raise InvalidWallCalibrationError()
@@ -356,6 +382,8 @@ class ReceivingCup(StrEnum):
                         pixels_per_share=material.heap_pixels_per_share,
                     ),
                 )
+            case ReceivingCup.TRANSLUCENT_CUP if material is PouredMaterial.WATER:
+                return StreamDetector(**common)
             case ReceivingCup.TRANSLUCENT_CUP:
                 return StreamDetector(
                     **common,

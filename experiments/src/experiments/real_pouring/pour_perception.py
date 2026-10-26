@@ -69,7 +69,15 @@ class PourPerception:
     def for_cup(
         cls, receiver: ReceivingCup, material: PouredMaterial
     ) -> PourPerception:
-        """Select calibrated wall reporting only for its supported cup and material."""
+        """
+        Select calibrated wall reporting only for its supported cup and material, and
+        the count for water, which does not show through the translucent cup's wall.
+        """
+        if (
+            receiver is ReceivingCup.TRANSLUCENT_CUP
+            and material is PouredMaterial.WATER
+        ):
+            return cls(ReceiverFillReport.COUNTED)
         if (
             receiver is not ReceivingCup.TRANSLUCENT_CUP
             or material is not PouredMaterial.CORN

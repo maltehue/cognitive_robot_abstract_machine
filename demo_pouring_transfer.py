@@ -283,24 +283,26 @@ MAXIMUM_TILT_RATE = math.radians(3.0)
 The fastest the fill task may tilt the cup further, in radians per second.
 """
 
-DRY_TILT = math.radians(60.0)
-"""
-The tilt below which nothing but stray heap grains has left the cup in any recorded pour
-(first bulk stream at 66 to 80 degrees), in radians.
-"""
-
 MAXIMUM_TILT = math.radians(110.0)
 """
 The tilt the cup is never turned past, in radians: the calibration ramps emptied it
 completely there.
 """
 
-TRANSFER_START_TILT = DRY_TILT - math.radians(20.0)
+MINIMUM_TRANSFER_START_TILT = math.radians(2.0)
+"""
+The least tilt the transfer starts from, in radians: upright, the fill the model predicts
+does not change with the tilt, which leaves the transfer no gradient to start from.
+"""
+
+TRANSFER_START_TILT = max(
+    MINIMUM_TRANSFER_START_TILT, MATERIAL.dry_tilt - math.radians(20.0)
+)
 """
 The tilt a plain pose goal turns the cup to before the transfer starts, in radians:
-short of :data:`DRY_TILT`, so the transfer's approach covers the last stretch to the
-first stream at its own rate. At 50 degrees a brimful cup already let a few kernels fall
-on 2026-10-16.
+short of the material's dry tilt, so the transfer's approach covers the last stretch to
+the first stream at its own rate; barely tilted for water, which spills at any tilt. At
+50 degrees a brimful cup already let a few kernels fall on 2026-10-16.
 
 The pose goal turns the cup without the pouring tasks, which chase a landing point and
 an upright plane that move with the tilt: when the transfer itself turned the cup at 10
@@ -551,7 +553,7 @@ else:
                 child=source_cup_body,
                 name=PrefixedName("l_gripper_T_source_cup"),
                 parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    roll=-math.pi / 2.0, y=-0.00
+                    roll=-math.pi / 2.0, y=-0.08
                 ),
             )
         )

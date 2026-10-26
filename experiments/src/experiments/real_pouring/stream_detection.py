@@ -451,6 +451,90 @@ class MovingYellowSegmentation(GrainSegmentation):
         return self.moved(image, previous) & self.yellowing.shows(image, background)
 
 
+MINIMUM_WATER_MOVEMENT = 20
+"""
+How much a pixel's colour has to change, summed over the three channels, both from the
+previous frame and from the empty view, to show a clear stream: in a video of water
+poured by hand into the translucent cup (2026-10-25), the share of the opening this
+picks out stood about twelve times higher while the stream fell than while the empty source
+cup was held tilted over the opening or the person walked away.
+"""
+
+MAXIMUM_WATER_SATURATION = 60
+"""
+The most saturation, from 0 to 255, a pixel showing water has, in this frame and the
+previous one: the frosted inside seen through the stream stays near 30, the blue source
+cup and the hand holding it lie far above.
+"""
+
+
+MINIMUM_WATER_BRIGHTNESS = 80
+"""
+The least brightness, from 0 to 255, a pixel showing water has, in this frame and the
+previous one: the stream shows against the receiver's lit inside, which a dark shirt
+behind the frosted wall dims to about 100, while the shirt itself, as colourless as the
+water, lies below 60. On a second video of a hand-poured water stream (2026-10-25), this
+cut what the person reaching for the cup and walking away counted to a third, and kept
+nine tenths of the stream.
+"""
+
+
+@dataclass(frozen=True)
+class MovingWaterSegmentation(GrainSegmentation):
+    """
+    Water is pixels that changed since the previous frame and differ from the empty
+    view, but were pale in both frames: a clear stream has no colour of its own and
+    shows only as the lit inside of the receiver flickering behind it, which the
+    coloured source cup, a hand or a dark shirt moving over the opening does not pass
+    for.
+
+    .. note:: Ripples on water already lying in the receiver flicker too, so they count
+        for as long as they show through the opening.
+    """
+
+    minimum_difference: int = MINIMUM_WATER_MOVEMENT
+    """
+    How much a pixel's colour has to change from the previous frame and from the empty
+    view.
+    """
+
+    maximum_saturation: int = MAXIMUM_WATER_SATURATION
+    """
+    The most saturation a pixel showing water has.
+    """
+
+    minimum_brightness: int = MINIMUM_WATER_BRIGHTNESS
+    """
+    The least brightness a pixel showing water has.
+    """
+
+    def pale(self, image: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :return: Which pixels are light and too little saturated to have a colour of
+            their own.
+        """
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        return (hsv[..., 1] <= self.maximum_saturation) & (
+            hsv[..., 2] >= self.minimum_brightness
+        )
+
+    def grains(
+        self,
+        image: numpy.ndarray,
+        background: numpy.ndarray,
+        previous: Optional[numpy.ndarray] = None,
+    ) -> numpy.ndarray:
+        if previous is None:
+            return numpy.zeros(image.shape[:2], dtype=bool)
+        return (
+            self.moved(image, previous)
+            & self.changed(image, background)
+            & self.pale(image)
+            & self.pale(previous)
+        )
+
+
 # %% the receiver's rim seen in the image
 
 

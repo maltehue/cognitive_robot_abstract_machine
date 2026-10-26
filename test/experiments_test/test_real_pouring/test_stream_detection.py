@@ -27,7 +27,9 @@ from experiments.real_pouring.stream_detection import (
     ChangeSegmentation,
     GrainSegmentation,
     HueBandSegmentation,
+    MINIMUM_WATER_MOVEMENT,
     MovingGrainSegmentation,
+    MovingWaterSegmentation,
     MovingYellowSegmentation,
     OpeningRegion,
     PixelOffset,
@@ -745,3 +747,82 @@ def test_the_translucent_cup_is_drawn_where_it_was_found():
         detector.wall_mask(WALL_IMAGE_SIZE)
         == WALL_GAUGE.region_in(WALL_IMAGE_SIZE, NO_OFFSET)
     ).all()
+
+
+# %% water moving without colour of its own over the light inside of a translucent cup
+
+
+MOVING_WATER = MovingWaterSegmentation()
+"""
+Water is what moved since the last frame, differs from the empty view and has no colour.
+"""
+
+WATER_GLINT = (240, 235, 225)
+"""
+The frosted inside seen through a clear stream, BGR: brightened, still colourless.
+"""
+
+COLOUR_CHANNELS = 3
+"""
+How many channels a colour image has, over which a change is summed.
+"""
+
+
+def _faint_flicker() -> tuple[int, int, int]:
+    """
+    The frosted inside changed by just less than water has to change it.
+    """
+    step = (MINIMUM_WATER_MOVEMENT - 1) // COLOUR_CHANNELS
+    return tuple(value + step for value in FROSTED_WALL)
+
+
+def test_a_colourless_glint_moving_over_a_light_inside_is_water():
+    frosted = _frosted_view()
+    water = MOVING_WATER.grains(
+        _grain_at(10, WATER_GLINT, frosted),
+        frosted,
+        previous=_grain_at(0, WATER_GLINT, frosted),
+    )
+    assert water.sum() == GRAIN_SIZE**2
+
+
+def test_the_coloured_source_cup_moving_over_the_opening_is_no_water():
+    frosted = _frosted_view()
+    water = MOVING_WATER.grains(
+        _grain_at(10, BLUE, frosted), frosted, previous=_grain_at(0, BLUE, frosted)
+    )
+    assert water.sum() == 0
+
+
+def test_water_lying_still_is_no_stream():
+    frosted = _frosted_view()
+    lying = _grain_at(0, WATER_GLINT, frosted)
+    assert MOVING_WATER.grains(lying, frosted, previous=lying).sum() == 0
+
+
+def test_no_water_is_seen_without_a_previous_frame():
+    frosted = _frosted_view()
+    image = _grain_at(0, WATER_GLINT, frosted)
+    assert MOVING_WATER.grains(image, frosted, previous=None).sum() == 0
+
+
+def test_a_flicker_smaller_than_the_threshold_is_no_water():
+    frosted = _frosted_view()
+    flicker = _grain_at(0, _faint_flicker(), frosted)
+    assert MOVING_WATER.grains(flicker, frosted, previous=frosted).sum() == 0
+
+
+DARK_SHIRT = (35, 35, 40)
+"""
+A person's black shirt passing behind the opening, BGR: colourless, but dark.
+"""
+
+
+def test_a_dark_colourless_thing_moving_over_the_opening_is_no_water():
+    frosted = _frosted_view()
+    water = MOVING_WATER.grains(
+        _grain_at(10, DARK_SHIRT, frosted),
+        frosted,
+        previous=_grain_at(0, DARK_SHIRT, frosted),
+    )
+    assert water.sum() == 0

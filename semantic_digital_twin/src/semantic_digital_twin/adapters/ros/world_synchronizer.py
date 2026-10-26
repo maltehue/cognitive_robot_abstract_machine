@@ -84,7 +84,7 @@ class PublicationProgress(ABC):
         raise NotImplementedError
 
 
-SYNC_QUEUE_DEPTH = 10
+SYNC_QUEUE_DEPTH = 20
 """
 How many messages the synchronization topic queues on each side, in messages.
 
