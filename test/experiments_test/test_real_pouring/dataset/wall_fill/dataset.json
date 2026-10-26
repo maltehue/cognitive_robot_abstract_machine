@@ -3,7 +3,7 @@
   "measurement": {
     "__json_type__": "experiments.real_pouring.wall_fill.WallColourMeasurement",
     "noise_floor": 2.0,
-    "yellowing_span": 32.0,
+    "colour_span": 32.0,
     "height_power": 2.0
   },
   "development": {

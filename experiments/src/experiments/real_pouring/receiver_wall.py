@@ -19,8 +19,8 @@ from experiments.real_pouring.stream_detection import (
     TOP_EDGE_ROWS,
     CameraView,
     PixelOffset,
+    ColourShift,
     ReceiverNotFoundError,
-    Yellowing,
 )
 
 OUTLINE_SAMPLES = 90
@@ -63,7 +63,7 @@ class WallGauge:
     wall: the scale one weighed pour of a material sets.
     """
 
-    yellowing: Yellowing = Yellowing()
+    colour_shift: ColourShift
     """
     How the contents are told from the empty view.
     """
@@ -76,6 +76,7 @@ class WallGauge:
         height: float,
         radius: float,
         detected_share: float,
+        colour_shift: ColourShift,
     ) -> WallGauge:
         """
         :param view: The camera's calibration.
@@ -83,6 +84,7 @@ class WallGauge:
         :param height: The receiver's height, in metres.
         :param radius: The receiver's inner radius, in metres.
         :param detected_share: The share of the contents' area the camera picks out.
+        :param colour_shift: How the contents are told from the empty view.
         :return: The gauge of a receiver standing below its opening.
         """
         return cls(
@@ -91,6 +93,7 @@ class WallGauge:
             height=height,
             radius=radius,
             detected_share=detected_share,
+            colour_shift=colour_shift,
         )
 
     def outline(self, fill: float) -> numpy.ndarray:
@@ -158,9 +161,9 @@ class WallGauge:
         """
         :param image: A colour image, BGR.
         :param background: What the same view showed before the pour, BGR.
-        :return: Which pixels turned yellow enough to show the contents.
+        :return: Which pixels turned far enough to show the contents.
         """
-        return self.yellowing.shows(image, background)
+        return self.colour_shift.shows(image, background)
 
 
 # %% finding the cup as the gap it makes in the mat it stands on

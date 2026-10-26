@@ -379,7 +379,38 @@ The channel of an OpenCV Lab image running from blue to yellow.
 
 
 @dataclass(frozen=True)
-class Yellowing:
+class ColourShift(ABC):
+    """
+    How far a pixel turned from the empty view towards the colour of the poured contents.
+    """
+
+    minimum: int
+    """
+    How far a pixel has to turn to show the contents.
+    """
+
+    def shows(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :param background: What the same view showed before the pour, BGR.
+        :return: Which pixels turned far enough to show the contents.
+        """
+        return self.difference(image, background) >= self.minimum
+
+    @abstractmethod
+    def difference(
+        self, image: numpy.ndarray, background: numpy.ndarray
+    ) -> numpy.ndarray:
+        """
+        :param image: A colour image, BGR.
+        :param background: What the same view showed before the pour, BGR.
+        :return: How far every pixel turned towards the contents' colour, negative where
+            it turned away.
+        """
+
+
+@dataclass(frozen=True)
+class Yellowing(ColourShift):
     """
     Corn told from a light background by turning it yellower, however pale and blurred
     it shows: a blue cup, a grey arm or a white wall passing by do not turn it so.
@@ -390,19 +421,11 @@ class Yellowing:
     How much yellower than the background a pixel has to turn.
     """
 
-    def shows(self, image: numpy.ndarray, background: numpy.ndarray) -> numpy.ndarray:
-        """
-        :param image: A colour image, BGR.
-        :param background: What the same view showed before the pour, BGR.
-        :return: Which pixels turned yellow enough to show corn.
-        """
-        return self.difference(image, background) >= self.minimum
-
     def difference(
         self, image: numpy.ndarray, background: numpy.ndarray
     ) -> numpy.ndarray:
         """
-        Return signed yellowing relative to the empty view, in OpenCV Lab units.
+        :return: How much yellower every pixel turned, in OpenCV Lab units.
         """
         channel = LAB_BLUE_YELLOW_CHANNEL
         return cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[..., channel].astype(
@@ -423,21 +446,21 @@ times at 20 and 70 times at 60, which leaves too few pixels of a thin trickle.
 
 
 @dataclass(frozen=True)
-class MovingYellowSegmentation(GrainSegmentation):
+class MovingColourShiftSegmentation(GrainSegmentation):
     """
-    Grains are pixels that changed since the previous frame and turned yellower than the
-    empty view: corn falling through the light inside of a translucent cup, against which
-    a thin, blurred stream barely changes the brightness.
+    Grains are pixels that changed since the previous frame and turned from the empty
+    view towards the contents' colour: contents falling through the light inside of a
+    translucent cup, against which a thin, blurred stream barely changes the brightness.
     """
 
-    minimum_difference: int = MINIMUM_YELLOW_MOVEMENT
+    minimum_difference: int = field(kw_only=True)
     """
     How much a pixel's colour has to change from the previous frame to count as moving.
     """
 
-    yellowing: Yellowing = Yellowing()
+    colour_shift: ColourShift = field(kw_only=True)
     """
-    How corn is told from the light background.
+    How the contents are told from the light background.
     """
 
     def grains(
@@ -448,7 +471,7 @@ class MovingYellowSegmentation(GrainSegmentation):
     ) -> numpy.ndarray:
         if previous is None:
             return numpy.zeros(image.shape[:2], dtype=bool)
-        return self.moved(image, previous) & self.yellowing.shows(image, background)
+        return self.moved(image, previous) & self.colour_shift.shows(image, background)
 
 
 MINIMUM_WATER_MOVEMENT = 20
@@ -1167,7 +1190,7 @@ class StreamDetector:
         self._wall_still_frames = numpy.where(contents, self._wall_still_frames + 1, 0)
         if self._wall_estimator is not None:
             calibrated = self._wall_estimator.observe(
-                self.wall_gauge.yellowing.difference(
+                self.wall_gauge.colour_shift.difference(
                     image[self._wall_window], self._wall_background
                 )
             )

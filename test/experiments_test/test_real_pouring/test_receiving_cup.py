@@ -18,7 +18,8 @@ from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
     MovingWaterSegmentation,
-    MovingYellowSegmentation,
+    MovingColourShiftSegmentation,
+    Yellowing,
 )
 
 VIEW = CameraView(
@@ -72,11 +73,18 @@ def test_corn_falling_into_the_translucent_cup_is_counted_by_turning_it_yellow()
     detector = _detector(ReceivingCup.TRANSLUCENT_CUP)
     assert (
         type(detector.segmentation),
+        type(detector.segmentation.colour_shift),
         detector.pixel_seconds_per_grain,
     ) == (
-        MovingYellowSegmentation,
+        MovingColourShiftSegmentation,
+        Yellowing,
         receiving_cup.TRANSLUCENT_CUP_CORN_PIXEL_SECONDS_PER_GRAIN,
     )
+
+
+def test_the_translucent_cups_wall_tells_corn_by_the_same_colour_as_its_stream():
+    detector = _detector(ReceivingCup.TRANSLUCENT_CUP)
+    assert detector.wall_gauge.colour_shift == detector.segmentation.colour_shift
 
 
 def test_corn_falling_into_the_jeroen_cup_is_counted_as_the_material_says():

@@ -27,7 +27,7 @@ def measurement() -> WallColourMeasurement:
     """
     A continuous colour measurement with an explicit noise floor and saturation.
     """
-    return WallColourMeasurement(noise_floor=2.0, yellowing_span=16.0, height_power=2.0)
+    return WallColourMeasurement(noise_floor=2.0, colour_span=16.0, height_power=2.0)
 
 
 @pytest.fixture
@@ -54,10 +54,10 @@ def test_subthreshold_colour_is_continuous(
     Faint colour above the noise floor contributes before a binary mask would.
     """
     faint = numpy.full(
-        region.shape, measurement.noise_floor + measurement.yellowing_span / 4
+        region.shape, measurement.noise_floor + measurement.colour_span / 4
     )
     stronger = numpy.full(
-        region.shape, measurement.noise_floor + measurement.yellowing_span / 2
+        region.shape, measurement.noise_floor + measurement.colour_span / 2
     )
     assert measurement.measure(stronger, region) == pytest.approx(
         2 * measurement.measure(faint, region)
@@ -73,8 +73,8 @@ def test_higher_contents_contribute_more(
     """
     upper = numpy.zeros(region.shape)
     lower = numpy.zeros(region.shape)
-    upper[1] = measurement.noise_floor + measurement.yellowing_span
-    lower[3] = measurement.noise_floor + measurement.yellowing_span
+    upper[1] = measurement.noise_floor + measurement.colour_span
+    lower[3] = measurement.noise_floor + measurement.colour_span
     assert measurement.measure(upper, region) == pytest.approx(
         9 * measurement.measure(lower, region)
     )
@@ -88,7 +88,7 @@ def test_pixels_outside_receiver_do_not_contribute(
     """
     region[:, 0] = False
     image = numpy.zeros(region.shape)
-    image[:, 0] = measurement.noise_floor + measurement.yellowing_span
+    image[:, 0] = measurement.noise_floor + measurement.colour_span
     assert measurement.measure(image, region) == 0.0
 
 
@@ -99,24 +99,22 @@ def test_narrow_persistent_stream_does_not_become_contents(
     A stream covering less than half a row is rejected even when persistent.
     """
     image = numpy.zeros(region.shape)
-    image[:, region.shape[1] // 2] = (
-        measurement.noise_floor + measurement.yellowing_span
-    )
+    image[:, region.shape[1] // 2] = measurement.noise_floor + measurement.colour_span
     assert measurement.measure(image, region) == 0.0
 
 
 @pytest.mark.parametrize(
-    "noise_floor,yellowing_span,height_power",
+    "noise_floor,colour_span,height_power",
     [(-1, 1, 1), (0, 0, 1), (0, 1, -1), (float("nan"), 1, 1)],
 )
 def test_invalid_measurement_parameters_are_rejected(
-    noise_floor: float, yellowing_span: float, height_power: float
+    noise_floor: float, colour_span: float, height_power: float
 ) -> None:
     """
     Invalid colour models must fail at construction.
     """
     with pytest.raises(InvalidWallCalibrationError):
-        WallColourMeasurement(noise_floor, yellowing_span, height_power)
+        WallColourMeasurement(noise_floor, colour_span, height_power)
 
 
 # %% calibration from independent weighed recordings
@@ -280,7 +278,7 @@ def test_transient_stream_does_not_become_contents(
     A brief yellow stream over an empty wall must not increase fill.
     """
     empty = numpy.zeros(region.shape)
-    stream = numpy.full(region.shape, estimator.calibration.measurement.yellowing_span)
+    stream = numpy.full(region.shape, estimator.calibration.measurement.colour_span)
     for _ in range(estimator.window_frames):
         estimator.observe(empty)
     assert estimator.observe(stream) == 0.0
@@ -293,9 +291,7 @@ def test_persistent_contents_are_measured(
     """
     Stable contents become measurable after the causal window.
     """
-    contents = numpy.full(
-        region.shape, estimator.calibration.measurement.yellowing_span
-    )
+    contents = numpy.full(region.shape, estimator.calibration.measurement.colour_span)
     for _ in range(estimator.window_frames):
         result = estimator.observe(contents)
     expected = estimator.calibration.fill_for(
@@ -312,7 +308,7 @@ def test_observations_are_copied(
     """
     image = numpy.zeros(region.shape)
     estimator.observe(image)
-    image.fill(estimator.calibration.measurement.yellowing_span)
+    image.fill(estimator.calibration.measurement.colour_span)
     for _ in range(estimator.window_frames - 1):
         result = estimator.observe(image)
     assert result == 0.0
