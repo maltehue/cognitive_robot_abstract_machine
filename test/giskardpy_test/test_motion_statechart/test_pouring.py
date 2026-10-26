@@ -10,6 +10,10 @@ from pathlib import Path
 
 from krrood.symbolic_math.float_variable_data import FloatVariableData
 from krrood.symbolic_math.symbolic_math import FloatVariable
+from giskardpy.motion_statechart.goals.collision_avoidance import (
+    ExternalCollisionAvoidance,
+    UpdateTemporaryCollisionRules,
+)
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.qp.control_cycle_recording import ControlCycleRecorder
@@ -54,6 +58,9 @@ from .debug_expression_helpers import debug_expression_by_name
 from .single_cup_world import PourableContainer, build_single_cup_world
 from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
     WorldEntityWithIDKwargsTracker,
+)
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AvoidCollisionBetweenGroups,
 )
 from semantic_digital_twin.datastructures.definitions import StaticJointState
 from semantic_digital_twin.datastructures.joint_state import JointState
@@ -182,25 +189,76 @@ def tracy_pouring_world(tracy_world):
     return world, tracy
 
 
+_TRANSFER_CARRY_HEIGHT = 0.3
+"""
+Height of the left tool above the table when the transfer starts, in metres.
+"""
+
+_TRANSFER_PRE_TILT = 0.1
+"""
+Tilt the source cup starts the transfer at, in radians.
+"""
+
+_TRANSFER_CARRY_SIDE = 0.2
+"""
+Sideways position of the left tool in the world when the transfer starts, in metres.
+"""
+
+_BOTTOM_GRASP = 0.0
+"""
+Offset of the source cup's base along the left tool's y axis, in metres: the gripper
+holds the cup at its bottom.
+"""
+
+
 @pytest.fixture(scope="function")
 def tracy_transfer_world(tracy_pouring_world):
     """
     World with a source cup attached to Tracy's left gripper and a receiving cup on the
     table, pre-coupled for liquid transfer.
 
-    Extends :func:`tracy_pouring_world` by positioning the left gripper upright, attaching a
-    source cup via a fixed connection, placing a receiving cup on the table, and coupling them
-    with :meth:`~semantic_digital_twin.semantic_annotations.mixins.HasFillLevel.receive_outflow_from`.
+    :returns:``(world, source_cup, receiving_cup, left_tool_frame)``
+    """
+    return _build_tracy_transfer_world(
+        tracy_pouring_world,
+        carry_height=_TRANSFER_CARRY_HEIGHT,
+        carry_side=_TRANSFER_CARRY_SIDE,
+        pre_tilt=_TRANSFER_PRE_TILT,
+        receiving_cup_body=_spawn_jeroen_cup_body("receiving_cup"),
+        grasp_offset=_BOTTOM_GRASP,
+    )
 
-    :returns: ``(world, source_cup, receiving_cup, left_tool_frame)``
+
+def _build_tracy_transfer_world(
+    tracy_pouring_world,
+    carry_height: float,
+    carry_side: float,
+    pre_tilt: float,
+    receiving_cup_body: Body,
+    grasp_offset: float,
+) -> tuple[World, PourableContainer, PourableContainer, Body]:
+    """
+    Extend :func:`tracy_pouring_world` by positioning the left gripper upright,
+    attaching a source cup via a fixed connection, placing a receiving cup on the table,
+    coupling them with :meth:`~semantic_digital_twin.semantic_annotations.mixins.HasFill
+    Level.receive_outflow_from`, and tilting the source cup.
+
+    :param tracy_pouring_world: The :func:`tracy_pouring_world` fixture value.
+    :param carry_height: Height of the left tool above the table, in metres.
+    :param carry_side: Sideways position of the left tool in the world, in metres.
+    :param pre_tilt: Tilt the source cup starts at, in radians.
+    :param receiving_cup_body: The body of the cup poured into, standing on its frame.
+    :param grasp_offset: Offset of the source cup's base along the left tool's y axis,
+        in metres.
+    :returns:``(world, source_cup, receiving_cup, left_tool_frame)``
     """
     world, _tracy = tracy_pouring_world
     left_tool_frame = world.get_body_by_name("l_gripper_tool_frame")
 
     upright_pose = HomogeneousTransformationMatrix.from_xyz_quaternion(
         pos_x=1,
-        pos_y=0.2,
-        pos_z=_TABLE_SURFACE_Z + 0.3,
+        pos_y=carry_side,
+        pos_z=_TABLE_SURFACE_Z + carry_height,
         quat_z=0.5,
         quat_x=0.5,
         quat_y=0.5,
@@ -231,7 +289,7 @@ def tracy_transfer_world(tracy_pouring_world):
                 child=source_cup_body,
                 name=PrefixedName("l_gripper_T_source_cup"),
                 parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    roll=-math.pi / 2.0, y=-0.0
+                    roll=-math.pi / 2.0, y=grasp_offset
                 ),
             )
         )
@@ -244,7 +302,6 @@ def tracy_transfer_world(tracy_pouring_world):
         world=world, initial_fill=1.0, outflow_rate_constant=1.0
     )
 
-    receiving_cup_body = _spawn_jeroen_cup_body("receiving_cup")
     with world.modify_world():
         world.add_body(receiving_cup_body)
         world.add_connection(
@@ -271,7 +328,7 @@ def tracy_transfer_world(tracy_pouring_world):
 
     left_wrist_joint = world.get_connection_by_name("left_wrist_3_joint")
     JointState.from_mapping(
-        {left_wrist_joint: left_wrist_joint.position + 0.1}
+        {left_wrist_joint: left_wrist_joint.position + pre_tilt}
     ).apply_to(world)
 
     return world, source_cup, receiving_cup, left_tool_frame
@@ -358,6 +415,7 @@ class TransferMotion:
 def _build_transfer_motion(
     tracy_transfer_world,
     minimum_clearance: float = 0.07,
+    clearance_band: float = 0.05,
     no_spill_weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
     no_spill_reference_velocity: float = 0.2,
     fill_level_tolerance: float = 0.05,
@@ -375,6 +433,7 @@ def _build_transfer_motion(
 
     :param tracy_transfer_world: The transfer world fixture value.
     :param minimum_clearance: Rim-to-rim clearance floor handed to the clearance task.
+    :param clearance_band: Width of the clearance band above the floor.
     :param no_spill_weight: Weight of the competing pour-aiming task.
     :param no_spill_reference_velocity: Reference velocity of the competing pour-aiming
         task.
@@ -400,6 +459,7 @@ def _build_transfer_motion(
         receiver=receiving_cup,
         source=source_cup,
         minimum_clearance=minimum_clearance,
+        clearance_band=clearance_band,
     )
     keep_plane = AlignPlanes(
         root_link=world.root,
@@ -2442,3 +2502,196 @@ def test_a_cup_below_its_ceiling_keeps_pouring(tracy_transfer_world) -> None:
         PACING_TICKS,
     )
     assert len(history) == PACING_TICKS
+
+
+# %% the hand clears the receiver at a small pre-tilt
+
+SMALL_PRE_TILT = math.radians(2.0)
+"""
+The tilt a brimful cup of water starts the transfer at, in radians: tilted further, it
+would spill before the transfer aims the stream.
+"""
+
+TALL_CUP_RADIUS = 0.045
+"""
+Inner radius of the tall receiving cup, in metres: the translucent cup the transfer demo
+pours into.
+"""
+
+TALL_CUP_HEIGHT = 0.155
+"""
+Height of the tall receiving cup from its bottom to its rim, in metres.
+"""
+
+SMALL_PRE_TILT_CARRY_SIDE = 0.3
+"""
+Sideways position of the left tool in the world at the small pre-tilt, in metres: 20 cm
+beside the receiver, as the transfer demo carries the cup.
+"""
+
+SMALL_PRE_TILT_CARRY_HEIGHT = 0.21
+"""
+Height of the left tool above the table at the small pre-tilt, in metres: the transfer
+demo's carry height for a cup gripped at its middle.
+"""
+
+MIDDLE_GRASP = -0.08
+"""
+Offset of the source cup's base along the left tool's y axis, in metres: the gripper
+holds the 16 cm cup at half its height, as the transfer demo does.
+"""
+
+WIDE_CLEARANCE_BAND = 0.15
+"""
+A clearance band wide enough for collision avoidance to lift the source's lip above the
+receiver while the stream still falls almost straight down.
+"""
+
+HAND_COLLISION_BUFFER = 0.05
+"""
+Distance between the hand and the receiver at which collision avoidance starts pushing
+them apart, in metres.
+"""
+
+SMALL_PRE_TILT_TICKS = 800
+"""
+Control cycles the small pre-tilt transfer runs: ten seconds at the pouring frequency,
+in which the paced tilt passes the angles at which the hand reaches over the receiver.
+"""
+
+
+@pytest.fixture(scope="function")
+def tracy_small_pre_tilt_transfer_world(tracy_pouring_world):
+    """
+    The transfer world with the source cup, gripped at its middle, tilted by only
+    :data:`SMALL_PRE_TILT` beside the tall receiving cup.
+
+    :returns:``(world, source_cup, receiving_cup, left_tool_frame)``
+    """
+    return _build_tracy_transfer_world(
+        tracy_pouring_world,
+        carry_height=SMALL_PRE_TILT_CARRY_HEIGHT,
+        carry_side=SMALL_PRE_TILT_CARRY_SIDE,
+        pre_tilt=SMALL_PRE_TILT,
+        receiving_cup_body=_tall_cup_body("receiving_cup"),
+        grasp_offset=MIDDLE_GRASP,
+    )
+
+
+def _tall_cup_body(name: str) -> Body:
+    """
+    Create the tall receiving cup: a cylinder of the cup's inner size standing on its
+    frame.
+    """
+    cylinder = Cylinder(
+        origin=HomogeneousTransformationMatrix.from_xyz_rpy(z=TALL_CUP_HEIGHT / 2),
+        width=2 * TALL_CUP_RADIUS,
+        height=TALL_CUP_HEIGHT,
+    )
+    return Body.from_shape_collection(
+        shape_collection=ShapeCollection([cylinder]), name=PrefixedName(name)
+    )
+
+
+def _hand_bodies(world: World, source_cup: PourableContainer) -> list[Body]:
+    """
+    :return: The source cup's body and every body of Tracy's left gripper with collision
+        geometry.
+    """
+    [tracy] = world.get_semantic_annotations_by_type(Tracy)
+    gripper_bodies = tracy.left_arm.end_effector.bodies_with_collision
+    return [source_cup.root] + [
+        body for body in gripper_bodies if body is not source_cup.root
+    ]
+
+
+def _closest_hand_distances(
+    transfer: TransferMotion, hand: list[Body], ticks: int
+) -> list[float]:
+    """
+    Run the motion for ``ticks`` cycles and record, after each, the signed distance
+    between the hand and the receiver, in metres; negative while they intersect.
+    """
+    detector = transfer.world.collision_manager.collision_detector
+    executor = Executor(
+        _pouring_context(transfer.world), pacer=SimulationPacer(real_time_factor=1)
+    )
+    executor.compile(motion_statechart=transfer.motion_statechart)
+    distances = []
+    try:
+        for _ in range(ticks):
+            executor.tick()
+            distances.append(
+                min(
+                    detector.check_collision_between_bodies(
+                        body, transfer.receiving_cup.root, distance=1.0
+                    ).distance
+                    for body in hand
+                )
+            )
+            if executor.motion_statechart.is_end_motion():
+                break
+    finally:
+        state = executor.context.world.state
+        state.velocities[:] = 0
+        state.accelerations[:] = 0
+        state.jerks[:] = 0
+        executor.motion_statechart.cleanup_nodes(context=executor.context)
+        executor.context.cleanup()
+    return distances
+
+
+class TestHandClearsTheReceiverAtASmallPreTilt:
+    """
+    At a small pre-tilt the stream of a brimful cup falls almost straight down, so
+    aiming it pulls the source right over the receiver while its lip is still high in
+    the cup and the hand hangs below it.
+
+    Collision avoidance between the hand and the receiver, given a clearance band wide
+    enough to lift the lip into, keeps the hand out of the receiver.
+    """
+
+    def test_collision_avoidance_lifts_the_hand_over_the_receiver(
+        self, tracy_small_pre_tilt_transfer_world
+    ) -> None:
+        world, source_cup, receiving_cup, _ = tracy_small_pre_tilt_transfer_world
+        [tracy] = world.get_semantic_annotations_by_type(Tracy)
+        hand = _hand_bodies(world, source_cup)
+        pacing = TiltPacing(
+            source=source_cup,
+            approach_rate=PACED_APPROACH_RATE,
+            maximum_rate=PACED_APPROACH_RATE,
+            maximum_tilt=math.radians(110.0),
+        )
+        transfer = _build_transfer_motion(
+            tracy_small_pre_tilt_transfer_world,
+            clearance_band=WIDE_CLEARANCE_BAND,
+            no_spill_weight=DefaultWeights.WEIGHT_MAXIMUM,
+            no_spill_reference_velocity=0.1,
+            extra_tasks=[pacing],
+        )
+        transfer.motion_statechart.add_nodes(
+            [
+                UpdateTemporaryCollisionRules(
+                    temporary_rules=[
+                        AvoidCollisionBetweenGroups(
+                            buffer_zone_distance=HAND_COLLISION_BUFFER,
+                            violated_distance=0.0,
+                            body_group_a=hand,
+                            body_group_b=[receiving_cup.root],
+                        )
+                    ]
+                ),
+                ExternalCollisionAvoidance(
+                    robot=tracy, cancel_if_collision_violated=False
+                ),
+            ]
+        )
+
+        distances = _closest_hand_distances(transfer, hand, SMALL_PRE_TILT_TICKS)
+
+        assert len(distances) == SMALL_PRE_TILT_TICKS
+        assert min(distances) > 0.0, (
+            "the hand reached into the receiver: closest distance was "
+            f"{min(distances):.3f} m"
+        )

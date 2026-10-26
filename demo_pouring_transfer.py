@@ -72,6 +72,10 @@ from giskardpy.motion_statechart.monitors.payload_monitors import (
     CountSimulationTimeSeconds,
 )
 from krrood.adapters.json_serializer import to_json
+from giskardpy.motion_statechart.goals.collision_avoidance import (
+    ExternalCollisionAvoidance,
+    UpdateTemporaryCollisionRules,
+)
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
@@ -83,6 +87,9 @@ from giskardpy.motion_statechart.tasks.pouring import (
     KeepProjectileInReceiver,
     KeepSourceRimAboveReceiverRim,
 )
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AvoidCollisionBetweenGroups,
+)
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.physics.equations.learned_pouring_equations import (
@@ -92,6 +99,7 @@ from semantic_digital_twin.physics.equations.learned_pouring_equations import (
 from semantic_digital_twin.physics.equations.pouring_equations import (
     ArticulatedPouringEquation,
 )
+from semantic_digital_twin.robots.tracy import Tracy
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.spatial_types import (
     HomogeneousTransformationMatrix,
@@ -291,8 +299,9 @@ completely there.
 
 MINIMUM_TRANSFER_START_TILT = math.radians(2.0)
 """
-The least tilt the transfer starts from, in radians: upright, the fill the model predicts
-does not change with the tilt, which leaves the transfer no gradient to start from.
+The least tilt the transfer starts from, in radians: upright, the fill the model
+predicts does not change with the tilt, which leaves the transfer no gradient to start
+from.
 """
 
 TRANSFER_START_TILT = max(
@@ -349,6 +358,36 @@ by itself and the bag gets all its files; the longest pour of 2026-10-24 took 45
 
 Ctrl+C during the transfer ends it the same way: the robot stops and the script goes on
 to weigh and save.
+"""
+
+MINIMUM_CLEARANCE = 0.07
+"""
+The lowest the source's lip may come above the receiver's rim during the transfer, in
+metres.
+"""
+
+CLEARANCE_BAND = 0.05
+"""
+How far above :data:`MINIMUM_CLEARANCE` the lip may rise, in metres.
+
+With a small :data:`TRANSFER_START_TILT` (a brimful cup of water allows about 2 degrees)
+the stream falls almost straight down and the aim pulls the hand over the receiver; with
+:data:`AVOID_RECEIVER_COLLISIONS`, widen this to 0.15 so collision avoidance has room to
+lift the lip until the tilt grows.
+"""
+
+AVOID_RECEIVER_COLLISIONS = False
+"""
+Keep the left gripper and the source cup out of the receiver with collision avoidance.
+
+On its own it cannot lift the hand above :data:`CLEARANCE_BAND`'s upper end, which the
+clearance task holds at maximum weight.
+"""
+
+RECEIVER_COLLISION_BUFFER = 0.05
+"""
+Distance between the hand and the receiver at which collision avoidance starts pushing
+them apart, in metres.
 """
 
 CONTROL_CYCLES_FILE_NAME = "transfer_control_cycles.npz"
@@ -659,8 +698,8 @@ no_spill = KeepProjectileInReceiver(
 keep_above = KeepSourceRimAboveReceiverRim(
     receiver=receiving_cup,
     source=source_cup,
-    minimum_clearance=0.07,
-    clearance_band=0.05,
+    minimum_clearance=MINIMUM_CLEARANCE,
+    clearance_band=CLEARANCE_BAND,
     weight=DefaultWeights.WEIGHT_MAXIMUM,
 )
 keep_plane = AlignPlanes(
@@ -737,6 +776,28 @@ msc.add_node(EndMotion.when_true(held_at_ceiling))
 time_limit = CountSimulationTimeSeconds(seconds=TRANSFER_TIME_LIMIT)
 msc.add_node(time_limit)
 msc.add_node(EndMotion.when_true(time_limit))
+if AVOID_RECEIVER_COLLISIONS:
+    [tracy] = world.get_semantic_annotations_by_type(Tracy)
+    hand = [source_cup.root] + [
+        body
+        for body in tracy.left_arm.end_effector.bodies_with_collision
+        if body is not source_cup.root
+    ]
+    msc.add_node(
+        UpdateTemporaryCollisionRules(
+            temporary_rules=[
+                AvoidCollisionBetweenGroups(
+                    buffer_zone_distance=RECEIVER_COLLISION_BUFFER,
+                    violated_distance=0.0,
+                    body_group_a=hand,
+                    body_group_b=[receiving_cup.root],
+                )
+            ]
+        )
+    )
+    msc.add_node(
+        ExternalCollisionAvoidance(robot=tracy, cancel_if_collision_violated=False)
+    )
 live_bank_listener = None
 if USE_LIVE_BANK:
     live_bank_listener = LiveBankListener(
