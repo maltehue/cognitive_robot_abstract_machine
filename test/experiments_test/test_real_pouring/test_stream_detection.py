@@ -22,6 +22,7 @@ from experiments.real_pouring.stream_detection import (
     HEAP_STILL_SECONDS,
     WALL_STILL_SECONDS,
     CupOnMatWithoutWallGaugeError,
+    FLICKER_MARGIN,
     NO_OFFSET,
     CameraView,
     ChangeSegmentation,
@@ -826,3 +827,70 @@ def test_a_dark_colourless_thing_moving_over_the_opening_is_no_water():
         previous=_grain_at(0, DARK_SHIRT, frosted),
     )
     assert water.sum() == 0
+
+
+# %% pixels that flicker in the empty view
+
+
+FLICKERING_EDGE = -30
+"""
+Column offset from :data:`CENTRE` of an edge inside the opening that flickers between
+the frosted inside and a glint while nothing pours.
+"""
+
+EMPTY_VIEW_FRAMES = 5
+"""
+How many images of the empty view the detector learns from.
+"""
+
+
+def _frosted_opening() -> numpy.ndarray:
+    return numpy.full((*IMAGE_SIZE, 3), FROSTED_WALL, dtype=numpy.uint8)
+
+
+def _flickering(frames: int, column_offset: int = FLICKERING_EDGE) -> list:
+    """
+    Images of the frosted inside whose edge at ``column_offset`` glints in every other
+    frame.
+    """
+    frosted = _frosted_opening()
+    return [
+        _grain_at(column_offset, WATER_GLINT, frosted) if frame % 2 else frosted
+        for frame in range(frames)
+    ]
+
+
+def _water_detector_learned_on(images: list) -> StreamDetector:
+    detector = StreamDetector(
+        view=_looking_down(),
+        opening=OPENING,
+        segmentation=MOVING_WATER,
+        pixel_seconds_per_grain=PIXEL_SECONDS_PER_GRAIN,
+        frame_period=FRAME_PERIOD,
+    )
+    detector.learn_background(images)
+    return detector
+
+
+def _counted(detector: StreamDetector, images: list) -> float:
+    for frame, image in enumerate(images):
+        reading = detector.observe(image, stamp=frame * FRAME_PERIOD)
+    return reading.counted_grains
+
+
+def test_pixels_that_flickered_in_the_empty_view_are_not_counted():
+    detector = _water_detector_learned_on(_flickering(EMPTY_VIEW_FRAMES))
+    assert _counted(detector, _flickering(EMPTY_VIEW_FRAMES)) == 0.0
+
+
+def test_a_flicker_shifted_by_the_margin_is_not_counted():
+    detector = _water_detector_learned_on(_flickering(EMPTY_VIEW_FRAMES))
+    shifted = _flickering(EMPTY_VIEW_FRAMES, FLICKERING_EDGE + FLICKER_MARGIN)
+    assert _counted(detector, shifted) == 0.0
+
+
+def test_a_stream_beside_the_pixels_that_flickered_is_counted():
+    detector = _water_detector_learned_on(_flickering(EMPTY_VIEW_FRAMES))
+    frosted = _frosted_opening()
+    stream = [_grain_at(offset, WATER_GLINT, frosted) for offset in (0, 10, 20)]
+    assert _counted(detector, stream) == pytest.approx(len(stream) - 1)

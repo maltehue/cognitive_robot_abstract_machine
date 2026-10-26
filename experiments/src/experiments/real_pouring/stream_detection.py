@@ -791,6 +791,14 @@ How many grain pixels the opening has to show for a stream to count as seen: one
 of a few millimetres, at the pole camera's millimetre per pixel.
 """
 
+FLICKER_MARGIN = 1
+"""
+How far around a pixel that flickered in the empty view the detector stops counting too,
+in pixels: the edges that flicker shift by about a pixel between frames. On the water
+pour of 2026-10-26 it cut what was counted while nothing poured from 67 grains to 11,
+and what was counted while the stream fell from 48 to 36.
+"""
+
 
 @dataclass
 class TwoReceiverGaugesError(Exception):
@@ -904,6 +912,14 @@ class StreamDetector:
     Which pixels show the opening.
     """
 
+    _counted_region: Optional[numpy.ndarray] = field(
+        init=False, default=None, repr=False
+    )
+    """
+    Which pixels of the window the detector counts grains in: the opening, but for the
+    pixels that flickered in the empty view.
+    """
+
     _opening_offset: PixelOffset = field(init=False, default=NO_OFFSET)
     """
     How far the opening was moved from where the camera's pose projects it.
@@ -981,9 +997,10 @@ class StreamDetector:
 
     def learn_background(self, images: List[numpy.ndarray]) -> None:
         """
-        Remember what the view shows before the pour, and start counting from nothing.
+        Remember what the view shows before the pour and which of its pixels flicker,
+        and start counting from nothing.
 
-        :param images: Images taken before any grain leaves the source, BGR.
+        :param images: Consecutive images taken before any grain leaves the source, BGR.
         """
         image_size = images[0].shape[:2]
         mask = self.opening.mask_in(self.view, image_size)
@@ -1000,6 +1017,7 @@ class StreamDetector:
         self._background = numpy.median(
             numpy.stack([image[self._window] for image in images]), axis=0
         ).astype(numpy.uint8)
+        self._counted_region = self._mask & ~self._flickering(images)
         self._counted = 0.0
         self._last_stamp = None
         self._previous = None
@@ -1009,6 +1027,22 @@ class StreamDetector:
             else self._mask & self.outline.shows_cup(self._background)
         )
         self._still_frames = numpy.zeros(self._mask.shape, dtype=int)
+
+    def _flickering(self, images: List[numpy.ndarray]) -> numpy.ndarray:
+        """
+        :param images: Consecutive images of the empty view, BGR.
+        :return: Which pixels of the window the segmentation picked out between any two
+            of them, grown by :data:`FLICKER_MARGIN`.
+        """
+        flickering = numpy.zeros(self._mask.shape, dtype=bool)
+        for previous, image in zip(images, images[1:]):
+            flickering |= self.segmentation.grains(
+                image[self._window], self._background, previous=previous[self._window]
+            )
+        size = 2 * FLICKER_MARGIN + 1
+        return cv2.dilate(
+            flickering.astype(numpy.uint8), numpy.ones((size, size), numpy.uint8)
+        ).astype(bool)
 
     def _offset_of(
         self, opening: numpy.ndarray, empty_view: numpy.ndarray
@@ -1153,11 +1187,12 @@ class StreamDetector:
         """
         :param window: The window around the opening of an image, BGR.
         :param previous: The same window of the image before, BGR, or ``None``.
-        :return: Which of its pixels show grains in the opening.
+        :return: Which of its pixels show grains in the opening, leaving out those that
+            flickered in the empty view.
         """
         return (
             self.segmentation.grains(window, self._background, previous=previous)
-            & self._mask
+            & self._counted_region
         )
 
     def observe(self, image: numpy.ndarray, stamp: float) -> StreamReading:
