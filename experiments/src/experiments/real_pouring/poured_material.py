@@ -96,10 +96,10 @@ How much further below the repose angle the corn keeps flowing per share of the 
 poured out: the slope of the same line through the three recorded stops.
 """
 
-WATER_FULL_CUP_MASS_GRAMS = 400.0
+WATER_FULL_CUP_MASS_GRAMS = 427.0
 """
-What the water filling the cup weighs, in grams: 400 ml, the most the cup was filled
-with for the hand-poured water videos of 2026-10-25.
+What the water filling the cup weighs, in grams: the cup filled to the brim, weighed
+(2026-10-29).
 """
 
 WATER_REPOSE_HYSTERESIS = 0.0

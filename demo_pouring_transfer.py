@@ -134,7 +134,6 @@ IS_SIM = False
 
 # START_FILL = 0.8
 # GOAL_FILL_CONST = 0.7
-START_FILL = 1.0
 
 UNCALIBRATED_DRAIN = ModelPoint(
     repose_angle=0.0, discharge_coefficient=0.2, outflow_rate_constant=0.8
@@ -202,6 +201,13 @@ FULL_CUP_MASS_GRAMS = MATERIAL.full_cup_mass_grams
 What a full cup of the material weighs, read before the robot moves so a material nobody
 weighed stops the demo here rather than after the pour.
 """
+
+LOADED_MASS_GRAMS = 367.0
+"""
+What the material loaded into the source cup weighs, in grams.
+"""
+
+START_FILL = LOADED_MASS_GRAMS / FULL_CUP_MASS_GRAMS
 
 POURING_VELOCITY = 0.06
 """

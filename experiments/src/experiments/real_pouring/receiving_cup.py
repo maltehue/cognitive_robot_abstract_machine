@@ -98,24 +98,23 @@ What the water filling the translucent cup weighs, in grams: 750 ml, the top of 
 scale printed on the cup.
 """
 
-TRANSLUCENT_CUP_WATER_PIXEL_SECONDS_PER_GRAIN = 27.2
+TRANSLUCENT_CUP_WATER_PIXEL_SECONDS_PER_GRAIN = 29.0
 """
 How much flickering pale area in the translucent cup's opening, times the time it shows,
 one of the live bank's grains of water received adds: 6.8 pixel-seconds per millilitre,
 from two hand-poured 400 ml pours of 2026-10-25 that counted 2973 and 2477 pixel-seconds
-while their streams fell (within 9 % of their mean), times the 4 ml a grain of the
-400 ml source cup holds. Ripples on the water lying in the cup keep counting for about
+while their streams fell (within 9 % of their mean), times the 4.27 ml a grain of the
+427 ml source cup holds. Ripples on the water lying in the cup keep counting for about
 three seconds after the stream stops.
 """
 
-TRANSLUCENT_CUP_DYED_WATER_PIXEL_SECONDS_PER_GRAIN = 17.0
+TRANSLUCENT_CUP_DYED_WATER_PIXEL_SECONDS_PER_GRAIN = 25.0
 """
 How much moving yellow area in the translucent cup's opening, times the time it shows,
-one of the live bank's grains of dyed water received adds: from a hand pour of 400 ml of
-water dyed near black (2026-10-29), held still at 200, 300 and 400 g, that counted 4.6,
-4.0 and 3.7 pixel-seconds per gram between the stops and none while it was held, the
-1697 pixel-seconds of the whole pour times the 4 ml a grain of the 400 ml source cup
-holds, over the 400 ml.
+one of the live bank's grains of dyed water received adds: 5.86 pixel-seconds per gram,
+from a robot pour of water dyed near black (2026-10-29 10:22) that counted 1196
+pixel-seconds for the 204 g the scale weighed after, times the 4.27 g a grain of the
+427 g source cup holds.
 """
 
 
