@@ -38,6 +38,12 @@ below the water line: the stream falling inside and the frosting's blur leave a 
 pixels of a row out.
 """
 
+OUTLINE_TIP_ROWS = 2
+"""
+How many of the receiver's lowest rows are the tip of its outline, whose few pixels
+blend with what lies behind the cup and need not show the contents.
+"""
+
 
 @dataclass(frozen=True)
 class WallGauge(ABC):
@@ -259,10 +265,10 @@ class WaterLineGauge(WallGauge):
         :param contents: Where the receiver shows its contents lying still.
         :return: The fill whose surface lies on the topmost of the rows that, from the
             receiver's bottom up without a gap, show the contents, or ``None`` where its
-            bottom row does not.
+            bottom row above the tip of its outline does not.
         """
         receiver_pixels = contents.receiver.sum(axis=1)
-        rows = numpy.nonzero(receiver_pixels)[0]
+        rows = numpy.nonzero(receiver_pixels)[0][:-OUTLINE_TIP_ROWS]
         under_water = (contents.shown[rows] & contents.receiver[rows]).sum(
             axis=1
         ) >= WATER_LINE_ROW_SHARE * receiver_pixels[rows]
