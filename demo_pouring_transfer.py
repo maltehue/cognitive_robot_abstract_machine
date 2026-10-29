@@ -179,7 +179,7 @@ DISCHARGE_COEFFICIENT = DRAIN.discharge_coefficient
 Scales the exit speed and with it how far the stream is thrown.
 """
 
-MATERIAL = PouredMaterial.WATER
+MATERIAL = PouredMaterial.DYED_WATER
 """
 What the source cup is filled with; ``pouring_perception.py`` has to watch for the same.
 """
