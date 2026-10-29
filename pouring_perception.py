@@ -56,7 +56,7 @@ class Parameter(StrEnum):
     BACKGROUND_FRAMES = "background_frames"
 
 
-MATERIAL = PouredMaterial.CORN
+MATERIAL = PouredMaterial.WATER
 """
 What the demo pours, which sets how grains are told from the empty view and how much
 image area one counts for.

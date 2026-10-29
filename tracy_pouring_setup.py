@@ -25,7 +25,7 @@ from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix,
 
 # %% robot and table
 
-TABLE_SURFACE_Z = 0.875
+TABLE_SURFACE_Z = 0.875 + 0.00
 """
 Height of the table top in the world root, in metres.
 
@@ -126,7 +126,7 @@ def upright_carry_pose(giskard: GiskardWrapper, tilt: float = 0.0) -> Pose:
     root_T_upright = HomogeneousTransformationMatrix.from_xyz_quaternion(
         pos_x=1,
         pos_y=0.3,
-        pos_z=TABLE_SURFACE_Z + CARRY_HEIGHT,
+        pos_z=TABLE_SURFACE_Z + 0.21,
         quat_z=0.5,
         quat_x=0.5,
         quat_y=0.5,

@@ -18,7 +18,7 @@ class QPSolverPIQP(QPSolver[QPDataExplicit]):
     The solver object of piqp.
     """
 
-    big_ball_mode: bool = False
+    big_ball_mode: bool = True
     """
     If the QP is known to be feasible, ignore non-SOLVED solver statuses and return the
     (possibly suboptimal) solution instead of raising.

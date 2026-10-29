@@ -179,7 +179,7 @@ DISCHARGE_COEFFICIENT = DRAIN.discharge_coefficient
 Scales the exit speed and with it how far the stream is thrown.
 """
 
-MATERIAL = PouredMaterial.CORN
+MATERIAL = PouredMaterial.WATER
 """
 What the source cup is filled with; ``pouring_perception.py`` has to watch for the same.
 """
@@ -189,7 +189,7 @@ RECEIVING_CUP = ReceivingCup.TRANSLUCENT_CUP
 The cup poured into; ``pouring_perception.py`` has to watch the same.
 """
 
-GOAL_FILL_CONST = RECEIVING_CUP.goal_fill
+GOAL_FILL_CONST = 0.3
 
 RECEIVER_FULL_MASS_GRAMS = RECEIVING_CUP.full_mass_grams(MATERIAL)
 """
@@ -203,7 +203,7 @@ What a full cup of the material weighs, read before the robot moves so a materia
 weighed stops the demo here rather than after the pour.
 """
 
-POURING_VELOCITY = 0.03
+POURING_VELOCITY = 0.06
 """
 How fast the transfer may raise the predicted fill of the receiver, in fill per second.
 """
@@ -286,7 +286,7 @@ slow enough for the camera and the bank to stop the pour within the degree or tw
 delivered amount changes by five percent of a cup over.
 """
 
-MAXIMUM_TILT_RATE = math.radians(3.0)
+MAXIMUM_TILT_RATE = math.radians(6.0)
 """
 The fastest the fill task may tilt the cup further, in radians per second.
 """
@@ -366,7 +366,7 @@ The lowest the source's lip may come above the receiver's rim during the transfe
 metres.
 """
 
-CLEARANCE_BAND = 0.05
+CLEARANCE_BAND = 0.15
 """
 How far above :data:`MINIMUM_CLEARANCE` the lip may rise, in metres.
 
@@ -376,7 +376,7 @@ the stream falls almost straight down and the aim pulls the hand over the receiv
 lift the lip until the tilt grows.
 """
 
-AVOID_RECEIVER_COLLISIONS = False
+AVOID_RECEIVER_COLLISIONS = True
 """
 Keep the left gripper and the source cup out of the receiver with collision avoidance.
 
