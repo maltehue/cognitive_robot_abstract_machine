@@ -31,17 +31,17 @@ class InvalidWallObservationError(ValueError):
 @dataclass(frozen=True)
 class WallColourMeasurement:
     """
-    Median yellowing across each receiver row, weighted by its image height.
+    Median colour shift across each receiver row, weighted by its image height.
     """
 
     noise_floor: float
     """
-    Yellowing discarded before accumulating colour evidence, in OpenCV Lab units.
+    Colour shift discarded before accumulating colour evidence, in the shift's units.
     """
 
-    yellowing_span: float
+    colour_span: float
     """
-    Yellowing above the floor that saturates a pixel's contribution.
+    Colour shift above the floor that saturates a pixel's contribution.
     """
 
     height_power: float
@@ -53,33 +53,31 @@ class WallColourMeasurement:
         """
         Require finite, nonnegative weights and a positive colour span.
         """
-        parameters = (self.noise_floor, self.yellowing_span, self.height_power)
+        parameters = (self.noise_floor, self.colour_span, self.height_power)
         if not all(math.isfinite(value) for value in parameters):
             raise InvalidWallCalibrationError()
-        if self.noise_floor < 0 or self.yellowing_span <= 0 or self.height_power < 0:
+        if self.noise_floor < 0 or self.colour_span <= 0 or self.height_power < 0:
             raise InvalidWallCalibrationError()
 
-    def measure(self, yellowing: numpy.ndarray, region: numpy.ndarray) -> float:
+    def measure(self, colour_shift: numpy.ndarray, region: numpy.ndarray) -> float:
         """
         Return colour evidence per receiver pixel in a tightly cropped wall image.
         """
         if (
-            yellowing.ndim != 2
+            colour_shift.ndim != 2
             or region.dtype != numpy.bool_
-            or yellowing.shape != region.shape
+            or colour_shift.shape != region.shape
             or not region.any()
-            or not numpy.isfinite(yellowing).all()
+            or not numpy.isfinite(colour_shift).all()
         ):
             raise InvalidWallObservationError()
         height = numpy.linspace(1.0, 0.0, region.shape[0])
         populated = region.any(axis=1)
         profile = numpy.zeros(region.shape[0])
         profile[populated] = numpy.nanmedian(
-            numpy.where(region[populated], yellowing[populated], numpy.nan), axis=1
+            numpy.where(region[populated], colour_shift[populated], numpy.nan), axis=1
         )
-        colour = numpy.clip(
-            (profile - self.noise_floor) / self.yellowing_span, 0.0, 1.0
-        )
+        colour = numpy.clip((profile - self.noise_floor) / self.colour_span, 0.0, 1.0)
         return float(
             (colour * height**self.height_power * region.sum(axis=1)).sum()
             / region.sum()
@@ -209,7 +207,7 @@ class WallFillEstimator:
     """
     Read persistent colour using only the current and preceding observations.
 
-    The pixelwise minimum rejects yellow excursions shorter than the observation window.
+    The pixelwise minimum rejects colour excursions shorter than the observation window.
     Persistent occlusion and changing illumination still require validation.
     """
 
@@ -230,7 +228,7 @@ class WallFillEstimator:
 
     _observations: deque[numpy.ndarray] = field(init=False, repr=False)
     """
-    Recent yellowing images, copied so camera buffers cannot alter history.
+    Recent colour shift images, copied so camera buffers cannot alter history.
     """
 
     def __post_init__(self) -> None:
@@ -248,13 +246,16 @@ class WallFillEstimator:
         self.region = self.region.copy()
         self._observations = deque(maxlen=self.window_frames)
 
-    def observe(self, yellowing: numpy.ndarray) -> float | None:
+    def observe(self, colour_shift: numpy.ndarray) -> float | None:
         """
         Return fill after a full causal window, or ``None`` during warmup.
         """
-        if yellowing.shape != self.region.shape or not numpy.isfinite(yellowing).all():
+        if (
+            colour_shift.shape != self.region.shape
+            or not numpy.isfinite(colour_shift).all()
+        ):
             raise InvalidWallObservationError()
-        self._observations.append(yellowing.astype(float, copy=True))
+        self._observations.append(colour_shift.astype(float, copy=True))
         if len(self._observations) < self.window_frames:
             return None
         persistent = numpy.minimum.reduce(self._observations)

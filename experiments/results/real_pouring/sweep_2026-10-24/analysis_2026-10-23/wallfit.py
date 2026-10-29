@@ -7,7 +7,7 @@ from experiments.real_pouring.wall_fill_validation import (
 from experiments.real_pouring.wall_fill import WallColourMeasurement
 
 d = Path(sys.argv[1])
-m = WallColourMeasurement(noise_floor=2.0, yellowing_span=32.0, height_power=2.0)
+m = WallColourMeasurement(noise_floor=2.0, colour_span=32.0, height_power=2.0)
 rows = []
 for f in sorted(d.glob("*.npz")):
     if f.stem == "2026-10-19_16-25-52":

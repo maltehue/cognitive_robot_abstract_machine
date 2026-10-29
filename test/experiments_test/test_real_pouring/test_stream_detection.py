@@ -32,7 +32,9 @@ from experiments.real_pouring.stream_detection import (
     MINIMUM_WATER_MOVEMENT,
     MovingGrainSegmentation,
     MovingWaterSegmentation,
-    MovingYellowSegmentation,
+    MINIMUM_YELLOW_MOVEMENT,
+    MovingColourShiftSegmentation,
+    Yellowing,
     OpeningRegion,
     PixelOffset,
     ReceiverNotFoundError,
@@ -668,7 +670,9 @@ def test_a_detector_reads_the_receiver_with_one_gauge_only():
 # %% grains that move and turn the light inside of a translucent cup yellow
 
 
-MOVING_YELLOW = MovingYellowSegmentation()
+MOVING_YELLOW = MovingColourShiftSegmentation(
+    colour_shift=Yellowing(), minimum_difference=MINIMUM_YELLOW_MOVEMENT
+)
 """
 Grains are what moved since the last frame and turned yellower than the empty view.
 """

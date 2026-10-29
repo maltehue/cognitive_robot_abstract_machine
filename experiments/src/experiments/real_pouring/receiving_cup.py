@@ -20,12 +20,15 @@ from experiments.real_pouring.receiver_wall import BLUE_MAT, WallGauge
 from experiments.real_pouring.wall_fill import InvalidWallCalibrationError
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
+    MINIMUM_YELLOW_MOVEMENT,
     CameraView,
+    ColourShift,
     OpeningRegion,
     GrainSegmentation,
+    MovingColourShiftSegmentation,
     MovingWaterSegmentation,
-    MovingYellowSegmentation,
     StreamDetector,
+    Yellowing,
 )
 
 if TYPE_CHECKING:
@@ -292,6 +295,18 @@ class ReceivingCup(StrEnum):
         if not math.isclose(receiver_capacity, expected, rel_tol=CAPACITY_TOLERANCE):
             raise ReceivingCupChangedError(cup=self)
 
+    def colour_shift(self, material: PouredMaterial) -> ColourShift:
+        """
+        :param material: What is poured.
+        :return: How the material tells itself from the light inside of this cup.
+        :raises MaterialNotSeenThroughWallError: For a material whose colour this cup
+            does not show.
+        """
+        match self, material:
+            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
+                return Yellowing()
+        raise MaterialNotSeenThroughWallError(material=material)
+
     def segmentation(self, material: PouredMaterial) -> GrainSegmentation:
         """
         :param material: What is poured.
@@ -303,7 +318,10 @@ class ReceivingCup(StrEnum):
             case ReceivingCup.JEROEN_CUP, _:
                 return material.segmentation
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
-                return MovingYellowSegmentation()
+                return MovingColourShiftSegmentation(
+                    colour_shift=self.colour_shift(material),
+                    minimum_difference=MINIMUM_YELLOW_MOVEMENT,
+                )
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER:
                 return MovingWaterSegmentation()
         raise MaterialNotSeenThroughWallError(material=material)
@@ -395,5 +413,6 @@ class ReceivingCup(StrEnum):
                         height=self.height,
                         radius=self.inner_radius,
                         detected_share=self.wall_detected_share(material),
+                        colour_shift=self.colour_shift(material),
                     ),
                 )

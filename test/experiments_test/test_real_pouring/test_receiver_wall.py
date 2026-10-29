@@ -9,6 +9,7 @@ from experiments.real_pouring.stream_detection import (
     CameraView,
     PixelOffset,
     ReceiverNotFoundError,
+    Yellowing,
 )
 
 # %% a translucent cup seen from the side and above, like the pole camera sees it
@@ -65,6 +66,7 @@ GAUGE = WallGauge(
     height=HEIGHT,
     radius=RADIUS,
     detected_share=DETECTED_SHARE,
+    colour_shift=Yellowing(),
 )
 
 
