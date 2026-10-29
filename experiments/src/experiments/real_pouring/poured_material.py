@@ -141,8 +141,8 @@ class MaterialNotSeenThroughWallError(Exception):
 
     def __str__(self) -> str:
         return (
-            f"{self.material} does not turn the translucent cup's frosted wall yellow, "
-            f"so its fill cannot be read through it: pour it into the Jeroen cup."
+            f"{self.material} does not show through the translucent cup's frosted "
+            f"wall, so its fill cannot be read through it: pour it into the Jeroen cup."
         )
 
 
@@ -205,6 +205,12 @@ class PouredMaterial(StrEnum):
     Clear tap water.
     """
 
+    DYED_WATER = "dyed_water"
+    """
+    Tap water dyed near black with brown food colouring, so that it shows through the
+    translucent cup's frosted wall.
+    """
+
     @property
     def segmentation(self) -> GrainSegmentation:
         """
@@ -213,7 +219,12 @@ class PouredMaterial(StrEnum):
             than the empty view's, so only the calibration differs.
         """
         match self:
-            case PouredMaterial.STYROFOAM | PouredMaterial.CORN | PouredMaterial.WATER:
+            case (
+                PouredMaterial.STYROFOAM
+                | PouredMaterial.CORN
+                | PouredMaterial.WATER
+                | PouredMaterial.DYED_WATER
+            ):
                 return MovingGrainSegmentation()
 
     @property
@@ -230,7 +241,7 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_PIXEL_SECONDS_PER_GRAIN
             case PouredMaterial.CORN:
                 return CORN_PIXEL_SECONDS_PER_GRAIN
-            case PouredMaterial.WATER:
+            case PouredMaterial.WATER | PouredMaterial.DYED_WATER:
                 raise JeroenCupCalibrationUnknownError(material=self)
 
     @property
@@ -246,7 +257,7 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_HEAP_PIXELS_PER_SHARE
             case PouredMaterial.CORN:
                 return CORN_HEAP_PIXELS_PER_SHARE
-            case PouredMaterial.WATER:
+            case PouredMaterial.WATER | PouredMaterial.DYED_WATER:
                 raise JeroenCupCalibrationUnknownError(material=self)
 
     @property
@@ -260,7 +271,7 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_REPOSE_HYSTERESIS
             case PouredMaterial.CORN:
                 return CORN_REPOSE_HYSTERESIS
-            case PouredMaterial.WATER:
+            case PouredMaterial.WATER | PouredMaterial.DYED_WATER:
                 return WATER_REPOSE_HYSTERESIS
 
     @property
@@ -274,7 +285,7 @@ class PouredMaterial(StrEnum):
                 return STYROFOAM_REPOSE_HYSTERESIS_GROWTH
             case PouredMaterial.CORN:
                 return CORN_REPOSE_HYSTERESIS_GROWTH
-            case PouredMaterial.WATER:
+            case PouredMaterial.WATER | PouredMaterial.DYED_WATER:
                 return WATER_REPOSE_HYSTERESIS_GROWTH
 
     @property
@@ -286,7 +297,7 @@ class PouredMaterial(StrEnum):
         match self:
             case PouredMaterial.STYROFOAM | PouredMaterial.CORN:
                 return GRAIN_DRY_TILT
-            case PouredMaterial.WATER:
+            case PouredMaterial.WATER | PouredMaterial.DYED_WATER:
                 return WATER_DRY_TILT
 
     def drain_of(self, drain: ModelPoint) -> ModelPoint:
@@ -313,5 +324,5 @@ class PouredMaterial(StrEnum):
                 return CORN_FULL_CUP_MASS_GRAMS
             case PouredMaterial.CORN:
                 raise FullCupMassUnknownError(material=self)
-            case PouredMaterial.WATER:
+            case PouredMaterial.WATER | PouredMaterial.DYED_WATER:
                 return WATER_FULL_CUP_MASS_GRAMS

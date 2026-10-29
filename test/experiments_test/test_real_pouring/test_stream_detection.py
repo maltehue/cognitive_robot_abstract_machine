@@ -35,6 +35,7 @@ from experiments.real_pouring.stream_detection import (
     MINIMUM_YELLOW_MOVEMENT,
     MovingColourShiftSegmentation,
     Yellowing,
+    Darkening,
     OpeningRegion,
     PixelOffset,
     ReceiverNotFoundError,
@@ -752,6 +753,49 @@ def test_the_translucent_cup_is_drawn_where_it_was_found():
     assert (
         detector.wall_mask(WALL_IMAGE_SIZE)
         == WALL_GAUGE.region_in(WALL_IMAGE_SIZE, NO_OFFSET)
+    ).all()
+
+
+# %% contents darker than the empty view
+
+
+LIT_WALL = (215, 205, 190)
+"""
+The empty cup's lit frosted wall, BGR.
+"""
+
+DYED_WATER_BEHIND_THE_WALL = (30, 35, 40)
+"""
+Water dyed near black seen through the frosted wall, BGR.
+"""
+
+SHADOW_DIMMING = 0.8
+"""
+How much of its brightness a shadow leaves the wall: a person or the arm standing in the
+light.
+"""
+
+
+def _wall_patch(colour) -> numpy.ndarray:
+    return numpy.full((4, 4, 3), colour, dtype=numpy.uint8)
+
+
+def test_dyed_water_behind_a_lit_wall_shows_as_darkening():
+    assert (
+        Darkening()
+        .shows(_wall_patch(DYED_WATER_BEHIND_THE_WALL), _wall_patch(LIT_WALL))
+        .all()
+    )
+
+
+def test_a_shadow_on_the_wall_does_not_show_as_darkening():
+    shadowed = tuple(round(channel * SHADOW_DIMMING) for channel in LIT_WALL)
+    assert not Darkening().shows(_wall_patch(shadowed), _wall_patch(LIT_WALL)).any()
+
+
+def test_a_wall_turned_brighter_did_not_darken():
+    assert (
+        Darkening().difference(_wall_patch(LIT_WALL), _wall_patch(GREY_THING)) < 0
     ).all()
 
 

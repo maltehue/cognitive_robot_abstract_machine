@@ -124,6 +124,36 @@ def test_water_keeps_flowing_below_its_repose_angle_by_its_own_hysteresis():
     )
 
 
+# %% dyed water
+
+
+def test_a_full_cup_of_dyed_water_weighs_what_a_full_cup_of_water_does():
+    assert (
+        PouredMaterial.DYED_WATER.full_cup_mass_grams
+        == poured_material.WATER_FULL_CUP_MASS_GRAMS
+    )
+
+
+def test_dyed_water_poured_into_the_jeroen_cup_has_no_count_calibration():
+    with pytest.raises(JeroenCupCalibrationUnknownError):
+        PouredMaterial.DYED_WATER.pixel_seconds_per_grain
+
+
+def test_dyed_water_poured_into_the_jeroen_cup_has_no_heap_scale():
+    with pytest.raises(JeroenCupCalibrationUnknownError):
+        PouredMaterial.DYED_WATER.heap_pixels_per_share
+
+
+def test_dyed_water_keeps_flowing_below_its_repose_angle_as_water_does():
+    assert (
+        PouredMaterial.DYED_WATER.repose_hysteresis,
+        PouredMaterial.DYED_WATER.repose_hysteresis_growth,
+    ) == (
+        poured_material.WATER_REPOSE_HYSTERESIS,
+        poured_material.WATER_REPOSE_HYSTERESIS_GROWTH,
+    )
+
+
 # %% the tilt up to which a material stays in the cup
 
 
@@ -132,5 +162,6 @@ def test_grains_stay_in_the_cup_up_to_the_tilt_the_recorded_pours_showed(materia
     assert material.dry_tilt == poured_material.GRAIN_DRY_TILT
 
 
-def test_water_stays_in_the_cup_up_to_its_own_tilt():
-    assert PouredMaterial.WATER.dry_tilt == poured_material.WATER_DRY_TILT
+@pytest.mark.parametrize("material", [PouredMaterial.WATER, PouredMaterial.DYED_WATER])
+def test_water_stays_in_the_cup_up_to_its_own_tilt(material):
+    assert material.dry_tilt == poured_material.WATER_DRY_TILT

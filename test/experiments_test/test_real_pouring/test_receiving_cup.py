@@ -13,10 +13,11 @@ from experiments.real_pouring.receiving_cup import (
     ReceivingCupChangedError,
     ReceivingCup,
 )
-from experiments.real_pouring.receiver_wall import BLUE_MAT
+from experiments.real_pouring.receiver_wall import BLUE_MAT, WaterLineGauge
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     CameraView,
+    Darkening,
     MovingWaterSegmentation,
     MovingColourShiftSegmentation,
     Yellowing,
@@ -205,3 +206,39 @@ def test_the_translucent_cup_holds_as_many_source_cups_of_water_as_its_scale_say
 def test_water_poured_into_the_jeroen_cup_says_it_is_not_calibrated():
     with pytest.raises(JeroenCupCalibrationUnknownError):
         _detector(ReceivingCup.JEROEN_CUP, PouredMaterial.WATER)
+
+
+# %% dyed water
+
+
+def test_dyed_water_falling_into_the_translucent_cup_is_counted_by_turning_it_yellow():
+    detector = _detector(ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.DYED_WATER)
+    assert (
+        type(detector.segmentation),
+        type(detector.segmentation.colour_shift),
+        detector.pixel_seconds_per_grain,
+    ) == (
+        MovingColourShiftSegmentation,
+        Yellowing,
+        receiving_cup.TRANSLUCENT_CUP_DYED_WATER_PIXEL_SECONDS_PER_GRAIN,
+    )
+
+
+def test_dyed_water_in_the_translucent_cup_is_read_by_its_water_line():
+    detector = _detector(ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.DYED_WATER)
+    assert (
+        type(detector.wall_gauge),
+        type(detector.wall_gauge.colour_shift),
+        detector.cup_on_mat,
+    ) == (WaterLineGauge, Darkening, BLUE_MAT)
+
+
+def test_the_translucent_cup_holds_as_much_dyed_water_as_clear_water():
+    assert ReceivingCup.TRANSLUCENT_CUP.source_cups_held(
+        PouredMaterial.DYED_WATER
+    ) == ReceivingCup.TRANSLUCENT_CUP.source_cups_held(PouredMaterial.WATER)
+
+
+def test_dyed_water_poured_into_the_jeroen_cup_says_it_is_not_calibrated():
+    with pytest.raises(JeroenCupCalibrationUnknownError):
+        _detector(ReceivingCup.JEROEN_CUP, PouredMaterial.DYED_WATER)

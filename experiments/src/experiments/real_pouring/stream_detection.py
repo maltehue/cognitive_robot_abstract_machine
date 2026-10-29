@@ -435,6 +435,52 @@ class Yellowing(ColourShift):
         )
 
 
+MINIMUM_DARKENING = 75
+"""
+How much of its brightness, in percent, a pixel has to lose to show water dyed near
+black behind the translucent cup's frosted wall: in a hand pour of 2026-10-29, the wall
+below the water lost 76 to 92 % of it, the wall just above the water, which the dark water
+dims through the frosting, at most 60 %, and any threshold from 70 to 80 % read the three
+weighed fills within 0.01, also with the pour's images dimmed by 15 % like a shadow
+does.
+"""
+
+LAB_LIGHTNESS_CHANNEL = 0
+"""
+The channel of an OpenCV Lab image running from black to white.
+"""
+
+
+@dataclass(frozen=True)
+class Darkening(ColourShift):
+    """
+    Contents told from a light background by taking most of its brightness: a shadow
+    dims the background by a share far smaller.
+    """
+
+    minimum: int = MINIMUM_DARKENING
+    """
+    How much of its brightness, in percent, a pixel has to lose.
+    """
+
+    def difference(
+        self, image: numpy.ndarray, background: numpy.ndarray
+    ) -> numpy.ndarray:
+        """
+        :return: How much of its brightness every pixel lost, in percent.
+        """
+        channel = LAB_LIGHTNESS_CHANNEL
+        lightness = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[..., channel].astype(
+            numpy.int32
+        )
+        empty = cv2.cvtColor(background, cv2.COLOR_BGR2LAB)[..., channel].astype(
+            numpy.int32
+        )
+        return (100 * (empty - lightness) // numpy.maximum(empty, 1)).astype(
+            numpy.int16
+        )
+
+
 MINIMUM_YELLOW_MOVEMENT = 45
 """
 How much a pixel's colour has to change from the previous frame, summed over the three
@@ -878,6 +924,31 @@ class TwoReceiverGaugesError(Exception):
         )
 
 
+@dataclass(frozen=True)
+class WallContents:
+    """
+    Where a translucent receiver shows its contents lying still, in an image or a window
+    of it.
+    """
+
+    shown: numpy.ndarray
+    """
+    Which pixels have shown the contents lying still.
+    """
+
+    receiver: numpy.ndarray
+    """
+    Which pixels show the receiver, where it was found.
+    """
+
+    first_row: int
+    """
+    The row of the image, as the camera's pose projects it, that the masks' first row
+    shows: the window's first row with the pose error the receiver was found off by taken
+    out.
+    """
+
+
 @dataclass
 class CupOnMatWithoutWallGaugeError(Exception):
     """
@@ -1161,13 +1232,20 @@ class StreamDetector:
         return mask
 
     @property
+    def _wall_still(self) -> numpy.ndarray:
+        """
+        :return: Which pixels of the wall window have shown the contents lying still for
+            :data:`WALL_STILL_SECONDS`.
+        """
+        return self._wall_still_frames >= round(WALL_STILL_SECONDS / self.frame_period)
+
+    @property
     def wall_pixels(self) -> int:
         """
         :return: How many pixels of the translucent receiver have shown its contents
             lying still for :data:`WALL_STILL_SECONDS`.
         """
-        still_for = round(WALL_STILL_SECONDS / self.frame_period)
-        return int((self._wall_still_frames >= still_for).sum())
+        return int(self._wall_still.sum())
 
     def _watch_wall(self, image: numpy.ndarray) -> Optional[float]:
         """
@@ -1197,7 +1275,13 @@ class StreamDetector:
             if calibrated is not None:
                 self._wall_calibrated = True
                 return calibrated
-        return self.wall_gauge.fill_for(self.wall_pixels)
+        return self.wall_gauge.fill_shown_by(
+            WallContents(
+                shown=self._wall_still,
+                receiver=self._wall_region,
+                first_row=self._wall_window[0].start - self._opening_offset.rows,
+            )
+        )
 
     @property
     def heap_pixels(self) -> int:

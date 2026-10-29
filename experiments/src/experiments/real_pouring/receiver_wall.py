@@ -1,11 +1,12 @@
 """
-How full a translucent receiver is, read off the area its contents show through the wall
-and the opening.
+How full a translucent receiver is, read off the contents it shows through the wall and
+the opening.
 """
 
 from __future__ import annotations
 
 import math
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -21,6 +22,7 @@ from experiments.real_pouring.stream_detection import (
     PixelOffset,
     ColourShift,
     ReceiverNotFoundError,
+    WallContents,
 )
 
 OUTLINE_SAMPLES = 90
@@ -29,12 +31,19 @@ How many points around the receiver's circumference are projected to outline it.
 """
 
 
+WATER_LINE_ROW_SHARE = 0.5
+"""
+The share of a row of the receiver that has to show the contents for the row to lie
+below the water line: the stream falling inside and the frosting's blur leave a few
+pixels of a row out.
+"""
+
+
 @dataclass(frozen=True)
-class WallGauge:
+class WallGauge(ABC):
     """
-    Reads the fill of a translucent receiver off the area of its contents the camera
-    picks out: contents up to a height show as the receiver itself would up to that
-    height, through the wall below the surface and through the opening above it.
+    Reads the fill of a translucent receiver off the contents the camera picks out
+    through its wall and its opening.
     """
 
     view: CameraView
@@ -57,43 +66,34 @@ class WallGauge:
     The receiver's inner radius, in metres.
     """
 
-    detected_share: float
-    """
-    The share of the contents' projected area the camera picks out through the frosted
-    wall: the scale one weighed pour of a material sets.
-    """
-
     colour_shift: ColourShift
     """
     How the contents are told from the empty view.
     """
 
-    @classmethod
-    def for_receiver(
-        cls,
-        view: CameraView,
-        opening_centre: numpy.ndarray,
-        height: float,
-        radius: float,
-        detected_share: float,
-        colour_shift: ColourShift,
-    ) -> WallGauge:
+    @staticmethod
+    def base_below(opening_centre: numpy.ndarray, height: float) -> numpy.ndarray:
         """
-        :param view: The camera's calibration.
         :param opening_centre: The centre of the receiver's opening, in the world.
         :param height: The receiver's height, in metres.
-        :param radius: The receiver's inner radius, in metres.
-        :param detected_share: The share of the contents' area the camera picks out.
-        :param colour_shift: How the contents are told from the empty view.
-        :return: The gauge of a receiver standing below its opening.
+        :return: The centre of the bottom of a receiver standing below its opening.
         """
-        return cls(
-            view=view,
-            receiver_base=opening_centre - numpy.array([0.0, 0.0, height]),
-            height=height,
-            radius=radius,
-            detected_share=detected_share,
-            colour_shift=colour_shift,
+        return opening_centre - numpy.array([0.0, 0.0, height])
+
+    def _circle_at(self, fill: float) -> numpy.ndarray:
+        """
+        :param fill: How full the receiver is, from 0 to 1.
+        :return: Points around the receiver's inside at the height of that fill, in the
+            world.
+        """
+        angles = numpy.linspace(0.0, 2 * numpy.pi, OUTLINE_SAMPLES, endpoint=False)
+        return self.receiver_base + numpy.stack(
+            [
+                self.radius * numpy.cos(angles),
+                self.radius * numpy.sin(angles),
+                numpy.full(OUTLINE_SAMPLES, fill * self.height),
+            ],
+            axis=1,
         )
 
     def outline(self, fill: float) -> numpy.ndarray:
@@ -102,18 +102,8 @@ class WallGauge:
         :return: The outline of its contents in the image, a convex polygon of
             ``(column, row)`` points.
         """
-        angles = numpy.linspace(0.0, 2 * numpy.pi, OUTLINE_SAMPLES, endpoint=False)
-        circle = numpy.stack(
-            [
-                self.radius * numpy.cos(angles),
-                self.radius * numpy.sin(angles),
-                numpy.zeros(OUTLINE_SAMPLES),
-            ],
-            axis=1,
-        )
-        surface = circle + numpy.array([0.0, 0.0, fill * self.height])
         points = self.view.to_image(
-            numpy.concatenate([circle, surface]) + self.receiver_base
+            numpy.concatenate([self._circle_at(0.0), self._circle_at(fill)])
         )
         return cv2.convexHull(points.astype(numpy.float32))
 
@@ -123,25 +113,6 @@ class WallGauge:
         :return: How many pixels its contents cover in the image.
         """
         return float(cv2.contourArea(self.outline(fill)))
-
-    @cached_property
-    def _areas(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
-        """
-        :return: Fills from empty to full and the area the contents cover at each.
-        """
-        fills = numpy.linspace(0.0, 1.0, FILL_SAMPLES)
-        return fills, numpy.array([self.projected_area(fill) for fill in fills])
-
-    def fill_for(self, pixels: float) -> Optional[float]:
-        """
-        :param pixels: How many pixels of the receiver show its contents.
-        :return: The fill at which the camera would pick out that many, or ``None``
-            where too few show to tell.
-        """
-        if pixels < MINIMUM_HEAP_PIXELS:
-            return None
-        fills, areas = self._areas
-        return float(numpy.interp(pixels / self.detected_share, areas, fills))
 
     def region_in(
         self, image_size: Tuple[int, int], offset: PixelOffset
@@ -164,6 +135,144 @@ class WallGauge:
         :return: Which pixels turned far enough to show the contents.
         """
         return self.colour_shift.shows(image, background)
+
+    @abstractmethod
+    def fill_shown_by(self, contents: WallContents) -> Optional[float]:
+        """
+        :param contents: Where the receiver shows its contents lying still.
+        :return: How full they show it, from 0 to 1, or ``None`` where too little shows
+            to tell.
+        """
+
+
+@dataclass(frozen=True)
+class WallAreaGauge(WallGauge):
+    """
+    Reads the fill off the area of the contents: contents up to a height show as the
+    receiver itself would up to that height, through the wall below the surface and
+    through the opening above it.
+    """
+
+    detected_share: float
+    """
+    The share of the contents' projected area the camera picks out through the frosted
+    wall: the scale one weighed pour of a material sets.
+    """
+
+    @classmethod
+    def for_receiver(
+        cls,
+        view: CameraView,
+        opening_centre: numpy.ndarray,
+        height: float,
+        radius: float,
+        detected_share: float,
+        colour_shift: ColourShift,
+    ) -> WallAreaGauge:
+        """
+        :param view: The camera's calibration.
+        :param opening_centre: The centre of the receiver's opening, in the world.
+        :param height: The receiver's height, in metres.
+        :param radius: The receiver's inner radius, in metres.
+        :param detected_share: The share of the contents' area the camera picks out.
+        :param colour_shift: How the contents are told from the empty view.
+        :return: The gauge of a receiver standing below its opening.
+        """
+        return cls(
+            view=view,
+            receiver_base=cls.base_below(opening_centre, height),
+            height=height,
+            radius=radius,
+            detected_share=detected_share,
+            colour_shift=colour_shift,
+        )
+
+    @cached_property
+    def _areas(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
+        """
+        :return: Fills from empty to full and the area the contents cover at each.
+        """
+        fills = numpy.linspace(0.0, 1.0, FILL_SAMPLES)
+        return fills, numpy.array([self.projected_area(fill) for fill in fills])
+
+    def fill_for(self, pixels: float) -> Optional[float]:
+        """
+        :param pixels: How many pixels of the receiver show its contents.
+        :return: The fill at which the camera would pick out that many, or ``None``
+            where too few show to tell.
+        """
+        if pixels < MINIMUM_HEAP_PIXELS:
+            return None
+        fills, areas = self._areas
+        return float(numpy.interp(pixels / self.detected_share, areas, fills))
+
+    def fill_shown_by(self, contents: WallContents) -> Optional[float]:
+        return self.fill_for(int(contents.shown.sum()))
+
+
+@dataclass(frozen=True)
+class WaterLineGauge(WallGauge):
+    """
+    Reads the fill off the line dark contents reach up to on the wall: the surface's
+    edge nearest the camera, below which the wall shows the contents in every row.
+    """
+
+    @classmethod
+    def for_receiver(
+        cls,
+        view: CameraView,
+        opening_centre: numpy.ndarray,
+        height: float,
+        radius: float,
+        colour_shift: ColourShift,
+    ) -> WaterLineGauge:
+        """
+        :param view: The camera's calibration.
+        :param opening_centre: The centre of the receiver's opening, in the world.
+        :param height: The receiver's height, in metres.
+        :param radius: The receiver's inner radius, in metres.
+        :param colour_shift: How the contents are told from the empty view.
+        :return: The gauge of a receiver standing below its opening.
+        """
+        return cls(
+            view=view,
+            receiver_base=cls.base_below(opening_centre, height),
+            height=height,
+            radius=radius,
+            colour_shift=colour_shift,
+        )
+
+    @cached_property
+    def _surface_rows(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
+        """
+        :return: Fills from empty to full and the image row of the surface's edge
+            nearest the camera at each, rising as the fill does.
+        """
+        fills = numpy.linspace(0.0, 1.0, FILL_SAMPLES)
+        rows = numpy.array(
+            [self.view.to_image(self._circle_at(fill))[:, 1].max() for fill in fills]
+        )
+        return fills, rows
+
+    def fill_shown_by(self, contents: WallContents) -> Optional[float]:
+        """
+        :param contents: Where the receiver shows its contents lying still.
+        :return: The fill whose surface lies on the topmost of the rows that, from the
+            receiver's bottom up without a gap, show the contents, or ``None`` where its
+            bottom row does not.
+        """
+        receiver_pixels = contents.receiver.sum(axis=1)
+        rows = numpy.nonzero(receiver_pixels)[0]
+        under_water = (contents.shown[rows] & contents.receiver[rows]).sum(
+            axis=1
+        ) >= WATER_LINE_ROW_SHARE * receiver_pixels[rows]
+        if not under_water[-1]:
+            return None
+        dry = numpy.nonzero(~under_water)[0]
+        top = rows[dry[-1] + 1] if dry.size else rows[0]
+        line = contents.first_row + top - 0.5
+        fills, surface_rows = self._surface_rows
+        return float(numpy.interp(-line, -surface_rows, fills))
 
 
 # %% finding the cup as the gap it makes in the mat it stands on

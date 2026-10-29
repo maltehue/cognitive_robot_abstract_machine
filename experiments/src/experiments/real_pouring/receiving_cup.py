@@ -16,13 +16,19 @@ from experiments.real_pouring.poured_material import (
     PouredMaterial,
 )
 from experiments.real_pouring.receiver_heap import HeapGauge
-from experiments.real_pouring.receiver_wall import BLUE_MAT, WallGauge
+from experiments.real_pouring.receiver_wall import (
+    BLUE_MAT,
+    WallAreaGauge,
+    WallGauge,
+    WaterLineGauge,
+)
 from experiments.real_pouring.wall_fill import InvalidWallCalibrationError
 from experiments.real_pouring.stream_detection import (
     BLUE_CUP_OUTLINE,
     MINIMUM_YELLOW_MOVEMENT,
     CameraView,
     ColourShift,
+    Darkening,
     OpeningRegion,
     GrainSegmentation,
     MovingColourShiftSegmentation,
@@ -100,6 +106,16 @@ from two hand-poured 400 ml pours of 2026-10-25 that counted 2973 and 2477 pixel
 while their streams fell (within 9 % of their mean), times the 4 ml a grain of the
 400 ml source cup holds. Ripples on the water lying in the cup keep counting for about
 three seconds after the stream stops.
+"""
+
+TRANSLUCENT_CUP_DYED_WATER_PIXEL_SECONDS_PER_GRAIN = 17.0
+"""
+How much moving yellow area in the translucent cup's opening, times the time it shows,
+one of the live bank's grains of dyed water received adds: from a hand pour of 400 ml of
+water dyed near black (2026-10-29), held still at 200, 300 and 400 g, that counted 4.6,
+4.0 and 3.7 pixel-seconds per gram between the stops and none while it was held, the
+1697 pixel-seconds of the whole pour times the 4 ml a grain of the 400 ml source cup
+holds, over the 400 ml.
 """
 
 
@@ -268,7 +284,9 @@ class ReceivingCup(StrEnum):
                 return material.full_cup_mass_grams
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
                 return TRANSLUCENT_CUP_CORN_MASS_GRAMS
-            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER:
+            case ReceivingCup.TRANSLUCENT_CUP, (
+                PouredMaterial.WATER | PouredMaterial.DYED_WATER
+            ):
                 return TRANSLUCENT_CUP_WATER_MASS_GRAMS
         raise ReceiverFullMassUnknownError(cup=self, material=material)
 
@@ -295,16 +313,35 @@ class ReceivingCup(StrEnum):
         if not math.isclose(receiver_capacity, expected, rel_tol=CAPACITY_TOLERANCE):
             raise ReceivingCupChangedError(cup=self)
 
-    def colour_shift(self, material: PouredMaterial) -> ColourShift:
+    def stream_colour_shift(self, material: PouredMaterial) -> ColourShift:
         """
         :param material: What is poured.
-        :return: How the material tells itself from the light inside of this cup.
+        :return: How the material falling into this cup tells itself from the light
+            inside of it: dyed water, which shows dark lying in the cup, falls thin
+            enough to show only a brownish yellow.
+        :raises MaterialNotSeenThroughWallError: For a material whose colour this cup
+            does not show.
+        """
+        match self, material:
+            case ReceivingCup.TRANSLUCENT_CUP, (
+                PouredMaterial.CORN | PouredMaterial.DYED_WATER
+            ):
+                return Yellowing()
+        raise MaterialNotSeenThroughWallError(material=material)
+
+    def wall_colour_shift(self, material: PouredMaterial) -> ColourShift:
+        """
+        :param material: What is poured.
+        :return: How the material lying in this cup tells itself through its wall from
+            the empty cup.
         :raises MaterialNotSeenThroughWallError: For a material whose colour this cup
             does not show.
         """
         match self, material:
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
                 return Yellowing()
+            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.DYED_WATER:
+                return Darkening()
         raise MaterialNotSeenThroughWallError(material=material)
 
     def segmentation(self, material: PouredMaterial) -> GrainSegmentation:
@@ -317,9 +354,11 @@ class ReceivingCup(StrEnum):
         match self, material:
             case ReceivingCup.JEROEN_CUP, _:
                 return material.segmentation
-            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.CORN:
+            case ReceivingCup.TRANSLUCENT_CUP, (
+                PouredMaterial.CORN | PouredMaterial.DYED_WATER
+            ):
                 return MovingColourShiftSegmentation(
-                    colour_shift=self.colour_shift(material),
+                    colour_shift=self.stream_colour_shift(material),
                     minimum_difference=MINIMUM_YELLOW_MOVEMENT,
                 )
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER:
@@ -341,6 +380,8 @@ class ReceivingCup(StrEnum):
                 return TRANSLUCENT_CUP_CORN_PIXEL_SECONDS_PER_GRAIN
             case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.WATER:
                 return TRANSLUCENT_CUP_WATER_PIXEL_SECONDS_PER_GRAIN
+            case ReceivingCup.TRANSLUCENT_CUP, PouredMaterial.DYED_WATER:
+                return TRANSLUCENT_CUP_DYED_WATER_PIXEL_SECONDS_PER_GRAIN
         raise MaterialNotSeenThroughWallError(material=material)
 
     def wall_detected_share(self, material: PouredMaterial) -> float:
@@ -354,6 +395,38 @@ class ReceivingCup(StrEnum):
         if self is ReceivingCup.TRANSLUCENT_CUP and material is PouredMaterial.CORN:
             return TRANSLUCENT_CUP_CORN_WALL_DETECTED_SHARE
         raise MaterialNotSeenThroughWallError(material=material)
+
+    def wall_gauge(
+        self, material: PouredMaterial, view: CameraView, opening_centre: numpy.ndarray
+    ) -> WallGauge:
+        """
+        :param material: What is poured.
+        :param view: The camera's calibration.
+        :param opening_centre: The centre of the cup's opening, in the world.
+        :return: How the fill of this cup is read through its wall: corn by the area
+            it shows, dyed water by the line it reaches up to.
+        :raises MaterialNotSeenThroughWallError: For a material the wall hides, or a
+            cup without a wall to see through.
+        """
+        if (
+            self is ReceivingCup.TRANSLUCENT_CUP
+            and material is PouredMaterial.DYED_WATER
+        ):
+            return WaterLineGauge.for_receiver(
+                view=view,
+                opening_centre=opening_centre,
+                height=self.height,
+                radius=self.inner_radius,
+                colour_shift=self.wall_colour_shift(material),
+            )
+        return WallAreaGauge.for_receiver(
+            view=view,
+            opening_centre=opening_centre,
+            height=self.height,
+            radius=self.inner_radius,
+            detected_share=self.wall_detected_share(material),
+            colour_shift=self.wall_colour_shift(material),
+        )
 
     def detector_for(
         self,
@@ -407,12 +480,5 @@ class ReceivingCup(StrEnum):
                     **common,
                     wall_calibration=wall_calibration,
                     cup_on_mat=BLUE_MAT,
-                    wall_gauge=WallGauge.for_receiver(
-                        view=view,
-                        opening_centre=opening_centre,
-                        height=self.height,
-                        radius=self.inner_radius,
-                        detected_share=self.wall_detected_share(material),
-                        colour_shift=self.colour_shift(material),
-                    ),
+                    wall_gauge=self.wall_gauge(material, view, opening_centre),
                 )

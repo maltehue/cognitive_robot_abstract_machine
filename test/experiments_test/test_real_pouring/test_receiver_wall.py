@@ -3,10 +3,16 @@ import numpy
 import pytest
 
 from experiments.real_pouring.receiver_heap import MINIMUM_HEAP_PIXELS
-from experiments.real_pouring.receiver_wall import BLUE_MAT, WallGauge
+from experiments.real_pouring.receiver_wall import (
+    BLUE_MAT,
+    WallAreaGauge,
+    WallContents,
+    WaterLineGauge,
+)
 from experiments.real_pouring.stream_detection import (
     NO_OFFSET,
     CameraView,
+    Darkening,
     PixelOffset,
     ReceiverNotFoundError,
     Yellowing,
@@ -60,7 +66,7 @@ VIEW = _looking_at(
     eye=numpy.array([0.6, 0.0, HEIGHT + 0.8]), target=numpy.array([0, 0, HEIGHT / 2])
 )
 
-GAUGE = WallGauge(
+GAUGE = WallAreaGauge(
     view=VIEW,
     receiver_base=numpy.zeros(3),
     height=HEIGHT,
@@ -95,6 +101,98 @@ def test_the_area_the_camera_picks_out_reads_back_as_the_fill_it_shows():
 
 def test_too_few_pixels_tell_no_fill():
     assert GAUGE.fill_for(MINIMUM_HEAP_PIXELS - 1) is None
+
+
+def test_the_area_gauge_reads_the_contents_by_how_many_pixels_show_them():
+    shown = GAUGE.region_in(IMAGE_SIZE, NO_OFFSET)
+    contents = WallContents(shown=shown, receiver=shown, first_row=0)
+    assert GAUGE.fill_shown_by(contents) == GAUGE.fill_for(int(shown.sum()))
+
+
+# %% the water line the contents show
+
+
+LINE_GAUGE = WaterLineGauge(
+    view=VIEW,
+    receiver_base=numpy.zeros(3),
+    height=HEIGHT,
+    radius=RADIUS,
+    colour_shift=Darkening(),
+)
+"""
+The same cup read by the line its dark contents reach up to.
+"""
+
+
+def _surface_front_row(fill: float) -> float:
+    """
+    :return: The lowest image row of the contents' surface at a fill: its edge nearest
+        the camera.
+    """
+    angles = numpy.linspace(0.0, 2 * numpy.pi, 360, endpoint=False)
+    surface = numpy.stack(
+        [
+            RADIUS * numpy.cos(angles),
+            RADIUS * numpy.sin(angles),
+            numpy.full(angles.size, fill * HEIGHT),
+        ],
+        axis=1,
+    )
+    return float(VIEW.to_image(surface)[:, 1].max())
+
+
+def _contents_up_to(fill: float, offset: PixelOffset = NO_OFFSET) -> WallContents:
+    receiver = LINE_GAUGE.region_in(IMAGE_SIZE, offset)
+    rows = numpy.arange(IMAGE_SIZE[0])[:, None]
+    shown = receiver & (rows >= _surface_front_row(fill) + offset.rows)
+    return WallContents(shown=shown, receiver=receiver, first_row=-offset.rows)
+
+
+def test_contents_up_to_a_surface_read_back_as_its_fill():
+    assert LINE_GAUGE.fill_shown_by(_contents_up_to(0.4)) == pytest.approx(
+        0.4, abs=0.01
+    )
+
+
+def test_the_water_line_is_read_where_the_cup_was_found():
+    contents = _contents_up_to(0.4, PixelOffset(rows=-15, columns=13))
+    assert LINE_GAUGE.fill_shown_by(contents) == pytest.approx(0.4, abs=0.01)
+
+
+def test_the_water_line_is_read_in_a_window_of_the_image():
+    contents = _contents_up_to(0.4)
+    rows, columns = numpy.nonzero(contents.receiver)
+    window = (
+        slice(rows.min(), rows.max() + 1),
+        slice(columns.min(), columns.max() + 1),
+    )
+    windowed = WallContents(
+        shown=contents.shown[window],
+        receiver=contents.receiver[window],
+        first_row=int(rows.min()),
+    )
+    assert LINE_GAUGE.fill_shown_by(windowed) == LINE_GAUGE.fill_shown_by(contents)
+
+
+def test_dark_rows_above_the_water_line_do_not_raise_it():
+    contents = _contents_up_to(0.4)
+    above = contents.receiver & (
+        numpy.arange(IMAGE_SIZE[0])[:, None] < _surface_front_row(0.8)
+    )
+    raised = WallContents(
+        shown=contents.shown | above, receiver=contents.receiver, first_row=0
+    )
+    assert LINE_GAUGE.fill_shown_by(raised) == LINE_GAUGE.fill_shown_by(contents)
+
+
+def test_contents_not_reaching_the_bottom_tell_no_fill():
+    contents = _contents_up_to(0.4)
+    floating = WallContents(
+        shown=contents.shown & ~_contents_up_to(0.2).shown,
+        receiver=contents.receiver,
+        first_row=0,
+    )
+    assert LINE_GAUGE.fill_shown_by(floating) is None
 
 
 # %% what the contents look like through the wall
