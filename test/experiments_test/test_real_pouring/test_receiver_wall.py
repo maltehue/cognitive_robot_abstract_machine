@@ -5,6 +5,7 @@ import pytest
 from experiments.real_pouring.receiver_heap import MINIMUM_HEAP_PIXELS
 from experiments.real_pouring.receiver_wall import (
     BLUE_MAT,
+    OUTLINE_TIP_WIDTH_SHARE,
     WallAreaGauge,
     WallContents,
     WaterLineGauge,
@@ -194,6 +195,20 @@ def test_the_tip_of_the_outline_not_showing_the_contents_does_not_hide_them():
         shown=shown, receiver=contents.receiver, first_row=contents.first_row
     )
     assert LINE_GAUGE.fill_shown_by(blended) == LINE_GAUGE.fill_shown_by(contents)
+
+
+def test_the_narrow_rows_of_the_outline_not_showing_the_contents_do_not_hide_them():
+    contents = _contents_up_to(0.4)
+    widths = contents.receiver.sum(axis=1)
+    narrow = (widths > 0) & (widths < OUTLINE_TIP_WIDTH_SHARE * widths.max())
+    shown = contents.shown.copy()
+    shown[narrow] = False
+    flickering = WallContents(
+        shown=shown, receiver=contents.receiver, first_row=contents.first_row
+    )
+    assert LINE_GAUGE.fill_shown_by(flickering) == pytest.approx(
+        LINE_GAUGE.fill_shown_by(contents), abs=0.01
+    )
 
 
 def test_contents_not_reaching_the_bottom_tell_no_fill():
