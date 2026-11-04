@@ -188,7 +188,7 @@ RECEIVING_CUP = ReceivingCup.TRANSLUCENT_CUP
 The cup poured into; ``pouring_perception.py`` has to watch the same.
 """
 
-GOAL_FILL_CONST = 0.3
+GOAL_FILL_CONST = 0.2
 
 RECEIVER_FULL_MASS_GRAMS = RECEIVING_CUP.full_mass_grams(MATERIAL)
 """
@@ -284,7 +284,7 @@ The inflow below which the receiver counts as no longer filling, in fill per sec
 one of the bank's grains a second, a stray kernel rather than a stream.
 """
 
-APPROACH_TILT_RATE = math.radians(3.0)
+APPROACH_TILT_RATE = math.radians(12.0)
 """
 How fast the cup keeps turning where the model predicts no flow, in radians per second:
 
@@ -292,7 +292,7 @@ slow enough for the camera and the bank to stop the pour within the degree or tw
 delivered amount changes by five percent of a cup over.
 """
 
-MAXIMUM_TILT_RATE = math.radians(6.0)
+MAXIMUM_TILT_RATE = math.radians(12.0)
 """
 The fastest the fill task may tilt the cup further, in radians per second.
 """
@@ -336,7 +336,7 @@ How long the cup may stay at :data:`MAXIMUM_TILT` before the transfer ends whate
 fill estimate says, in seconds: a cup held there that long has poured all it will.
 """
 
-MAXIMUM_RETURN_TILT_RATE = math.radians(10.0)
+MAXIMUM_RETURN_TILT_RATE = math.radians(15.0)
 """
 The fastest the cup may tilt back, in radians per second.
 
@@ -346,7 +346,7 @@ at :data:`APPROACH_TILT_RATE` and the stream stops within a few degrees of the o
 the return needs no more than this.
 """
 
-MAXIMUM_TILT_ACCELERATION = math.radians(30.0)
+MAXIMUM_TILT_ACCELERATION = math.radians(60.0)
 """
 The fastest the cup's tilt rate may change, in radians per second squared.
 
