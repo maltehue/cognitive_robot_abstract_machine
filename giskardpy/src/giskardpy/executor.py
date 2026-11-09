@@ -240,6 +240,7 @@ class Executor:
                     for dof_id in world.state
                 ],
                 self.motion_statechart.collect_debug_expressions(),
+                [node.unique_name for node in self.motion_statechart.nodes],
             )
         if self.trajectory_plotter is not None:
             self.trajectory_plotter.reset(self.context.world.state, self.time)
@@ -269,7 +270,11 @@ class Executor:
         )
         if self.control_cycle_recorder is not None:
             self.control_cycle_recorder.record(
-                self.time, solution, self.context.world.state.positions
+                self.time,
+                solution,
+                self.context.world.state.positions,
+                self.motion_statechart.observation_state.data,
+                self.motion_statechart.life_cycle_state.data,
             )
         self.context.world.apply_control_commands(
             solution.control_commands,

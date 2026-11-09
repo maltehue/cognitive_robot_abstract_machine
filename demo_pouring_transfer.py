@@ -48,7 +48,7 @@ from experiments.real_pouring.live_bank_listener import LiveBankListener
 from experiments.real_pouring.transfer_ending import (
     TRANSFER_ENDING_FILE_NAME,
     CancelOnInterrupt,
-    TransferEnding,
+    TransferStop,
 )
 from experiments.real_pouring.poured_material import PouredMaterial
 from experiments.real_pouring.pour_perception import PourPerception
@@ -837,19 +837,19 @@ if USE_LIVE_BANK:
     live_bank_listener.start()
 print("Start transfer.")
 transfer_started_at = time.time()
+transfer_canceled = False
 with CancelOnInterrupt(giskard.cancel_goal_async) as interruption:
     try:
         giskard.execute(msc)
     except ExecutionCanceledException:
-        pass
-if interruption.interrupted:
-    transfer_ending = TransferEnding.STOPPED_BY_OPERATOR
-elif msc.observation_state[held_at_ceiling] == ObservationStateValues.TRUE:
-    transfer_ending = TransferEnding.HELD_AT_CEILING
-elif msc.observation_state[time_limit] == ObservationStateValues.TRUE:
-    transfer_ending = TransferEnding.TIME_LIMIT
-else:
-    transfer_ending = TransferEnding.GOAL_REACHED
+        transfer_canceled = True
+transfer_ending = TransferStop(
+    stopped_by_operator=interruption.interrupted,
+    canceled=transfer_canceled,
+    held_at_ceiling=msc.observation_state[held_at_ceiling]
+    == ObservationStateValues.TRUE,
+    reached_time_limit=msc.observation_state[time_limit] == ObservationStateValues.TRUE,
+).ending()
 print(f"Transfer ended: {transfer_ending}.")
 recording.add_file(TRANSFER_ENDING_FILE_NAME, transfer_ending)
 if live_bank_listener is not None:

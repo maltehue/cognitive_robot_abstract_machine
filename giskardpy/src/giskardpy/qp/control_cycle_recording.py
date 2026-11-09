@@ -50,6 +50,21 @@ class ControlCycleArchiveKey(StrEnum):
     The names of the debug value columns, kept with the metadata.
     """
 
+    OBSERVATIONS = "observations"
+    """
+    The observation state of every motion statechart node in every cycle.
+    """
+
+    LIFE_CYCLES = "life_cycles"
+    """
+    The life cycle state of every motion statechart node in every cycle.
+    """
+
+    NODE_NAMES = "node_names"
+    """
+    The unique names of the motion statechart nodes, kept with the metadata.
+    """
+
 
 DEBUG_COMPONENT_SEPARATOR = "/"
 """
@@ -284,6 +299,20 @@ class RecordedControlCycle:
     columns,)``.
     """
 
+    observations: np.ndarray
+    """
+    What every motion statechart node observed after the cycle's tick, as
+    :class:`~giskardpy.motion_statechart.data_types.ObservationStateValues`, shaped
+    ``(nodes,)``.
+    """
+
+    life_cycles: np.ndarray
+    """
+    Where every motion statechart node was in its own execution after the cycle's tick,
+    as :class:`~giskardpy.motion_statechart.data_types.LifeCycleValues`, shaped
+    ``(nodes,)``.
+    """
+
 
 # %% recording
 
@@ -382,12 +411,34 @@ class ControlCycleRecording:
     columns for recordings made without debug expressions.
     """
 
+    node_names: list[str] = field(default_factory=list)
+    """
+    Unique name of every motion statechart node, in the column order of
+    :attr:`observations` and :attr:`life_cycles`.
+    """
+
+    observations: np.ndarray | None = None
+    """
+    Per-cycle observation state of every node, shaped ``(cycles, nodes)``; empty columns
+    for recordings made before node states were kept.
+    """
+
+    life_cycles: np.ndarray | None = None
+    """
+    Per-cycle life cycle state of every node, shaped ``(cycles, nodes)``; empty columns
+    for recordings made before node states were kept.
+    """
+
     def __post_init__(self) -> None:
         """
-        Gives a recording without debug values its empty debug columns.
+        Gives a recording without debug values or node states its empty columns.
         """
         if self.debug_values is None:
             self.debug_values = np.zeros((len(self.times), 0))
+        if self.observations is None:
+            self.observations = np.zeros((len(self.times), 0))
+        if self.life_cycles is None:
+            self.life_cycles = np.zeros((len(self.times), 0))
 
     @classmethod
     def from_cycles(
@@ -396,6 +447,7 @@ class ControlCycleRecording:
         world_degree_of_freedom_names: list[str],
         cycles: list[RecordedControlCycle],
         debug_columns: Sequence[str] = (),
+        node_names: Sequence[str] = (),
     ) -> Self:
         """
         Stacks the recorded cycles into one time series.
@@ -424,6 +476,9 @@ class ControlCycleRecording:
             world_positions=np.stack([cycle.world_positions for cycle in cycles]),
             debug_columns=list(debug_columns),
             debug_values=np.stack([cycle.debug_values for cycle in cycles]),
+            node_names=list(node_names),
+            observations=np.stack([cycle.observations for cycle in cycles]),
+            life_cycles=np.stack([cycle.life_cycles for cycle in cycles]),
         )
 
     @property
@@ -444,6 +499,7 @@ class ControlCycleRecording:
                 "structure": self.structure.to_json(),
                 "world_degree_of_freedom_names": self.world_degree_of_freedom_names,
                 ControlCycleArchiveKey.DEBUG_COLUMNS: self.debug_columns,
+                ControlCycleArchiveKey.NODE_NAMES: self.node_names,
             }
         )
         np.savez_compressed(
@@ -460,7 +516,11 @@ class ControlCycleRecording:
             velocity_lower_limits=self.velocity_lower_limits,
             velocity_upper_limits=self.velocity_upper_limits,
             world_positions=self.world_positions,
-            **{ControlCycleArchiveKey.DEBUG_VALUES: self.debug_values},
+            **{
+                ControlCycleArchiveKey.DEBUG_VALUES: self.debug_values,
+                ControlCycleArchiveKey.OBSERVATIONS: self.observations,
+                ControlCycleArchiveKey.LIFE_CYCLES: self.life_cycles,
+            },
         )
 
     @classmethod
@@ -499,12 +559,26 @@ class ControlCycleRecording:
                 debug_columns=list(
                     metadata.get(ControlCycleArchiveKey.DEBUG_COLUMNS, [])
                 ),
-                debug_values=(
-                    archive[ControlCycleArchiveKey.DEBUG_VALUES]
-                    if ControlCycleArchiveKey.DEBUG_VALUES in archive.files
-                    else None
+                debug_values=cls._optional_entry(
+                    archive, ControlCycleArchiveKey.DEBUG_VALUES
+                ),
+                node_names=list(metadata.get(ControlCycleArchiveKey.NODE_NAMES, [])),
+                observations=cls._optional_entry(
+                    archive, ControlCycleArchiveKey.OBSERVATIONS
+                ),
+                life_cycles=cls._optional_entry(
+                    archive, ControlCycleArchiveKey.LIFE_CYCLES
                 ),
             )
+
+    @staticmethod
+    def _optional_entry(
+        archive: np.lib.npyio.NpzFile, key: ControlCycleArchiveKey
+    ) -> np.ndarray | None:
+        """
+        :return: The stored entry, or ``None`` for a recording written before it was kept.
+        """
+        return archive[key] if key in archive.files else None
 
 
 # %% recorder
@@ -553,11 +627,18 @@ class ControlCycleRecorder:
     Name of every recorded debug value column.
     """
 
+    node_names: list[str] = field(init=False, default_factory=list)
+    """
+    Unique name of every motion statechart node, in the order of the node states handed
+    to :meth:`record`.
+    """
+
     def reset(
         self,
         qp_data: QPDataSymbolic,
         world_degree_of_freedom_names: list[str],
         debug_expressions: Sequence[DebugExpression] = (),
+        node_names: Sequence[str] = (),
     ) -> None:
         """
         Prepares to record the given problem, discarding any previous cycles.
@@ -566,7 +647,10 @@ class ControlCycleRecorder:
         :param world_degree_of_freedom_names: Name of every degree of freedom of the
             world, in the column order of the positions handed to :meth:`record`.
         :param debug_expressions: The motion's debug expressions, evaluated every cycle.
+        :param node_names: Unique name of every motion statechart node, in the order of
+            the node states handed to :meth:`record`.
         """
+        self.node_names = list(node_names)
         self.structure = ConstraintProblemStructure.from_symbolic_problem(qp_data)
         self.world_degree_of_freedom_names = list(world_degree_of_freedom_names)
         self._debug_expressions = [
@@ -629,6 +713,8 @@ class ControlCycleRecorder:
         time: float,
         solution: ControlCycleSolution,
         world_positions: np.ndarray,
+        observations: np.ndarray,
+        life_cycles: np.ndarray,
     ) -> None:
         """
         Reads the rows and commands of one solved control cycle.
@@ -636,6 +722,8 @@ class ControlCycleRecorder:
         :param time: Simulation time of the cycle in seconds.
         :param solution: The solved quadratic program of the cycle.
         :param world_positions: Position of every degree of freedom of the world.
+        :param observations: Observation state of every motion statechart node.
+        :param life_cycles: Life cycle state of every motion statechart node.
         :raises UnrecordableQPDataFormatError: if the solver format keeps no separate
             equality and inequality blocks.
         """
@@ -681,6 +769,8 @@ class ControlCycleRecorder:
                     [np.zeros(0)]
                     + [recorded.current_value() for recorded in self._debug_expressions]
                 ),
+                observations=np.array(observations),
+                life_cycles=np.array(life_cycles),
             )
         )
 
@@ -697,6 +787,7 @@ class ControlCycleRecorder:
             self.world_degree_of_freedom_names,
             self._cycles,
             self.debug_columns,
+            self.node_names,
         )
 
     def _number_of_non_slack_variables(self, qp_data: QPDataExplicit) -> int:

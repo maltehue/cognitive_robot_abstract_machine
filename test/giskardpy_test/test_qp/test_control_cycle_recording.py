@@ -1,10 +1,15 @@
 import json
+from dataclasses import dataclass
 
 import numpy as np
 import pytest
 
 from giskardpy.executor import Executor
 from giskardpy.motion_statechart.context import MotionStatechartContext
+from giskardpy.motion_statechart.data_types import (
+    LifeCycleValues,
+    ObservationStateValues,
+)
 from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import (
@@ -33,7 +38,29 @@ Where the recorded motion moves the PR2's hand, in the world root.
 """
 
 
-def _run_recorded_motion(world) -> ControlCycleRecording:
+@dataclass
+class RecordedReach:
+    """
+    A recorded motion together with the motion statechart that produced it.
+    """
+
+    motion_statechart: MotionStatechart
+    """
+    The motion statechart that was executed.
+    """
+
+    reach: CartesianPosition
+    """
+    The node whose goal ends the motion.
+    """
+
+    recording: ControlCycleRecording
+    """
+    The recording of the motion.
+    """
+
+
+def _run_recorded_motion(world) -> RecordedReach:
     """
     Move the PR2 hand to a point while its linear speed is capped, and record it.
 
@@ -63,12 +90,21 @@ def _run_recorded_motion(world) -> ControlCycleRecording:
     )
     executor.compile(motion_statechart=motion_statechart)
     executor.tick_until_end()
-    return recorder.build_recording()
+    return RecordedReach(
+        motion_statechart=motion_statechart,
+        reach=reach,
+        recording=recorder.build_recording(),
+    )
 
 
 @pytest.fixture()
-def recording(pr2_world_state_reset) -> ControlCycleRecording:
+def recorded_reach(pr2_world_state_reset) -> RecordedReach:
     return _run_recorded_motion(pr2_world_state_reset)
+
+
+@pytest.fixture()
+def recording(recorded_reach) -> ControlCycleRecording:
+    return recorded_reach.recording
 
 
 # %% row layout
@@ -227,6 +263,43 @@ def test_a_debug_value_holds_what_its_expression_evaluated_to(recording):
         np.testing.assert_allclose(recording.debug_values[:, column], coordinate)
 
 
+# %% motion statechart state
+
+
+def test_every_node_of_the_motion_statechart_is_named(recorded_reach):
+    assert recorded_reach.recording.node_names == [
+        node.unique_name for node in recorded_reach.motion_statechart.nodes
+    ]
+
+
+def test_every_node_state_is_recorded_every_cycle(recording):
+    expected_shape = (recording.number_of_cycles, len(recording.node_names))
+
+    assert recording.observations.shape == expected_shape
+    assert recording.life_cycles.shape == expected_shape
+
+
+def test_a_node_is_recorded_observing_its_goal_once_it_reaches_it(recorded_reach):
+    """
+    The motion ends once the hand reaches the point, so the reaching node observes its
+    goal in the last cycle and not yet in the first.
+    """
+    recording = recorded_reach.recording
+    column = recording.node_names.index(recorded_reach.reach.unique_name)
+
+    assert recording.observations[0, column] != ObservationStateValues.TRUE
+    assert recording.observations[-1, column] == ObservationStateValues.TRUE
+
+
+def test_a_running_node_is_recorded_running(recorded_reach):
+    recording = recorded_reach.recording
+    column = recording.node_names.index(recorded_reach.reach.unique_name)
+
+    np.testing.assert_array_equal(
+        recording.life_cycles[:, column], LifeCycleValues.RUNNING
+    )
+
+
 # %% replaying the pose
 
 
@@ -307,6 +380,40 @@ def test_a_recording_stored_without_debug_values_reads_with_none(recording, tmp_
 
     assert loaded.debug_columns == []
     assert loaded.debug_values.shape == (loaded.number_of_cycles, 0)
+
+
+def test_stored_node_states_read_back_unchanged(recording, tmp_path):
+    file_path = str(tmp_path / "goal_0.npz")
+
+    recording.save(file_path)
+    loaded = ControlCycleRecording.load(file_path)
+
+    assert loaded.node_names == recording.node_names
+    np.testing.assert_array_equal(loaded.observations, recording.observations)
+    np.testing.assert_array_equal(loaded.life_cycles, recording.life_cycles)
+
+
+def test_a_recording_stored_without_node_states_reads_with_no_nodes(
+    recording, tmp_path
+):
+    """
+    Recordings written before node states were kept read back with no node columns.
+    """
+    file_path = str(tmp_path / "goal_0.npz")
+    recording.save(file_path)
+    archive = dict(np.load(file_path, allow_pickle=False))
+    del archive[ControlCycleArchiveKey.OBSERVATIONS]
+    del archive[ControlCycleArchiveKey.LIFE_CYCLES]
+    metadata = json.loads(str(archive["metadata"].item()))
+    del metadata[ControlCycleArchiveKey.NODE_NAMES]
+    archive["metadata"] = np.array(json.dumps(metadata))
+    np.savez_compressed(file_path, **archive)
+
+    loaded = ControlCycleRecording.load(file_path)
+
+    assert loaded.node_names == []
+    assert loaded.observations.shape == (loaded.number_of_cycles, 0)
+    assert loaded.life_cycles.shape == (loaded.number_of_cycles, 0)
 
 
 def test_recording_of_an_unknown_format_version_is_rejected(recording, tmp_path):

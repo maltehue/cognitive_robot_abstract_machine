@@ -46,6 +46,53 @@ class TransferEnding(StrEnum):
     The operator stopped the transfer by hand.
     """
 
+    CANCELED = "canceled"
+    """
+    The motion was cancelled without the operator asking for it.
+    """
+
+
+@dataclass
+class TransferStop:
+    """
+    What the demo saw of how its transfer motion stopped.
+    """
+
+    stopped_by_operator: bool
+    """
+    Whether the operator stopped the transfer by hand.
+    """
+
+    canceled: bool
+    """
+    Whether the motion came back cancelled rather than finished.
+    """
+
+    held_at_ceiling: bool
+    """
+    Whether the cup stayed at its ceiling tilt long enough to end the transfer.
+    """
+
+    reached_time_limit: bool
+    """
+    Whether the transfer ran out of time.
+    """
+
+    def ending(self) -> TransferEnding:
+        """
+        :return: What ended the transfer; the goal counts as reached only when nothing
+            else did.
+        """
+        if self.stopped_by_operator:
+            return TransferEnding.STOPPED_BY_OPERATOR
+        if self.canceled:
+            return TransferEnding.CANCELED
+        if self.held_at_ceiling:
+            return TransferEnding.HELD_AT_CEILING
+        if self.reached_time_limit:
+            return TransferEnding.TIME_LIMIT
+        return TransferEnding.GOAL_REACHED
+
 
 # %% stopping the transfer by hand
 
