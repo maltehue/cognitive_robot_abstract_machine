@@ -1,5 +1,6 @@
 """
-Stopping a demo transfer by hand without losing the rest of the script.
+Stopping a demo transfer by hand without losing the rest of the script, and naming how a
+transfer ended.
 """
 
 from __future__ import annotations
@@ -9,7 +10,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from experiments.real_pouring.transfer_ending import CancelOnInterrupt
+from experiments.real_pouring.transfer_ending import (
+    CancelOnInterrupt,
+    TransferEnding,
+    TransferStop,
+)
 
 # %% the first Ctrl+C stops the motion, a second one the script
 
@@ -84,3 +89,64 @@ def test_the_previous_handler_is_restored(python_handler) -> None:
     with CancelOnInterrupt(CountedCancel()):
         signal.raise_signal(signal.SIGINT)
     assert signal.getsignal(signal.SIGINT) is python_handler
+
+
+# %% naming how the transfer ended
+
+
+def test_a_cancel_the_operator_did_not_ask_for_is_not_a_reached_goal() -> None:
+    stop = TransferStop(
+        stopped_by_operator=False,
+        canceled=True,
+        held_at_ceiling=False,
+        reached_time_limit=False,
+    )
+
+    assert stop.ending() == TransferEnding.CANCELED
+
+
+def test_a_cancel_the_operator_asked_for_is_a_stop_by_the_operator() -> None:
+    """
+    Stopping by hand cancels the motion too, so the operator's stop names the ending.
+    """
+    stop = TransferStop(
+        stopped_by_operator=True,
+        canceled=True,
+        held_at_ceiling=False,
+        reached_time_limit=False,
+    )
+
+    assert stop.ending() == TransferEnding.STOPPED_BY_OPERATOR
+
+
+def test_a_transfer_held_at_its_ceiling_ended_there() -> None:
+    stop = TransferStop(
+        stopped_by_operator=False,
+        canceled=False,
+        held_at_ceiling=True,
+        reached_time_limit=False,
+    )
+
+    assert stop.ending() == TransferEnding.HELD_AT_CEILING
+
+
+def test_a_transfer_out_of_time_ended_at_its_time_limit() -> None:
+    stop = TransferStop(
+        stopped_by_operator=False,
+        canceled=False,
+        held_at_ceiling=False,
+        reached_time_limit=True,
+    )
+
+    assert stop.ending() == TransferEnding.TIME_LIMIT
+
+
+def test_a_transfer_that_ended_by_itself_reached_its_goal() -> None:
+    stop = TransferStop(
+        stopped_by_operator=False,
+        canceled=False,
+        held_at_ceiling=False,
+        reached_time_limit=False,
+    )
+
+    assert stop.ending() == TransferEnding.GOAL_REACHED
