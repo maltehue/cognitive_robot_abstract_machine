@@ -1,5 +1,8 @@
 import copy
+import gc
+import itertools
 import operator
+import weakref
 
 import casadi as ca
 import numpy as np
@@ -8,13 +11,19 @@ import scipy
 import scipy.sparse as sp
 
 import krrood.symbolic_math.symbolic_math as sm
+from krrood.adapters.json_serializer import from_json, to_json
 from krrood.symbolic_math.exceptions import (
+    CannotConvertToStringError,
+    FloatVariableAlreadyHasResolveError,
     HasFreeVariablesError,
     NotColumnVectorError,
     NotEnoughArgumentsError,
     NotSquareMatrixError,
+    UnhashableExpressionError,
 )
 from krrood.symbolic_math.symbolic_math import VariableParameters
+from krrood.utils import is_hashable
+from ..dataset.symbolic_type_with_inherited_hash import SymbolicTypeWithInheritedHash
 from .reference_implementations import (
     normalize_angle_positive,
     shortest_angular_distance,
@@ -90,6 +99,46 @@ def test_to_sx():
     assert ca.is_equal(sx_list[2], 3)
 
 
+class TestBinaryLogic:
+    """
+    The two-valued logic operators.
+    """
+
+    @pytest.mark.parametrize(
+        "logic_operator, identity",
+        [
+            (sm.logic_and, sm.Scalar.const_true()),
+            (sm.logic_or, sm.Scalar.const_false()),
+        ],
+    )
+    def test_an_operator_combines_any_number_of_arguments(
+        self, *, logic_operator, identity
+    ):
+        """
+        Chaining several arguments gives the same value as combining them pairwise.
+        """
+        for values in itertools.product([0, 1], repeat=3):
+            arguments = [sm.Scalar(value) for value in values]
+            pairwise = identity
+            for argument in arguments:
+                pairwise = logic_operator(pairwise, argument)
+            assert float(logic_operator(*arguments)) == float(pairwise), f"{values}"
+
+    @pytest.mark.parametrize("logic_operator", [sm.logic_and, sm.logic_or])
+    def test_an_operator_of_one_argument_is_that_argument(self, *, logic_operator):
+        a = sm.FloatVariable(name="a")
+
+        assert logic_operator(a).free_variables() == [a]
+        assert ca.is_equal(logic_operator(a).casadi_sx, a.casadi_sx)
+
+    @pytest.mark.parametrize("logic_operator", [sm.logic_and, sm.logic_or])
+    def test_an_operator_without_arguments_is_rejected(self, *, logic_operator):
+        with pytest.raises(NotEnoughArgumentsError) as error:
+            logic_operator()
+        assert error.value.minimum_number_of_arguments == 1
+        assert error.value.actual_number_of_arguments == 0
+
+
 class TestLogic3:
     values = [
         TrinaryTrue,
@@ -102,18 +151,18 @@ class TestLogic3:
             for j in self.values:
                 expected = logic_and(i, j)
                 actual = sm.trinary_logic_and(sm.Scalar(i), sm.Scalar(j))
-                assert (
-                    expected == actual
-                ), f"a={i}, b={j}, expected {expected}, actual {actual}"
+                assert expected == actual, (
+                    f"a={i}, b={j}, expected {expected}, actual {actual}"
+                )
 
     def test_or3(self):
         for i in self.values:
             for j in self.values:
                 expected = logic_or(i, j)
                 actual = sm.trinary_logic_or(sm.Scalar(i), sm.Scalar(j))
-                assert expected == float(
-                    actual
-                ), f"a={i}, b={j}, expected {expected}, actual {actual}"
+                assert expected == float(actual), (
+                    f"a={i}, b={j}, expected {expected}, actual {actual}"
+                )
 
     def test_and3_of_one_argument_is_that_argument(self):
         for i in self.values:
@@ -141,23 +190,6 @@ class TestLogic3:
             actual = sm.trinary_logic_not(sm.Scalar(i))
             assert expected == actual, f"a={i}, expected {expected}, actual {actual}"
 
-    def test_trinary_logic_to_str(self):
-        a = sm.FloatVariable(name="a")
-        b = sm.FloatVariable(name="b")
-        c = sm.FloatVariable(name="c")
-        expression = sm.trinary_logic_and(
-            a, sm.trinary_logic_or(b, sm.trinary_logic_not(c))
-        )
-        expression_str = sm.trinary_logic_to_str(expression)
-        assert expression_str == '("a" and ("b" or not "c"))'
-
-        const_expr = sm.trinary_logic_and(
-            sm.Scalar.const_true(),
-            sm.trinary_logic_or(a, sm.Scalar.const_trinary_unknown()),
-        )
-        const_expr_str = sm.trinary_logic_to_str(const_expr)
-        assert const_expr_str == '("a" or Unknown)'
-
 
 class TestTrinaryPredicates:
     """
@@ -172,6 +204,52 @@ class TestTrinaryPredicates:
     """
     The predicate that holds for each trinary truth value.
     """
+
+    def test_or3_accepts_a_constant_comparison_result(self):
+        constant_comparison = sm.Scalar(0) <= 0.05
+        assert isinstance(constant_comparison, sm.Scalar)
+        result = sm.trinary_logic_or(sm.Scalar(0), constant_comparison)
+        assert isinstance(result, sm.Scalar)
+        assert bool(result) is True
+
+    def test_and3_accepts_a_constant_comparison_result(self):
+        constant_comparison = sm.Scalar(0) <= 0.05
+        assert isinstance(constant_comparison, sm.Scalar)
+        result = sm.trinary_logic_and(sm.Scalar(1), constant_comparison)
+        assert isinstance(result, sm.Scalar)
+        assert bool(result) is True
+
+    def test_predicate_return_types_are_primitive_bool(self):
+        """
+        Verify that is_const_true, is_const_false, and is_const_unknown return primitive
+        bool values rather than Scalar expressions.
+        """
+        s_true = sm.Scalar(0) <= 0.05
+        s_false = sm.Scalar(1) <= 0.05
+        s_unknown = sm.Scalar(0.5)
+
+        assert isinstance(s_true.is_constant_true(), bool)
+        assert s_true.is_constant_true() is True
+        assert isinstance(s_true.is_constant_false(), bool)
+        assert s_true.is_constant_false() is False
+
+        assert isinstance(s_false.is_constant_true(), bool)
+        assert s_false.is_constant_true() is False
+        assert isinstance(s_false.is_constant_false(), bool)
+        assert s_false.is_constant_false() is True
+
+        assert isinstance(s_unknown.is_constant_unknown(), bool)
+        assert s_unknown.is_constant_unknown() is True
+        assert isinstance(s_true.is_constant_unknown(), bool)
+        assert s_true.is_constant_unknown() is False
+
+        v = sm.FloatVariable(name="v")
+        assert isinstance(v.is_constant_true(), bool)
+        assert v.is_constant_true() is False
+        assert isinstance(v.is_constant_false(), bool)
+        assert v.is_constant_false() is False
+        assert isinstance(v.is_constant_unknown(), bool)
+        assert v.is_constant_unknown() is False
 
     def test_each_predicate_holds_only_for_its_own_value(self):
         for value in self.predicate_of_value:
@@ -192,7 +270,11 @@ class TestTrinaryPredicates:
         for value in self.predicate_of_value:
             for predicate_value, predicate in self.predicate_of_value.items():
                 expected = float(value == predicate_value)
-                actual = float(predicate(variable).substitute([variable], [value]))
+                actual = float(
+                    predicate(variable).substitute(
+                        old_variables=[variable], new_variables=[value]
+                    )
+                )
                 assert expected == actual, (
                     f"{predicate.__name__} of {value}, "
                     f"expected {expected}, actual {actual}"
@@ -216,6 +298,35 @@ class TestTrinaryPredicates:
 
 
 class TestIfElse:
+    @pytest.mark.parametrize(
+        "guard, selected",
+        [
+            (sm.Scalar.const_true(), True),
+            (sm.Scalar.const_trinary_unknown(), False),
+            (sm.Scalar.const_false(), False),
+        ],
+    )
+    def test_trinary_if_cases_selects_a_case_only_while_its_guard_is_true(
+        self, *, guard: sm.Scalar, selected: bool
+    ) -> None:
+        """
+        A trinary guard selects its case only while it is True, where :func:`if_cases`
+        would take Unknown for true as well.
+        """
+        a = sm.FloatVariable(name="a")
+        case_result = sm.Scalar(1)
+        else_result = sm.Scalar(2)
+
+        result = sm.trinary_if_cases(
+            cases=[(guard * a, case_result)], else_result=else_result
+        )
+
+        expected = case_result if selected else else_result
+        assert (
+            result.substitute(old_variables=[a], new_variables=[sm.Scalar(1)]).to_np()
+            == expected.to_np()
+        )
+
     def test_if_one_arg(self):
         inputs = [
             (sm.FloatVariable(name="muh"), sm.FloatVariable(name="muh2")),
@@ -235,9 +346,9 @@ class TestIfElse:
                 if isinstance(if_result, sm.FloatVariable):
                     assert result_type == sm.Scalar
                     continue
-                assert isinstance(
-                    result, result_type
-                ), f"{type(result)} != {result_type} for {if_function}"
+                assert isinstance(result, result_type), (
+                    f"{type(result)} != {result_type} for {if_function}"
+                )
 
     def test_if_two_arg(self):
         inputs = [
@@ -260,14 +371,14 @@ class TestIfElse:
                 if isinstance(if_result, sm.FloatVariable):
                     assert result_type == sm.Scalar
                     continue
-                assert isinstance(
-                    result, result_type
-                ), f"{type(result)} != {result_type} for {if_function}"
+                assert isinstance(result, result_type), (
+                    f"{type(result)} != {result_type} for {if_function}"
+                )
 
     @pytest.mark.parametrize("condition", bool_values)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_greater_zero(self, condition, if_result, else_result):
+    def test_if_greater_zero(self, *, condition, if_result, else_result):
         assert np.allclose(
             sm.if_greater_zero(condition, if_result, else_result),
             float(if_result if condition > 0 else else_result),
@@ -276,7 +387,7 @@ class TestIfElse:
     @pytest.mark.parametrize("condition", bool_values)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_greater_eq_zero(self, condition, if_result, else_result):
+    def test_if_greater_eq_zero(self, *, condition, if_result, else_result):
         assert np.allclose(
             sm.if_greater_eq_zero(condition, if_result, else_result),
             float(if_result if condition >= 0 else else_result),
@@ -285,7 +396,7 @@ class TestIfElse:
     @pytest.mark.parametrize("condition", bool_values)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_eq_zero(self, condition, if_result, else_result):
+    def test_if_eq_zero(self, *, condition, if_result, else_result):
         assert np.allclose(
             sm.if_eq_zero(condition, if_result, else_result),
             float(if_result if condition == 0 else else_result),
@@ -295,7 +406,7 @@ class TestIfElse:
     @pytest.mark.parametrize("b", numbers)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_greater_eq(self, a, b, if_result, else_result):
+    def test_if_greater_eq(self, *, a, b, if_result, else_result):
         assert np.allclose(
             sm.if_greater_eq(a, b, if_result, else_result),
             float(if_result if a >= b else else_result),
@@ -305,7 +416,7 @@ class TestIfElse:
     @pytest.mark.parametrize("b", numbers)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_less_eq(self, a, b, if_result, else_result):
+    def test_if_less_eq(self, *, a, b, if_result, else_result):
         assert np.allclose(
             sm.if_less_eq(a, b, if_result, else_result),
             float(if_result if a <= b else else_result),
@@ -315,7 +426,7 @@ class TestIfElse:
     @pytest.mark.parametrize("b", numbers)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_eq(self, a, b, if_result, else_result):
+    def test_if_eq(self, *, a, b, if_result, else_result):
         assert np.allclose(
             sm.if_eq(a, b, if_result, else_result),
             float(if_result if a == b else else_result),
@@ -325,7 +436,7 @@ class TestIfElse:
     @pytest.mark.parametrize("b", numbers)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_greater(self, a, b, if_result, else_result):
+    def test_if_greater(self, *, a, b, if_result, else_result):
         assert np.allclose(
             sm.if_greater(a, b, if_result, else_result),
             float(if_result if a > b else else_result),
@@ -335,14 +446,14 @@ class TestIfElse:
     @pytest.mark.parametrize("b", numbers)
     @pytest.mark.parametrize("if_result", numbers)
     @pytest.mark.parametrize("else_result", numbers)
-    def test_if_less(self, a, b, if_result, else_result):
+    def test_if_less(self, *, a, b, if_result, else_result):
         assert np.allclose(
             sm.if_less(a, b, if_result, else_result),
             float(if_result if a < b else else_result),
         )
 
     @pytest.mark.parametrize("a", [1, 3, 4, -1, 0.5, -0.5, 0])
-    def test_if_eq_cases(self, a):
+    def test_if_eq_cases(self, *, a):
         b_result_cases = [
             (1, sm.Scalar(1)),
             (3, sm.Scalar(3)),
@@ -363,7 +474,7 @@ class TestIfElse:
         assert np.allclose(actual, expected)
 
     @pytest.mark.parametrize("a", numbers)
-    def test_if_eq_cases_set(self, a):
+    def test_if_eq_cases_set(self, *, a):
         b_result_cases = [
             (1, sm.Scalar(1)),
             (3, sm.Scalar(3)),
@@ -384,7 +495,7 @@ class TestIfElse:
         assert np.allclose(actual, expected)
 
     @pytest.mark.parametrize("a", numbers)
-    def test_if_less_eq_cases(self, a):
+    def test_if_less_eq_cases(self, *, a):
         b_result_cases = [
             (-1, sm.Scalar(-1)),
             (-0.5, sm.Scalar(-0.5)),
@@ -426,7 +537,7 @@ class TestFloatVariable:
         assert expression.free_variables()[1].name == "kikariki"
 
     def test_create_with_resolver(self):
-        v = sm.FloatVariable.create_with_resolver("v", lambda: 42)
+        v = sm.FloatVariable.create_with_resolver(name="v", resolver=lambda: 42)
         assert v.evaluate() == 42
 
     def test_float_casting(self):
@@ -451,9 +562,9 @@ class TestFloatVariable:
             result = op(s1, s2)
             assert isinstance(result, sm.Scalar), f"{op.__name__} result is not Scalar"
             f = result.compile()
-            assert f.call_with_kwargs(muh=1, kikariki=2) == op(
-                1, 2
-            ), f"{op.__name__} result is wrong"
+            assert f.call_with_kwargs(muh=1, kikariki=2) == op(1, 2), (
+                f"{op.__name__} result is wrong"
+            )
 
     def test_comparison_operations(self):
         operators = [
@@ -469,9 +580,9 @@ class TestFloatVariable:
             result = op(s1, s2)
             assert isinstance(result, sm.Scalar), f"{op.__name__} result is not Scalar"
             f = result.compile()
-            assert f.call_with_kwargs(muh=1, kikariki=2) == op(
-                1, 2
-            ), f"{op.__name__} result is wrong"
+            assert f.call_with_kwargs(muh=1, kikariki=2) == op(1, 2), (
+                f"{op.__name__} result is wrong"
+            )
 
     def test_back_reference(self):
         v = sm.FloatVariable(name="asdf")
@@ -486,7 +597,7 @@ class TestFloatVariable:
         v1 = sm.FloatVariable(name="asdf")
         v2 = sm.FloatVariable(name="asdf")
         e = v1 + v2
-        e.compile(VariableParameters.from_lists([v1, v2]))
+        e.compile(parameters=VariableParameters.from_lists([v1, v2]))
 
     def test_from_name(self):
         s = sm.FloatVariable(name="muh")
@@ -522,19 +633,18 @@ class TestFloatVariable:
         """
         v = sm.FloatVariable(name="v")
 
-        substituted = v.substitute([v], [sm.Scalar(42)])
+        substituted = v.substitute(old_variables=[v], new_variables=[sm.Scalar(42)])
 
         assert substituted.to_np() == 42
         assert v.free_variables() == [v]
 
 
 class TestExpression:
-
     def test_free_variables(self):
         m = sm.Vector(v := sm.create_float_variables(["a", "b", "c", "d"]))
         assert len(m.free_variables()) == 4
         a = sm.FloatVariable(name="a")
-        assert a.equivalent(a.free_variables()[0])
+        assert a.equivalent(other=a.free_variables()[0])
 
     def test_constant_expression_pins_no_free_variables(self):
         assert sm.Vector([1, 2, 3]).pinned_free_variables == []
@@ -547,7 +657,7 @@ class TestExpression:
         assert [variable.name for variable in pinned] == ["a", "b"]
 
     def test_pretty_str(self):
-        e = sm.Matrix.eye(4)
+        e = sm.Matrix.eye(size=4)
         e.pretty_str()
 
     def test_to_np(self):
@@ -568,11 +678,11 @@ class TestExpression:
         a = sm.FloatVariable(name="a")
         b = sm.FloatVariable(name="b")
         m = sm.Vector(data=[a + b, a**2, b**2])
-        jac = m.jacobian([a, b])
+        jac = m.jacobian(variables=[a, b])
         expected = sm.Matrix([[1, 1], [2 * a, 0], [0, 2 * b]])
         for i in range(expected.shape[0]):
             for j in range(expected.shape[1]):
-                assert jac[i, j].equivalent(expected[i, j])
+                assert jac[i, j].equivalent(other=expected[i, j])
 
     def test_jacobian_dot(self):
         a, ad, b, bd = 1.0, 2.0, 3.0, 4.0
@@ -592,7 +702,7 @@ class TestExpression:
                 -a_s * sm.cos(b_s),
             ]
         )
-        jac = m.jacobian_dot([a_s, b_s], [ad_s, bd_s])
+        jac = m.jacobian_dot(variables=[a_s, b_s], variables_dot=[ad_s, bd_s])
         expected_expr = sm.Matrix(
             data=[
                 [
@@ -629,7 +739,11 @@ class TestExpression:
                 -a_s * sm.cos(b_s),
             ]
         )
-        jac = m.jacobian_ddot([a_s, b_s], [ad_s, bd_s], [add_s, bdd_s])
+        jac = m.jacobian_ddot(
+            variables=[a_s, b_s],
+            variables_dot=[ad_s, bd_s],
+            variables_ddot=[add_s, bdd_s],
+        )
         expected = np.array(
             [
                 [
@@ -660,7 +774,11 @@ class TestExpression:
         bd_s = sm.FloatVariable(name="bd")
         bdd_s = sm.FloatVariable(name="bdd")
         m = a_s * b_s**2
-        jac = m.second_order_total_derivative([a_s, b_s], [ad_s, bd_s], [add_s, bdd_s])
+        jac = m.second_order_total_derivative(
+            variables=[a_s, b_s],
+            variables_dot=[ad_s, bd_s],
+            variables_ddot=[add_s, bdd_s],
+        )
         actual = jac.compile().call_with_kwargs(**kwargs)
         expected = bdd * 2 * a + 2 * ad * bd * 2 * b
         assert np.allclose(actual, expected)
@@ -689,7 +807,9 @@ class TestExpression:
         cdd_s = sm.FloatVariable(name="cdd")
         m = data = a_s * b_s**2 * c_s**3
         jac = m.second_order_total_derivative(
-            [a_s, b_s, c_s], [ad_s, bd_s, cd_s], [add_s, bdd_s, cdd_s]
+            variables=[a_s, b_s, c_s],
+            variables_dot=[ad_s, bd_s, cd_s],
+            variables_ddot=[add_s, bdd_s, cdd_s],
         )
         actual = jac.compile().call_with_kwargs(**kwargs)
         expected = (
@@ -703,31 +823,73 @@ class TestExpression:
 
 
 class TestSymbolicType:
+    """
+    Behaviour every symbolic type shares, whatever its shape.
+    """
+
     def test_substitute(self):
+        """
+        Substituting variables replaces them throughout the expression.
+        """
         a, b, c, d = sm.create_float_variables(["a", "b", "c", "d"])
         expr = a * b
-        expr_substituted = expr.substitute([a, b], [c, d])
+        expr_substituted = expr.substitute(old_variables=[a, b], new_variables=[c, d])
         assert expr_substituted == c * d
 
     def test_create_variables(self):
+        """
+        Variables created from names carry those names.
+        """
         result = sm.create_float_variables(["a", "b", "c"])
         assert str(result[0]) == "a"
         assert str(result[1]) == "b"
         assert str(result[2]) == "c"
 
     def test_create_variables2(self):
+        """
+        Variables created from a count are numbered from zero.
+        """
         result = sm.create_float_variables(3)
         assert str(result[0]) == "s_0"
         assert str(result[1]) == "s_1"
         assert str(result[2]) == "s_2"
 
     def test_to_str(self):
+        """
+        The readable form shows the expression in casadi's notation.
+        """
         expr = sm.FloatVariable(name="muh") * sm.Scalar(23)
         assert expr.pretty_str() == [["(23*muh)"]]
 
+    def test_a_scalar_hashes_as_its_casadi_expression(self):
+        """
+        A scalar keeps the hash of the casadi expression it wraps.
+        """
+        scalar = SymbolicTypeWithInheritedHash.from_casadi_sx(casadi_sx=ca.SX(2))
+        assert hash(scalar) == hash(scalar.casadi_sx)
+
+    def test_hashing_a_non_scalar_raises_a_type_error(self):
+        """
+        Hashing an expression of more than one entry raises the error for it.
+        """
+        column = SymbolicTypeWithInheritedHash.from_casadi_sx(
+            casadi_sx=ca.SX([1, 0, 0])
+        )
+        with pytest.raises(UnhashableExpressionError):
+            hash(column)
+
+    def test_a_non_scalar_is_not_hashable(self):
+        """
+        A check for hashability, which expects a :class:`TypeError`, reports an
+        expression of more than one entry as not hashable.
+        """
+        column = SymbolicTypeWithInheritedHash.from_casadi_sx(
+            casadi_sx=ca.SX([1, 0, 0])
+        )
+        assert not is_hashable(column)
+
 
 class TestCompiledFunction:
-
     def test_empty_compiled_function(self):
         expected = np.array([1, 2, 3])
         e = sm.Vector(expected)
@@ -741,6 +903,12 @@ class TestCompiledFunction:
         f = e.compile(sparse=True)
         assert np.allclose(f().toarray(), expected)
         assert np.allclose(f(np.array([], dtype=float)).toarray(), expected)
+
+    def test_function_of_an_expression_without_entries_has_a_representation(
+        self,
+    ) -> None:
+        function = sm.Matrix().compile()
+        assert repr(function.expression) in repr(function)
 
     def test_dense(self):
         s1_value = 420.0
@@ -803,7 +971,7 @@ class TestCompiledFunction:
         variables = sm.create_float_variables([str(i) for i in range(size)])
         expr = sm.sum(*variables)
         f = expr.compile()
-        f.bind_args_to_memory_view(0, data)
+        f.bind_args_to_memory_view(arg_idx=0, numpy_array=data)
         for i in range(10):
             np.copyto(data, np.random.rand(size))
             assert np.isclose(f.evaluate(), np.sum(data))
@@ -832,7 +1000,7 @@ class TestCompiledFunction:
         datas = []
         for i in range(n):
             datas.append(np.random.rand(element_size))
-            f.bind_args_to_memory_view(i, datas[i])
+            f.bind_args_to_memory_view(arg_idx=i, numpy_array=datas[i])
         for i in range(100):
             for i in range(n):
                 datas[i][:] = np.random.rand(element_size)
@@ -908,6 +1076,7 @@ class TestScalar:
             operator.lt,
             operator.le,
             operator.eq,
+            operator.ne,
             operator.ge,
             operator.gt,
         ]
@@ -918,8 +1087,8 @@ class TestScalar:
         for f in operators:
             r_np = f(f1, f2)
             r_cas = f(e1_cas, e2_cas)
-            assert isinstance(r_cas, bool), f"{f.__name__} result is not Scalar"
-            assert r_np == r_cas, f"{f.__name__} result is wrong"
+            assert isinstance(r_cas, sm.Scalar), f"{f.__name__} result is not Scalar"
+            assert bool(r_cas) == r_np, f"{f.__name__} result is wrong"
 
     def test_comparisons_with_variable(self):
         operators = [
@@ -960,22 +1129,24 @@ class TestScalar:
 
     def test_save_division(self):
         f1, f2 = 23, 69
-        assert np.allclose(sm.Scalar(f1).safe_division(f2), f1 / f2 if f2 != 0 else 0)
+        assert np.allclose(
+            sm.Scalar(f1).safe_division(other=f2), f1 / f2 if f2 != 0 else 0
+        )
 
     @pytest.mark.parametrize("x", [-23, 0, 23])
-    def test_sign(self, x):
+    def test_sign(self, *, x):
         actual = sm.sign(x)
         assert np.allclose(actual, np.sign(x))
         assert isinstance(actual, sm.Scalar)
 
     @pytest.mark.parametrize("x", [-23, 0, 23])
-    def test_exp(self, x):
+    def test_exp(self, *, x):
         actual = sm.exp(x)
         assert np.allclose(actual, np.exp(x))
         assert isinstance(actual, sm.Scalar)
 
     @pytest.mark.parametrize("x", [-23, 0, 23])
-    def test_log(self, x):
+    def test_log(self, *, x):
         actual = sm.log(x)
         assert np.allclose(actual, np.log(x), equal_nan=True)
         assert isinstance(actual, sm.Scalar)
@@ -983,7 +1154,7 @@ class TestScalar:
     @pytest.mark.parametrize("x", numbers)
     @pytest.mark.parametrize("lower_limit", numbers)
     @pytest.mark.parametrize("upper_limit", numbers)
-    def test_limit(self, x, lower_limit, upper_limit):
+    def test_limit(self, *, x, lower_limit, upper_limit):
         r1 = sm.limit(sm.Scalar(x), lower_limit, upper_limit)
         r2 = max(lower_limit, min(upper_limit, x))
         assert isinstance(r1, sm.Scalar)
@@ -991,14 +1162,14 @@ class TestScalar:
 
     @pytest.mark.parametrize("a", numbers)
     @pytest.mark.parametrize("b", numbers)
-    def test_fmod(self, a, b):
+    def test_fmod(self, *, a, b):
         ref_r = np.fmod(a, b)
         actual = sm.fmod(sm.Scalar(a), sm.Scalar(b))
         assert isinstance(actual, sm.Scalar)
         assert np.allclose(actual, ref_r, equal_nan=True)
 
     @pytest.mark.parametrize("a", numbers)
-    def test_normalize_angle_positive(self, a):
+    def test_normalize_angle_positive(self, *, a):
         expected = normalize_angle_positive(a)
         actual = sm.normalize_angle_positive(a)
         assert isinstance(actual, sm.Scalar)
@@ -1008,7 +1179,7 @@ class TestScalar:
         )
 
     @pytest.mark.parametrize("a", numbers)
-    def test_normalize_angle(self, a):
+    def test_normalize_angle(self, *, a):
         ref_r = normalize_angle(a)
         actual = sm.normalize_angle(a)
         assert isinstance(actual, sm.Scalar)
@@ -1016,7 +1187,7 @@ class TestScalar:
 
     @pytest.mark.parametrize("angle1", numbers)
     @pytest.mark.parametrize("angle2", numbers)
-    def test_shorted_angular_distance(self, angle1, angle2):
+    def test_shorted_angular_distance(self, *, angle1, angle2):
         try:
             expected = shortest_angular_distance(angle1, angle2)
         except ValueError:
@@ -1103,17 +1274,17 @@ class TestVector:
             expected = op(v1_np, s1_float)
             assert isinstance(result, sm.Vector), f"{op.__name__} result is not Vector"
             assert np.allclose(result, expected), f"{op.__name__} result is wrong"
-            assert (
-                result.shape[0] == expected.shape[0]
-            ), f"{op.__name__} result shape is wrong"
+            assert result.shape[0] == expected.shape[0], (
+                f"{op.__name__} result shape is wrong"
+            )
 
             result = op(v1, v2)
             expected = op(v1_np, v2_np)
             assert isinstance(result, sm.Vector), f"{op.__name__} result is not Vector"
             assert np.allclose(result, expected), f"{op.__name__} result is wrong"
-            assert (
-                result.shape[0] == expected.shape[0]
-            ), f"{op.__name__} result shape is wrong"
+            assert result.shape[0] == expected.shape[0], (
+                f"{op.__name__} result shape is wrong"
+            )
 
     def test_abs(self):
         f1 = sm.Vector([1, -1, -23])
@@ -1201,7 +1372,7 @@ class TestVector:
             expected = [0, 0, 0]
         else:
             expected = v / np.linalg.norm(v) * a
-        actual = sm.Vector(data=v).scale(a)
+        actual = sm.Vector(data=v).scale(a=a)
         assert np.allclose(actual, expected)
 
     def test_filter1(self):
@@ -1217,7 +1388,7 @@ class TestVector:
     def test_concatenate(self):
         v1 = sm.Vector([1, 2, 3])
         v2 = sm.Vector([4, 5, 6, 7])
-        assert np.allclose(v1.concatenate(v2), np.concatenate([v1, v2]))
+        assert np.allclose(v1.concatenate(other=v2), np.concatenate([v1, v2]))
 
     def test_concatenate2(self):
         v1 = sm.Vector([1, 2, 3])
@@ -1281,15 +1452,15 @@ class TestSubstitutionCache:
 
 class TestMatrix:
     @pytest.mark.parametrize("shape", [(1, 1), (1, 5), (3, 1), (2, 3), (4, 4)])
-    def test_create_filled_with_variables(self, shape):
-        m = sm.Matrix.create_filled_with_variables(shape, name="muh")
+    def test_create_filled_with_variables(self, *, shape):
+        m = sm.Matrix.create_filled_with_variables(shape=shape, name="muh")
         for row in range(shape[0]):
             for col in range(shape[1]):
                 v = m[row, col].free_variables()[0]
                 assert v.name == f"muh_{row}_{col}"
 
     @pytest.mark.parametrize("shape", [(1, 1), (1, 5), (3, 1), (2, 3), (4, 4)])
-    def test_matrix_flatten_matches_numpy(self, shape):
+    def test_matrix_flatten_matches_numpy(self, *, shape):
         data = np.arange(shape[0] * shape[1]).reshape(shape)
         m = sm.Matrix(data)
         flat = m.flatten()
@@ -1300,7 +1471,7 @@ class TestMatrix:
         assert flat.shape == (np_flat.size, 1)
 
     @pytest.mark.parametrize("sparse_format", ["csc", "csr", "coo"])
-    def test_from_sparse_matrix(self, sparse_format):
+    def test_from_sparse_matrix(self, *, sparse_format):
         dense = np.array([[1.0, 0.0, 2.0], [0.0, 3.0, 0.0], [4.0, 0.0, 5.0]])
         matrix = sp.coo_matrix(dense).asformat(sparse_format)
         sm_matrix = sm.Matrix(matrix)
@@ -1332,11 +1503,11 @@ class TestMatrix:
 
     def test_reshape(self):
         np_arr = np.arange(16)
-        mat = sm.Matrix(np_arr).reshape((4, 4))
+        mat = sm.Matrix(np_arr).reshape(new_shape=(4, 4))
         assert mat.shape == (4, 4)
         assert np.allclose(mat.to_np(), np_arr.reshape((4, 4)))
 
-        mat = sm.Matrix(np_arr).reshape((2, 8))
+        mat = sm.Matrix(np_arr).reshape(new_shape=(2, 8))
         assert mat.shape == (2, 8)
         assert np.allclose(mat.to_np(), np_arr.reshape((2, 8)))
 
@@ -1379,7 +1550,7 @@ class TestMatrix:
     def test_vstack(self):
         m = np.eye(4)
         m1 = sm.Matrix(m)
-        e = sm.Matrix.vstack([m1, m1])
+        e = sm.Matrix.vstack(list_of_matrices=[m1, m1])
         r1 = e
         r2 = np.vstack([m, m])
         assert isinstance(r1, sm.Matrix)
@@ -1388,7 +1559,7 @@ class TestMatrix:
     def test_vstack_empty(self):
         m = np.eye(0)
         m1 = sm.Matrix(data=m)
-        e = sm.Matrix.vstack([m1, m1])
+        e = sm.Matrix.vstack(list_of_matrices=[m1, m1])
         r1 = e
         r2 = np.vstack([m, m])
         assert isinstance(r1, sm.Matrix)
@@ -1397,7 +1568,7 @@ class TestMatrix:
     def test_hstack(self):
         m = np.eye(4)
         m1 = sm.Matrix(data=m)
-        e = sm.Matrix.hstack([m1, m1])
+        e = sm.Matrix.hstack(list_of_matrices=[m1, m1])
         r1 = e
         r2 = np.hstack([m, m])
         assert isinstance(r1, sm.Matrix)
@@ -1406,7 +1577,7 @@ class TestMatrix:
     def test_hstack_empty(self):
         m = np.eye(0)
         m1 = sm.Matrix(data=m)
-        e = sm.Matrix.hstack([m1, m1])
+        e = sm.Matrix.hstack(list_of_matrices=[m1, m1])
         r1 = e
         r2 = np.hstack([m, m])
         assert isinstance(r1, sm.Matrix)
@@ -1419,7 +1590,7 @@ class TestMatrix:
         m1_e = sm.Matrix(data=m1_np)
         m2_e = sm.Matrix(data=m2_np)
         m3_e = sm.Matrix(data=m3_np)
-        e = sm.Matrix.diag_stack([m1_e, m2_e, m3_e])
+        e = sm.Matrix.diag_stack(list_of_matrices=[m1_e, m2_e, m3_e])
         assert isinstance(e, sm.Matrix)
         r1 = e
         combined_matrix = np.zeros((4 + 2 + 5, 4 + 5 + 3))
@@ -1481,39 +1652,39 @@ class TestMatrix:
             result = op(m1, s1)
             assert isinstance(result, sm.Matrix), f"{op.__name__} result is not Matrix"
             assert np.allclose(result, expected), f"{op.__name__} result is wrong"
-            assert np.allclose(
-                result, op(m1, s1_float)
-            ), f"{op.__name__} result is wrong"
-            assert (
-                result.shape == expected.shape
-            ), f"{op.__name__} result shape is wrong"
+            assert np.allclose(result, op(m1, s1_float)), (
+                f"{op.__name__} result is wrong"
+            )
+            assert result.shape == expected.shape, (
+                f"{op.__name__} result shape is wrong"
+            )
 
             expected = op(m1_np, v1_np)
             result = op(m1, v1)
             assert isinstance(result, sm.Matrix), f"{op.__name__} result is not Matrix"
             assert np.allclose(result, expected), f"{op.__name__} result is wrong"
-            assert (
-                result.shape == expected.shape
-            ), f"{op.__name__} result shape is wrong"
+            assert result.shape == expected.shape, (
+                f"{op.__name__} result shape is wrong"
+            )
 
             expected = op(m1_np, v1_np)
             result = op(m1, v1)
             assert isinstance(result, sm.Matrix), f"{op.__name__} result is not Matrix"
             assert np.allclose(result, expected), f"{op.__name__} result is wrong"
-            assert (
-                result.shape == expected.shape
-            ), f"{op.__name__} result shape is wrong"
+            assert result.shape == expected.shape, (
+                f"{op.__name__} result shape is wrong"
+            )
 
             expected = op(m1_np, m2_np)
             result = op(m1, m2)
             assert isinstance(result, sm.Matrix), f"{op.__name__} result is not Matrix"
             assert np.allclose(result, expected), f"{op.__name__} result is wrong"
-            assert (
-                result.shape == expected.shape
-            ), f"{op.__name__} result shape is wrong"
+            assert result.shape == expected.shape, (
+                f"{op.__name__} result shape is wrong"
+            )
 
     def test_abs(self):
-        f1 = -sm.Matrix.eye(3)
+        f1 = -sm.Matrix.eye(size=3)
         assert np.allclose(abs(f1), abs(f1.to_np()))
         assert isinstance(abs(f1), sm.Matrix)
 
@@ -1561,7 +1732,7 @@ class TestMatrix:
     def test_kron(self):
         m1_np = np.eye(4)
         m1_cas = sm.Matrix(m1_np)
-        r1 = m1_cas.kron(m1_cas)
+        r1 = m1_cas.kron(other=m1_cas)
         r2 = np.kron(m1_np, m1_np)
         assert np.allclose(r1, r2)
         assert isinstance(r1, sm.Matrix)
@@ -1569,7 +1740,7 @@ class TestMatrix:
     def test_diag(self):
         v_np = np.arange(23)
         m_np = np.diag(v_np)
-        m_cas = sm.Matrix.diag(v_np)
+        m_cas = sm.Matrix.diag(args=v_np)
         assert np.allclose(m_cas, m_np)
         assert isinstance(m_cas, sm.Matrix)
 
@@ -1583,3 +1754,161 @@ class TestMatrix:
         assert isinstance(m[2, :], sm.Vector)
         assert np.allclose(m[:2, :2], np.eye(2))
         assert isinstance(m[:2, :2], sm.Matrix)
+
+
+# %% JSON serialization
+
+
+def scalar_expression(x: sm.FloatVariable, y: sm.FloatVariable) -> sm.Scalar:
+    return sm.sin(x) * y + x
+
+
+def vector_expression(x: sm.FloatVariable, y: sm.FloatVariable) -> sm.Vector:
+    return sm.Vector([x, y * 2, 3])
+
+
+def matrix_expression(x: sm.FloatVariable, y: sm.FloatVariable) -> sm.Matrix:
+    return sm.Matrix([[x, y], [x * y, 1]])
+
+
+class TestJsonSerialization:
+    """
+    A symbolic math value round-trips through JSON, and the variables it depends on come
+    back as the variables they were while those still exist.
+    """
+
+    @pytest.mark.parametrize(
+        "constant",
+        [
+            sm.Scalar(1.5),
+            sm.Vector([1, 2]),
+            sm.Matrix([[1, 2], [3, 4]]),
+            sm.Matrix([[1, 2]]),
+        ],
+        ids=["scalar", "vector", "matrix", "row matrix"],
+    )
+    def test_constant_round_trips(self, *, constant: sm.SymbolicMathType):
+        constant_copy = from_json(to_json(constant))
+
+        assert type(constant_copy) is type(constant)
+        assert constant_copy.shape == constant.shape
+        assert np.array_equal(constant_copy.to_np(), constant.to_np())
+
+    def test_variable_round_trips_to_itself(self):
+        variable = sm.FloatVariable("x")
+
+        assert from_json(to_json(variable)) is variable
+
+    def test_variable_without_a_living_original_is_recreated(self):
+        variable = sm.FloatVariable("x")
+        variable_json = to_json(variable)
+        variable_id, variable_name = variable.id, variable.name
+        del variable
+        gc.collect()
+
+        variable_copy = from_json(variable_json)
+
+        assert type(variable_copy) is sm.FloatVariable
+        assert variable_copy.id == variable_id
+        assert variable_copy.name == variable_name
+
+    @pytest.mark.parametrize(
+        "build_expression",
+        [scalar_expression, vector_expression, matrix_expression],
+        ids=["scalar", "vector", "matrix"],
+    )
+    def test_expression_round_trips(self, *, build_expression):
+        x, y = sm.FloatVariable("x"), sm.FloatVariable("y")
+        expression = build_expression(x, y)
+        values = [2.0, 3.0]
+
+        expression_copy = from_json(to_json(expression))
+
+        assert type(expression_copy) is type(expression)
+        assert expression_copy.shape == expression.shape
+        assert {id(variable) for variable in expression_copy.free_variables()} == {
+            id(x),
+            id(y),
+        }
+        assert np.array_equal(
+            expression_copy.substitute(
+                old_variables=[x, y], new_variables=values
+            ).to_np(),
+            expression.substitute(old_variables=[x, y], new_variables=values).to_np(),
+        )
+
+    def test_variables_sharing_a_name_stay_apart(self):
+        first, second = sm.FloatVariable("x"), sm.FloatVariable("x")
+        expression = sm.Vector([first, second * 2])
+        values = [2.0, 3.0]
+
+        expression_copy = from_json(to_json(expression))
+
+        assert np.array_equal(
+            expression_copy.substitute(
+                old_variables=[first, second], new_variables=values
+            ).to_np(),
+            expression.substitute(
+                old_variables=[first, second], new_variables=values
+            ).to_np(),
+        )
+
+    def test_recreated_variables_sharing_a_name_stay_apart(self):
+        first, second = sm.FloatVariable("x"), sm.FloatVariable("x")
+        expression = sm.Vector([first, second * 2])
+        values = [2.0, 3.0]
+        expected = expression.substitute(
+            old_variables=[first, second], new_variables=values
+        ).to_np()
+        expression_json = to_json(expression)
+        first_id, second_id = first.id, second.id
+        originals = [weakref.ref(first), weakref.ref(second)]
+        del first, second, expression
+        gc.collect()
+        assert [original() for original in originals] == [None, None]
+
+        expression_copy = from_json(expression_json)
+
+        variables_by_id = {
+            variable.id: variable for variable in expression_copy.free_variables()
+        }
+        assert variables_by_id.keys() == {first_id, second_id}
+        assert np.array_equal(
+            expression_copy.substitute(
+                old_variables=[variables_by_id[first_id], variables_by_id[second_id]],
+                new_variables=values,
+            ).to_np(),
+            expected,
+        )
+
+    def test_expression_keeps_shared_subexpressions(self):
+        x, y = sm.FloatVariable("x"), sm.FloatVariable("y")
+        shared = x * y
+        expression = sm.Vector([sm.sin(shared), sm.cos(shared)])
+
+        expression_copy = from_json(to_json(expression))
+
+        assert ca.n_nodes(expression_copy.casadi_sx) == ca.n_nodes(expression.casadi_sx)
+
+    def test_variable_shared_by_two_expressions_is_deserialized_once(self):
+        variable = sm.FloatVariable("x")
+        expressions_json = to_json([variable + 1, variable * 2])
+        del variable
+        gc.collect()
+
+        first, second = from_json(
+            expressions_json, **sm.FloatVariableTracker().create_kwargs()
+        )
+
+        (first_variable,) = first.free_variables()
+        (second_variable,) = second.free_variables()
+        assert first_variable is second_variable
+
+    def test_error_holding_a_variable_round_trips_it(self):
+        variable = sm.FloatVariable("x")
+
+        error_copy = from_json(
+            to_json(FloatVariableAlreadyHasResolveError(variable=variable))
+        )
+
+        assert error_copy.variable is variable

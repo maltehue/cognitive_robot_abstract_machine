@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import timedelta
 import threading
 import time
 from dataclasses import dataclass
@@ -14,10 +15,10 @@ from trimesh.visual.material import SimpleMaterial
 from semantic_digital_twin.adapters.mesh import STLParser
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.exceptions import ParsingError
+from semantic_digital_twin.exceptions import ParsingError, SimulationNotStartedError
 from semantic_digital_twin.robots.hsrb import HSRB
 from semantic_digital_twin.robots.tracy import Tracy
-from semantic_digital_twin.spatial_types.spatial_types import (
+from krrood_spatial_math.spatial_types import (
     HomogeneousTransformationMatrix,
     Vector3,
     Pose,
@@ -28,25 +29,38 @@ from semantic_digital_twin.world_description.connections import (
     FixedConnection,
     RevoluteConnection,
 )
-from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
+from semantic_digital_twin.world_description.degree_of_freedom import (
+    DegreeOfFreedom,
+    DegreeOfFreedomLimits,
+)
+from semantic_digital_twin.world_description.contact import ContactParameters
 from semantic_digital_twin.world_description.geometry import (
     Box,
     Scale,
     Color,
     Cylinder,
     Mesh,
+    MeshFileFormat,
     Texture,
 )
+from semantic_digital_twin.world_description.inertial_properties import Inertial
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
-from semantic_digital_twin.world_description.world_entity import Body, Region, Actuator
+from semantic_digital_twin.world_description.world_entity import (
+    Body,
+    Region,
+    Actuator,
+    GravityCompensation,
+)
 
 from physics_simulators.mujoco_simulator import MujocoSimulator
 from physics_simulators.base_simulator import SimulatorState
 from semantic_digital_twin.adapters.mjcf import MJCFParser
 from semantic_digital_twin.adapters.multi_sim import (
+    ContactCategories,
     MujocoSim,
     MujocoActuator,
     MujocoBuilder,
+    MujocoGeom,
     MujocoLight,
     MujocoSynchronizer,
 )
@@ -104,17 +118,36 @@ def stop_multisim_if_running(multi_sim: MujocoSim) -> None:
 
 @pytest.fixture
 def test_urdf_1_world():
-    return URDFParser.from_file(file_path=TEST_URDF_1).parse()
+    return URDFParser.from_file(file_path=TEST_URDF_1).create_world()
 
 
 @pytest.fixture
 def test_mjcf_1_world():
-    return MJCFParser(TEST_MJCF_1).parse()
+    return MJCFParser(TEST_MJCF_1).create_world()
 
 
 @pytest.fixture
 def test_mjcf_2_world():
-    return MJCFParser(TEST_MJCF_2).parse()
+    return MJCFParser(TEST_MJCF_2).create_world()
+
+
+def test_every_simulation_saves_its_world_to_a_file_of_its_own(tmp_path):
+    """
+    Simulations built at the same time, e.g. by parallel test workers, never overwrite
+    each other's scene, and a temporary scene goes away with its simulation.
+    """
+    first = MujocoSim(world=World(), headless=True)
+    second = MujocoSim(world=World(), headless=True)
+    chosen = MujocoSim(world=World(), headless=True, file_path=tmp_path / "chosen.xml")
+
+    assert first.file_path != second.file_path
+    assert first.file_path.is_file() and second.file_path.is_file()
+    assert chosen.file_path == tmp_path / "chosen.xml"
+    assert chosen.file_path.is_file()
+
+    first_scene_directory = first.file_path.parent
+    first._scene_directory.cleanup()
+    assert not first_scene_directory.exists()
 
 
 def test_empty_multi_sim_in_5s():
@@ -123,7 +156,7 @@ def test_empty_multi_sim_in_5s():
 
     try:
         assert isinstance(multi_sim.simulator, MujocoSimulator)
-        assert multi_sim.simulator.file_path == MujocoSim.default_file_path
+        assert multi_sim.simulator.file_path == str(multi_sim.file_path)
         assert multi_sim.simulator.headless is headless
         assert multi_sim.simulator.step_size == STEP_SIZE
 
@@ -142,7 +175,7 @@ def test_world_multi_sim_in_5s(test_urdf_1_world):
 
     try:
         assert isinstance(multi_sim.simulator, MujocoSimulator)
-        assert multi_sim.simulator.file_path == MujocoSim.default_file_path
+        assert multi_sim.simulator.file_path == str(multi_sim.file_path)
         assert multi_sim.simulator.headless is headless
         assert multi_sim.simulator.step_size == STEP_SIZE
 
@@ -158,7 +191,7 @@ def test_world_multi_sim_in_5s(test_urdf_1_world):
 
 def test_apartment_multi_sim_in_5s():
     try:
-        test_urdf_2_world = URDFParser.from_file(file_path=TEST_URDF_2).parse()
+        test_urdf_2_world = URDFParser.from_file(file_path=TEST_URDF_2).create_world()
     except ParsingError:
         pytest.skip("Skipping HSRB krrood_test due to URDF parsing error.")
 
@@ -166,7 +199,7 @@ def test_apartment_multi_sim_in_5s():
 
     try:
         assert isinstance(multi_sim.simulator, MujocoSimulator)
-        assert multi_sim.simulator.file_path == MujocoSim.default_file_path
+        assert multi_sim.simulator.file_path == str(multi_sim.file_path)
         assert multi_sim.simulator.headless is headless
         assert multi_sim.simulator.step_size == STEP_SIZE
 
@@ -185,7 +218,7 @@ def test_world_multi_sim_with_change(test_urdf_1_world):
 
     try:
         assert isinstance(multi_sim.simulator, MujocoSimulator)
-        assert multi_sim.simulator.file_path == MujocoSim.default_file_path
+        assert multi_sim.simulator.file_path == str(multi_sim.file_path)
         assert multi_sim.simulator.headless is headless
         assert multi_sim.simulator.step_size == STEP_SIZE
 
@@ -201,7 +234,7 @@ def test_world_multi_sim_with_change(test_urdf_1_world):
         box = Box(
             origin=box_origin,
             scale=Scale(1.0, 1.5, 0.5),
-            color=Color(1.0, 0.0, 0.0, 1.0),
+            color=Color.from_rgba(red=1.0, green=0.0, blue=0.0, opacity=1.0),
         )
         new_body.collision = ShapeCollection([box], reference_frame=new_body)
 
@@ -224,7 +257,7 @@ def test_world_multi_sim_with_change(test_urdf_1_world):
         region_box = Box(
             scale=Scale(0.1, 0.5, 0.2),
             origin=HomogeneousTransformationMatrix.from_xyz_rpy(reference_frame=region),
-            color=Color(0.0, 1.0, 0.0, 0.8),
+            color=Color.from_rgba(red=0.0, green=1.0, blue=0.0, opacity=0.8),
         )
         region.area = ShapeCollection([region_box], reference_frame=region)
 
@@ -251,7 +284,7 @@ def test_world_multi_sim_with_change(test_urdf_1_world):
         actuator = Actuator()
         dof = test_urdf_1_world.get_degree_of_freedom_by_name(name="r_joint_1")
         actuator.add_dof(dof=dof)
-        actuator.simulator_additional_properties.append(
+        actuator.add_simulator_property(
             MujocoActuator(
                 dynamics_type=mujoco.mjtDyn.mjDYN_NONE,
                 dynamics_parameters=[T_const] + [0.0] * 9,
@@ -432,7 +465,7 @@ def test_builder_writes_a_light_attached_to_a_body(tmp_path):
     with world.modify_world():
         root = Body(name=PrefixedName("root"))
         world.add_body(root)
-        root.simulator_additional_properties.append(
+        root.add_simulator_property(
             MujocoLight(
                 name="overview_light",
                 body=root,
@@ -510,9 +543,236 @@ def test_builder_assigns_material_to_a_textured_primitive_shape(tmp_path):
     assert texture.file == str(texture_file)
 
 
+def test_builder_writes_a_geoms_contact_bitmasks(tmp_path):
+    """
+    A shape's ``MujocoGeom.contact_type``/``contact_affinity`` must reach the built
+    geom, so two geoms can be kept from ever generating a contact (a robot's own
+    overlapping links) while each still collides with everything else.
+    """
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        box_shape = Box(scale=Scale(1, 1, 1))
+        box_shape.add_simulator_property(
+            MujocoGeom(
+                contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
+            )
+        )
+        link = Body(
+            name=PrefixedName("link"),
+            visual=ShapeCollection([box_shape]),
+            collision=ShapeCollection([box_shape]),
+        )
+        world.add_kinematic_structure_entity(link)
+        world.add_connection(FixedConnection(parent=root, child=link))
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    [geom] = [
+        geom
+        for body in builder.spec.bodies
+        for geom in body.geoms
+        if body.name == "link"
+    ]
+    assert geom.contype == 2
+    assert geom.conaffinity == 4
+
+
+def _world_with_one_cylinder(cylinder: Cylinder) -> World:
+    """
+    A world whose only link is shaped as ``cylinder``.
+    """
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        link = Body(name=PrefixedName("link"), collision=ShapeCollection([cylinder]))
+        world.add_kinematic_structure_entity(link)
+        world.add_connection(FixedConnection(parent=root, child=link))
+    return world
+
+
+def test_builder_sizes_a_cylinder_by_its_radius_and_half_its_height(tmp_path):
+    """
+    MuJoCo sizes a cylinder by its radius and half its length, so a cylinder written
+    with its whole height stands twice as tall in the simulation as in the world.
+    """
+    cylinder = Cylinder(width=0.028, height=0.03)
+    builder = MujocoBuilder()
+    builder.build_world(
+        world=_world_with_one_cylinder(cylinder), file_path=str(tmp_path / "scene.xml")
+    )
+
+    [geom] = [
+        geom
+        for body in builder.spec.bodies
+        for geom in body.geoms
+        if body.name == "link"
+    ]
+    assert list(geom.size[:2]) == [cylinder.radius, cylinder.height / 2]
+
+
+def test_a_cylinder_keeps_its_size_through_a_round_trip(tmp_path):
+    cylinder = Cylinder(width=0.028, height=0.03)
+    builder = MujocoBuilder()
+    builder.build_world(
+        world=_world_with_one_cylinder(cylinder), file_path=str(tmp_path / "scene.xml")
+    )
+
+    parsed_world = MJCFParser(str(tmp_path / "scene.xml")).create_world()
+
+    [parsed_cylinder] = parsed_world.get_body_by_name("link").collision.shapes
+    assert (parsed_cylinder.width, parsed_cylinder.height) == pytest.approx(
+        (cylinder.width, cylinder.height)
+    )
+
+
+def test_contact_declarations_and_gravity_compensation_survive_a_round_trip(tmp_path):
+    """
+    A shape's contact parameters and a body's gravity compensation are written into the
+    built model under MuJoCo's own attributes, and read back into the same properties
+    when that model is parsed again.
+    """
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        box_shape = Box(scale=Scale(1, 1, 1))
+        contact = ContactParameters.create_for_grasped_object(sliding_friction=0.4)
+        link = Body(name=PrefixedName("link"), collision=ShapeCollection([box_shape]))
+        link.add_simulator_property(GravityCompensation(fraction=0.5))
+        contact.apply_to([link])
+        world.add_kinematic_structure_entity(link)
+        world.add_connection(FixedConnection(parent=root, child=link))
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+    parsed_world = MJCFParser(str(tmp_path / "scene.xml")).create_world()
+
+    parsed_link = parsed_world.get_body_by_name("link")
+    [parsed_shape] = parsed_link.collision.shapes
+    assert parsed_link.get_simulator_property_of_type(GravityCompensation) == (
+        GravityCompensation(fraction=0.5)
+    )
+    assert parsed_shape.get_simulator_property_of_type(ContactParameters) == contact
+
+
+def test_a_simulated_body_weighs_what_its_inertial_says_not_what_its_shapes_would():
+    """
+    A body's mass comes from its inertial; its shapes only stand in for a body that has
+    none.
+    """
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        link = Body(
+            name=PrefixedName("link"),
+            collision=ShapeCollection([Box(scale=Scale(1, 1, 1))]),
+            inertial=Inertial(mass=2.0),
+        )
+        world.add_kinematic_structure_entity(link)
+        world.add_connection(FixedConnection(parent=root, child=link))
+
+    simulation = MujocoSim(world=world, headless=True)
+    simulation.start_stepped_simulation()
+    try:
+        simulated_mass = simulation.simulator._mj_model.body("link").mass[0]
+    finally:
+        simulation.stop_simulation()
+
+    assert simulated_mass == pytest.approx(link.inertial.mass)
+
+
+def test_builder_keeps_a_visual_only_geom_contactless_despite_its_bitmasks(tmp_path):
+    """
+    A shape that is visual only never collides, whatever ``MujocoGeom`` bitmasks it
+    carries: those describe how a collidable geom pairs up, not whether it collides at
+    all.
+    """
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        box_shape = Box(scale=Scale(1, 1, 1))
+        box_shape.add_simulator_property(
+            MujocoGeom(
+                contact_type=ContactCategories(2), contact_affinity=ContactCategories(4)
+            )
+        )
+        link = Body(name=PrefixedName("link"), visual=ShapeCollection([box_shape]))
+        world.add_kinematic_structure_entity(link)
+        world.add_connection(FixedConnection(parent=root, child=link))
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    [geom] = [
+        geom
+        for body in builder.spec.bodies
+        for geom in body.geoms
+        if body.name == "link"
+    ]
+    assert geom.contype == 0
+    assert geom.conaffinity == 0
+
+
+def test_builder_writes_a_negative_multiplier_mimic_joints_own_range(tmp_path):
+    """
+    A mimic connection with a negative multiplier is displayed in the opposite direction
+    of the raw DOF it shares, so its compiled joint range must be the mirrored one --
+    otherwise its own limit and the equality tying it to the raw DOF only agree at 0,
+    and the whole linkage is pinned there however hard its actuator pushes.
+    """
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        knuckle = Body(name=PrefixedName("knuckle"))
+        mirrored_knuckle = Body(name=PrefixedName("mirrored_knuckle"))
+        world.add_body(knuckle)
+        world.add_body(mirrored_knuckle)
+        degree_of_freedom = DegreeOfFreedom(
+            name=PrefixedName("knuckle_joint"),
+            limits=DegreeOfFreedomLimits.from_position_range_and_speed(
+                lower_position=0.0, upper_position=0.8
+            ),
+        )
+        world.add_degree_of_freedom(degree_of_freedom)
+        world.add_connection(
+            RevoluteConnection(
+                name=PrefixedName("knuckle_joint"),
+                parent=root,
+                child=knuckle,
+                axis=Vector3.Z(reference_frame=knuckle),
+                raw_dof=degree_of_freedom,
+            )
+        )
+        world.add_connection(
+            RevoluteConnection(
+                name=PrefixedName("mirrored_knuckle_joint"),
+                parent=root,
+                child=mirrored_knuckle,
+                axis=Vector3.Z(reference_frame=mirrored_knuckle),
+                raw_dof=degree_of_freedom,
+                multiplier=-1.0,
+            )
+        )
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    [mirrored_joint] = [
+        joint for joint in builder.spec.joints if joint.name == "mirrored_knuckle_joint"
+    ]
+    assert list(mirrored_joint.range) == pytest.approx([-0.8, 0.0])
+
+
 def test_mujoco_with_tracy_dae_files():
     try:
-        dae_world = URDFParser.from_file(file_path=TEST_URDF_TRACY).parse()
+        dae_world = URDFParser.from_file(file_path=TEST_URDF_TRACY).create_world()
     except ParsingError:
         pytest.skip("Skipping tracy test due to URDF parsing error.")
 
@@ -520,7 +780,7 @@ def test_mujoco_with_tracy_dae_files():
 
     try:
         assert isinstance(multi_sim.simulator, MujocoSimulator)
-        assert multi_sim.simulator.file_path == MujocoSim.default_file_path
+        assert multi_sim.simulator.file_path == str(multi_sim.file_path)
         assert multi_sim.simulator.headless is headless
         assert multi_sim.simulator.step_size == STEP_SIZE
 
@@ -546,7 +806,7 @@ def test_mujocosim_world_with_added_objects(test_urdf_1_world):
         "milk.stl",
     )
     stl_parser = STLParser(milk_path)
-    mesh_world = stl_parser.parse()
+    mesh_world = stl_parser.create_world()
     transformation = HomogeneousTransformationMatrix.from_xyz_rpy(
         x=0.5, reference_frame=test_urdf_1_world.root
     )
@@ -558,7 +818,7 @@ def test_mujocosim_world_with_added_objects(test_urdf_1_world):
 
     try:
         assert isinstance(multi_sim.simulator, MujocoSimulator)
-        assert multi_sim.simulator.file_path == MujocoSim.default_file_path
+        assert multi_sim.simulator.file_path == str(multi_sim.file_path)
         assert multi_sim.simulator.headless is headless
         assert multi_sim.simulator.step_size == STEP_SIZE
 
@@ -581,7 +841,7 @@ def test_spawn_body_with_connections():
         box = Box(
             origin=box_origin,
             scale=Scale(0.4, 0.4, 1.0),
-            color=Color(0.9, 0.9, 0.9, 1.0),
+            color=Color.from_rgba(red=0.9, green=0.9, blue=0.9, opacity=1.0),
         )
         spawn_body.collision = ShapeCollection([box], reference_frame=spawn_body)
 
@@ -597,7 +857,7 @@ def test_spawn_body_with_connections():
         cylinder = Cylinder(
             width=0.2,
             height=0.1,
-            color=Color(0.9, 0.1, 0.1, 1.0),
+            color=Color.from_rgba(red=0.9, green=0.1, blue=0.1, opacity=1.0),
         )
         spawn_left_shoulder_body.collision = ShapeCollection(
             [cylinder], reference_frame=spawn_left_shoulder_body
@@ -630,7 +890,7 @@ def test_spawn_body_with_connections():
         cylinder = Cylinder(
             width=0.2,
             height=0.1,
-            color=Color(0.9, 0.1, 0.1, 1.0),
+            color=Color.from_rgba(red=0.9, green=0.1, blue=0.1, opacity=1.0),
         )
         spawn_right_shoulder_body.collision = ShapeCollection(
             [cylinder], reference_frame=spawn_right_shoulder_body
@@ -783,7 +1043,7 @@ def test_world_sim_state_sync():
                         reference_frame=plane_body
                     ),
                     scale=Scale(2.0, 2.0, plane_half_thickness * 2),
-                    color=Color(1.0, 1.0, 0.0, 1.0),
+                    color=Color.from_rgba(red=1.0, green=1.0, blue=0.0, opacity=1.0),
                 )
             ],
             reference_frame=plane_body,
@@ -799,7 +1059,7 @@ def test_world_sim_state_sync():
                     scale=Scale(
                         box_half_size * 2, box_half_size * 2, box_half_size * 2
                     ),
-                    color=Color(1.0, 0.0, 0.0, 1.0),
+                    color=Color.from_rgba(red=1.0, green=0.0, blue=0.0, opacity=1.0),
                 )
             ],
             reference_frame=falling_box,
@@ -831,9 +1091,9 @@ def test_world_sim_state_sync():
         falling_box, box_connection = spawn_state_sync_scene(world)
 
         body_names = multi_sim.simulator.get_all_body_names().result
-        assert {"ground_plane", "falling_box"}.issubset(
-            body_names
-        ), f"scene bodies were not spawned in the simulator; bodies={body_names}"
+        assert {"ground_plane", "falling_box"}.issubset(body_names), (
+            f"scene bodies were not spawned in the simulator; bodies={body_names}"
+        )
 
         box_connection.origin = HomogeneousTransformationMatrix.from_xyz_rpy(
             x=float(init_pos[0]),
@@ -860,7 +1120,8 @@ def test_world_sim_state_sync():
 
 def _write_thin_slab_mesh(directory) -> str:
     """
-    Writes a minimal OBJ mesh for a closed box thin enough (1e-5 units) that MuJoCo's
+    Writes a minimal OBJ mesh for a closed box thin enough (1e-5 units) that MuJoCo's.
+
     default ("legacy") volume-based inertia estimator used to reject it as "mesh volume
     is too small" (fixed upstream as of MuJoCo 3.11) - the shape of real CAD furniture
     panels (a door slab, a backing panel), reproduced with an actual ArtVIP dataset
@@ -1058,11 +1319,122 @@ def test_thicken_if_near_planar_regenerates_instead_of_reusing_a_stale_file(tmp_
     assert len(trimesh.load(thickened_path, force="mesh").vertices) == 8
 
 
+# %% meshes sharing a file name
+
+
+def _write_box_mesh(directory, file_name: str, edge_length: float) -> str:
+    """
+    Writes a cube mesh into its own directory.
+
+    :param directory: The directory to write the mesh into.
+    :param file_name: The mesh file's name; its extension picks the format.
+    :param edge_length: The length of the cube's edges, in metres.
+    :return: The path of the written mesh.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    mesh_file = str(directory / file_name)
+    trimesh.creation.box(extents=(edge_length,) * 3).export(mesh_file)
+    return mesh_file
+
+
+def _world_with_meshes(visual_file: str, collision_file: str) -> World:
+    """
+    :return: A world with one body showing one mesh and colliding with another.
+    """
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        body = Body(
+            name=PrefixedName("body"),
+            visual=ShapeCollection([Mesh(filename=visual_file, scale=Scale(1, 1, 1))]),
+            collision=ShapeCollection(
+                [Mesh(filename=collision_file, scale=Scale(1, 1, 1))]
+            ),
+        )
+        world.add_kinematic_structure_entity(body)
+        world.add_connection(FixedConnection(parent=root, child=body))
+    return world
+
+
+def _compiled_mesh_extents(builder: MujocoBuilder) -> list[list[float]]:
+    """
+    :return: The extents of the mesh file each geom of the built body compiles from, in
+        the order the geoms were added.
+    """
+    body = next(body for body in builder.spec.bodies if body.name == "body")
+    return [
+        list(trimesh.load(builder.spec.mesh(geom.meshname).file, force="mesh").extents)
+        for geom in body.geoms
+    ]
+
+
+def test_a_visual_and_a_collision_mesh_sharing_a_file_stem_each_compile_from_their_own_file(
+    tmp_path,
+):
+    world = _world_with_meshes(
+        visual_file=_write_box_mesh(tmp_path / "visual", "base.obj", edge_length=1.0),
+        collision_file=_write_box_mesh(
+            tmp_path / "collision", "base.stl", edge_length=0.1
+        ),
+    )
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    assert _compiled_mesh_extents(builder) == [
+        pytest.approx([1.0] * 3),
+        pytest.approx([0.1] * 3),
+    ]
+
+
+def test_two_collada_meshes_sharing_a_file_name_each_compile_from_their_own_file(
+    tmp_path,
+):
+    world = _world_with_meshes(
+        visual_file=_write_box_mesh(tmp_path / "visual", "base.dae", edge_length=1.0),
+        collision_file=_write_box_mesh(
+            tmp_path / "collision", "base.dae", edge_length=0.1
+        ),
+    )
+
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    assert _compiled_mesh_extents(builder) == [
+        pytest.approx([1.0] * 3),
+        pytest.approx([0.1] * 3),
+    ]
+
+
+def test_a_collada_mesh_converted_by_an_earlier_build_is_not_reused_for_another_file_of_the_same_name(
+    tmp_path,
+):
+    """
+    Two robots built into the same asset folder, one after the other, may both ship a
+    Collada mesh called ``base.dae``.
+    """
+    large_base = _write_box_mesh(tmp_path / "large", "base.dae", edge_length=1.0)
+    small_base = _write_box_mesh(tmp_path / "small", "base.dae", edge_length=0.1)
+    MujocoBuilder().build_world(
+        world=_world_with_meshes(visual_file=large_base, collision_file=large_base),
+        file_path=str(tmp_path / "first_scene.xml"),
+    )
+
+    builder = MujocoBuilder()
+    builder.build_world(
+        world=_world_with_meshes(visual_file=small_base, collision_file=small_base),
+        file_path=str(tmp_path / "second_scene.xml"),
+    )
+
+    assert _compiled_mesh_extents(builder) == [pytest.approx([0.1] * 3)] * 2
+
+
 @dataclass
 class BoxOnPlaneWorld:
     """
-    A world holding a ground plane and one free-floating box, together with the
-    pieces of it a test needs to address afterwards.
+    A world holding a ground plane and one free-floating box, together with the pieces
+    of it a test needs to address afterwards.
     """
 
     world: World
@@ -1083,8 +1455,8 @@ class BoxOnPlaneWorld:
 
 def _build_box_on_plane_world() -> BoxOnPlaneWorld:
     """
-    Build a ground plane plus a single free-floating box, authored directly
-    into a :class:`World` so a simulator can be built from it without spawning.
+    Build a ground plane plus a single free-floating box, authored directly into a
+    :class:`World` so a simulator can be built from it without spawning.
 
     :return: The world and the box handles the caller needs.
     """
@@ -1101,7 +1473,7 @@ def _build_box_on_plane_world() -> BoxOnPlaneWorld:
                         reference_frame=ground_plane
                     ),
                     scale=Scale(2.0, 2.0, 0.1),
-                    color=Color(1.0, 1.0, 0.0, 1.0),
+                    color=Color.from_rgba(red=1.0, green=1.0, blue=0.0, opacity=1.0),
                 )
             ],
             reference_frame=ground_plane,
@@ -1116,7 +1488,7 @@ def _build_box_on_plane_world() -> BoxOnPlaneWorld:
                         reference_frame=box
                     ),
                     scale=Scale(0.2, 0.2, 0.2),
-                    color=Color(1.0, 0.0, 0.0, 1.0),
+                    color=Color.from_rgba(red=1.0, green=0.0, blue=0.0, opacity=1.0),
                 )
             ],
             reference_frame=box,
@@ -1161,9 +1533,9 @@ def test_pose_written_during_sim_to_world_pull_reaches_the_simulator():
 
     def blocking_read(connection, qpos_address):
         pull_is_inside.set()
-        assert let_pull_finish.wait(
-            timeout=10
-        ), "test did not release the sim → world pull"
+        assert let_pull_finish.wait(timeout=10), (
+            "test did not release the sim → world pull"
+        )
         return original_read(connection, qpos_address)
 
     write_failed = []
@@ -1204,7 +1576,8 @@ def test_pose_written_during_sim_to_world_pull_reaches_the_simulator():
         qpos_address = synchronizer._resolve_qpos_address(box_connection)
         assert qpos_address is not None, "free joint is missing from the MuJoCo model"
         written_xyz = numpy.asarray(
-            multi_sim.simulator._mj_data.qpos[qpos_address : qpos_address + 3], dtype=float
+            multi_sim.simulator._mj_data.qpos[qpos_address : qpos_address + 3],
+            dtype=float,
         )
         assert numpy.allclose(written_xyz, target_xyz, atol=1e-6), (
             "pose written during the sim → world pull never reached MuJoCo: "
@@ -1218,9 +1591,8 @@ def test_pose_written_during_sim_to_world_pull_reaches_the_simulator():
 
 def test_pose_write_waits_for_the_running_physics_step():
     """
-    The *world → sim* push must write ``qpos`` under the simulator's model
-    lock, the same lock :meth:`MujocoSimulator.step_callback` holds across
-    ``mj_step``.
+    The *world → sim* push must write ``qpos`` under the simulator's model lock, the
+    same lock :meth:`MujocoSimulator.step_callback` holds across ``mj_step``.
 
     The scene integrates with RK4, which saves the state at the top of the step
     and writes the integrated ``qpos`` back at the end. A pose written into
@@ -1286,7 +1658,8 @@ def test_pose_write_waits_for_the_running_physics_step():
         qpos_address = synchronizer._resolve_qpos_address(box_connection)
         assert qpos_address is not None, "free joint is missing from the MuJoCo model"
         written_xyz = numpy.asarray(
-            multi_sim.simulator._mj_data.qpos[qpos_address : qpos_address + 3], dtype=float
+            multi_sim.simulator._mj_data.qpos[qpos_address : qpos_address + 3],
+            dtype=float,
         )
         assert numpy.allclose(written_xyz, target_xyz, atol=1e-6), (
             "pose never reached MuJoCo once the model lock was free: "
@@ -1329,7 +1702,7 @@ def test_prebuilt_world_multiple_free_bodies_start_at_authored_poses():
                         reference_frame=ground_plane
                     ),
                     scale=Scale(2.0, 2.0, 0.1),
-                    color=Color(1.0, 1.0, 0.0, 1.0),
+                    color=Color.from_rgba(red=1.0, green=1.0, blue=0.0, opacity=1.0),
                 )
             ],
             reference_frame=ground_plane,
@@ -1355,7 +1728,9 @@ def test_prebuilt_world_multiple_free_bodies_start_at_authored_poses():
                         scale=Scale(
                             box_half_size * 2, box_half_size * 2, box_half_size * 2
                         ),
-                        color=Color(0.9, 0.3, 0.3, 1.0),
+                        color=Color.from_rgba(
+                            red=0.9, green=0.3, blue=0.3, opacity=1.0
+                        ),
                     )
                 ],
                 reference_frame=cube,
@@ -1396,3 +1771,118 @@ def test_prebuilt_world_multiple_free_bodies_start_at_authored_poses():
             )
     finally:
         stop_multisim_if_running(multi_sim)
+
+
+# %% meshes written as glb
+
+
+def _textured_tetrahedron_as_glb(directory, texture_color: tuple[int, int, int]) -> str:
+    """
+    Writes a tetrahedron painted with a one-coloured texture as a GLB file.
+
+    :param directory: The directory to write the mesh and its texture into.
+    :param texture_color: The colour of the texture image.
+    :return: The path of the written mesh.
+    """
+    texture_file = directory / "wood.png"
+    Image.new("RGB", (4, 4), color=texture_color).save(texture_file)
+    tetrahedron = trimesh.Trimesh(
+        vertices=[[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        faces=[[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
+        process=False,
+    )
+    corner_uv = numpy.tile([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], (4, 1))
+    return Mesh.from_trimesh(
+        mesh=tetrahedron,
+        uv=corner_uv,
+        texture_file_path=str(texture_file),
+        directory=directory,
+        file_type=MeshFileFormat.GLB,
+    ).filename
+
+
+def test_meshes_written_as_glb_compile(tmp_path):
+    box = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    glb_file = Mesh.from_trimesh(
+        mesh=box, directory=tmp_path, file_type=MeshFileFormat.GLB
+    ).filename
+    world = _world_with_meshes(visual_file=glb_file, collision_file=glb_file)
+    builder = MujocoBuilder()
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    model = builder.spec.compile()
+
+    assert model.nmesh == len(builder.spec.meshes)
+
+
+def test_a_textured_mesh_written_as_glb_keeps_its_texture(tmp_path):
+    texture_color = (120, 60, 20)
+    glb_file = _textured_tetrahedron_as_glb(tmp_path, texture_color=texture_color)
+    world = _world_with_meshes(visual_file=glb_file, collision_file=glb_file)
+    builder = MujocoBuilder()
+
+    builder.build_world(world=world, file_path=str(tmp_path / "scene.xml"))
+
+    [texture] = builder.spec.textures
+    assert Image.open(texture.file).convert("RGB").getpixel((0, 0)) == texture_color
+
+
+# %% stepped simulation
+
+
+@pytest.fixture
+def falling_box_world() -> World:
+    world = World()
+    with world.modify_world():
+        root = Body(name=PrefixedName("root"))
+        world.add_body(root)
+        box = Body(name=PrefixedName("box"))
+        geometry = ShapeCollection(
+            [
+                Box(
+                    origin=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        reference_frame=box
+                    ),
+                    scale=Scale(0.1, 0.1, 0.1),
+                )
+            ],
+            reference_frame=box,
+        )
+        box.collision, box.visual = geometry, geometry
+        world.add_connection(
+            Connection6DoF.create_with_dofs(
+                world=world,
+                parent=root,
+                child=box,
+                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                    z=1.0, reference_frame=root
+                ),
+            )
+        )
+    return world
+
+
+def test_stepping_before_start_raises(falling_box_world):
+    multi_sim = MujocoSim(world=falling_box_world, headless=headless)
+
+    with pytest.raises(SimulationNotStartedError):
+        multi_sim.step_simulation(timedelta(milliseconds=100))
+
+
+def test_a_stepped_simulation_advances_exactly_the_requested_time(falling_box_world):
+    """
+    A box dropped from a metre falls under gravity exactly as far as the requested steps
+    add up to, and no physics thread advances it in between.
+    """
+    multi_sim = MujocoSim(world=falling_box_world, headless=headless)
+    duration = timedelta(milliseconds=500)
+
+    multi_sim.start_stepped_simulation()
+    try:
+        multi_sim.step_simulation(duration)
+        height = multi_sim.simulator.get_body_position(body_name="box").result[2]
+    finally:
+        stop_multisim_if_running(multi_sim)
+
+    fallen = 0.5 * 9.81 * duration.total_seconds() ** 2
+    assert height == pytest.approx(1.0 - fallen, abs=0.01)

@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import timedelta
 from functools import cached_property
-from typing import ClassVar, Optional, Type, List, Dict
+from typing_extensions import ClassVar
 from uuid import UUID
 
 import numpy as np
@@ -21,6 +23,7 @@ from sqlalchemy.orm import Session
 from krrood.adapters.json_serializer import from_json, to_json
 from krrood.ormatic.data_access_objects.helper import to_dao
 from semantic_digital_twin.adapters.ros.messages import (
+    MessageField,
     MetaData,
     WorldStateUpdate,
     Message,
@@ -36,7 +39,12 @@ from semantic_digital_twin.callbacks.callback import (
     StateChangeCallback,
     ModelChangeCallback,
 )
+from semantic_digital_twin.adapters.ros.exceptions import (
+    WorldUpdateReferencesUnknownEntityError,
+)
 from semantic_digital_twin.exceptions import (
+    SynchronizerNotConnectedError,
+    WorldEntityWithIDNotInKwargs,
     MissingPublishChangesKWARG,
     ApplyMissedMessagesWhileWorldIsBeingModifiedError,
     StateUpdateContainsUnknownDegreesOfFreedomError,
@@ -86,6 +94,8 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
     Every published message carries its position in this synchronizer's stream, and
     every applied message is remembered per publisher, so that two processes can tell
     each other what to catch up with without comparing world models they cannot compare.
+    A message that does not follow the one received from its publisher before reveals
+    that messages in between were lost, which is logged.
     """
 
     node: RosNode = field(kw_only=True)
@@ -93,22 +103,43 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
     The rclpy node used to create the publishers and subscribers.
     """
 
-    topic_name: Optional[str] = None
+    topic_name: str | None = None
     """
     The topic name of the publisher and subscriber.
     """
 
-    publisher: Optional[Publisher] = field(init=False, default=None)
+    connection_timeout: timedelta = timedelta(seconds=5)
+    """
+    How long to wait for the topic of this synchronizer to become usable.
+    """
+
+    discovery_settle_time: timedelta = timedelta(seconds=0.2)
+    """
+    How long no subscriber may appear before the topic counts as connected.
+    """
+
+    discovery_poll_interval: timedelta = timedelta(seconds=0.02)
+    """
+    How long to wait between two looks at the subscribers of the topic while connecting.
+    """
+
+    message_queue_depth: int = 1000
+    """
+    How many messages the publisher and the subscriber keep for a receiver that has not
+    taken them yet; once more are waiting, the oldest are lost.
+    """
+
+    publisher: Publisher | None = field(init=False, default=None)
     """
     The publisher used to publish the world state.
     """
 
-    subscriber: Optional[Subscription] = field(default=None, init=False)
+    subscriber: Subscription | None = field(default=None, init=False)
     """
     The subscriber to the world state.
     """
 
-    message_type: ClassVar[Optional[Type[Message]]] = None
+    message_type: ClassVar[type[Message] | None] = None
     """
     The type of the message that is sent and received.
     """
@@ -118,11 +149,18 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
     Position of the message this synchronizer published last.
     """
 
-    _applied_sequence_numbers: Dict[MetaData, int] = field(
+    _applied_sequence_numbers: dict[MetaData, int] = field(
         default_factory=dict, init=False, repr=False
     )
     """
     The highest position applied so far, per publisher.
+    """
+
+    _received_sequence_numbers: dict[MetaData, int] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    """
+    The position of the message received last, per publisher.
     """
 
     _sequence_number_lock: threading.Lock = field(
@@ -140,10 +178,46 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
             std_msgs.msg.String,
             topic=self.topic_name,
             callback=self.subscription_callback,
-            qos_profile=10,
+            qos_profile=self.message_queue_depth,
         )
         self.publisher = self.node.create_publisher(
-            std_msgs.msg.String, topic=self.topic_name, qos_profile=10
+            std_msgs.msg.String,
+            topic=self.topic_name,
+            qos_profile=self.message_queue_depth,
+        )
+        self.wait_until_connected()
+
+    def wait_until_connected(self) -> None:
+        """
+        Block until what this synchronizer publishes reaches the processes that already
+        listen on its topic.
+
+        A publisher drops what it sends to subscribers it has not discovered yet, so a
+        world that is modified right after its synchronizer was created would keep those
+        changes to itself. Ros names no moment at which every process is known, so this
+        waits for the subscribers it can see to be matched and for no further one to
+        turn up.
+
+        :raises SynchronizerNotConnectedError: If not even the subscriber of this
+            synchronizer itself was matched in time.
+        """
+        deadline = time.monotonic() + self.connection_timeout.total_seconds()
+        subscriber_count = self.publisher.get_subscription_count()
+        settled_since = time.monotonic()
+        while time.monotonic() < deadline:
+            current_count = self.publisher.get_subscription_count()
+            if current_count != subscriber_count:
+                subscriber_count = current_count
+                settled_since = time.monotonic()
+            elif (
+                current_count > 0
+                and time.monotonic() - settled_since
+                >= self.discovery_settle_time.total_seconds()
+            ):
+                return
+            time.sleep(self.discovery_poll_interval.total_seconds())
+        raise SynchronizerNotConnectedError(
+            topic_name=self.topic_name, timeout=self.connection_timeout
         )
 
     @cached_property
@@ -167,16 +241,50 @@ class Synchronizer(WorldEntityWithClassBasedID, PublicationProgress):
         :param message: The incoming ROS string message containing a serialized
             synchronization message.
         """
+        content = json.loads(message.data)
         with self._world._world_lock:
             tracker = WorldEntityWithIDKwargsTracker.from_world(self._world)
-            deserialized_message = from_json(
-                json.loads(message.data), **tracker.create_kwargs()
-            )
+            try:
+                deserialized_message = from_json(content, **tracker.create_kwargs())
+            except WorldEntityWithIDNotInKwargs as unknown_entity:
+                # More concrete exception for synchronizer
+                raise WorldUpdateReferencesUnknownEntityError(
+                    publisher=from_json(content[MessageField.META_DATA]),
+                    entity_id=unknown_entity.key,
+                    entity_name=unknown_entity.world_entity_name,
+                ) from unknown_entity
 
             if deserialized_message.meta_data == self.meta_data:
                 return
 
+            self._notice_lost_messages(deserialized_message)
             self._subscription_callback(deserialized_message)
+
+    def _notice_lost_messages(
+        self, message: Message, warning_throttle_period: float = 1.0
+    ) -> None:
+        """
+        Warn that messages of the publisher of `message` were lost if `message` does not
+        follow the one received from it before.
+
+        Only what changed is published, so the world may differ from the publisher's in
+        what the lost messages carried.
+
+        :param message: A message just received from another synchronizer.
+        :param warning_throttle_period: The fewest seconds between two warnings.
+        """
+        publisher = message.meta_data
+        with self._sequence_number_lock:
+            last_received = self._received_sequence_numbers.get(publisher)
+            self._received_sequence_numbers[publisher] = message.sequence_number
+        if last_received is None or message.sequence_number == last_received + 1:
+            return
+        self.node.get_logger().warning(
+            f"Updates #{last_received + 1} to #{message.sequence_number - 1} of "
+            f"'{publisher.node_name}' were lost, so this world may differ from the one "
+            f"of the publisher.",
+            throttle_duration_sec=warning_throttle_period,
+        )
 
     @property
     def published_sequence_number(self) -> int:
@@ -262,7 +370,7 @@ class ModelReloadSynchronizer(Synchronizer):
     Note that this may take a couple of seconds.
     """
 
-    message_type: ClassVar[Type[Message]] = LoadModel
+    message_type: ClassVar[type[Message]] = LoadModel
 
     session: Session = None
     """
@@ -281,7 +389,7 @@ class ModelReloadSynchronizer(Synchronizer):
     running motion.
     """
 
-    pending_reload: Optional[LoadModel] = field(default=None, init=False, repr=False)
+    pending_reload: LoadModel | None = field(default=None, init=False, repr=False)
     """
     The reload that was received but not applied yet.
 
@@ -341,23 +449,8 @@ class ModelReloadSynchronizer(Synchronizer):
             WorldMappingDAO.database_id == msg.primary_key
         )
         new_world = self.session.scalars(query).one().from_dao()
-        self._replace_world(new_world)
-        self._world._notify_model_change(publish_changes=False)
+        self._world._replace_with(new_world)
         self.record_applied(msg)
-
-    def _replace_world(self, new_world: World):
-        """
-        Replaces the current world with a new one, updating all relevant attributes.
-        This method modifies the existing world state, kinematic structure, degrees of
-        freedom, and semantic annotation based on the `new_world` provided.
-
-        If you encounter any issues with references to dead objects, it is most likely
-        due to this method not doing everything needed.
-
-        :param new_world: The new world instance to replace the current world.
-        """
-        self._world.clear()
-        self._world.merge_world(new_world)
 
 
 @dataclass(eq=False)
@@ -371,7 +464,7 @@ class WorldSynchronizer(Synchronizer, ModelChangeCallback, StateChangeCallback):
     messages arrive before the model update that introduced the referenced DOF UUIDs.
     """
 
-    message_type: ClassVar[Optional[Type[Message]]] = WorldUpdate
+    message_type: ClassVar[type[Message] | None] = WorldUpdate
 
     topic_name: str = "/semantic_digital_twin/world_sync"
 
@@ -385,7 +478,7 @@ class WorldSynchronizer(Synchronizer, ModelChangeCallback, StateChangeCallback):
     example a controller that must not have the world changed under a running motion.
     """
 
-    missed_messages: List[WorldUpdate] = field(
+    missed_messages: list[WorldUpdate] = field(
         default_factory=list, init=False, repr=False
     )
     """
@@ -430,7 +523,7 @@ class WorldSynchronizer(Synchronizer, ModelChangeCallback, StateChangeCallback):
         Synchronizer.__post_init__(self)
         ModelChangeCallback.__post_init__(self)
 
-    def on_model_change(self, publish_changes: Optional[bool] = None, **kwargs):
+    def on_model_change(self, publish_changes: bool | None = None, **kwargs):
         """
         Send the modification block the world just recorded to the other synchronizers.
 
@@ -457,7 +550,7 @@ class WorldSynchronizer(Synchronizer, ModelChangeCallback, StateChangeCallback):
 
     def on_state_change(
         self,
-        publish_changes: Optional[bool] = None,
+        publish_changes: bool | None = None,
         force_republish: bool = False,
         **kwargs,
     ):
@@ -514,7 +607,7 @@ class WorldSynchronizer(Synchronizer, ModelChangeCallback, StateChangeCallback):
         else:
             self.publish(update)
 
-    def compute_state_changes(self) -> Dict[UUID, float]:
+    def compute_state_changes(self) -> dict[UUID, float]:
         """
         Return only DOF positions that changed since the last snapshot.
         """

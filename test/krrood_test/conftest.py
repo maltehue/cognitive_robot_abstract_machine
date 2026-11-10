@@ -30,6 +30,14 @@ from .dataset import (
     example_classes,
     semantic_world_like_classes,
     alternative_mappings_construction_order,
+    annotated_fields,
+    chained_exceptions,
+    dataclass_field_descriptors,
+    clashing_field_names,
+    classes_with_generic,
+    identity_hashed_values_created_on_access,
+    interface_typed_fields,
+    single_value_classes,
 )
 from .dataset.example_classes import (
     KRROODPhysicalObject,
@@ -37,11 +45,14 @@ from .dataset.example_classes import (
     ChildNotMapped,
     ConceptType,
     JSONSerializableClass,
+    GenericJSONSerializableClass,
+    TextJSONSerializableClass,
 )
 from .dataset.role_and_ontology import (
     university_ontology_like_classes_without_descriptors,
     role_takers_in_another_module,
     classes_for_testing_role_recursion_error,
+    roles_over_a_value_stored_as_json,
 )
 from .dataset.semantic_world_like_classes import *
 from .test_eql.conf.world.doors_and_drawers import DoorsAndDrawersWorld
@@ -64,10 +75,6 @@ def generate_sqlalchemy_interface():
 
     # collect all classes that need persistence
     all_classes = {c.clazz for c in symbol_graph._class_diagram.wrapped_classes}
-    all_classes |= {
-        alternative_mapping.original_class()
-        for alternative_mapping in recursive_subclasses(AlternativeMapping)
-    }
     all_classes |= set(classes_of_module(krrood.symbol_graph.symbol_graph))
     all_classes |= set(classes_of_module(example_classes))
     all_classes |= set(classes_of_module(semantic_world_like_classes))
@@ -76,12 +83,22 @@ def generate_sqlalchemy_interface():
     )
     all_classes |= set(classes_of_module(role_takers_in_another_module))
     all_classes |= set(classes_of_module(classes_for_testing_role_recursion_error))
+    all_classes |= set(classes_of_module(roles_over_a_value_stored_as_json))
     all_classes |= set(classes_of_module(alternative_mappings_construction_order))
+    all_classes |= set(classes_of_module(annotated_fields))
+    all_classes |= set(classes_of_module(chained_exceptions))
+    all_classes |= set(classes_of_module(dataclass_field_descriptors))
+    all_classes |= set(classes_of_module(clashing_field_names))
+    all_classes |= set(classes_of_module(classes_with_generic))
+    all_classes |= set(classes_of_module(single_value_classes))
+    all_classes |= set(classes_of_module(identity_hashed_values_created_on_access))
+    all_classes |= set(classes_of_module(interface_typed_fields))
     all_classes |= {Symbol, Role}
 
     # remove classes that don't need persistence
     all_classes -= {HasType, HasTypes, ContainsType}
     all_classes -= {NotMappedParent, ChildNotMapped, JSONSerializableClass}
+    all_classes -= {GenericJSONSerializableClass, TextJSONSerializableClass}
 
     # only keep dataclasses
     all_classes = {
@@ -90,18 +107,24 @@ def generate_sqlalchemy_interface():
         if is_dataclass(c) and not issubclass(c, AlternativeMapping)
     }
 
+    # a mapped class need not be a dataclass, such as an interface its mappings share
+    all_classes |= {
+        alternative_mapping.original_class()
+        for alternative_mapping in recursive_subclasses(AlternativeMapping)
+    }
+
     all_classes |= {FunctionType}
     logging.basicConfig(level=logging.DEBUG)
     logging.getLogger("krrood").setLevel(logging.DEBUG)
 
     class_diagram = ClassDiagram(
-        list(sorted(all_classes, key=lambda c: c.__name__, reverse=True))
+        classes=list(sorted(all_classes, key=lambda c: c.__name__, reverse=True))
     )
 
     instance = ORMatic(
         class_dependency_graph=class_diagram,
         interface_information=OrmaticInterfaceInformation(
-            type_mappings=TypeDict({KRROODPhysicalObject: ConceptType}),
+            type_mappings=TypeDict(_dict={KRROODPhysicalObject: ConceptType}),
             alternative_mappings=recursive_subclasses(AlternativeMapping),
         ),
     )
@@ -121,7 +144,7 @@ def generate_sqlalchemy_interface():
     with tempfile.NamedTemporaryFile(
         "w", dir=directory, prefix="ormatic_interface.", suffix=".py.tmp", delete=False
     ) as temporary_file:
-        instance.to_sqlalchemy_file(temporary_file)
+        instance.to_sqlalchemy_file(file=temporary_file)
         temporary_path = temporary_file.name
     os.replace(temporary_path, file_path)
 

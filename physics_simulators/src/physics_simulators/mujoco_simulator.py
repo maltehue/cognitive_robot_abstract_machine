@@ -3,8 +3,9 @@
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, InitVar
+from enum import StrEnum
 from threading import RLock
-from typing import Optional, List, Dict, Union, Any
+from typing_extensions import Any
 
 import mujoco
 import mujoco.viewer
@@ -16,6 +17,37 @@ from physics_simulators.base_simulator import (
     SimulatorCallbackResult,
     SimulatorState,
 )
+
+
+class HeadlessGraphicsBackend(StrEnum):
+    """
+    The OpenGL backends MuJoCo renders with when no display is available, selected
+    through the ``MUJOCO_GL`` environment variable.
+
+    Named for the graphics libraries MuJoCo itself names them after
+    (https://mujoco.readthedocs.io/en/stable/programming/visualization.html#rendering):
+    Khronos's EGL interface and off-screen Mesa.
+    """
+
+    EGL = "egl"
+    OSMESA = "osmesa"
+
+
+class MujocoEnvironmentVariable(StrEnum):
+    """
+    Environment variables that steer which OpenGL backend MuJoCo renders with.
+    """
+
+    GRAPHICS_BACKEND = "MUJOCO_GL"
+    """
+    Selects the backend MuJoCo renders with; a member of :class:`HeadlessGraphicsBackend`
+    selects a headless one.
+    """
+
+    DISPLAY = "DISPLAY"
+    """
+    Names the X display the windowed backend renders through.
+    """
 
 
 @dataclass
@@ -80,8 +112,9 @@ class MujocoSimulator(BaseSimulator):
         root = ET.parse(file_path).getroot()
         self._name = root.attrib.get("model", self.name)
         self._mj_spec: mujoco.MjSpec = mujoco.MjSpec.from_file(filename=self._file_path)
+        # A body's own inertial wins; its geoms only stand in for one it lacks.
         self._mj_spec.compiler.inertiafromgeom = self.config.get(
-            "inertiafromgeom", mujoco.mjtInertiaFromGeom.mjINERTIAFROMGEOM_TRUE
+            "inertiafromgeom", mujoco.mjtInertiaFromGeom.mjINERTIAFROMGEOM_AUTO
         )
         self._mj_spec.option.integrator = self.config.get(
             "integrator", mujoco.mjtIntegrator.mjINT_RK4
@@ -290,7 +323,7 @@ class MujocoSimulator(BaseSimulator):
         )
 
     @BaseSimulator.simulator_callback
-    def get_bodies_positions(self, body_names: List[str]) -> SimulatorCallbackResult:
+    def get_bodies_positions(self, body_names: list[str]) -> SimulatorCallbackResult:
         """
         Get bodies positions by body names.
 
@@ -314,7 +347,7 @@ class MujocoSimulator(BaseSimulator):
         )
 
     @BaseSimulator.simulator_callback
-    def get_bodies_quaternions(self, body_names: List[str]) -> SimulatorCallbackResult:
+    def get_bodies_quaternions(self, body_names: list[str]) -> SimulatorCallbackResult:
         """
         Get all bodies quaternions by body names.
 
@@ -456,7 +489,7 @@ class MujocoSimulator(BaseSimulator):
 
     @BaseSimulator.simulator_callback
     def set_bodies_positions(
-        self, bodies_positions: Dict[str, numpy.ndarray]
+        self, bodies_positions: dict[str, numpy.ndarray]
     ) -> SimulatorCallbackResult:
         """
         Set the positions of all bodies by its name and positions.
@@ -523,7 +556,7 @@ class MujocoSimulator(BaseSimulator):
 
     @BaseSimulator.simulator_callback
     def set_bodies_quaternions(
-        self, bodies_quaternions: Dict[str, numpy.ndarray]
+        self, bodies_quaternions: dict[str, numpy.ndarray]
     ) -> SimulatorCallbackResult:
         """
         Set the quaternions of all bodies by its name and quaternions.
@@ -546,7 +579,7 @@ class MujocoSimulator(BaseSimulator):
 
     @BaseSimulator.simulator_callback
     def get_all_joint_names(
-        self, joint_types: Optional[List[mujoco.mjtJoint]] = None
+        self, joint_types: list[mujoco.mjtJoint] | None = None
     ) -> SimulatorCallbackResult:
         """
         Get the names of all joints, filtered by types.
@@ -570,7 +603,7 @@ class MujocoSimulator(BaseSimulator):
 
     @BaseSimulator.simulator_callback
     def get_joint(
-        self, joint_name: str, joint_types: Optional[mujoco.mjtJoint] = None
+        self, joint_name: str, joint_types: mujoco.mjtJoint | None = None
     ) -> SimulatorCallbackResult:
         """
         Get a joint by its name and type.
@@ -626,7 +659,7 @@ class MujocoSimulator(BaseSimulator):
         )
 
     @BaseSimulator.simulator_callback
-    def get_joints_values(self, joint_names: List[str]) -> SimulatorCallbackResult:
+    def get_joints_values(self, joint_names: list[str]) -> SimulatorCallbackResult:
         """
         Get values of joints by their names.
 
@@ -681,7 +714,7 @@ class MujocoSimulator(BaseSimulator):
 
     @BaseSimulator.simulator_callback
     def set_joints_values(
-        self, joints_values: Dict[str, float]
+        self, joints_values: dict[str, float]
     ) -> SimulatorCallbackResult:
         """
         Set the values of joints by their names.
@@ -743,12 +776,73 @@ class MujocoSimulator(BaseSimulator):
         )
 
     @BaseSimulator.simulator_callback
+    def get_actuators_lengths(
+        self, actuator_names: list[str]
+    ) -> SimulatorCallbackResult:
+        """
+        Get the lengths of actuators by their names: for an actuator driving a joint,
+        the joint's position scaled by the actuator's gear.
+
+        :param actuator_names: The names of the actuators
+        :return: A SimulatorCallbackResult with the length per actuator name as the
+            result
+        """
+        result = {}
+        for actuator_name in actuator_names:
+            get_actuator = self.get_actuator(actuator_name)
+            if (
+                get_actuator.type
+                != SimulatorCallbackResult.ResultType.SUCCESS_WITHOUT_EXECUTION
+            ):
+                return get_actuator
+            result[actuator_name] = float(get_actuator.result.length[0])
+        return SimulatorCallbackResult(
+            type=SimulatorCallbackResult.ResultType.SUCCESS_WITHOUT_EXECUTION,
+            info=f"Getting actuators lengths of {actuator_names}",
+            result=result,
+        )
+
+    @BaseSimulator.simulator_callback
+    def set_actuator_control(
+        self, actuator_name: str, value: float
+    ) -> SimulatorCallbackResult:
+        """
+        Set the control input of an actuator by its name.
+
+        Unlike :meth:`set_joint_value`, which moves a joint to a value outright, this
+        hands the value to the actuator as a set point and leaves the actuator's own
+        dynamics to reach it.
+
+        :param actuator_name: The name of the actuator
+        :param value: The new control input
+        :return: A SimulatorCallbackResult indicating the success or failure of the
+            operation
+        """
+        get_actuator = self.get_actuator(actuator_name)
+        if (
+            get_actuator.type
+            != SimulatorCallbackResult.ResultType.SUCCESS_WITHOUT_EXECUTION
+        ):
+            return get_actuator
+        actuator = get_actuator.result
+        if numpy.isclose(actuator.ctrl[0], value):
+            return SimulatorCallbackResult(
+                type=SimulatorCallbackResult.ResultType.SUCCESS_WITHOUT_EXECUTION,
+                info=f"Actuator {actuator_name} is already controlled to {value}",
+            )
+        actuator.ctrl[0] = value
+        return SimulatorCallbackResult(
+            type=SimulatorCallbackResult.ResultType.SUCCESS_AFTER_EXECUTION_ON_DATA,
+            info=f"Set control of actuator {actuator_name} to {value}",
+        )
+
+    @BaseSimulator.simulator_callback
     def attach(
         self,
         body_1_name: str,
-        body_2_name: Optional[str] = None,
-        relative_position: Optional[numpy.ndarray] = None,
-        relative_quaternion: Optional[numpy.ndarray] = None,
+        body_2_name: str | None = None,
+        relative_position: numpy.ndarray | None = None,
+        relative_quaternion: numpy.ndarray | None = None,
     ) -> SimulatorCallbackResult:
         """
         Attach body 1 to body 2 with the given relative position and quaternion.
@@ -1094,11 +1188,11 @@ class MujocoSimulator(BaseSimulator):
     @BaseSimulator.simulator_callback
     def get_contact_points(
         self,
-        body_names: List[str],
+        body_names: list[str],
         including_children: bool = True,
-        contact_style: Union[
-            SimulatorCallbackResult.OutputType, str
-        ] = SimulatorCallbackResult.OutputType.PYBULLET,
+        contact_style: (
+            SimulatorCallbackResult.OutputType | str
+        ) = SimulatorCallbackResult.OutputType.PYBULLET,
     ) -> SimulatorCallbackResult:
         """
         Get the contact points between bodies by their names.
@@ -1212,11 +1306,11 @@ class MujocoSimulator(BaseSimulator):
     @BaseSimulator.simulator_callback
     def ray_test(
         self,
-        ray_from_position: List[float],
-        ray_to_position: List[float],
-        ray_style: Union[
-            SimulatorCallbackResult.OutputType, str
-        ] = SimulatorCallbackResult.OutputType.PYBULLET,
+        ray_from_position: list[float],
+        ray_to_position: list[float],
+        ray_style: (
+            SimulatorCallbackResult.OutputType | str
+        ) = SimulatorCallbackResult.OutputType.PYBULLET,
     ) -> SimulatorCallbackResult:
         """
         Cast a ray in the scene and return intersections in a PyBullet\-style format.
@@ -1286,12 +1380,12 @@ class MujocoSimulator(BaseSimulator):
     @BaseSimulator.simulator_callback
     def ray_test_batch(
         self,
-        ray_from_position: List[float],
-        ray_to_positions: List[List[float]],
-        parent_link_name: Optional[str] = None,
-        ray_style: Union[
-            SimulatorCallbackResult.OutputType, str
-        ] = SimulatorCallbackResult.OutputType.PYBULLET,
+        ray_from_position: list[float],
+        ray_to_positions: list[list[float]],
+        parent_link_name: str | None = None,
+        ray_style: (
+            SimulatorCallbackResult.OutputType | str
+        ) = SimulatorCallbackResult.OutputType.PYBULLET,
     ) -> SimulatorCallbackResult:
         """
         Cast a batch of rays from a single origin to multiple end positions.
@@ -1386,7 +1480,7 @@ class MujocoSimulator(BaseSimulator):
 
     @BaseSimulator.simulator_callback
     def save(
-        self, file_path: Optional[str] = None, key_name: Optional[str] = None
+        self, file_path: str | None = None, key_name: str | None = None
     ) -> SimulatorCallbackResult:
         """
         Save the current simulation state to a file or to a keyframe.
@@ -1442,7 +1536,7 @@ class MujocoSimulator(BaseSimulator):
 
     @BaseSimulator.simulator_callback
     def load(
-        self, file_path: Optional[str] = None, key_id: int = 0
+        self, file_path: str | None = None, key_id: int = 0
     ) -> SimulatorCallbackResult:
         """
         Load a simulation state from a file or from a keyframe.
@@ -1490,6 +1584,18 @@ class MujocoSimulator(BaseSimulator):
             info=f"Loaded simulation with key_id {key_id}",
             result=key_id,
         )
+
+    @classmethod
+    def offscreen_rendering_available(cls) -> bool:
+        """
+        Whether this process can create the OpenGL context that :meth:`capture_rgb` and
+        :meth:`capture_depth` need: a headless backend is selected, or a display is
+        available to the windowed one.
+        """
+        backend = os.environ.get(MujocoEnvironmentVariable.GRAPHICS_BACKEND, "")
+        if backend in HeadlessGraphicsBackend:
+            return True
+        return MujocoEnvironmentVariable.DISPLAY in os.environ
 
     @BaseSimulator.simulator_callback
     def capture_rgb(
@@ -1560,7 +1666,6 @@ class MujocoSimulator(BaseSimulator):
         :return: A SimulatorCallbackResult object with the segmentation data as the
             result.
         """
-
         with self._model_lock:
             with mujoco.Renderer(self._mj_model, height, width) as renderer:
                 renderer.enable_segmentation_rendering()
@@ -1642,8 +1747,8 @@ class MujocoSimulator(BaseSimulator):
         self,
         entity_name: str,
         entity_type: str,
-        entity_properties: Dict[str, Any],
-        parent_name: Optional[str] = None,
+        entity_properties: dict[str, Any],
+        parent_name: str | None = None,
         parent_type: str = "body",
     ) -> SimulatorCallbackResult:
         """

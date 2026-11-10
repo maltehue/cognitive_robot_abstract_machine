@@ -5,7 +5,7 @@ from random_events.product_algebra import Event, SimpleEvent
 
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.datastructures.variables import SpatialVariables
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Point2
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix, Point2
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.geometry import PlanarBoundingBox
@@ -179,7 +179,7 @@ def test_planar_bounding_box_intersection_with_disjoint_box_is_none():
     assert a.intersection_with(b) is None
 
 
-# %% BoundingBoxCollection[PlanarBoundingBox]
+# %% BoundingBoxCollection[PlanarBoundingBox, Point2]
 
 
 def test_planar_bounding_box_collection_merge():

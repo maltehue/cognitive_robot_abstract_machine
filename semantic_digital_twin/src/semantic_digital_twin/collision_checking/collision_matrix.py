@@ -3,15 +3,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from itertools import combinations, product
-from typing import Dict, Any
+from typing_extensions import TYPE_CHECKING, Self, Any
 
-from typing_extensions import Tuple, TYPE_CHECKING, Self
 
 from krrood.adapters.json_serializer import (
     SubclassJSONSerializer,
     to_json,
     from_json,
-    list_like_classes,
 )
 from krrood.class_diagrams.attribute_introspector import DataclassOnlyIntrospector
 from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
@@ -115,27 +113,27 @@ class CollisionCheck(SubclassJSONSerializer):
     def __eq__(self, other: CollisionCheck):
         return self.body_a == other.body_a and self.body_b == other.body_b
 
-    def bodies(self) -> Tuple[Body, Body]:
+    def bodies(self) -> tuple[Body, Body]:
         return self.body_a, self.body_b
 
     def sort_bodies(self):
         if self.body_a.id > self.body_b.id:
             self.body_a, self.body_b = self.body_b, self.body_a
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self, **kwargs) -> dict[str, Any]:
         return {
-            **super().to_json(),
-            "body_a": to_json(self.body_a.id),
-            "body_b": to_json(self.body_b.id),
-            "distance": to_json(self.distance),
+            **super().to_json(**kwargs),
+            "body_a": to_json(self.body_a.id, **kwargs),
+            "body_b": to_json(self.body_b.id, **kwargs),
+            "distance": to_json(self.distance, **kwargs),
         }
 
     @classmethod
-    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
-        tracker = WorldEntityWithIDKwargsTracker.from_kwargs(kwargs)
+    def _from_json(cls, *, data: dict[str, Any], **kwargs) -> Self:
+        tracker = WorldEntityWithIDKwargsTracker.from_kwargs(from_json_kwargs=kwargs)
         return cls(
-            body_a=tracker.get_world_entity_with_id(id=from_json(data["body_a"])),
-            body_b=tracker.get_world_entity_with_id(id=from_json(data["body_b"])),
+            body_a=tracker.get(key=from_json(data["body_a"])),
+            body_b=tracker.get(key=from_json(data["body_b"])),
             distance=data["distance"],
         )
 
@@ -185,7 +183,15 @@ class CollisionMatrix:
         )
 
     def add_collision_checks(self, collision_checks: set[CollisionCheck]):
-        self.collision_checks |= collision_checks
+        """
+        Adds collision checks to the matrix.
+
+        A check for a body pair the matrix already contains replaces the distance of
+        that pair.
+        """
+        self.collision_checks = (
+            self.collision_checks - collision_checks
+        ) | collision_checks
 
     def remove_collision_checks(self, collision_checks: set[CollisionCheck]):
         self.collision_checks -= collision_checks
@@ -215,7 +221,7 @@ class CollisionRule(ABC):
     They modify collision matrices by adding or removing collision checks.
     """
 
-    _last_world_model_version: int = field(init=False, default=-1)
+    _last_world_model_version: int = field(init=False, default=-1, compare=False)
     """
     Used to prevent updating the collision matrix when the world model has not changed.
     """
@@ -301,21 +307,20 @@ class MaxAvoidedCollisionsOverride(MaxAvoidedCollisionsRule, SubclassJSONSeriali
             return None
         return self.value
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self, **kwargs) -> dict[str, Any]:
         return {
-            **super().to_json(),
+            **super().to_json(**kwargs),
             "value": self.value,
-            "bodies": to_json({b.id for b in self.bodies} if self.bodies else None),
+            "bodies": to_json(
+                {b.id for b in self.bodies} if self.bodies else None, **kwargs
+            ),
         }
 
     @classmethod
-    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
-        tracker = WorldEntityWithIDKwargsTracker.from_kwargs(kwargs)
+    def _from_json(cls, *, data: dict[str, Any], **kwargs) -> Self:
+        tracker = WorldEntityWithIDKwargsTracker.from_kwargs(from_json_kwargs=kwargs)
         body_subset_ids = from_json(data["bodies"], **kwargs)
         body_subset = None
         if body_subset_ids is not None:
-            body_subset = {
-                tracker.get_world_entity_with_id(id=body_id)
-                for body_id in body_subset_ids
-            }
+            body_subset = {tracker.get(key=body_id) for body_id in body_subset_ids}
         return cls(value=data["value"], bodies=body_subset)

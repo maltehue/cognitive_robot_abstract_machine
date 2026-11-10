@@ -1,15 +1,19 @@
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
+from datetime import timedelta
+from functools import cached_property
 
 import mujoco
 import numpy
 import trimesh
 from scipy.spatial.transform import Rotation
-from typing_extensions import Optional, Dict, Self
+from typing_extensions import Self
 from xml.etree import ElementTree as ET
 
 from semantic_digital_twin.adapters.multi_sim import (
+    ContactCategories,
     MujocoActuator,
     GeomVisibilityAndCollisionType,
     MujocoCamera,
@@ -20,16 +24,16 @@ from semantic_digital_twin.adapters.multi_sim import (
     MujocoLight,
     MujocoTendon,
 )
-from semantic_digital_twin.adapters.world_model_parser import WorldModelParser
+from semantic_digital_twin.adapters.package_resolver import PackageUriResolver
+from semantic_digital_twin.world_source import WorldModelParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.exceptions import WorldEntityNotFoundError
-from semantic_digital_twin.spatial_types import (
+from krrood_spatial_math.spatial_types import (
     HomogeneousTransformationMatrix,
     RotationMatrix,
     Point3,
     Vector3,
 )
-from semantic_digital_twin.spatial_types.derivatives import DerivativeMap
 from semantic_digital_twin.world import World, Body
 from semantic_digital_twin.world_description.connection_properties import JointDynamics
 from semantic_digital_twin.world_description.connections import (
@@ -41,6 +45,12 @@ from semantic_digital_twin.world_description.connections import (
 from semantic_digital_twin.world_description.degree_of_freedom import (
     DegreeOfFreedom,
     DegreeOfFreedomLimits,
+)
+from semantic_digital_twin.world_description.contact import (
+    ContactFriction,
+    ContactImpedance,
+    ContactParameters,
+    ContactStiffness,
 )
 from semantic_digital_twin.world_description.geometry import (
     Box,
@@ -59,7 +69,10 @@ from semantic_digital_twin.world_description.inertial_properties import (
     PrincipalAxes,
 )
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
-from semantic_digital_twin.world_description.world_entity import Actuator
+from semantic_digital_twin.world_description.world_entity import (
+    Actuator,
+    GravityCompensation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,28 +88,52 @@ class MJCFParser(WorldModelParser):
     The file path of the scene.
     """
 
-    mimic_joints: Dict[str, str] = field(default_factory=dict)
+    mimic_joints: dict[str, str] = field(default_factory=dict)
     """
     A dictionary mapping joint names to the names of the joints they mimic.
     """
 
-    prefix: Optional[str] = None
+    prefix: str | None = None
     """
     The prefix for every name used in this world.
     """
 
-    def __post_init__(self):
+    default_joint_velocity_limit: float = 1.0
+    """
+    Velocity magnitude every limited joint is parsed with, in radian or meter per
+    second.
+
+    MJCF describes no velocity limit on a joint, so one is supplied here, applied
+    symmetrically about zero the way :mod:`semantic_digital_twin.adapters.urdf` reads
+    the URDF limit.
+    """
+
+    def __post_init__(self) -> None:
+        package_uri_resolver = PackageUriResolver()
+        if package_uri_resolver.supports(self.file_path):
+            self.file_path = package_uri_resolver.resolve(self.file_path)
         if self.prefix is None:
             self.prefix = os.path.basename(self.file_path).split(".")[0]
         self.spec: mujoco.MjSpec = mujoco.MjSpec.from_file(self.file_path)
-        self.tree = ET.fromstring(self.spec.to_xml())
+
+    @cached_property
+    def resolved_document(self) -> ET.Element:
+        """
+        The scene's XML document with its includes and defaults resolved, as MuJoCo
+        writes it back out.
+
+        .. warning:: Building it compiles the whole scene, loading every mesh and
+            texture the scene refers to.
+        """
+        return ET.fromstring(self.spec.to_xml())
 
     @classmethod
     def from_file(
         cls,
         file_path: str,
-        prefix: Optional[str] = None,
-        mimic_joints: Optional[Dict[str, str]] = None,
+        prefix: str | None = None,
+        mimic_joints: dict[str, str] | None = None,
+        use_visual_as_collision_backup: bool = False,
     ) -> Self:
         """
         Creates a parser for a scene file.
@@ -105,26 +142,39 @@ class MJCFParser(WorldModelParser):
         :param prefix: The prefix for every name used in this world.
         :param mimic_joints: A mapping of joint names to the names of the joints they
             mimic.
+        :param use_visual_as_collision_backup: Whether a body with no geom that takes
+            part in contact collides with the geoms it does have.
         :return: A parser for the world described by that file.
         """
-        return cls(file_path=file_path, mimic_joints=mimic_joints or {}, prefix=prefix)
+        return cls(
+            file_path=file_path,
+            mimic_joints=mimic_joints or {},
+            prefix=prefix,
+            use_visual_as_collision_backup=use_visual_as_collision_backup,
+        )
 
     @classmethod
-    def from_xml_string(cls, xml_string: str) -> Self:
-        file_path = "/tmp/scene.xml"
-        with open(file_path, "w") as f:
+    def from_xml_string(
+        cls, xml_string: str, use_visual_as_collision_backup: bool = False
+    ) -> Self:
+        """
+        Creates a parser for a scene held in memory, by way of a temporary file.
+
+        :param xml_string: The MJCF document to parse.
+        :param use_visual_as_collision_backup: Whether a body with no geom that takes
+            part in contact collides with the geoms it does have.
+        :return: A parser for the world described by that document.
+        """
+        # A file of its own, so that parsers created at the same time, e.g. by parallel
+        # test workers, never overwrite each other's scene.
+        file_descriptor, file_path = tempfile.mkstemp(prefix="scene_", suffix=".xml")
+        with os.fdopen(file_descriptor, "w") as f:
             f.write(xml_string)
-        return cls(file_path)
+        return cls(
+            file_path, use_visual_as_collision_backup=use_visual_as_collision_backup
+        )
 
-    def parse(self) -> World:
-        """
-        Parse the MJCF file and convert it into a World object.
-
-        The world is built per call, so parsing repeatedly yields independent worlds
-        that share no entity identifiers.
-
-        :return: The World object representing the MJCF scene.
-        """
+    def create_world(self) -> World:
         self.world = World()
         worldbody: mujoco.MjsBody = self.spec.worldbody
         with self.world.modify_world():
@@ -133,6 +183,7 @@ class MJCFParser(WorldModelParser):
 
             root = Body(name=PrefixedName(worldbody.name))
             self.world.add_body(root)
+            self._apply_geoms_to_body(mujoco_body=worldbody, body=root)
 
             for mujoco_body in worldbody.bodies:
                 self.parse_body(mujoco_body=mujoco_body)
@@ -151,6 +202,99 @@ class MJCFParser(WorldModelParser):
 
         return self.world
 
+    @staticmethod
+    def _compose_frame_chain(
+        entity: mujoco.MjsBody | mujoco.MjsGeom,
+    ) -> HomogeneousTransformationMatrix:
+        """
+        Compose the transform from the entity's enclosing body down through any nested
+        MJCF ``<frame>`` wrappers to the entity's own local frame.
+
+        MJCF ``<frame>`` elements add an extra coordinate system between a body
+        and its children without creating a new body. ``mujoco.MjSpec`` preserves
+        them: ``geom.frame`` / ``body.frame`` is the immediate parent frame (or
+        ``None``), and ``geom.pos`` / ``body.pos`` are expressed relative to that
+        frame. The returned matrix is therefore ``body_T_leafFrame`` (identity if
+        the entity is not inside any frame).
+
+        MuJoCo folds frames into their children while compiling, so this composition is
+        only needed because the parser reads the editable ``MjSpec`` rather than the
+        compiled ``MjModel``.
+        """
+        chain = []
+        frame = entity.frame
+        while frame is not None:
+            chain.append(frame)
+            frame = frame.frame
+        result = HomogeneousTransformationMatrix()
+        for frame in reversed(chain):
+            frame_quat = numpy.asarray(frame.quat, dtype=float)
+            frame_quat = frame_quat / numpy.linalg.norm(frame_quat)
+            frame_transform = HomogeneousTransformationMatrix.from_xyz_quaternion(
+                pos_x=frame.pos[0],
+                pos_y=frame.pos[1],
+                pos_z=frame.pos[2],
+                quat_w=frame_quat[0],
+                quat_x=frame_quat[1],
+                quat_y=frame_quat[2],
+                quat_z=frame_quat[3],
+            )
+            result = result @ frame_transform
+        return result
+
+    def _apply_geoms_to_body(self, mujoco_body: mujoco.MjsBody, body: Body) -> None:
+        """
+        Parse geoms of a Mujoco body and attach them as visual/collision shapes to a
+        Body.
+
+        A body counts as having no collision geometry when every one of its geoms is
+        excluded from contact through ``contype=0`` and ``conaffinity=0``, which is when
+        :attr:`use_visual_as_collision_backup` lets those geoms collide instead.
+
+        :param mujoco_body: The Mujoco body whose geoms to parse.
+        :param body: The semdt Body to attach the shapes to.
+        """
+        visuals = []
+        contact_shapes = []
+        contact_excluded_shapes = []
+        for mujoco_geom in mujoco_body.geoms:
+            shape = self.parse_geom(mujoco_geom=mujoco_geom)
+            shape.origin.reference_frame = body
+            shape.add_simulator_property(
+                ContactParameters(
+                    friction=ContactFriction(*mujoco_geom.friction.tolist()),
+                    stiffness=ContactStiffness(
+                        time_constant=timedelta(seconds=mujoco_geom.solref[0]),
+                        damping_ratio=mujoco_geom.solref[1],
+                    ),
+                    impedance=ContactImpedance(*mujoco_geom.solimp.tolist()),
+                )
+            )
+            shape.add_simulator_property(
+                MujocoGeom(
+                    contact_type=ContactCategories(mujoco_geom.contype),
+                    contact_affinity=ContactCategories(mujoco_geom.conaffinity),
+                )
+            )
+            takes_part_in_contact = (
+                mujoco_geom.contype != 0 or mujoco_geom.conaffinity != 0
+            )
+            if takes_part_in_contact:
+                contact_shapes.append(shape)
+            else:
+                contact_excluded_shapes.append(shape)
+            if mujoco_geom.group in [
+                GeomVisibilityAndCollisionType.VISIBLE_AND_COLLIDABLE_1,
+                GeomVisibilityAndCollisionType.VISIBLE_AND_COLLIDABLE_2,
+                GeomVisibilityAndCollisionType.ONLY_VISIBLE,
+            ]:
+                visuals.append(shape)
+        collisions = contact_shapes
+        if not collisions and self.use_visual_as_collision_backup:
+            collisions = contact_excluded_shapes
+        body.visual = ShapeCollection(shapes=visuals, reference_frame=body)
+        body.collision = ShapeCollection(shapes=collisions, reference_frame=body)
+
     def parse_body(self, mujoco_body: mujoco.MjsBody):
         """
         Parse a Mujoco body and add it to the world.
@@ -158,39 +302,18 @@ class MJCFParser(WorldModelParser):
         :param mujoco_body: The Mujoco body to parse.
         """
         body = Body(name=PrefixedName(mujoco_body.name))
-        visuals = []
-        collisions = []
-        for mujoco_geom in mujoco_body.geoms:
-            shape = self.parse_geom(mujoco_geom=mujoco_geom)
-            shape.origin.reference_frame = body
-            shape.simulator_additional_properties.append(
-                MujocoGeom(
-                    solver_impedance=mujoco_geom.solimp.tolist(),
-                    solver_reference=mujoco_geom.solref.tolist(),
-                )
-            )
-            if mujoco_geom.contype != 0 or mujoco_geom.conaffinity != 0:
-                collisions.append(shape)
-            if mujoco_geom.group in [
-                GeomVisibilityAndCollisionType.VISIBLE_AND_COLLIDABLE_1,
-                GeomVisibilityAndCollisionType.VISIBLE_AND_COLLIDABLE_2,
-                GeomVisibilityAndCollisionType.ONLY_VISIBLE,
-            ]:
-                visuals.append(shape)
+        self._apply_geoms_to_body(mujoco_body=mujoco_body, body=body)
         body.inertial = self.parse_inertial(mujoco_body=mujoco_body)
-        body.visual = ShapeCollection(shapes=visuals, reference_frame=body)
-        body.collision = ShapeCollection(shapes=collisions, reference_frame=body)
-        body.simulator_additional_properties.append(
-            MujocoBody(
-                gravitation_compensation_factor=mujoco_body.gravcomp,
-                motion_capture=mujoco_body.mocap,
+        if mujoco_body.gravcomp != 0.0:
+            body.add_simulator_property(
+                GravityCompensation(fraction=float(mujoco_body.gravcomp))
             )
-        )
+        body.add_simulator_property(MujocoBody(motion_capture=mujoco_body.mocap))
         self.world.add_kinematic_structure_entity(body)
         for mujoco_child_body in mujoco_body.bodies:
             self.parse_body(mujoco_body=mujoco_child_body)
 
-    def parse_inertial(self, mujoco_body: mujoco.MjsBody) -> Optional[Inertial]:
+    def parse_inertial(self, mujoco_body: mujoco.MjsBody) -> Inertial | None:
         """
         Parse the inertial properties of a Mujoco body.
 
@@ -250,7 +373,7 @@ class MJCFParser(WorldModelParser):
             body_pos = mujoco_body.pos
             body_quat = mujoco_body.quat
             body_quat /= numpy.linalg.norm(body_quat)
-            parent_body_to_child_body_transform = (
+            frame_to_body_transform = (
                 HomogeneousTransformationMatrix.from_xyz_quaternion(
                     pos_x=body_pos[0],
                     pos_y=body_pos[1],
@@ -260,6 +383,9 @@ class MJCFParser(WorldModelParser):
                     quat_y=body_quat[2],
                     quat_z=body_quat[3],
                 )
+            )
+            parent_body_to_child_body_transform = (
+                self._compose_frame_chain(mujoco_body) @ frame_to_body_transform
             )
             parent_body = self.world.get_kinematic_structure_entity_by_name(
                 mujoco_body.parent.name
@@ -275,9 +401,7 @@ class MJCFParser(WorldModelParser):
                 )
             )
 
-    def _resolve_primitive_texture(
-        self, mujoco_geom: mujoco.MjsGeom
-    ) -> Optional[Texture]:
+    def _resolve_primitive_texture(self, mujoco_geom: mujoco.MjsGeom) -> Texture | None:
         """
         Resolves the texture a primitive (box/sphere/cylinder/plane) geom's ``material``
         references, if any. Mesh geoms resolve their texture separately, as part of
@@ -290,12 +414,12 @@ class MJCFParser(WorldModelParser):
         """
         if not mujoco_geom.material:
             return None
-        mujoco_material: Optional[mujoco.MjsMaterial] = self.spec.material(
+        mujoco_material: mujoco.MjsMaterial | None = self.spec.material(
             mujoco_geom.material
         )
         if mujoco_material is None or not mujoco_material.textures[1]:
             return None
-        mujoco_texture: Optional[mujoco.MjsTexture] = self.spec.texture(
+        mujoco_texture: mujoco.MjsTexture | None = self.spec.texture(
             mujoco_material.textures[1]
         )
         if mujoco_texture is None:
@@ -320,7 +444,7 @@ class MJCFParser(WorldModelParser):
         geom_pos = mujoco_geom.pos
         geom_quat = mujoco_geom.quat
         geom_quat /= numpy.linalg.norm(geom_quat)
-        origin_transform = HomogeneousTransformationMatrix.from_xyz_quaternion(
+        frame_to_geom_transform = HomogeneousTransformationMatrix.from_xyz_quaternion(
             pos_x=geom_pos[0],
             pos_y=geom_pos[1],
             pos_z=geom_pos[2],
@@ -329,11 +453,14 @@ class MJCFParser(WorldModelParser):
             quat_y=geom_quat[2],
             quat_z=geom_quat[3],
         )
+        origin_transform = (
+            self._compose_frame_chain(mujoco_geom) @ frame_to_geom_transform
+        )
         size = mujoco_geom.size * 2
         for i in range(len(size)):
             if numpy.isclose(size[i], 0.0):
                 size[i] = 100.0  # Handle infinite size
-        color = Color(*mujoco_geom.rgba)
+        color = Color.from_rgba(*mujoco_geom.rgba)
         match mujoco_geom.type:
             case mujoco.mjtGeom.mjGEOM_PLANE:
                 return Box(
@@ -360,7 +487,7 @@ class MJCFParser(WorldModelParser):
                 return Cylinder(
                     origin=origin_transform,
                     width=size[0],
-                    height=size[1] / 2,
+                    height=size[1],
                     color=color,
                     texture=self._resolve_primitive_texture(mujoco_geom),
                 )
@@ -394,7 +521,7 @@ class MJCFParser(WorldModelParser):
                     texture_name = mujoco_material.textures[1]
                     mujoco_texture: mujoco.MjsTexture = self.spec.texture(texture_name)
                     if mujoco_texture is None:
-                        color = Color(*mujoco_material.rgba)
+                        color = Color.from_rgba(*mujoco_material.rgba)
                         return Mesh(
                             filename=filename,
                             origin=origin_transform,
@@ -427,7 +554,7 @@ class MJCFParser(WorldModelParser):
         self,
         parent_name: str,
         child_name: str,
-        mujoco_joint: Optional[mujoco.MjsJoint] = None,
+        mujoco_joint: mujoco.MjsJoint | None = None,
     ):
         """
         Parse a Mujoco joint and add it to the world.
@@ -446,7 +573,7 @@ class MJCFParser(WorldModelParser):
             child_body_pos = mujoco_child_body.pos
             child_body_quat = mujoco_child_body.quat
             child_body_quat /= numpy.linalg.norm(child_body_quat)
-            parent_body_to_child_body_transform = (
+            frame_to_child_body_transform = (
                 HomogeneousTransformationMatrix.from_xyz_quaternion(
                     pos_x=child_body_pos[0],
                     pos_y=child_body_pos[1],
@@ -456,6 +583,10 @@ class MJCFParser(WorldModelParser):
                     quat_y=child_body_quat[2],
                     quat_z=child_body_quat[3],
                 )
+            )
+            parent_body_to_child_body_transform = (
+                self._compose_frame_chain(mujoco_child_body)
+                @ frame_to_child_body_transform
             )
             child_body_to_joint_transform = (
                 HomogeneousTransformationMatrix.from_xyz_quaternion(
@@ -518,7 +649,7 @@ class MJCFParser(WorldModelParser):
                     raise NotImplementedError(
                         f"Joint type {mujoco_joint.type} not implemented yet."
                     )
-                connection.simulator_additional_properties.append(
+                connection.add_simulator_property(
                     MujocoJoint(
                         stiffness=(
                             [mujoco_joint.stiffness]
@@ -552,14 +683,13 @@ class MJCFParser(WorldModelParser):
                     name=PrefixedName(dof_name),
                 )
             else:
-                lower_limits = DerivativeMap()
-                lower_limits.position = float(mujoco_joint.range[0])
-                upper_limits = DerivativeMap()
-                upper_limits.position = float(mujoco_joint.range[1])
                 dof = DegreeOfFreedom(
                     name=PrefixedName(dof_name),
-                    limits=DegreeOfFreedomLimits(
-                        lower=lower_limits, upper=upper_limits
+                    # MJCF has no velocity limit on a joint, so a default is supplied.
+                    limits=DegreeOfFreedomLimits.from_position_range_and_speed(
+                        lower_position=float(mujoco_joint.range[0]),
+                        upper_position=float(mujoco_joint.range[1]),
+                        maximum_speed=self.default_joint_velocity_limit,
                     ),
                 )
             self.world.add_degree_of_freedom(dof)
@@ -585,15 +715,15 @@ class MJCFParser(WorldModelParser):
             joint_name = mujoco_actuator.target
             connection = self.world.get_connection_by_name(joint_name)
             dofs = list(connection.dofs)
-            assert (
-                len(dofs) == 1
-            ), f"Actuator {actuator_name} is associated with joint {joint_name} which has {len(connection.dofs)} DOFs, but only single-DOF joints are supported for actuators."
+            assert len(dofs) == 1, (
+                f"Actuator {actuator_name} is associated with joint {joint_name} which has {len(connection.dofs)} DOFs, but only single-DOF joints are supported for actuators."
+            )
             actuator.add_dof(dofs[0])
         else:
             actuator.add_dof(
                 self.world.get_degree_of_freedom_by_name(mujoco_actuator.target)
             )
-        actuator.simulator_additional_properties.append(
+        actuator.add_simulator_property(
             MujocoActuator(
                 activation_limited=mujoco_actuator.actlimited,
                 activation_range=[*mujoco_actuator.actrange],
@@ -656,7 +786,7 @@ class MJCFParser(WorldModelParser):
 
         body_name = mujoco_camera.parent.name
         body = self.world.get_body_by_name(body_name)
-        body.simulator_additional_properties.append(
+        body.add_simulator_property(
             MujocoCamera(
                 body=body,
                 name=camera_name,
@@ -687,7 +817,7 @@ class MJCFParser(WorldModelParser):
         """
         body_name = mujoco_light.parent.name
         body = self.world.get_body_by_name(body_name)
-        body.simulator_additional_properties.append(
+        body.add_simulator_property(
             MujocoLight(
                 body=body,
                 name=mujoco_light.name,
@@ -716,7 +846,7 @@ class MJCFParser(WorldModelParser):
                 case mujoco.mjtEq.mjEQ_JOINT:
                     self.mimic_joints[equality.name2] = equality.name1
                 case mujoco.mjtEq.mjEQ_WELD:
-                    self.world.simulator_additional_properties.append(
+                    self.world.add_simulator_property(
                         MujocoEquality(
                             type=mujoco.mjtEq.mjEQ_WELD,
                             object_type=mujoco.mjtObj.mjOBJ_BODY,
@@ -726,7 +856,7 @@ class MJCFParser(WorldModelParser):
                         )
                     )
                 case mujoco.mjtEq.mjEQ_CONNECT:
-                    self.world.simulator_additional_properties.append(
+                    self.world.add_simulator_property(
                         MujocoEquality(
                             type=mujoco.mjtEq.mjEQ_CONNECT,
                             object_type=mujoco.mjtObj.mjOBJ_BODY,
@@ -740,22 +870,24 @@ class MJCFParser(WorldModelParser):
                         f"Equality of type {equality.type} not supported yet. Skipping."
                     )
 
-    def parse_tendons(self):
+    def parse_tendons(self) -> None:
+        """
+        Add a degree of freedom for every tendon of the scene, carrying the tendon's
+        MuJoCo properties and the coefficient of every joint a fixed tendon couples.
+        """
         tendon: mujoco.MjsTendon
         for tendon in self.spec.tendons:
-            joints = {}
-            for joint in self.tree.findall(
-                f".//tendon/fixed[@name='{tendon.name}']/joint"
-            ):
-                name = joint.get("joint")
-                coef = float(joint.get("coef"))
-                assert coef is not None and coef is not None
-                joints[name] = coef
+            joints = {
+                joint.get("joint"): float(joint.get("coef"))
+                for joint in self.resolved_document.findall(
+                    f".//tendon/fixed[@name='{tendon.name}']/joint"
+                )
+            }
             dof = DegreeOfFreedom(
                 name=PrefixedName(tendon.name),
             )
             self.world.add_degree_of_freedom(dof)
-            self.world.simulator_additional_properties.append(
+            self.world.add_simulator_property(
                 MujocoTendon(
                     name=tendon.name,
                     actuator_force_limited=tendon.actfrclimited,
@@ -772,7 +904,7 @@ class MJCFParser(WorldModelParser):
                     margin=tendon.margin,
                     material=tendon.material,
                     range=tendon.range.tolist(),
-                    rgba=Color(*tendon.rgba),
+                    rgba=Color.from_rgba(*tendon.rgba),
                     solver_impedance_friction=tendon.solimp_friction.tolist(),
                     solver_impedance_limit=tendon.solimp_limit.tolist(),
                     solver_reference_friction=tendon.solref_friction.tolist(),

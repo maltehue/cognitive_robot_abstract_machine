@@ -4,14 +4,12 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Callable, TYPE_CHECKING
+from typing_extensions import Callable, TYPE_CHECKING
 
 import numpy as np
 
-from semantic_digital_twin.spatial_types import Point3
-from semantic_digital_twin.spatial_types.spatial_types import (
-    HomogeneousTransformationMatrix,
-)
+from krrood_spatial_math.spatial_types import Point3
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world_description.geometry import Mesh
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -49,7 +47,7 @@ class Pipeline:
     output World of one Step is passed as the input World to the next Step.
     """
 
-    steps: List[Step]
+    steps: list[Step]
     """
     The list of Steps to be applied in the Pipeline.
     """
@@ -89,7 +87,6 @@ class CenterLocalGeometryAndPreserveWorldPose(Step):
 
     def _apply(self, world: World) -> World:
         for body in world.bodies_topologically_sorted:
-
             vertices = []
 
             for coll in body.collision:
@@ -178,7 +175,8 @@ class BodyFactoryReplace(Step):
 
             world.remove_kinematic_structure_entity(body)
 
-            parent_connection.child = new_world.root
-            world.merge_world(new_world, parent_connection)
+            world.merge_world(
+                new_world, parent_connection.copy_with_new_child(new_world.root)
+            )
 
         return world

@@ -7,32 +7,22 @@ from functools import cached_property
 
 import numpy as np
 import numpy.typing as npt
-from random_events.product_algebra import Event, SimpleEvent
 from trimesh import Trimesh
 from trimesh.util import concatenate
-from typing_extensions import (
-    Dict,
-    Any,
-    Self,
-    Optional,
-    List,
-    Iterable,
-    Iterator,
-    Generic,
-    Type,
-    TypeVar,
-)
+from typing_extensions import Any, Self, Iterable, Iterator, Generic, TypeVar
 from typing_extensions import TYPE_CHECKING
 
 from krrood.adapters.json_serializer import SubclassJSONSerializer, to_json, from_json
+from random_events.product_algebra import Event, SimpleEvent
 from semantic_digital_twin.exceptions import MismatchingWorld
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix, Point3
 from semantic_digital_twin.world_description.geometry import (
     Shape,
     AxisAlignedBox,
+    PointT,
     VolumetricBoundingBox,
     Color,
 )
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Point3
 
 BoxT = TypeVar("BoxT", bound=AxisAlignedBox)
 """
@@ -56,18 +46,18 @@ class ShapeCollection(SubclassJSONSerializer):
     A collection of shapes.
     """
 
-    shapes: List[Shape] = field(default_factory=list)
+    shapes: list[Shape] = field(default_factory=list)
     """
     The shapes contained in this collection.
     """
 
-    reference_frame: Optional[KinematicStructureEntity] = None
+    reference_frame: KinematicStructureEntity | None = None
     """
     Backreference to the kinematic structure entity this collection belongs to.
     """
 
     @property
-    def world(self) -> Optional[World]:
+    def world(self) -> World | None:
         """
         The world this collection belongs to.
         """
@@ -205,15 +195,25 @@ class ShapeCollection(SubclassJSONSerializer):
             HomogeneousTransformationMatrix(reference_frame=reference_frame)
         )
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self, **kwargs) -> dict[str, Any]:
         return {
-            **super().to_json(),
-            "shapes": [to_json(shape) for shape in self.shapes],
+            **super().to_json(**kwargs),
+            "shapes": [to_json(shape, **kwargs) for shape in self.shapes],
         }
 
     @classmethod
-    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
-        return cls(shapes=[from_json(d, **kwargs) for d in data["shapes"]])
+    def _from_json(cls, *, data: dict[str, Any], **kwargs) -> Self:
+        """
+        The collection belongs to the frame all its shapes are expressed in, which is
+        the entity it was written from, such as a body whose shapes are replaced.
+        """
+        shapes = [from_json(d, **kwargs) for d in data["shapes"]]
+        frames = {
+            id(shape.origin.reference_frame): shape.origin.reference_frame
+            for shape in shapes
+        }
+        reference_frame = next(iter(frames.values())) if len(frames) == 1 else None
+        return cls(shapes=shapes, reference_frame=reference_frame)
 
     def center_of_mass_in_world(self) -> Point3:
         """
@@ -252,7 +252,7 @@ class ShapeCollection(SubclassJSONSerializer):
 
 
 @dataclass
-class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
+class BoundingBoxCollection(Generic[BoxT, PointT], ShapeCollection):
     """
     A collection of axis-aligned bounding boxes, sharing one reference frame.
 
@@ -261,23 +261,26 @@ class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
     on the shared :class:`AxisAlignedBox` interface. ``as_shapes``/``from_shapes``
     additionally need :meth:`AxisAlignedBox.as_shape`, so they are only meaningful for
     a :class:`VolumetricBoundingBox` collection.
+
+    The second parameter is the point type the boxes are asked about. It follows from the
+    first, but Python cannot derive one type parameter from another, so both are spelled.
     """
 
-    shapes: List[BoxT] = field(default_factory=list)
+    shapes: list[BoxT] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.reference_frame:
             raise ValueError("BoundingBoxCollection must have a reference frame.")
         for box in self.bounding_boxes:
-            assert (
-                box.origin.reference_frame == self.reference_frame
-            ), "All bounding boxes must have the same reference frame."
+            assert box.origin.reference_frame == self.reference_frame, (
+                "All bounding boxes must have the same reference frame."
+            )
 
     def __iter__(self) -> Iterator[BoxT]:
         return iter(self.bounding_boxes)
 
     @property
-    def bounding_boxes(self) -> List[BoxT]:
+    def bounding_boxes(self) -> list[BoxT]:
         return self.shapes
 
     @property
@@ -289,6 +292,15 @@ class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
             *[box.simple_event for box in self.bounding_boxes]
         )
 
+    def contains(self, point: PointT) -> bool:
+        """
+        Check whether a point lies in any of the bounding boxes.
+
+        :param point: The point to check, in any reference frame.
+        :return: True if one of the bounding boxes contains the point.
+        """
+        return any(box.contains(point) for box in self.bounding_boxes)
+
     def merge(self, other: Self) -> Self:
         """
         Merge another bounding box collection into this one.
@@ -296,9 +308,9 @@ class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
         :param other: The other bounding box collection.
         :return: The merged bounding box collection.
         """
-        assert (
-            self.reference_frame == other.reference_frame
-        ), "The reference frames of the bounding box collections must be the same."
+        assert self.reference_frame == other.reference_frame, (
+            "The reference frames of the bounding box collections must be the same."
+        )
         return type(self)(
             reference_frame=self.reference_frame,
             shapes=self.bounding_boxes + other.bounding_boxes,
@@ -307,9 +319,9 @@ class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
     @classmethod
     def merge_all(
         cls,
-        collections: Iterable[BoundingBoxCollection[BoxT]],
+        collections: Iterable[BoundingBoxCollection[BoxT, PointT]],
         reference_frame: KinematicStructureEntity,
-    ) -> BoundingBoxCollection[BoxT]:
+    ) -> BoundingBoxCollection[BoxT, PointT]:
         """
         Merge a sequence of bounding box collections into one.
 
@@ -326,11 +338,11 @@ class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
     @classmethod
     def from_simple_event(
         cls,
-        box_type: Type[BoxT],
+        box_type: type[BoxT],
         reference_frame: KinematicStructureEntity,
         simple_event: SimpleEvent,
         keep_surface: bool = False,
-    ) -> BoundingBoxCollection[BoxT]:
+    ) -> BoundingBoxCollection[BoxT, PointT]:
         """
         Create a collection of bounding boxes from a simple random event.
 
@@ -372,7 +384,7 @@ class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
     @classmethod
     def from_event(
         cls,
-        box_type: Type[BoxT],
+        box_type: type[BoxT],
         reference_frame: KinematicStructureEntity,
         event: Event,
     ) -> Self:
@@ -406,9 +418,9 @@ class BoundingBoxCollection(Generic[BoxT], ShapeCollection):
         if len(shapes) == 0:
             return cls(shapes=[])
         for shape in shapes:
-            assert (
-                shape.origin.reference_frame == shapes[0].origin.reference_frame
-            ), "All shapes must have the same reference frame."
+            assert shape.origin.reference_frame == shapes[0].origin.reference_frame, (
+                "All shapes must have the same reference frame."
+            )
 
         local_bbs = [shape.local_frame_bounding_box for shape in shapes]
         return cls(

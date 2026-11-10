@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Type, Self
+from typing_extensions import TYPE_CHECKING, Any, Type, Self
 
 import numpy as np
-from typing_extensions import Dict, List, TYPE_CHECKING, Optional
 
 from krrood.adapters.json_serializer import (
     DataclassJSONSerializer,
@@ -30,18 +29,18 @@ class JointState(SubclassJSONSerializer):
     Represents a specific joint state by mapping a set of connections to target values.
     """
 
-    connections: List[ActiveConnection1DOF] = field(default_factory=list)
+    connections: list[ActiveConnection1DOF] = field(default_factory=list)
     """
     All connections in this state.
     """
 
-    target_values: List[float] = field(default_factory=list)
+    target_values: list[float] = field(default_factory=list)
     """
     All target values in this state, order has to correspond to the order of
     connections.
     """
 
-    state_type: Optional[JointStateType] = field(default=None)
+    state_type: JointStateType | None = field(default=None)
     """
     A type to better describe this state.
     """
@@ -109,14 +108,14 @@ class JointState(SubclassJSONSerializer):
                 connection.position = target_value
 
     @classmethod
-    def from_str_dict(cls, mapping: Dict[str, float], world: World):
+    def from_str_dict(cls, mapping: dict[str, float], world: World):
         connections = [world.get_connection_by_name(name) for name in mapping.keys()]
         return cls(connections, list(mapping.values()))
 
     @classmethod
     def from_mapping(
         cls,
-        mapping: Dict[ActiveConnection1DOF, float],
+        mapping: dict[ActiveConnection1DOF, float],
         state_type: JointStateType = None,
         name: PrefixedName = PrefixedName("JointState"),
     ):
@@ -128,30 +127,38 @@ class JointState(SubclassJSONSerializer):
         )
 
     @classmethod
-    def from_lists(cls, connections: List[ActiveConnection1DOF], targets: List[float]):
+    def from_lists(cls, connections: list[ActiveConnection1DOF], targets: list[float]):
         return cls(connections, targets)
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self, **kwargs) -> dict[str, Any]:
         return {
-            **super().to_json(),
+            **super().to_json(**kwargs),
             "child_ids": [
-                to_json(connection.child.id) for connection in self.connections
+                to_json(connection.child.id, **kwargs)
+                for connection in self.connections
+            ],
+            "child_names": [
+                to_json(connection.child.name, **kwargs)
+                for connection in self.connections
             ],
             "target_values": self.target_values,
-            "joint_state_type": to_json(self.state_type),
-            "name": to_json(self.name),
+            "joint_state_type": to_json(self.state_type, **kwargs),
+            "name": to_json(self.name, **kwargs),
         }
 
     @classmethod
-    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
+    def _from_json(cls, *, data: dict[str, Any], **kwargs) -> Self:
         # A connection carries no identifier of its own, so it is referenced the way
         # Connection itself is serialized: through the entities it joins. Names would
         # not do, since two instances of the same robot description name their joints
         # identically.
-        tracker = WorldEntityWithIDKwargsTracker.from_kwargs(kwargs)
+        tracker = WorldEntityWithIDKwargsTracker.from_kwargs(from_json_kwargs=kwargs)
+        child_names = data.get("child_names") or [None] * len(data["child_ids"])
         connections = [
-            tracker.get_world_entity_with_id(from_json(child_id)).parent_connection
-            for child_id in data["child_ids"]
+            tracker.get(
+                key=from_json(child_id), name=from_json(child_name)
+            ).parent_connection
+            for child_id, child_name in zip(data["child_ids"], child_names)
         ]
         target_values = from_json(data["target_values"])
         state_type = from_json(data["joint_state_type"])

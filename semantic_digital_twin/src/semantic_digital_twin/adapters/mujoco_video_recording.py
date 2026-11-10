@@ -7,7 +7,6 @@ from pathlib import Path
 import imageio.v2 as imageio
 import mujoco
 import numpy as np
-from typing_extensions import List, Optional
 
 from semantic_digital_twin.adapters.multi_sim import (
     MujocoCamera,
@@ -36,7 +35,9 @@ class VideoResolution:
     """The frame width in pixels."""
 
     height: int
-    """The frame height in pixels."""
+    """
+    The frame height in pixels.
+    """
 
 
 @dataclass
@@ -45,14 +46,16 @@ class RecordedVideo:
     The raw result of a :class:`MujocoVideoRecorder` session, before encoding.
     """
 
-    frames: List[np.ndarray]
+    frames: list[np.ndarray]
     """The captured RGB frames, in playback order."""
 
     frames_per_second: int
-    """The rate the frames are encoded at."""
+    """
+    The rate the frames are encoded at.
+    """
 
     @property
-    def frame_timestamps(self) -> List[float]:
+    def frame_timestamps(self) -> list[float]:
         """
         Each frame's position, in seconds, on the *encoded video's own timeline*
         (``index / frames_per_second``) - not a real-world or simulated-world clock. Whatever
@@ -68,7 +71,7 @@ class RecordedVideo:
         Encodes :attr:`frames` into a video file.
 
         :param output_path: The file path the video is written to.
-        :return: ``output_path``.
+        :return:``output_path``.
         """
         if len(self.frames) == 0:
             raise EmptyVideoRecordingError(output_path=output_path)
@@ -83,12 +86,16 @@ class RecordedVideo:
 @dataclass(eq=False)
 class _FrameCaptureCallback(StateChangeCallback):
     """
-    Sibling callback owned by a :class:`MujocoVideoRecorder`. Notifies it every time
+    Sibling callback owned by a :class:`MujocoVideoRecorder`.
+
+    Notifies it every time
     :attr:`recorder`'s world changes, at whatever pace that happens.
     """
 
     recorder: MujocoVideoRecorder = field(kw_only=True)
-    """The recorder to notify on every state change."""
+    """
+    The recorder to notify on every state change.
+    """
 
     def on_state_change(self, **kwargs):
         self.recorder._on_world_state_change()
@@ -98,8 +105,8 @@ class _FrameCaptureCallback(StateChangeCallback):
 class MujocoVideoRecorder:
     """
     Records a video of a :class:`~semantic_digital_twin.world.World` while it is being
-    mutated live (e.g. by a running plan), by mirroring it into a headless MuJoCo scene via
-    :class:`~semantic_digital_twin.adapters.multi_sim.MujocoSim`.
+    mutated live (e.g. by a running plan), by mirroring it into a headless MuJoCo scene
+    via :class:`~semantic_digital_twin.adapters.multi_sim.MujocoSim`.
 
     Frames are captured on world state changes rather than on a wall-clock timer: whatever
     drives the world (a Giskard-ticked plan, or manual stepping via
@@ -111,50 +118,74 @@ class MujocoVideoRecorder:
     """
 
     world: World
-    """The world to record. Must already contain at least one body with geometry."""
+    """
+    The world to record.
+
+    Must already contain at least one body with geometry.
+    """
 
     frames_per_second: int = 30
-    """The rate the encoded video plays back at."""
+    """
+    The rate the encoded video plays back at.
+    """
 
     capture_every_n_state_changes: int = 1
     """
-    Only every Nth world state change is captured as a frame. Raise this to shorten the
-    video for a world that changes state very often per unit of meaningful motion.
+    Only every Nth world state change is captured as a frame.
+
+    Raise this to shorten the video for a world that changes state very often per unit
+    of meaningful motion.
     """
 
     resolution: VideoResolution = field(
         default_factory=lambda: VideoResolution(width=640, height=480)
     )
-    """The pixel resolution of the captured frames."""
-
-    camera: Optional[MujocoCamera] = None
     """
-    An existing camera, already attached to :attr:`world`, to record from. If ``None``, a
-    fixed overview camera framing the world's bounding box is attached automatically on
-    construction, and this field is replaced with it.
+    The pixel resolution of the captured frames.
     """
 
-    _multi_sim: Optional[MujocoSim] = field(init=False, default=None, repr=False)
-    """The live MuJoCo mirror of :attr:`world`, present only while recording."""
+    camera: MujocoCamera | None = None
+    """
+    An existing camera, already attached to :attr:`world`, to record from.
 
-    _frame_capture_callback: Optional[_FrameCaptureCallback] = field(
+    If ``None``, a fixed overview camera framing the world's bounding box is attached
+    automatically on construction, and this field is replaced with it.
+    """
+
+    _multi_sim: MujocoSim | None = field(init=False, default=None, repr=False)
+    """
+    The live MuJoCo mirror of :attr:`world`, present only while recording.
+    """
+
+    _frame_capture_callback: _FrameCaptureCallback | None = field(
         init=False, default=None, repr=False
     )
-    """Notifies on every world state change, present only while recording."""
+    """
+    Notifies on every world state change, present only while recording.
+    """
 
     _state_change_count: int = field(init=False, default=0, repr=False)
-    """Number of world state changes observed since :meth:`start`."""
+    """
+    Number of world state changes observed since :meth:`start`.
+    """
 
-    _frames: List[np.ndarray] = field(init=False, default_factory=list, repr=False)
-    """Frames captured since the last :meth:`start`."""
+    _frames: list[np.ndarray] = field(init=False, default_factory=list, repr=False)
+    """
+    Frames captured since the last :meth:`start`.
+    """
 
-    _auto_attached_camera: Optional[MujocoCamera] = field(
+    _renderer: mujoco.Renderer | None = field(init=False, default=None, repr=False)
+    """
+    Renders the frames of the current recording, present only while recording.
+    """
+
+    _auto_attached_camera: MujocoCamera | None = field(
         init=False, default=None, repr=False
     )
     """
-    The overview camera construction attached to :attr:`world`, if :attr:`camera` was not
-    given; removed again by :meth:`stop` so repeated recordings of the same world don't
-    accumulate same-named cameras.
+    The overview camera construction attached to :attr:`world`, if :attr:`camera` was
+    not given; removed again by :meth:`stop` so repeated recordings of the same world
+    don't accumulate same-named cameras.
     """
 
     def __post_init__(self):
@@ -178,8 +209,8 @@ class MujocoVideoRecorder:
 
         The mirror's own physics stepping is not run in a background thread: for a world
         driven by a plan, MuJoCo only needs to mirror the poses Giskard already computed
-        (see :meth:`_on_world_state_change`, which refreshes the derived kinematics itself);
-        for a world with nothing else driving it, advance it explicitly with
+        (see :meth:`_on_world_state_change`, which refreshes the derived kinematics
+        itself); for a world with nothing else driving it, advance it explicitly with
         :meth:`advance_simulation`.
         """
         if self._multi_sim is not None:
@@ -221,6 +252,9 @@ class MujocoVideoRecorder:
 
         self._frame_capture_callback.stop()
         self._frame_capture_callback = None
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
         self._multi_sim.simulator.stop()
         self._multi_sim = None
 
@@ -245,12 +279,13 @@ class MujocoVideoRecorder:
         Steps the MuJoCo mirror's own physics (gravity, contacts, ...) forward by
         ``duration`` simulated seconds, capturing frames along the way.
 
-        Use this when nothing else (e.g. a coraplex plan) is already driving :attr:`world`;
-        it single-steps the mirror synchronously so capturing stays deterministic regardless
-        of how fast the host machine can step MuJoCo. A physics step is far finer-grained
-        than a usable video frame (often 1 ms), so :attr:`capture_every_n_state_changes` is
-        temporarily raised to match :attr:`frames_per_second` for the duration of this call -
-        otherwise every single step would trigger an expensive render.
+        Use this when nothing else (e.g. a coraplex plan) is already driving
+        :attr:`world`; it single-steps the mirror synchronously so capturing stays
+        deterministic regardless of how fast the host machine can step MuJoCo. A physics
+        step is far finer-grained than a usable video frame (often 1 ms), so
+        :attr:`capture_every_n_state_changes` is temporarily raised to match
+        :attr:`frames_per_second` for the duration of this call - otherwise every single
+        step would trigger an expensive render.
 
         :param duration: How many simulated seconds to advance.
         """
@@ -261,10 +296,6 @@ class MujocoVideoRecorder:
         steps_per_frame = max(1, round((1.0 / self.frames_per_second) / step_size))
         previous_decimation = self.capture_every_n_state_changes
         self.capture_every_n_state_changes = steps_per_frame
-        # Restart the decimation period cleanly so the first frame of this call lands
-        # exactly steps_per_frame steps in, rather than wherever the previous decimation
-        # period's phase happened to leave off.
-        self._state_change_count = 0
         try:
             for _ in range(max(1, round(duration / step_size))):
                 self._multi_sim.simulator.step()
@@ -280,8 +311,8 @@ class MujocoVideoRecorder:
 
     def _on_world_state_change(self) -> None:
         """
-        Captures a frame if this is the Nth world state change since the last capture (see
-        :attr:`capture_every_n_state_changes`).
+        Captures a frame if this is the Nth world state change since the last capture
+        (see :attr:`capture_every_n_state_changes`).
         """
         keep_frame = self._state_change_count % self.capture_every_n_state_changes == 0
         self._state_change_count += 1
@@ -297,12 +328,26 @@ class MujocoVideoRecorder:
         simulator = self._multi_sim.simulator
         with simulator._model_lock:
             mujoco.mj_forward(simulator._mj_model, simulator._mj_data)
-            capture_result = simulator.capture_rgb(
-                camera_name=self.camera.name,
-                height=self.resolution.height,
-                width=self.resolution.width,
-            )
-        self._frames.append(capture_result.result)
+            renderer = self._renderer_for(simulator._mj_model)
+            renderer.update_scene(simulator._mj_data, camera=self.camera.name)
+            self._frames.append(renderer.render())
+
+    def _renderer_for(self, model: mujoco.MjModel) -> mujoco.Renderer:
+        """
+        The renderer of :attr:`resolution` for ``model``, kept across frames and built
+        anew only when the simulator has recompiled its model.
+
+        :param model: The model the next frame is rendered from.
+        :return: A renderer bound to ``model``.
+        """
+        if self._renderer is not None and self._renderer.model is model:
+            return self._renderer
+        if self._renderer is not None:
+            self._renderer.close()
+        self._renderer = mujoco.Renderer(
+            model, self.resolution.height, self.resolution.width
+        )
+        return self._renderer
 
     def _attach_overview_camera(self) -> MujocoCamera:
         """
@@ -317,13 +362,13 @@ class MujocoVideoRecorder:
 
         pose = MujocoCamera.overview_pose(np.asarray(bounds))
         # MuJoCo orders the quaternion scalar-first, while Quaternion.to_np is [x, y, z, w].
-        quaternion_xyzw = pose.to_quaternion().to_np().tolist()
+        quaternion_xyzw = pose.quaternion.to_np().tolist()
         camera = MujocoCamera(
             name="cram_video_overview_camera",
             body=self.world.root,
-            position=pose.to_position().to_np()[:3].tolist(),
+            position=pose.position.to_np()[:3].tolist(),
             quaternion=[quaternion_xyzw[3]] + quaternion_xyzw[:3],
             resolution=[float(self.resolution.width), float(self.resolution.height)],
         )
-        self.world.root.simulator_additional_properties.append(camera)
+        self.world.root.add_simulator_property(camera)
         return camera
