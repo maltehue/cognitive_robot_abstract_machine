@@ -20,6 +20,11 @@ from giskardpy.qp.qp_controller_config import QPControllerConfig
 
 from semantic_digital_twin.world import World
 
+if TYPE_CHECKING:
+    from semantic_digital_twin.world_description.degree_of_freedom import (
+        DegreeOfFreedom,
+    )
+
 
 @dataclass
 class ContextExtension:
@@ -64,6 +69,15 @@ class MotionStatechartContext:
     Is only needed when constraints are present in the motion statechart.
     """
 
+    moves_only_commanded_degrees_of_freedom: bool = field(default=False, kw_only=True)
+    """
+    Whether the controller may move only the degrees of freedom a hardware interface
+    commands, leaving every other joint where its state says it is.
+
+    A real robot's other joints, such as a gripper no controller drives, never execute a
+    commanded velocity, so a motion waiting for them to come to rest would never end.
+    """
+
     extensions: Dict[Type[ContextExtension], ContextExtension] = field(
         default_factory=dict, repr=False, init=False
     )
@@ -87,6 +101,18 @@ class MotionStatechartContext:
     """
     Backs :attr:`external_collision_manager`, None until a node requests it.
     """
+
+    @property
+    def controlled_degrees_of_freedom(self) -> List[DegreeOfFreedom]:
+        """
+        :return: The degrees of freedom the controller may move: the commanded ones when
+            :attr:`moves_only_commanded_degrees_of_freedom` is set, every active one
+            otherwise.
+        """
+        active = self.world.active_degrees_of_freedom
+        if not self.moves_only_commanded_degrees_of_freedom:
+            return active
+        return [dof for dof in active if dof.has_hardware_interface]
 
     @property
     def collision_manager(self) -> CollisionManager:

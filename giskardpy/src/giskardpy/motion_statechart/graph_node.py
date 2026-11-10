@@ -1543,7 +1543,7 @@ def velocity_convergence_expression(
     :param maximum_threshold: Upper bound for the per-degree-of-freedom velocity
         threshold.
     :param degrees_of_freedom: Degrees of freedom to check for convergence. Defaults to
-        every active degree of freedom in the world when ``None``. Those without an
+        every degree of freedom the controller may move when ``None``. Those without an
         upper velocity limit are skipped, since no threshold can be derived for them.
     :param minimum_time: Minimum elapsed control time before the expression can become
         true.
@@ -1558,7 +1558,7 @@ def velocity_convergence_expression(
     degrees_of_freedom = (
         degrees_of_freedom
         if degrees_of_freedom is not None
-        else context.world.active_degrees_of_freedom
+        else context.controlled_degrees_of_freedom
     )
     ref = []
     symbols = []
@@ -1868,7 +1868,7 @@ class EndMotion(TerminalNode):
         .. note:: If the world has no active degrees of freedom, there is nothing to
             converge, so this reports done immediately once running, same as before.
         """
-        if not context.world.active_degrees_of_freedom:
+        if not context.controlled_degrees_of_freedom:
             return NodeArtifacts(observation=Scalar.const_true())
         observation = velocity_convergence_expression(
             context=context,

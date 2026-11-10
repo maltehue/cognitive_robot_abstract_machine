@@ -1,5 +1,7 @@
 from dataclasses import fields, is_dataclass
 
+import pytest
+
 from giskardpy.middleware.ros2.giskard import Giskard
 from giskardpy.middleware.ros2.robot_interface_config import (
     RobotInterfaceConfig,
@@ -16,12 +18,16 @@ from giskardpy.middleware.ros2.scripts.iai_robots.stretch.configs import (
 )
 from giskardpy.middleware.ros2.scripts.iai_robots.tracy.configs import (
     TracyStandAloneRobotInterfaceConfig,
+    TracyVelocityInterface,
+    WorldWithTracyConfig,
 )
-from giskardpy.middleware.ros2.server_config import GiskardServerConfig
+from giskardpy.middleware.ros2.server_config import ExecutionMode, GiskardServerConfig
+from giskardpy.middleware.ros2.utils.utils import load_xacro
 from giskardpy.model.world_config import EmptyWorld
 from semantic_digital_twin.robots.daisy import DAiSyJoint
 from semantic_digital_twin.robots.stretch import StretchJoint
-from semantic_digital_twin.robots.tracy import TracyJoint
+from semantic_digital_twin.robots.tracy import Tracy, TracyJoint
+from semantic_digital_twin.utils import tracy_installed
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 
 # %% the interface hierarchy is built from dataclasses
@@ -81,6 +87,80 @@ def test_attaching_lets_the_interface_reach_the_server_config():
     interface.attach(giskard)
 
     assert interface.server_config is server_config
+
+
+# %% the server moves only the joints its robot interface commands
+
+
+def test_the_server_controller_moves_only_commanded_joints(init_rospy):
+    """
+    A joint no controller of the robot commands never executes a velocity, so the
+    server's controller leaves it alone.
+    """
+    giskard = Giskard(
+        world_config=EmptyWorld(),
+        server_config=GiskardServerConfig(),
+        robot_interface_config=StandAloneRobotInterfaceConfig([]),
+        qp_controller_config=QPControllerConfig(target_frequency=50),
+    )
+
+    executor = giskard.create_executor()
+
+    assert executor.context.moves_only_commanded_degrees_of_freedom is True
+
+
+TRACY_ARM_JOINTS = [
+    TracyJoint.LEFT_SHOULDER_PAN,
+    TracyJoint.LEFT_SHOULDER_LIFT,
+    TracyJoint.LEFT_ELBOW,
+    TracyJoint.LEFT_WRIST_1,
+    TracyJoint.LEFT_WRIST_2,
+    TracyJoint.LEFT_WRIST_3,
+    TracyJoint.RIGHT_SHOULDER_PAN,
+    TracyJoint.RIGHT_SHOULDER_LIFT,
+    TracyJoint.RIGHT_ELBOW,
+    TracyJoint.RIGHT_WRIST_1,
+    TracyJoint.RIGHT_WRIST_2,
+    TracyJoint.RIGHT_WRIST_3,
+]
+"""
+The joints both Tracy interfaces command; neither commands the grippers.
+"""
+
+
+@pytest.mark.skipif(not tracy_installed(), reason="Tracy's description is missing")
+@pytest.mark.parametrize(
+    "robot_interface_config, execution_mode",
+    [
+        (TracyStandAloneRobotInterfaceConfig(), ExecutionMode.STANDALONE),
+        (TracyVelocityInterface(), ExecutionMode.CLOSED_LOOP),
+    ],
+    ids=["standalone", "velocity"],
+)
+def test_only_the_joints_the_interface_commands_count_as_commanded(
+    init_rospy, robot_interface_config, execution_mode
+):
+    """
+    Tracy's robot model marks its gripper joints as commandable, but neither interface
+    commands them, so the server's controller must not count on them moving.
+    """
+    giskard = Giskard(
+        world_config=WorldWithTracyConfig(urdf=load_xacro(Tracy.get_ros_file_path())),
+        robot_interface_config=robot_interface_config,
+        server_config=GiskardServerConfig(execution_mode=execution_mode),
+        qp_controller_config=QPControllerConfig(target_frequency=50),
+    )
+
+    giskard.setup()
+
+    world = giskard.executor.context.world
+    commanded = [
+        str(connection.name.name)
+        for connection in world.connections
+        if connection.has_hardware_interface
+    ]
+    giskard.close_world_model_ros_interface()
+    assert sorted(commanded) == sorted(TRACY_ARM_JOINTS)
 
 
 # %% robot specific interfaces declare their controlled joints

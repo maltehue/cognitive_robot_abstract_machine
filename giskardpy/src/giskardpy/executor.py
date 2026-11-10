@@ -331,7 +331,7 @@ class Executor:
 
     def _compile_qp_controller(self, controller_config: QPControllerConfig):
         ordered_dofs = sorted(
-            self.context.world.active_degrees_of_freedom,
+            self.context.controlled_degrees_of_freedom,
             key=lambda dof: self.context.world.state._index[dof.id],
         )
         constraint_collection = (

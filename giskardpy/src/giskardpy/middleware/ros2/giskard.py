@@ -105,8 +105,21 @@ class Giskard:
         self.setup_world_model_ros_interface()
         self.motion_server = self.create_motion_server()
         self.robot_interface_config.attach(self)
+        self._leave_commanding_to_the_robot_interface()
         self.robot_interface_config.setup()
         self.sanity_check()
+
+    def _leave_commanding_to_the_robot_interface(self) -> None:
+        """
+        Forget which joints the robot model marks as commandable, so that only the
+        joints the robot interface registers or sends commands to count as commanded.
+
+        A robot model marks every joint a robot could drive, such as its grippers', but
+        a server commands only what its interface connects to; the controller must not
+        move a joint that never executes the command.
+        """
+        for degree_of_freedom in self.world_config.world.degrees_of_freedom:
+            degree_of_freedom.has_hardware_interface = False
 
     def create_executor(self) -> Ros2Executor:
         """
@@ -118,6 +131,7 @@ class Giskard:
             context=MotionStatechartContext(
                 world=self.world_config.world,
                 qp_controller_config=self.qp_controller_config,
+                moves_only_commanded_degrees_of_freedom=True,
             ),
             pacer=self.server_config.create_pacer(),
             publish_debug_expressions=self.server_config.publishes_debug_expressions,

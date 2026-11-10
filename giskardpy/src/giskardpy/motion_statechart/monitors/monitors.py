@@ -70,8 +70,8 @@ class LocalMinimumReached(MotionStatechartNode):
     """
     Degrees of freedom to check for convergence.
 
-    Defaults to ``context.world.active_degrees_of_freedom`` (every active degree of
-    freedom) if left ``None``.
+    Defaults to ``context.controlled_degrees_of_freedom`` (every degree of freedom the
+    controller may move) if left ``None``.
     """
 
     minimum_time: float = 1.0
