@@ -150,6 +150,33 @@ class NonPositiveClearanceError(NodeInitializationError):
 
 
 @dataclass
+class NonPositiveLandingSpreadError(NodeInitializationError):
+    """
+    Raised when a landing spread task is given an exit speed uncertainty or a confidence
+    that leaves no spread to keep inside the opening.
+    """
+
+    exit_speed_uncertainty: float
+    """
+    The rejected relative uncertainty of the exit speed.
+    """
+
+    confidence: float
+    """
+    The rejected number of standard deviations the spread covers.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f'exit_speed_uncertainty and confidence of node "{self.node.name}" must both be '
+            f"positive, got {self.exit_speed_uncertainty} and {self.confidence}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Leave the task out where the exit speed is known exactly."
+
+
+@dataclass
 class NonPositiveTiltRateError(NodeInitializationError):
     """
     Raised when a tilt pacing task is given a rate that could not turn the cup.

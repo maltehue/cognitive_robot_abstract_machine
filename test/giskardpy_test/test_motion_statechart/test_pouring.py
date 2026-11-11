@@ -16,6 +16,7 @@ from giskardpy.motion_statechart.goals.collision_avoidance import (
 )
 from giskardpy.motion_statechart.goals.templates import Parallel
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
+from giskardpy.qp.constraint import LargeNumber
 from giskardpy.qp.control_cycle_recording import ControlCycleRecorder
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.qp.terminal_state_prediction_strategy import (
@@ -35,6 +36,7 @@ from giskardpy.motion_statechart.exceptions import (
     MissingExitSpeedError,
     MissingInflowEquationError,
     NonPositiveClearanceError,
+    NonPositiveLandingSpreadError,
     RootLinkNotWorldRootError,
 )
 from giskardpy.motion_statechart.graph_node import EndMotion, Task
@@ -44,10 +46,12 @@ from giskardpy.motion_statechart.tasks.cartesian_tasks import (
     CartesianPosition,
 )
 from giskardpy.motion_statechart.tasks.pouring import (
+    LANDING_OFFSET_SMOOTHING,
     FillDebugValue,
     HeldAtTilt,
     TiltPacing,
     FillByTransferTask,
+    MinimizeLandingSpread,
     KeepProjectileInReceiver,
     KeepSourceRimAboveReceiverRim,
     PouringTask,
@@ -2578,14 +2582,16 @@ def tracy_small_pre_tilt_transfer_world(tracy_pouring_world):
     )
 
 
-def _tall_cup_body(name: str) -> Body:
+def _tall_cup_body(name: str, radius: float = TALL_CUP_RADIUS) -> Body:
     """
     Create the tall receiving cup: a cylinder of the cup's inner size standing on its
     frame.
+
+    :param radius: The cup's opening radius, in metres.
     """
     cylinder = Cylinder(
         origin=HomogeneousTransformationMatrix.from_xyz_rpy(z=TALL_CUP_HEIGHT / 2),
-        width=2 * TALL_CUP_RADIUS,
+        width=2 * radius,
         height=TALL_CUP_HEIGHT,
     )
     return Body.from_shape_collection(
@@ -2694,4 +2700,472 @@ class TestHandClearsTheReceiverAtASmallPreTilt:
         assert min(distances) > 0.0, (
             "the hand reached into the receiver: closest distance was "
             f"{min(distances):.3f} m"
+        )
+
+
+# %% the landing spread is minimized
+
+UNKNOWN_EXIT_SPEED = 1.0
+"""
+Relative uncertainty of an exit speed nothing is known about yet: its standard deviation
+is the speed itself.
+"""
+
+NARROWED_EXIT_SPEED = 0.5
+"""
+Relative uncertainty of an exit speed experience has narrowed to half of it.
+"""
+
+NARROW_OPENING_RADIUS = 0.015
+"""
+Opening radius of a narrow receiver, in metres: a bottle neck, narrower than the throw
+of the transfer's stream is uncertain at the lip height the clearance band starts it at.
+"""
+
+LOW_CLEARANCE_FLOOR = 0.02
+"""
+A clearance floor low enough to leave the lip room to come down to a narrow opening, in
+metres.
+"""
+
+LIP_ON_FLOOR_TOLERANCE = 0.005
+"""
+How far above the clearance floor the lip may stay to count as held on it, in metres:
+
+the lowest-weight narrowing settles a few millimetres above the floor against the other
+tasks, a small share of the band the lip could take.
+"""
+
+SPREAD_TOLERANCE = 0.0005
+"""
+How far the landing spread may pass the opening radius, in metres: the row holding it is
+soft and only closes its error over the controller's horizon.
+"""
+
+
+@pytest.fixture(scope="function")
+def tracy_narrow_receiver_transfer_world(tracy_pouring_world):
+    """
+    The small pre-tilt transfer world with a receiver whose opening is only
+    :data:`NARROW_OPENING_RADIUS` wide.
+
+    :returns:``(world, source_cup, receiving_cup, left_tool_frame)``
+    """
+    return _build_tracy_transfer_world(
+        tracy_pouring_world,
+        carry_height=SMALL_PRE_TILT_CARRY_HEIGHT,
+        carry_side=SMALL_PRE_TILT_CARRY_SIDE,
+        pre_tilt=SMALL_PRE_TILT,
+        receiving_cup_body=_tall_cup_body(
+            "receiving_cup", radius=NARROW_OPENING_RADIUS
+        ),
+        grasp_offset=MIDDLE_GRASP,
+    )
+
+
+def _landing_spread_from_the_throw(
+    world: World,
+    source_cup: PourableContainer,
+    receiving_cup: PourableContainer,
+    spread_task: MinimizeLandingSpread,
+) -> float:
+    """
+    :return: The landing spread the task's definition gives at the world's current state:
+        its confidence times its exit speed uncertainty times the horizontal distance the
+        stream is thrown, in metres.
+    """
+    exit_point = source_cup.liquid_exit_point(world)
+    landing = receiving_cup.projectile_landing_point(
+        source_cup, world, source_cup.current_outflow_velocity(world)
+    )
+    throw = math.hypot(
+        landing.x.evaluate()[0] - exit_point.x.evaluate()[0],
+        landing.y.evaluate()[0] - exit_point.y.evaluate()[0],
+    )
+    return spread_task.confidence * spread_task.exit_speed_uncertainty * throw
+
+
+def _landing_offset_from_the_opening(
+    world: World, source_cup: PourableContainer, receiving_cup: PourableContainer
+) -> float:
+    """
+    :return: The horizontal distance from the receiver's opening centre to where the
+        stream is predicted to land at the world's current state, in metres.
+    """
+    opening = receiving_cup.opening_point(world)
+    landing = receiving_cup.projectile_landing_point(
+        source_cup, world, source_cup.current_outflow_velocity(world)
+    )
+    return math.hypot(
+        landing.x.evaluate()[0] - opening.x.evaluate()[0],
+        landing.y.evaluate()[0] - opening.y.evaluate()[0],
+    )
+
+
+@dataclass
+class SpreadRun:
+    """
+    What a paced transfer recorded on every control cycle.
+    """
+
+    farthest_landings: list[float]
+    """
+    How far from the opening centre the stream may land, in metres, on the cycles the
+    source pours on once the aim has first brought the stream over the opening and the
+    fill task has started.
+    """
+
+    lip_heights: list[float]
+    """
+    The source's lip above the receiver's rim, in metres.
+    """
+
+
+def _paced_transfer_run(
+    transfer_world, spread_task: MinimizeLandingSpread, with_task: bool
+) -> SpreadRun:
+    """
+    Run the paced transfer, with a low clearance floor and a wide band, until the
+    receiver reaches its fill goal and record how far from the opening centre the stream
+    may land and the lip height; the world is put back into the state it started from
+    afterwards. The fixture's source runs dry at that goal, and an empty source still
+    predicts a stream the aim keeps following, so the run does not wait for the robot to
+    settle.
+
+    :param transfer_world: The transfer world fixture value.
+    :param spread_task: The task whose farthest landing is recorded.
+    :param with_task: Whether the task runs alongside the transfer.
+    """
+    world, source_cup, receiving_cup, _ = transfer_world
+    pacing = TiltPacing(
+        source=source_cup,
+        approach_rate=PACED_APPROACH_RATE,
+        maximum_rate=PACED_APPROACH_RATE,
+        maximum_tilt=math.radians(110.0),
+    )
+    transfer = _build_transfer_motion(
+        transfer_world,
+        minimum_clearance=LOW_CLEARANCE_FLOOR,
+        clearance_band=WIDE_CLEARANCE_BAND,
+        no_spill_weight=DefaultWeights.WEIGHT_MAXIMUM,
+        no_spill_reference_velocity=0.1,
+        extra_tasks=[pacing, spread_task] if with_task else [pacing],
+    )
+    farthest_landing = spread_task.farthest_landing(world)
+    outflow = source_cup.outflow_volume_rate(world)
+    lip_height = (
+        source_cup.liquid_exit_point(world).z - receiving_cup.opening_point(world).z
+    )
+    run = SpreadRun(farthest_landings=[], lip_heights=[])
+    start_positions = world.state.positions.copy()
+    executor = Executor(
+        _pouring_context(world), pacer=SimulationPacer(real_time_factor=1)
+    )
+    executor.compile(motion_statechart=transfer.motion_statechart)
+    try:
+        for _ in range(4000):
+            executor.tick()
+            filling = (
+                transfer.transfer_task.life_cycle_state != LifeCycleValues.NOT_STARTED
+            )
+            if filling and outflow.evaluate()[0] > 0.0:
+                run.farthest_landings.append(float(farthest_landing.evaluate()[0]))
+            run.lip_heights.append(float(lip_height.evaluate()[0]))
+            if transfer.transfer_task.observation_state == ObservationStateValues.TRUE:
+                break
+    finally:
+        state = executor.context.world.state
+        state.velocities[:] = 0
+        state.accelerations[:] = 0
+        state.jerks[:] = 0
+        executor.motion_statechart.cleanup_nodes(context=executor.context)
+        executor.context.cleanup()
+        filled = transfer.transfer_task.observation_state == ObservationStateValues.TRUE
+        state.positions[:] = start_positions
+        world.notify_state_change()
+    assert filled
+    return run
+
+
+class TestLandingSpreadIsMinimized:
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.MinimizeLandingSpread` narrows
+    the band an uncertain exit speed spreads the landing point over as far as the other
+    tasks allow, which brings the lip down, and never lets it grow wider than the
+    receiver's opening.
+    """
+
+    def test_the_limit_row_keeps_the_farthest_landing_inside_the_opening(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The stream may land the aim's error plus the spread away from the opening
+        centre, so both have to fit inside the opening together.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.inequality_constraints
+        offset = math.hypot(
+            _landing_offset_from_the_opening(world, source_cup, receiving_cup),
+            LANDING_OFFSET_SMOOTHING,
+        )
+        farthest_landing = offset + _landing_spread_from_the_throw(
+            world, source_cup, receiving_cup, spread_task
+        )
+        assert row.expression.evaluate()[0] == pytest.approx(farthest_landing)
+        assert row.upper_bound.evaluate()[0] == pytest.approx(
+            receiving_cup.opening_radius - farthest_landing
+        )
+
+    def test_a_stream_landing_on_the_opening_centre_keeps_a_finite_gradient(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The distance from the opening centre has no direction where the stream lands
+        exactly on it; the limit row must still give the solver a usable gradient there.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+        opening = receiving_cup.opening_point(world)
+        landing = receiving_cup.projectile_landing_point(
+            source_cup, world, source_cup.current_outflow_velocity(world)
+        )
+        receiver_connection = receiving_cup.root.parent_connection
+        receiver_connection.origin = (
+            receiver_connection.origin
+            @ HomogeneousTransformationMatrix.from_xyz_rpy(
+                x=landing.x.evaluate()[0] - opening.x.evaluate()[0],
+                y=landing.y.evaluate()[0] - opening.y.evaluate()[0],
+            )
+        )
+        source_shoulder = world.get_connection_by_name(
+            "left_shoulder_lift_joint"
+        ).dof.variables.position
+        assert _landing_offset_from_the_opening(
+            world, source_cup, receiving_cup
+        ) == pytest.approx(0.0, abs=1e-9)
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.inequality_constraints
+        gradient = row.expression.jacobian([source_shoulder])[0, 0].evaluate()[0]
+        assert math.isfinite(gradient)
+
+    def test_the_limit_row_lets_the_spread_shrink_freely(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        A lower bound would hold a small throw from shrinking, and with it the lip from
+        coming down, however wide the opening.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.inequality_constraints
+        assert row.lower_bound == -LargeNumber
+
+    def test_the_narrowing_row_pulls_the_spread_to_zero(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        The narrowing is normalized by a fixed speed, so it stays the weakest row
+        however narrow the opening.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.equality_constraints
+        spread = _landing_spread_from_the_throw(
+            world, source_cup, receiving_cup, spread_task
+        )
+        assert row.expression.evaluate()[0] == pytest.approx(spread)
+        assert row.bound.evaluate()[0] == pytest.approx(-spread)
+        assert row.normalization_factor == spread_task.reference_velocity
+
+    def test_the_spread_is_narrowed_while_the_source_pours(
+        self, tracy_transfer_world
+    ) -> None:
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+        assert source_cup.outflow_volume_rate(world).evaluate()[0] > 0.0
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.equality_constraints
+        assert row.quadratic_weight.evaluate()[0] == spread_task.minimization_weight
+
+    def test_the_landing_is_limited_while_the_source_pours(
+        self, tracy_transfer_world
+    ) -> None:
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+        assert source_cup.outflow_volume_rate(world).evaluate()[0] > 0.0
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.inequality_constraints
+        assert row.quadratic_weight.evaluate()[0] == spread_task.weight
+
+    def test_an_empty_source_leaves_no_stream_to_narrow(
+        self, tracy_transfer_world
+    ) -> None:
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+        JointState.from_mapping({source_cup.fill_connection: 0.0}).apply_to(world)
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.equality_constraints
+        assert row.quadratic_weight.evaluate()[0] == 0.0
+
+    def test_an_empty_source_leaves_no_landing_to_limit(
+        self, tracy_transfer_world
+    ) -> None:
+        """
+        Once the stream stops, holding where it would land only keeps the source from
+        tilting back.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+        JointState.from_mapping({source_cup.fill_connection: 0.0}).apply_to(world)
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.inequality_constraints
+        assert row.quadratic_weight.evaluate()[0] == 0.0
+
+    def test_either_hand_can_close_the_spread(self, tracy_transfer_world) -> None:
+        """
+        The spread follows the lip's height above the opening, so raising the receiver
+        narrows it as well as lowering the source: a robot holding both can use either
+        hand.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup, source=source_cup, exit_speed_uncertainty=0.5
+        )
+        receiver_height = receiving_cup.root.parent_connection.z.variables.position
+        source_shoulder = world.get_connection_by_name(
+            "left_shoulder_lift_joint"
+        ).dof.variables.position
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        [row] = artifacts.constraints.inequality_constraints
+        assert row.expression.jacobian([receiver_height])[0, 0].evaluate()[0] < 0.0
+        assert row.expression.jacobian([source_shoulder])[0, 0].evaluate()[0] != 0.0
+
+    def test_the_task_never_holds_the_motion_open(self, tracy_transfer_world) -> None:
+        """
+        A spread the clearance floor keeps above the opening radius must not keep a
+        finished transfer running.
+        """
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup,
+            source=source_cup,
+            exit_speed_uncertainty=UNKNOWN_EXIT_SPEED,
+            confidence=1e6,
+        )
+
+        artifacts = spread_task.build(MotionStatechartContext(world=world))
+
+        assert artifacts.observation.evaluate()[0] == 1.0
+
+    @pytest.mark.parametrize(
+        "exit_speed_uncertainty, confidence", [(0.0, 2.0), (0.5, 0.0)]
+    )
+    def test_a_spread_that_cannot_grow_is_rejected(
+        self, tracy_transfer_world, exit_speed_uncertainty: float, confidence: float
+    ) -> None:
+        world, source_cup, receiving_cup, _ = tracy_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup,
+            source=source_cup,
+            exit_speed_uncertainty=exit_speed_uncertainty,
+            confidence=confidence,
+        )
+
+        with pytest.raises(NonPositiveLandingSpreadError):
+            spread_task.build(MotionStatechartContext(world=world))
+
+    def test_a_narrow_opening_keeps_the_farthest_landing_inside_it(
+        self, tracy_narrow_receiver_transfer_world
+    ) -> None:
+        """
+        With nothing known about the exit speed, the throw at the lip height the
+        clearance band allows is too uncertain for a bottle neck, so the task has to
+        bring the lip down.
+
+        The aim counts as settled within its own tolerance, so the pour may start with
+        the farthest landing outside the opening; once inside, it stays inside.
+        """
+        _, source_cup, receiving_cup, _ = tracy_narrow_receiver_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup,
+            source=source_cup,
+            exit_speed_uncertainty=UNKNOWN_EXIT_SPEED,
+        )
+        without_task = _paced_transfer_run(
+            tracy_narrow_receiver_transfer_world, spread_task, with_task=False
+        )
+        assert max(without_task.farthest_landings) > receiving_cup.opening_radius
+
+        with_task = _paced_transfer_run(
+            tracy_narrow_receiver_transfer_world, spread_task, with_task=True
+        )
+
+        limit = receiving_cup.opening_radius + SPREAD_TOLERANCE
+        first_inside = next(
+            index
+            for index, farthest_landing in enumerate(with_task.farthest_landings)
+            if farthest_landing <= limit
+        )
+        assert max(with_task.farthest_landings[first_inside:]) <= limit
+
+    def test_a_wide_opening_brings_the_lip_down_to_the_floor(
+        self, tracy_small_pre_tilt_transfer_world
+    ) -> None:
+        """
+        Once experience has narrowed the exit speed, the throw fits the translucent cup
+        at every lip height, so the limit never acts; narrowing the spread still holds
+        the lip on the clearance floor for most of the pour.
+        """
+        _, source_cup, receiving_cup, _ = tracy_small_pre_tilt_transfer_world
+        spread_task = MinimizeLandingSpread(
+            receiver=receiving_cup,
+            source=source_cup,
+            exit_speed_uncertainty=NARROWED_EXIT_SPEED,
+        )
+
+        with_task = _paced_transfer_run(
+            tracy_small_pre_tilt_transfer_world, spread_task, with_task=True
+        )
+
+        assert max(with_task.farthest_landings) < receiving_cup.opening_radius
+        assert np.median(with_task.lip_heights) == pytest.approx(
+            LOW_CLEARANCE_FLOOR, abs=LIP_ON_FLOOR_TOLERANCE
         )

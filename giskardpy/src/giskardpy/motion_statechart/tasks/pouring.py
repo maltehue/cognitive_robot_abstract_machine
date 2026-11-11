@@ -4,7 +4,7 @@ import math
 from abc import ABC, abstractmethod
 from enum import StrEnum
 from dataclasses import dataclass, field
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional
 
 import krrood.symbolic_math.symbolic_math as sm
 from krrood.symbolic_math.symbolic_math import (
@@ -34,6 +34,7 @@ from giskardpy.motion_statechart.exceptions import (
     MissingExitSpeedError,
     MissingInflowEquationError,
     NonPositiveClearanceError,
+    NonPositiveLandingSpreadError,
     NonPositiveTiltAccelerationError,
     NonPositiveTiltRateError,
     RootLinkNotWorldRootError,
@@ -44,7 +45,11 @@ from giskardpy.motion_statechart.graph_node import (
     NodeArtifacts,
     Task,
 )
+from giskardpy.qp.constraint import LargeNumber
 from giskardpy.qp.terminal_state_prediction_strategy import CoupledState
+
+if TYPE_CHECKING:
+    from semantic_digital_twin.world import World
 
 
 class FillDebugValue(StrEnum):
@@ -434,7 +439,45 @@ class FillByTransferTask(TerminalFillConstraintTask):
 
 
 @dataclass(eq=False, repr=False)
-class KeepProjectileInReceiver(Task):
+class PourStreamTask(Task, ABC):
+    """
+    A task on the stream a source pours into a receiver, which leaves the source at its
+    exit point and lands on the receiver's opening plane.
+    """
+
+    receiver: HasFillLevel
+    """
+    The container poured into; must already be coupled via ``receive_outflow_from``.
+    """
+
+    source: LiquidSource
+    """
+    The liquid source being poured from.
+    """
+
+    def landing_point(self, world: World) -> Point3:
+        """
+        :param world: The world providing the forward kinematics.
+        :return: Where the stream lands on the receiver's opening plane, thrown at the
+            source's live exit speed or, without one, at the receiver's nominal one.
+        :raises MissingInflowEquationError: if the receiver is not coupled to a source.
+        :raises MissingExitSpeedError: if neither the source nor the receiver's inflow
+            equation provides an exit speed.
+        """
+        self.receiver.ensure_inflow_coupling(world)
+        inflow_equation = self.receiver.fill_connection.inflow_equation
+        if inflow_equation is None:
+            raise MissingInflowEquationError(node=self)
+        exit_speed = self.source.current_outflow_velocity(world)
+        if exit_speed is None:
+            if not isinstance(inflow_equation, GatedInflowEquation):
+                raise MissingExitSpeedError(node=self)
+            exit_speed = inflow_equation.exit_speed
+        return self.receiver.projectile_landing_point(self.source, world, exit_speed)
+
+
+@dataclass(eq=False, repr=False)
+class KeepProjectileInReceiver(PourStreamTask):
     """
     Positions the source so the poured liquid's projectile lands in the receiver
     opening.
@@ -443,17 +486,6 @@ class KeepProjectileInReceiver(Task):
     receiver's opening centre, so as the source tilts the optimizer moves the gripper to
     keep the liquid landing inside the receiver — the no-spill counterpart to
     :class:`FillByTransferTask`.
-    """
-
-    receiver: HasFillLevel
-    """
-    The container the liquid must land in; must already be coupled via
-    ``receive_outflow_from``.
-    """
-
-    source: LiquidSource
-    """
-    The liquid source being poured from.
     """
 
     reference_velocity: float = field(default=0.2, kw_only=True)
@@ -492,18 +524,7 @@ class KeepProjectileInReceiver(Task):
         :return: The generated task artifacts.
         """
         artifacts = NodeArtifacts()
-        self.receiver.ensure_inflow_coupling(context.world)
-        inflow_equation = self.receiver.fill_connection.inflow_equation
-        if inflow_equation is None:
-            raise MissingInflowEquationError(node=self)
-        exit_speed = self.source.current_outflow_velocity(context.world)
-        if exit_speed is None:
-            if not isinstance(inflow_equation, GatedInflowEquation):
-                raise MissingExitSpeedError(node=self)
-            exit_speed = inflow_equation.exit_speed
-        landing_point = self.receiver.projectile_landing_point(
-            self.source, context.world, exit_speed
-        )
+        landing_point = self.landing_point(context.world)
         receiver_opening = self.receiver.opening_point(context.world)
         artifacts.geometry.add_point_goal_constraints(
             name=f"{self.receiver.root.name}_projectile",
@@ -544,7 +565,7 @@ class KeepProjectileInReceiver(Task):
 
 
 @dataclass(eq=False, repr=False)
-class ShareAimWithReceiver(Task):
+class ShareAimWithReceiver(PourStreamTask):
     """
     Moves the receiver horizontally towards the pour's predicted landing point, so the
     hand holding the receiver shares the aiming correction with the hand holding the
@@ -562,16 +583,6 @@ class ShareAimWithReceiver(Task):
     Meant for a receiver a robot itself holds and can therefore usefully move; a
     receiver resting on a support should not be given this task, since nothing then
     stops the optimizer from sliding it across that support.
-    """
-
-    receiver: HasFillLevel
-    """
-    The container being poured into; its opening is driven towards the landing point.
-    """
-
-    source: LiquidSource
-    """
-    The liquid source being poured from.
     """
 
     reference_velocity: float = field(default=0.05, kw_only=True)
@@ -600,18 +611,7 @@ class ShareAimWithReceiver(Task):
         :return: The generated task artifacts.
         """
         artifacts = NodeArtifacts()
-        self.receiver.ensure_inflow_coupling(context.world)
-        inflow_equation = self.receiver.fill_connection.inflow_equation
-        if inflow_equation is None:
-            raise MissingInflowEquationError(node=self)
-        exit_speed = self.source.current_outflow_velocity(context.world)
-        if exit_speed is None:
-            if not isinstance(inflow_equation, GatedInflowEquation):
-                raise MissingExitSpeedError(node=self)
-            exit_speed = inflow_equation.exit_speed
-        landing_point = self.receiver.projectile_landing_point(
-            self.source, context.world, exit_speed
-        )
+        landing_point = self.landing_point(context.world)
         receiver_opening = self.receiver.opening_point(context.world)
         artifacts.geometry.add_point_goal_constraints(
             name=f"{self.receiver.root.name}_share_aim",
@@ -619,6 +619,138 @@ class ShareAimWithReceiver(Task):
             frame_P_current=receiver_opening,
             reference_velocity=self.reference_velocity,
             quadratic_weight=self.weight,
+        )
+        return artifacts
+
+
+LANDING_OFFSET_SMOOTHING = 1e-4
+"""
+Length added in quadrature to the distance of the landing point from the opening centre,
+in metres, so the distance keeps a finite gradient where the stream lands on the centre.
+"""
+
+
+@dataclass(eq=False, repr=False)
+class MinimizeLandingSpread(PourStreamTask):
+    """
+    Makes the band an uncertain exit speed spreads the stream's landing point over as
+    narrow as the other tasks allow, and keeps the whole band, displaced by the aim's
+    error, inside the receiver's opening.
+
+    A relative error in the exit speed moves the landing point by the same relative share
+    of the horizontal distance the stream is thrown, and that distance shrinks with the
+    lip's height above the opening. The task therefore brings the lip down towards the
+    opening, by moving the source or the receiver, wherever nothing else needs it up: at
+    the lowest weight while the band fits the opening, and at the aim's weight once it
+    would not.
+    """
+
+    exit_speed_uncertainty: float = field(kw_only=True)
+    """
+    Standard deviation of the exit speed, as a share of the exit speed: one for a stream
+    nothing is known about yet, smaller as experience narrows it.
+    """
+
+    confidence: float = field(default=2.0, kw_only=True)
+    """
+    How many standard deviations of the exit speed the spread must cover.
+    """
+
+    reference_velocity: float = field(default=0.05, kw_only=True)
+    """
+    Reference velocity for normalizing both rows, in metres per second: a fixed speed
+    keeps the narrowing the weakest row however narrow the opening.
+    """
+
+    weight: float = field(
+        default=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE, kw_only=True
+    )
+    """
+    QP constraint weight for keeping the farthest landing inside the opening while the
+    source pours; the aim's default, since both keep the stream inside the receiver.
+    """
+
+    minimization_weight: float = field(
+        default=DefaultWeights.WEIGHT_BELOW_COLLISION_AVOIDANCE, kw_only=True
+    )
+    """
+    QP constraint weight for narrowing the spread while the source pours: the lowest, so
+    it only decides what no other task does. A source that pours nothing leaves no stream
+    to narrow.
+    """
+
+    def landing_spread(self, world: World) -> sm.Scalar:
+        """
+        :param world: The world providing the forward kinematics.
+        :return: How far from the predicted landing point the stream may land, in metres:
+            :attr:`confidence` standard deviations of the throw.
+        """
+        exit_point = self.source.liquid_exit_point(world)
+        landing_point = self.landing_point(world)
+        throw = sm.sqrt(
+            (landing_point.x - exit_point.x) ** 2
+            + (landing_point.y - exit_point.y) ** 2
+        )
+        return self.confidence * self.exit_speed_uncertainty * throw
+
+    def farthest_landing(self, world: World) -> sm.Scalar:
+        """
+        :param world: The world providing the forward kinematics.
+        :return: How far from the receiver's opening centre the stream may land, in
+            metres: the predicted landing point's horizontal distance from the centre
+            plus the :meth:`landing_spread`.
+        """
+        opening = self.receiver.opening_point(world)
+        landing_point = self.landing_point(world)
+        offset = sm.sqrt(
+            (landing_point.x - opening.x) ** 2
+            + (landing_point.y - opening.y) ** 2
+            + LANDING_OFFSET_SMOOTHING**2
+        )
+        return offset + self.landing_spread(world)
+
+    def build(self, context: MotionStatechartContext) -> NodeArtifacts:
+        """
+        Creates the constraint keeping the farthest landing within the opening radius and
+        the one narrowing the spread, both acting only while the source pours.
+
+        The observation is always true: a spread the other tasks keep wide must not hold
+        the motion open.
+
+        :param context: The build context.
+        :return: The generated task artifacts.
+        :raises NonPositiveLandingSpreadError: if the uncertainty or the confidence leaves
+            no spread.
+        """
+        if self.exit_speed_uncertainty <= 0.0 or self.confidence <= 0.0:
+            raise NonPositiveLandingSpreadError(
+                node=self,
+                exit_speed_uncertainty=self.exit_speed_uncertainty,
+                confidence=self.confidence,
+            )
+        artifacts = NodeArtifacts(observation=sm.Scalar.const_true())
+        pouring = sm.if_greater(
+            self.source.outflow_volume_rate(context.world),
+            sm.Scalar(0.0),
+            sm.Scalar(1.0),
+            sm.Scalar(0.0),
+        )
+        farthest_landing = self.farthest_landing(context.world)
+        artifacts.constraints.add_inequality_constraint(
+            reference_velocity=self.reference_velocity,
+            lower_error=-LargeNumber,
+            upper_error=self.receiver.opening_radius - farthest_landing,
+            quadratic_weight=pouring * self.weight,
+            task_expression=farthest_landing,
+            name=f"{self.name}_landing_spread_limit",
+        )
+        spread = self.landing_spread(context.world)
+        artifacts.constraints.add_equality_constraint(
+            task_expression=spread,
+            equality_bound=-spread,
+            quadratic_weight=pouring * self.minimization_weight,
+            reference_velocity=self.reference_velocity,
+            name=f"{self.name}_landing_spread_narrowing",
         )
         return artifacts
 
