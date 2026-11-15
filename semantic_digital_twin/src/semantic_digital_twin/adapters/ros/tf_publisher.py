@@ -234,6 +234,9 @@ class TfPublisherModelCallback(ModelChangeCallback, HasROS2Node):
             self._write_pose(p_T_c, pose)
 
 
+# %% state publication
+
+
 @dataclass(eq=False)
 class TFPublisher(StateChangeCallback, HasROS2Node):
     """
@@ -283,9 +286,8 @@ class TFPublisher(StateChangeCallback, HasROS2Node):
     kept for as long as this publisher lives so the transform stays latched.
     """
 
-    def __post_init__(self):
-        super().__post_init__()
-
+    def __post_init__(self) -> None:
+        """Prepare TF publication before registering the state callback."""
         self.tf_pub = self.node.create_publisher(TFMessage, self.tf_topic, 10)
         sleep(0.2)
         self.tf_model_callback = TfPublisherModelCallback(
@@ -297,6 +299,8 @@ class TFPublisher(StateChangeCallback, HasROS2Node):
         self.tf_model_callback.notify_model_change()
         if self.frame_names.prefix:
             self._publish_root_link()
+        # Registration allows state notifications to arrive immediately.
+        super().__post_init__()
         self.on_state_change()
 
     def _publish_root_link(self):
