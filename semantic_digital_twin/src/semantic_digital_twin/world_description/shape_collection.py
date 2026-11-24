@@ -1,3 +1,7 @@
+"""
+Collections of the shapes that make up a body's visual or collision geometry.
+"""
+
 from __future__ import annotations
 
 import itertools

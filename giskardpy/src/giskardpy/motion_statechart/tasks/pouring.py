@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from typing_extensions import TYPE_CHECKING, ClassVar
+from typing_extensions import TYPE_CHECKING
 
 import krrood.symbolic_math.symbolic_math as sm
 from cramph.context import ContextExtension
@@ -22,27 +22,28 @@ from krrood.symbolic_math.symbolic_math import (
 from krrood_spatial_math.spatial_types import Point3, Vector3
 from semantic_digital_twin.physics.equations.pouring_equations import (
     GatedInflowEquation,
-    PouringEquation,
-    SymbolicFillContext,
-    tilt_expression_from_fk,
 )
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel, LiquidSource
 from semantic_digital_twin.world_description.connections import LiquidConnection
 from semantic_digital_twin.world_description.geometry import Color
-from semantic_digital_twin.world_description.world_entity import Body
 
 from giskardpy.motion_statechart.context import MotionControlContext
-from giskardpy.motion_statechart.exceptions import (
-    MissingExitSpeedError,
-    MissingInflowEquationError,
-    NonPositiveClearanceError,
-    RootLinkNotWorldRootError,
-)
 from giskardpy.motion_statechart.graph_node import (
     ConvergingTask,
     DebugExpression,
     MotionNodeArtifacts,
     Task,
+)
+from giskardpy.motion_statechart.mixins import (
+    HasCruiseVelocityParameter,
+    HasThresholdParameter,
+    HasWeightParameter,
+)
+from giskardpy.motion_statechart.tasks.exceptions import (
+    MissingExitSpeedError,
+    MissingInflowEquationError,
+    MissingOutflowEquationError,
+    NonPositiveClearanceError,
 )
 from giskardpy.motion_statechart.weights import DefaultWeights
 from giskardpy.qp.terminal_state_prediction_strategy import CoupledState
@@ -65,16 +66,14 @@ class FillDebugValue(StrEnum):
     FILL_RATE = "fill_rate"
     """The fill rate the task's model gives now, in fill per second."""
 
-@dataclass(eq=False, repr=False, kw_only=True)
-class TerminalFillConstraintTask(Task, ABC):
-    """Base for tasks that drive a container's predicted terminal fill level to
-    a goal.
 
-    Subclasses resolve the fill connection and build the symbolic fill-
-    velocity ODE; this base linearizes that ODE into a terminal-state
-    prediction constraint and observes success once the fill reaches the
-    goal and its rate has settled to zero.
-    """
+@dataclass(eq=False, repr=False, kw_only=True)
+class TerminalFillConstraintTask(
+    Task, HasWeightParameter, HasCruiseVelocityParameter, ABC
+):
+    """Base for tasks that drive a container's predicted fill level at the end
+    of :attr:`prediction_duration` to a goal, and observe success once the fill
+    has reached it and stopped changing."""
 
     goal_value: float
     """Target normalized fill level."""
@@ -83,7 +82,7 @@ class TerminalFillConstraintTask(Task, ABC):
     """Tolerance around :attr:`goal_value` within which the goal counts as
     reached."""
 
-    outflow_tolerance: float = 0.001
+    fill_rate_tolerance: float = 0.001
     """Tolerance around zero for the residual fill rate, in normalized fill per
     second."""
 
@@ -91,50 +90,46 @@ class TerminalFillConstraintTask(Task, ABC):
     """The rate the normalized fill level is driven at, in fill per second."""
 
     stopping_velocity: float | None = None
-    """How fast the controller may take back fill that is predicted to arrive
-    beyond the goal, in normalized fill per second; ``None`` stops no faster
-    than :attr:`cruise_velocity` pours."""
+    """How fast fill predicted beyond the goal may be taken back, in normalized
+    fill per second; ``None`` takes it back no faster than
+    :attr:`cruise_velocity`."""
 
     weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE
     """QP constraint weight of the fill row."""
 
     prediction_duration: float = 1.5
-    """How far ahead the fill level is predicted, in seconds.
-
-    Long enough to cover the liquid that keeps flowing after the last
-    commanded velocity; it also sets how quickly the tilt reacts to a
-    predicted miss and is independent of the controller's prediction
-    horizon.
-    """
+    """How far ahead the fill level is predicted, in seconds, independent of
+    the controller's prediction horizon."""
 
     fill_connection: LiquidConnection = field(init=False)
     """World-resident fill connection resolved while building."""
 
     fill_velocity_expression: Scalar = field(init=False)
-    """Symbolic fill-velocity ODE built while building."""
+    """Symbolic fill velocity built while building."""
 
     _compiled_fill_velocity: CompiledFunction = field(init=False, repr=False)
     """Compiled :attr:`fill_velocity_expression`, evaluated once per tick."""
 
     @classproperty
     def required_context_extensions(cls) -> tuple[type[ContextExtension], ...]:
+        """
+        :return: The extensions of the base, and the motion control context the fill
+            row is built in.
+        """
         return super().required_context_extensions + (MotionControlContext,)
 
     @abstractmethod
     def _resolve_fill_connection(self) -> LiquidConnection:
-        """Resolves and validates the live fill connection whose DOF position
-        the constraint drives.
-
-        :return: The world-resident fill connection.
+        """
+        :return: The world-resident fill connection whose fill level the
+            constraint drives.
         """
 
     @abstractmethod
     def _fill_velocity(self) -> Scalar:
-        """Builds the symbolic fill-velocity ODE to linearize;
-        :attr:`fill_connection` is resolved.
-
-        :return: Symbolic normalized fill velocity at the current
-            operating point.
+        """
+        :return: Symbolic normalized fill velocity of :attr:`fill_connection`,
+            which is resolved when this is called.
         """
 
     @abstractmethod
@@ -166,14 +161,10 @@ class TerminalFillConstraintTask(Task, ABC):
         return compiled
 
     def build_artifacts(self) -> MotionNodeArtifacts:
-        """Linearizes the fill ODE into a single terminal-state prediction row
-        over :attr:`prediction_duration`.
-
-        Because the row couples earlier velocity decisions to a larger
-        share of the predicted change, the optimizer eases off before
-        overshooting rather than reacting late.
-
-        :return: The artifacts of this task.
+        """
+        :return: The artifacts of this task: one terminal-state prediction row on
+            the fill level, and the predicted fill and fill rate as debug
+            expressions.
         """
         artifacts = MotionNodeArtifacts()
         self.fill_connection = self._resolve_fill_connection()
@@ -199,7 +190,7 @@ class TerminalFillConstraintTask(Task, ABC):
             [
                 DebugExpression(
                     name=f"{self.name}/{FillDebugValue.PREDICTED_FILL}",
-                    expression=row.predicted_value(controller_config),
+                    expression=row.predicted_value(config=controller_config),
                 ),
                 DebugExpression(
                     name=f"{self.name}/{FillDebugValue.FILL_RATE}",
@@ -223,7 +214,7 @@ class TerminalFillConstraintTask(Task, ABC):
         """
         fill_level = float(self.fill_connection.position)
         fill_rate = float(self._compiled_fill_velocity.evaluate()[0])
-        rate_settled = -self.outflow_tolerance < fill_rate < self.outflow_tolerance
+        rate_settled = -self.fill_rate_tolerance < fill_rate < self.fill_rate_tolerance
         if rate_settled and self._fill_goal_reached(fill_level=fill_level):
             return ObservationStateValue.TRUE
         return None
@@ -231,48 +222,31 @@ class TerminalFillConstraintTask(Task, ABC):
 
 @dataclass(eq=False, repr=False, kw_only=True)
 class PouringTask(TerminalFillConstraintTask):
-    """
-    Tilts a container the robot holds so its own fill level drains toward
-    :attr:`goal_value`; the pouring ODE couples the controlled tilt to the passive fill
-    DOF.
-    """
+    """Tilts a container the robot holds so its own fill level drains toward
+    :attr:`goal_value`, predicted with the drain its fill connection integrates."""
 
-    fill_equation: PouringEquation
-    """Pouring ODE coupling tilt to the fill-level DOF."""
-
-    fill_connection: LiquidConnection
-    """Virtual DOF whose position encodes the fill level in [0, 1]."""
-
-    root_link: Body
-    """Root of the kinematic chain the cup tilt is derived along; must be the
-    world root."""
-
-    tip_link: Body
-    """Tip of the kinematic chain, the cup body."""
+    container: HasFillLevel
+    """The container poured from, whose fill level is driven down to
+    :attr:`goal_value`."""
 
     def _resolve_fill_connection(self) -> LiquidConnection:
         """
-        :raises RootLinkNotWorldRootError: if ``root_link`` is not the world root, since
-            the tilt expression is only valid relative to the vertical world-root frame.
+        :raises MissingOutflowEquationError: if the container has no fill level that
+            drains.
         """
-        world = self.context.world
-        if self.root_link is not world.root:
-            raise RootLinkNotWorldRootError(
-                node=self, root_link=self.root_link, world_root=world.root
-            )
-        return world.get_connection(
-            self.fill_connection.parent, self.fill_connection.child
+        container_connection = self.container.fill_connection
+        if container_connection is None:
+            raise MissingOutflowEquationError(node=self)
+        fill_connection = self.context.world.get_connection(
+            container_connection.parent, container_connection.child
         )
+        if fill_connection.outflow_equation is None:
+            raise MissingOutflowEquationError(node=self)
+        return fill_connection
 
     def _fill_velocity(self) -> Scalar:
-        root_T_tip = self.context.world.compose_forward_kinematics_expression(
-            self.root_link, self.tip_link
-        )
-        return self.fill_equation.symbolic_velocity(
-            SymbolicFillContext(
-                tilt_expression=tilt_expression_from_fk(root_T_tip),
-                fill_position=self.fill_connection.dof.variables.position,
-            )
+        return self.fill_connection.outflow_equation.symbolic_velocity(
+            context=self.fill_connection
         )
 
     def _fill_goal_reached(self, *, fill_level: float) -> bool:
@@ -283,18 +257,9 @@ class PouringTask(TerminalFillConstraintTask):
 class FillByTransferTask(TerminalFillConstraintTask):
     """Fills a receiver by tilting a separate source container.
 
-    Unlike :class:`PouringTask`, the controlled degrees of freedom (the
-    arm holding the source) do not belong to the container whose fill
-    level is the goal. The receiver's inflow ODE depends symbolically on
-    the source arm configuration through the source outflow, so driving
-    the receiver's predicted terminal fill toward the goal makes the
-    optimizer tilt the source.
-
-    The transfer gate scales the predicted fill but is held as a value
-    read once per tick, outside the row's gradient: its logistics never
-    go flat, so a row that differentiated them would keep lifting the
-    source to open the height gate a little more for the whole pour.
-    Placing the source over the receiver is left to
+    The transfer gate scales the predicted fill but is read once per
+    tick, outside the row's gradient, so the row only tilts; placing the
+    source over the receiver is left to
     :class:`KeepProjectileInReceiver` and
     :class:`KeepSourceRimAboveReceiverRim`.
     """
@@ -329,7 +294,7 @@ class FillByTransferTask(TerminalFillConstraintTask):
             meaning ``receive_outflow_from`` was not called to couple it to a source.
         """
         world = self.context.world
-        self.receiver.ensure_inflow_coupling(world)
+        self.receiver.ensure_inflow_coupling(world=world)
         fill_connection = world.get_connection(
             self.receiver.fill_connection.parent, self.receiver.fill_connection.child
         )
@@ -340,12 +305,14 @@ class FillByTransferTask(TerminalFillConstraintTask):
     def _fill_velocity(self) -> Scalar:
         inflow_equation = self.fill_connection.inflow_equation
         if not isinstance(inflow_equation, GatedInflowEquation):
-            return inflow_equation.symbolic_velocity(self.fill_connection)
+            return inflow_equation.symbolic_velocity(context=self.fill_connection)
         self._compiled_gate = self._compile_against_state(
             expression=inflow_equation.gate
         )
         self._read_gate()
-        return self._gate_value * inflow_equation.ungated_velocity(self.fill_connection)
+        return self._gate_value * inflow_equation.ungated_velocity(
+            context=self.fill_connection
+        )
 
     def _coupled_states(self) -> list[CoupledState]:
         """
@@ -392,6 +359,17 @@ class FillByTransferTask(TerminalFillConstraintTask):
 # %% pour stream
 
 
+class StreamDebugValue(StrEnum):
+    """The points of the poured stream a task exposes as debug expressions,
+    each named after the task and this value."""
+
+    EXIT_POINT = "exit"
+    """Where the stream leaves the source."""
+
+    LANDING_POINT = "landing"
+    """Where the stream lands on the receiver's opening plane."""
+
+
 @dataclass(eq=False, repr=False, kw_only=True)
 class PourStreamTask(Task, ABC):
     """A task on the stream a source pours into a receiver, which leaves the
@@ -413,28 +391,29 @@ class PourStreamTask(Task, ABC):
         :raises MissingExitSpeedError: if neither the source nor the receiver's inflow
             equation provides an exit speed.
         """
-        self.receiver.ensure_inflow_coupling(world)
+        self.receiver.ensure_inflow_coupling(world=world)
         inflow_equation = self.receiver.fill_connection.inflow_equation
         if inflow_equation is None:
             raise MissingInflowEquationError(node=self)
-        exit_speed = self.source.current_outflow_velocity(world)
+        exit_speed = self.source.current_exit_speed(world=world)
         if exit_speed is None:
             if not isinstance(inflow_equation, GatedInflowEquation):
                 raise MissingExitSpeedError(node=self)
             exit_speed = inflow_equation.exit_speed
-        return self.receiver.projectile_landing_point(self.source, world, exit_speed)
+        return self.receiver.projectile_landing_point(
+            source=self.source, world=world, exit_speed=exit_speed
+        )
 
 
 @dataclass(eq=False, repr=False, kw_only=True)
-class KeepProjectileInReceiver(PourStreamTask, ConvergingTask):
-    """Positions the source so the poured liquid's projectile lands in the
-    receiver's opening.
-
-    Drives the predicted landing point of the source's pour toward the
-    receiver's opening centre, so as the source tilts the optimizer
-    moves the gripper to keep the liquid landing inside the receiver.
-    Its error is the distance between the two.
-    """
+class KeepProjectileInReceiver(
+    PourStreamTask,
+    ConvergingTask,
+    HasWeightParameter,
+    HasCruiseVelocityParameter,
+):
+    """Moves the source so the stream it pours lands on the receiver's opening
+    centre; its error is the distance between the two."""
 
     cruise_velocity: float = 0.2
     """The speed the landing point is moved at, in metres per second."""
@@ -446,15 +425,15 @@ class KeepProjectileInReceiver(PourStreamTask, ConvergingTask):
     weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE
     """QP constraint weight of the landing-point goal."""
 
-    EXIT_POINT_COLOR: ClassVar[Color] = Color.from_rgba(
-        red=0.0, green=0.6, blue=1.0, opacity=1.0
-    )
-    """Color of the exit-point marker."""
+    @classproperty
+    def exit_point_color(cls) -> Color:
+        """Color of the exit-point marker."""
+        return Color.from_rgba(red=0.0, green=0.6, blue=1.0, opacity=1.0)
 
-    LANDING_POINT_COLOR: ClassVar[Color] = Color.from_rgba(
-        red=1.0, green=0.0, blue=0.0, opacity=1.0
-    )
-    """Color of the landing-point marker."""
+    @classproperty
+    def landing_point_color(cls) -> Color:
+        """Color of the landing-point marker."""
+        return Color.from_rgba(red=1.0, green=0.0, blue=0.0, opacity=1.0)
 
     def build_artifacts(self) -> MotionNodeArtifacts:
         """
@@ -464,7 +443,7 @@ class KeepProjectileInReceiver(PourStreamTask, ConvergingTask):
         world = self.context.world
         artifacts = MotionNodeArtifacts()
         landing_point = self.landing_point(world=world)
-        receiver_opening = self.receiver.opening_point(world)
+        receiver_opening = self.receiver.opening_point(world=world)
         artifacts.geometry.add_point_goal_constraints(
             name=f"{self.receiver.root.name}_projectile",
             frame_P_goal=receiver_opening,
@@ -475,14 +454,14 @@ class KeepProjectileInReceiver(PourStreamTask, ConvergingTask):
         artifacts.debug_expressions.extend(
             [
                 DebugExpression(
-                    name=f"{self.name}/exit",
-                    expression=self.source.liquid_exit_point(world),
-                    color=self.EXIT_POINT_COLOR,
+                    name=f"{self.name}/{StreamDebugValue.EXIT_POINT}",
+                    expression=self.source.liquid_exit_point(world=world),
+                    color=self.exit_point_color,
                 ),
                 DebugExpression(
-                    name=f"{self.name}/landing",
+                    name=f"{self.name}/{StreamDebugValue.LANDING_POINT}",
                     expression=landing_point,
-                    color=self.LANDING_POINT_COLOR,
+                    color=self.landing_point_color,
                 ),
             ]
         )
@@ -491,15 +470,11 @@ class KeepProjectileInReceiver(PourStreamTask, ConvergingTask):
 
 
 @dataclass(eq=False, repr=False, kw_only=True)
-class KeepSourceRimAboveReceiverRim(Task):
-    """Keeps the pouring source's lip within a clearance band above the
-    receiver's rim.
-
-    The lip is derived from the live forward kinematics, so the
-    constraint accounts for the lip descending as the source tilts, and
-    the clearance is a true rim-to-rim gap rather than an offset on the
-    cup origins.
-    """
+class KeepSourceRimAboveReceiverRim(
+    Task, HasWeightParameter, HasCruiseVelocityParameter
+):
+    """Keeps the source's lip, taken from the live forward kinematics, within a
+    clearance band above the receiver's rim."""
 
     receiver: HasFillLevel
     """The container whose rim the source's lip must stay above."""
@@ -508,28 +483,15 @@ class KeepSourceRimAboveReceiverRim(Task):
     """The pouring source whose lip must stay above the receiver's rim."""
 
     minimum_clearance: float = 0.07
-    """Lower end of the clearance band, in metres.
-
-    Must be positive: the bound is enforced softly, so a band reaching down to zero
-    would let the lip settle below the receiver's rim.
-    """
+    """Lower end of the clearance band, in metres; must be positive, as the
+    bound is enforced softly."""
 
     clearance_band: float = 0.05
-    """Width of the clearance band above :attr:`minimum_clearance`, in metres.
-
-    A band rather than a one-sided bound keeps the problem well conditioned: it is the
-    only constraint pinning the source's height, because the landing point that
-    :class:`KeepProjectileInReceiver` aims lies in the receiver's opening plane by
-    construction and so carries no vertical error.
-    """
+    """Width of the clearance band above :attr:`minimum_clearance`, in
+    metres."""
 
     weight: float = DefaultWeights.WEIGHT_MAXIMUM
-    """QP constraint weight of the clearance.
-
-    The fill task pulls the lip down along the same direction this task
-    holds it, so the clearance needs the top tier to keep its floor
-    against it.
-    """
+    """QP constraint weight of the clearance."""
 
     cruise_velocity: float = 0.2
     """The vertical speed the clearance is restored at, in metres per
@@ -553,8 +515,8 @@ class KeepSourceRimAboveReceiverRim(Task):
             )
         world = self.context.world
         artifacts = MotionNodeArtifacts()
-        source_lip = self.source.liquid_exit_point(world)
-        receiver_rim = self.receiver.opening_point(world)
+        source_lip = self.source.liquid_exit_point(world=world)
+        receiver_rim = self.receiver.opening_point(world=world)
         clearance = (source_lip - receiver_rim) @ Vector3.Z()
         artifacts.constraints.add_inequality_constraint(
             cruise_velocity=self.cruise_velocity,

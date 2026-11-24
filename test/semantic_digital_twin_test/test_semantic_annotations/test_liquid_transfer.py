@@ -1,3 +1,6 @@
+"""Tests of the fill-level containers, their transfer coupling and the liquid
+connection."""
+
 # %% imports
 
 from __future__ import annotations
@@ -22,25 +25,21 @@ from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
 )
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.exceptions import (
-    FillLevelAlreadyInitializedError,
-    MissingFillEquationError,
-    MissingFillLevelLimitsError,
-    ReceiverAlreadyCoupledError,
-    ReceiverNotInitializedError,
-    SourceAlreadyCoupledError,
-)
 from semantic_digital_twin.physics.equations.pouring_equations import (
     ArticulatedPouringEquation,
-    DEFAULT_DISCHARGE_COEFFICIENT,
-    DEFAULT_GATE_SHARPNESS,
-    DEFAULT_POUR_EXIT_SPEED,
+    FillEquation,
     GatedArticulatedPouringEquation,
     GatedInflowEquation,
     InflowEquation,
-    MINIMUM_POUR_HEAD,
-    STANDARD_GRAVITY,
     SymbolicFillContext,
+)
+from semantic_digital_twin.physics.liquid_transfer import LiquidTransferSettings
+from semantic_digital_twin.semantic_annotations.exceptions import (
+    FillLevelAlreadyInitializedError,
+    MissingFillEquationError,
+    ReceiverAlreadyCoupledError,
+    ReceiverNotInitializedError,
+    SourceAlreadyCoupledError,
 )
 from semantic_digital_twin.semantic_annotations.mixins import (
     HasFillLevel,
@@ -59,12 +58,19 @@ from semantic_digital_twin.world_description.derivatives import (
     DerivativeMap,
     Derivatives,
 )
+from semantic_digital_twin.world_description.exceptions import (
+    MissingFillLevelLimitsError,
+)
 from semantic_digital_twin.world_description.geometry import Scale
 from semantic_digital_twin.world_description.world_entity import Body
 
-_INFLOW_CONTEXT = SymbolicFillContext(sm.Scalar(0.0), sm.Scalar(0.0))
-"""Placeholder context for inflow equations, whose velocity does not depend on
-the context."""
+# %% helpers
+
+
+@pytest.fixture
+def inflow_context() -> SymbolicFillContext:
+    """A context for inflow equations, whose velocity does not depend on it."""
+    return SymbolicFillContext(tilt=sm.Scalar(0.0), fill=sm.Scalar(0.0))
 
 
 def _evaluated_xyz(spatial: Point3 | Vector3) -> np.ndarray:
@@ -82,13 +88,18 @@ def _container_volume(container: HasFillLevel) -> float:
     return collision.depth * collision.width * collision.height
 
 
+def _horizontal_unit(direction: np.ndarray) -> np.ndarray:
+    """The horizontal part of a numeric direction, scaled to unit length."""
+    return direction[:2] / np.linalg.norm(direction[:2])
+
+
 # %% test containers and sources
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, kw_only=True)
 class _TranslatingContainer(HasFillLevel):
     """A pourable container attached to its parent by a single translating
-    DOF."""
+    degree of freedom."""
 
     @classmethod
     def parent_connection_specification(
@@ -96,21 +107,20 @@ class _TranslatingContainer(HasFillLevel):
         axis: Vector3 | None = None,
         dof_limits: DegreeOfFreedomLimits | None = None,
     ) -> PrismaticConnectionSpecification:
-        """Build the single-degree-of-freedom connection the container hangs
-        from.
-
+        """
         :param axis: Axis of the connection. Defaults to the z axis.
         :param dof_limits: Limits of the generated degree of freedom.
-        :return: The connection specification.
+        :return: The connection the container hangs from.
         """
         return PrismaticConnectionSpecification(
             axis=axis if axis is not None else Vector3.Z(), dof_limits=dof_limits
         )
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, kw_only=True)
 class _TiltingContainer(HasFillLevel):
-    """A pourable container attached to its parent by a single tilting DOF."""
+    """A pourable container attached to its parent by a single tilting degree
+    of freedom."""
 
     @classmethod
     def parent_connection_specification(
@@ -118,22 +128,20 @@ class _TiltingContainer(HasFillLevel):
         axis: Vector3 | None = None,
         dof_limits: DegreeOfFreedomLimits | None = None,
     ) -> RevoluteConnectionSpecification:
-        """Build the single-degree-of-freedom connection the container hangs
-        from.
-
+        """
         :param axis: Axis of the connection. Defaults to the z axis.
         :param dof_limits: Limits of the generated degree of freedom.
-        :return: The connection specification.
+        :return: The connection the container hangs from.
         """
         return RevoluteConnectionSpecification(
             axis=axis if axis is not None else Vector3.Z(), dof_limits=dof_limits
         )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class _StaticLiquidSource(LiquidSource):
-    """A non-cup liquid source (a faucet stand-in) with a fixed exit point and
-    constant stream."""
+    """A liquid source that is not a cup (a faucet stand-in), with a fixed exit
+    point and a constant stream."""
 
     exit_point: Point3
     """World-frame point at which the stream leaves the source."""
@@ -141,20 +149,32 @@ class _StaticLiquidSource(LiquidSource):
     volume_rate: float
     """Constant volume rate of the stream, in cubic metres per second."""
 
-    def outflow_volume_rate(self, world: World) -> sm.Scalar:
+    def outflow_volume_rate(self, *, world: World) -> sm.Scalar:
+        """
+        :return: The constant volume rate of the stream.
+        """
         return sm.Scalar(self.volume_rate)
 
-    def liquid_exit_point(self, world: World) -> Point3:
+    def liquid_exit_point(self, *, world: World) -> Point3:
+        """
+        :return: The fixed exit point.
+        """
         return self.exit_point
 
-    def liquid_exit_direction(self, world: World) -> Vector3:
-        return Vector3.Z()
+    def opening_direction(self, *, world: World) -> Vector3:
+        """
+        :return: Straight down, the way the stream leaves.
+        """
+        return Vector3(x=0.0, y=0.0, z=-1.0, reference_frame=world.root)
 
     @property
     def pour_tilt_expression(self) -> sm.Scalar:
+        """
+        :return: Zero, as the source does not tilt.
+        """
         return sm.Scalar(0.0)
 
-    def couple_drain_to_gate(self, gate: sm.Scalar, world: World) -> None:
+    def couple_drain_to_gate(self, *, gate: sm.Scalar, world: World) -> None:
         """The reservoir is infinite, so being gated does not change the
         source."""
 
@@ -166,6 +186,7 @@ class _StaticLiquidSource(LiquidSource):
 
 
 def _build_world(
+    *,
     source_class: type[HasFillLevel] = _TranslatingContainer,
     source_axis: Vector3 | None = None,
     source_height: float = 0.3,
@@ -174,36 +195,29 @@ def _build_world(
     scale_factor: float = 1.0,
     couple: bool = True,
     initialize_receiver_fill: bool = True,
-    exit_speed: float = DEFAULT_POUR_EXIT_SPEED,
-    height_gate_sharpness: float = DEFAULT_GATE_SHARPNESS,
-    overlap_gate_sharpness: float = DEFAULT_GATE_SHARPNESS,
+    settings: LiquidTransferSettings = LiquidTransferSettings(),
 ) -> tuple[World, HasFillLevel, _TranslatingContainer]:
     """Builds a fixed receiver at the origin and a source held above it on a
-    single DOF.
+    single degree of freedom.
 
     :param source_class: The container annotation type used for the
         source.
-    :param source_axis: Axis of the source's single DOF; defaults to
-        translation along x.
+    :param source_axis: Axis of the source's degree of freedom; defaults
+        to x.
     :param source_height: Height of the source's origin above the world
         root, in metres.
     :param receiver_height: Height of the receiver's collision geometry,
         in metres.
     :param receiver_depth: Depth of the receiver's collision geometry,
-        in metres. The receiver holds more liquid as it deepens, while
-        the width its pouring model reads stays the same.
+        in metres, which changes its capacity but not the width its
+        pouring model reads.
     :param scale_factor: Factor every length in the scene is multiplied
-        by, so a scene built twice with different factors is
-        geometrically similar.
+        by.
     :param couple: Whether the receiver's inflow is coupled to the
         source's outflow.
     :param initialize_receiver_fill: Whether the receiver's fill level
         is initialized.
-    :param exit_speed: Nominal exit speed forwarded to the coupling.
-    :param height_gate_sharpness: Height-gate steepness forwarded to the
-        coupling.
-    :param overlap_gate_sharpness: Overlap-gate steepness forwarded to
-        the coupling.
+    :param settings: The transfer settings forwarded to the coupling.
     :return: The world, the source, and the receiver.
     """
     if source_axis is None:
@@ -246,18 +260,12 @@ def _build_world(
         receiver.initialize_fill_level(world=world, initial_fill=0.0)
     source.initialize_fill_level(world=world, initial_fill=1.0)
     if couple:
-        receiver.receive_outflow_from(
-            source=source,
-            world=world,
-            exit_speed=exit_speed,
-            height_gate_sharpness=height_gate_sharpness,
-            overlap_gate_sharpness=overlap_gate_sharpness,
-        )
+        receiver.receive_outflow_from(source=source, world=world, settings=settings)
     return world, source, receiver
 
 
 def _set_source_offset(world: World, source: HasFillLevel, offset: float) -> None:
-    """Sets the position of the source's single DOF."""
+    """Sets the position of the source's single degree of freedom."""
     JointState.from_mapping({source.root.parent_connection: offset}).apply_to(world)
 
 
@@ -282,7 +290,9 @@ class TestGatedInflowEquation:
         equation = InflowEquation(container_height=0.2, container_width=0.08)
         assert equation.capacity == pytest.approx(0.08 * 0.08 * 0.2)
 
-    def test_gate_scales_the_inflow_velocity(self):
+    def test_gate_scales_the_inflow_velocity(
+        self, *, inflow_context: SymbolicFillContext
+    ) -> None:
         """A half-open gate halves the resulting fill velocity."""
         inflow = sm.Scalar(0.006)
         open_equation = GatedInflowEquation(
@@ -290,17 +300,19 @@ class TestGatedInflowEquation:
             container_width=0.06,
             inflow=inflow,
             gate=sm.Scalar(1.0),
+            exit_speed=LiquidTransferSettings().exit_speed,
         )
         half_equation = GatedInflowEquation(
             container_height=0.2,
             container_width=0.06,
             inflow=inflow,
             gate=sm.Scalar(0.5),
+            exit_speed=LiquidTransferSettings().exit_speed,
         )
-        assert half_equation.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[
+        assert half_equation.symbolic_velocity(context=inflow_context).evaluate()[
             0
         ] == pytest.approx(
-            0.5 * open_equation.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[0]
+            0.5 * open_equation.symbolic_velocity(context=inflow_context).evaluate()[0]
         )
 
     @pytest.mark.parametrize(
@@ -308,8 +320,12 @@ class TestGatedInflowEquation:
         [(1e-3, 1e-3), (1e-3, 4e-4), (4e-4, 1e-3)],
     )
     def test_a_transfer_moves_the_share_the_capacities_relate(
-        self, source_capacity, receiver_capacity
-    ):
+        self,
+        *,
+        source_capacity: float,
+        receiver_capacity: float,
+        inflow_context: SymbolicFillContext,
+    ) -> None:
         """The share of itself the receiver gains is the share the source lost,
         scaled by how the two capacities compare, so the volume leaving one is
         the volume entering the other whatever shape either has."""
@@ -320,7 +336,7 @@ class TestGatedInflowEquation:
             outflow_rate_constant=1.0,
         )
         source_drain = source.symbolic_velocity(
-            SymbolicFillContext(sm.Scalar(1.3), sm.Scalar(0.8))
+            context=SymbolicFillContext(tilt=sm.Scalar(1.3), fill=sm.Scalar(0.8))
         ).evaluate()[0]
 
         receiver = GatedInflowEquation(
@@ -328,15 +344,94 @@ class TestGatedInflowEquation:
             container_width=0.06,
             capacity=receiver_capacity,
             inflow=-source.symbolic_velocity(
-                SymbolicFillContext(sm.Scalar(1.3), sm.Scalar(0.8))
+                context=SymbolicFillContext(tilt=sm.Scalar(1.3), fill=sm.Scalar(0.8))
             )
             * source_capacity,
             gate=sm.Scalar(1.0),
+            exit_speed=LiquidTransferSettings().exit_speed,
         )
 
-        assert receiver.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[
+        assert receiver.symbolic_velocity(context=inflow_context).evaluate()[
             0
         ] == pytest.approx(-source_drain * source_capacity / receiver_capacity)
+
+
+# %% the parts of a coupled inflow
+
+
+class TestCoupledInflowParts:
+    """The inflow a coupling builds is its gate, the product of a height and an
+    overlap factor, times the source's volume rate over the receiver's
+    capacity."""
+
+    def _partly_open_transfer(self) -> tuple[World, HasFillLevel, HasFillLevel]:
+        world, source, receiver = _build_world(
+            source_class=_TiltingContainer,
+            source_axis=Vector3(0, 1, 0),
+            settings=LiquidTransferSettings(
+                height_gate_sharpness=1.0, overlap_gate_sharpness=1.0
+            ),
+        )
+        _set_source_offset(world, source, 0.5)
+        return world, source, receiver
+
+    def test_the_gate_is_the_product_of_its_factors(self) -> None:
+        _, _, receiver = self._partly_open_transfer()
+        inflow_equation = receiver.fill_connection.inflow_equation
+
+        assert inflow_equation.gate.evaluate()[0] == pytest.approx(
+            inflow_equation.height_gate.evaluate()[0]
+            * inflow_equation.overlap_gate.evaluate()[0]
+        )
+
+    def test_the_height_factor_reads_the_clearance_in_receiver_heights(self) -> None:
+        world, source, receiver = self._partly_open_transfer()
+        clearance = (
+            source.liquid_exit_point(world=world).z.evaluate()[0]
+            - receiver.opening_point(world=world).z.evaluate()[0]
+        )
+
+        sharpness = receiver.inflow_coupling.settings.height_gate_sharpness
+
+        height_gate = receiver.fill_connection.inflow_equation.height_gate
+
+        assert height_gate.evaluate()[0] == pytest.approx(
+            1 / (1 + math.exp(-sharpness * clearance / receiver.root.collision.height))
+        )
+
+    def test_the_overlap_factor_reads_the_landing_distance_in_opening_radii(
+        self,
+    ) -> None:
+        world, source, receiver = self._partly_open_transfer()
+        landing = _evaluated_xyz(
+            receiver.projectile_landing_point(
+                source=source,
+                world=world,
+                exit_speed=source.current_exit_speed(world=world),
+            )
+        )
+        opening = _evaluated_xyz(receiver.opening_point(world=world))
+        landing_distance = np.linalg.norm(landing[:2] - opening[:2])
+        margin = (receiver.opening_radius - landing_distance) / receiver.opening_radius
+        sharpness = receiver.inflow_coupling.settings.overlap_gate_sharpness
+
+        overlap_gate = receiver.fill_connection.inflow_equation.overlap_gate
+
+        assert overlap_gate.evaluate()[0] == pytest.approx(
+            1 / (1 + math.exp(-sharpness * margin))
+        )
+
+    def test_the_ungated_velocity_is_the_volume_rate_over_the_capacity(
+        self, *, inflow_context: SymbolicFillContext
+    ) -> None:
+        world, source, receiver = self._partly_open_transfer()
+        inflow_equation = receiver.fill_connection.inflow_equation
+
+        assert inflow_equation.ungated_velocity(context=inflow_context).evaluate()[
+            0
+        ] == pytest.approx(
+            source.outflow_volume_rate(world=world).evaluate()[0] / receiver.capacity
+        )
 
 
 # %% a fill level's rate from all its equations
@@ -351,7 +446,9 @@ class TestSymbolicFillVelocity:
         world, _source, receiver = _build_world()
         connection = receiver.fill_connection
         assert connection.symbolic_fill_velocity().evaluate()[0] == pytest.approx(
-            connection.inflow_equation.symbolic_velocity(connection).evaluate()[0]
+            connection.inflow_equation.symbolic_velocity(context=connection).evaluate()[
+                0
+            ]
         )
 
     def test_a_source_drains_at_its_outflow(self):
@@ -360,7 +457,9 @@ class TestSymbolicFillVelocity:
         world, source, _receiver = _build_world()
         connection = source.fill_connection
         assert connection.symbolic_fill_velocity().evaluate()[0] == pytest.approx(
-            connection.outflow_equation.symbolic_velocity(connection).evaluate()[0]
+            connection.outflow_equation.symbolic_velocity(
+                context=connection
+            ).evaluate()[0]
         )
 
     def test_a_connection_without_equations_stands_still(self):
@@ -386,9 +485,9 @@ class TestGatedSourceOutflow:
             gate=sm.Scalar(0.0),
         )
         tilt, fill = sm.Scalar(1.3), sm.Scalar(0.8)
-        assert equation.symbolic_velocity(SymbolicFillContext(tilt, fill)).evaluate()[
-            0
-        ] == pytest.approx(0.0)
+        assert equation.symbolic_velocity(
+            context=SymbolicFillContext(tilt=tilt, fill=fill)
+        ).evaluate()[0] == pytest.approx(0.0)
 
     def test_open_gate_matches_ungated_outflow(self):
         """A fully open gate leaves the tilt-driven outflow unchanged."""
@@ -402,13 +501,17 @@ class TestGatedSourceOutflow:
             outflow_rate_constant=1.0,
             gate=sm.Scalar(1.0),
         )
-        assert gated.symbolic_velocity(SymbolicFillContext(tilt, fill)).evaluate()[
-            0
-        ] == pytest.approx(
-            ungated.symbolic_velocity(SymbolicFillContext(tilt, fill)).evaluate()[0]
+        assert gated.symbolic_velocity(
+            context=SymbolicFillContext(tilt=tilt, fill=fill)
+        ).evaluate()[0] == pytest.approx(
+            ungated.symbolic_velocity(
+                context=SymbolicFillContext(tilt=tilt, fill=fill)
+            ).evaluate()[0]
         )
 
-    def test_partial_gate_transfer_is_conserved(self):
+    def test_partial_gate_transfer_is_conserved(
+        self, *, inflow_context: SymbolicFillContext
+    ) -> None:
         """At a partly open gate the source's gated loss equals the receiver's
         gated gain."""
         gate = sm.Scalar(0.5)
@@ -425,18 +528,21 @@ class TestGatedSourceOutflow:
         receiver = GatedInflowEquation(
             container_height=0.2,
             container_width=0.08,
-            inflow=-ungated.symbolic_velocity(SymbolicFillContext(tilt, fill))
+            inflow=-ungated.symbolic_velocity(
+                context=SymbolicFillContext(tilt=tilt, fill=fill)
+            )
             * ungated.capacity,
             gate=gate,
+            exit_speed=LiquidTransferSettings().exit_speed,
         )
         source_volume_loss = (
-            -gated_source.symbolic_velocity(SymbolicFillContext(tilt, fill)).evaluate()[
-                0
-            ]
+            -gated_source.symbolic_velocity(
+                context=SymbolicFillContext(tilt=tilt, fill=fill)
+            ).evaluate()[0]
             * gated_source.capacity
         )
         receiver_volume_gain = (
-            receiver.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[0]
+            receiver.symbolic_velocity(context=inflow_context).evaluate()[0]
             * receiver.capacity
         )
         assert receiver_volume_gain == pytest.approx(source_volume_loss)
@@ -450,13 +556,10 @@ class TestCrossContainerVolumeConversion:
     as it moves into the receiver, whatever the two containers' shapes."""
 
     def test_containers_of_different_depth_conserve_volume(self):
-        """A receiver that holds four times the liquid of the source at the
-        same fill must rise four times more slowly than the source drops.
-
-        Both rates carry the same transfer gate, so their ratio is the
-        volume conversion the transfer applies, whatever the gate is
-        currently worth.
-        """
+        """A receiver that holds four times the liquid of the source rises four
+        times more slowly than the source drops; both rates carry the same
+        gate, so their ratio is the volume conversion whatever the gate is
+        worth."""
         world, source, receiver = _build_world(
             source_class=_TiltingContainer,
             source_axis=Vector3(0, 1, 0),
@@ -466,12 +569,12 @@ class TestCrossContainerVolumeConversion:
 
         source_fill_loss_rate = (
             -source.fill_connection.outflow_equation.symbolic_velocity(
-                source.fill_connection
+                context=source.fill_connection
             ).evaluate()[0]
         )
         receiver_fill_gain_rate = (
             receiver.fill_connection.inflow_equation.symbolic_velocity(
-                receiver.fill_connection
+                context=receiver.fill_connection
             ).evaluate()[0]
         )
         assert source_fill_loss_rate > 0.0, "the source must be draining"
@@ -496,19 +599,21 @@ class TestCrossContainerVolumeConversion:
 
         source_fill_loss_rate = (
             -source.fill_connection.outflow_equation.symbolic_velocity(
-                source.fill_connection
+                context=source.fill_connection
             ).evaluate()[0]
         )
         receiver_fill_gain_rate = (
             receiver.fill_connection.inflow_equation.symbolic_velocity(
-                receiver.fill_connection
+                context=receiver.fill_connection
             ).evaluate()[0]
         )
         assert receiver_fill_gain_rate / source_fill_loss_rate == pytest.approx(
             _container_volume(source) / receiver.measured_capacity
         )
 
-    def test_a_measured_capacity_is_the_capacity(self):
+    def test_a_measured_capacity_is_the_capacity(self) -> None:
+        """A measured capacity takes the place of the one the collision
+        geometry bounds."""
         _, _, receiver = _build_world(couple=False)
         receiver.measured_capacity = 0.002
         assert receiver.capacity == receiver.measured_capacity
@@ -557,10 +662,8 @@ class TestTransferGate:
         assert values[-1] < 0.1
 
     def test_gate_has_nonzero_gradient_in_transition(self):
-        """The gate is differentiable: its slope w.r.t.
-
-        the source position is non-zero at the rim.
-        """
+        """The gate is differentiable: its slope with respect to the source
+        position is non-zero at the rim."""
         world, source, receiver = _build_world()
         gate = receiver.fill_connection.inflow_equation.gate
         source_position = source.root.parent_connection.dof.variables.position
@@ -568,22 +671,10 @@ class TestTransferGate:
         gradient = gate.jacobian(variables=[source_position])[0, 0].evaluate()[0]
         assert abs(gradient) > 1e-3
 
-    @pytest.mark.skip(
-        reason="Fails identically on the source branch pouring-constraint-inspector: "
-        "the height gate's logistic reads the lip clearance in metres, so it is not "
-        "invariant under a uniform scaling of the scene."
-    )
     def test_height_gate_is_unchanged_by_a_uniform_scene_scaling(self):
-        """The height gate reports whether the source's lip clears the
-        receiver's opening, which is a question about the shape of the
-        arrangement alone. Two scenes that differ only by a uniform scaling of
-        every length are the same arrangement, so the gate must read the same
-        in both.
-
-        The receiver is tall enough that its opening sits just below the
-        source's lip, which puts the clearance in the gate's transition
-        rather than at either end.
-        """
+        """Whether the source's lip clears the receiver's opening depends on
+        the shape of the arrangement alone, so two scenes that differ by a
+        uniform scaling read the same height gate."""
         gates = []
         for scale_factor in (1.0, 4.0):
             world, source, receiver = _build_world(
@@ -622,11 +713,11 @@ class TestTransferGate:
         still well above the receiver's base."""
         world, source, receiver = _build_world(receiver_height=1.0)
         _set_source_offset(world, source, 0.0)
-        source_lip = source.liquid_exit_point(world).z.evaluate()[0]
+        source_lip = source.liquid_exit_point(world=world).z.evaluate()[0]
         receiver_base = world.compose_forward_kinematics_expression(
             world.root, receiver.root
         ).position.z.evaluate()[0]
-        receiver_opening = receiver.opening_point(world).z.evaluate()[0]
+        receiver_opening = receiver.opening_point(world=world).z.evaluate()[0]
         assert (
             receiver_base < source_lip < receiver_opening
         ), "the setup must hold the lip above the receiver's base but below its opening"
@@ -639,12 +730,15 @@ class TestTransferGate:
 # %% live exit speed
 
 
-class TestCurrentOutflowVelocity:
+class TestCurrentExitSpeed:
     """Validates the discharge-scaled Torricelli exit speed derived from the
     live pour head."""
 
     def _tilted_source(
-        self, tilt: float, discharge_coefficient: float = DEFAULT_DISCHARGE_COEFFICIENT
+        self,
+        *,
+        tilt: float,
+        discharge_coefficient: float = ArticulatedPouringEquation.discharge_coefficient,
     ) -> tuple[World, HasFillLevel]:
         world, source, _ = _build_world(
             source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
@@ -656,46 +750,51 @@ class TestCurrentOutflowVelocity:
     def test_matches_discharge_scaled_torricelli(self):
         """The exit speed is ``C_d * sqrt(2 g h_head)`` for the current head
         above the lip."""
-        world, source = self._tilted_source(1.2, discharge_coefficient=0.4)
-        head = source.fill_equation.head_above_lip(source.fill_connection).evaluate()[0]
-        velocity = source.current_outflow_velocity(world)
+        world, source = self._tilted_source(tilt=1.2, discharge_coefficient=0.4)
+        head = source.fill_equation.head_above_lip(
+            context=source.fill_connection
+        ).evaluate()[0]
+        velocity = source.current_exit_speed(world=world)
         assert velocity is not None
         assert velocity.evaluate()[0] == pytest.approx(
-            0.4 * math.sqrt(2 * STANDARD_GRAVITY * head)
+            0.4 * math.sqrt(2 * FillEquation.standard_gravity * head)
         )
 
     def test_discharge_coefficient_scales_speed_linearly(self):
         """The discharge coefficient scales the exit speed proportionally."""
-        low_world, low = self._tilted_source(1.2, discharge_coefficient=0.2)
-        high_world, high = self._tilted_source(1.2, discharge_coefficient=0.6)
+        low_world, low = self._tilted_source(tilt=1.2, discharge_coefficient=0.2)
+        high_world, high = self._tilted_source(tilt=1.2, discharge_coefficient=0.6)
         ratio = (
-            high.current_outflow_velocity(high_world).evaluate()[0]
-            / low.current_outflow_velocity(low_world).evaluate()[0]
+            high.current_exit_speed(world=high_world).evaluate()[0]
+            / low.current_exit_speed(world=low_world).evaluate()[0]
         )
         assert ratio == pytest.approx(3.0)
 
     def test_more_tilt_pours_faster(self):
         """A steeper tilt lifts more liquid above the lip, so the exit speed
         grows."""
-        gentle_world, gentle = self._tilted_source(0.6)
-        steep_world, steep = self._tilted_source(1.2)
+        gentle_world, gentle = self._tilted_source(tilt=0.6)
+        steep_world, steep = self._tilted_source(tilt=1.2)
         assert (
-            steep.current_outflow_velocity(steep_world).evaluate()[0]
-            > gentle.current_outflow_velocity(gentle_world).evaluate()[0]
+            steep.current_exit_speed(world=steep_world).evaluate()[0]
+            > gentle.current_exit_speed(world=gentle_world).evaluate()[0]
         )
 
     def test_head_is_floored_when_barely_pouring(self):
         """With no head above the lip the head is floored so the exit-speed
         gradient stays finite."""
-        world, source = self._tilted_source(0.0, discharge_coefficient=0.4)
-        assert source.current_outflow_velocity(world).evaluate()[0] == pytest.approx(
-            0.4 * math.sqrt(2 * STANDARD_GRAVITY * MINIMUM_POUR_HEAD)
+        world, source = self._tilted_source(tilt=0.0, discharge_coefficient=0.4)
+        assert source.current_exit_speed(world=world).evaluate()[0] == pytest.approx(
+            0.4
+            * math.sqrt(
+                2 * FillEquation.standard_gravity * source.fill_equation.minimum_head
+            )
         )
 
     def test_source_without_pour_head_has_no_velocity(self):
         """A source whose dynamics expose no head reports no exit speed."""
         source = _StaticLiquidSource(exit_point=Point3(), volume_rate=0.01)
-        assert source.current_outflow_velocity(world=None) is None
+        assert source.current_exit_speed(world=World()) is None
 
     def test_initialize_fill_level_threads_discharge_coefficient(self):
         """The discharge coefficient passed to ``initialize_fill_level``
@@ -754,11 +853,11 @@ class TestLiquidExitPoint:
     """Validates that liquid leaves from the rim edge on the pour side, not the
     rim centre."""
 
-    def _horizontal_half_extent(self, source: HasFillLevel) -> float:
+    def _horizontal_half_extent(self, *, source: HasFillLevel) -> float:
         collision = source.root.collision
         return (collision.max_point.x - collision.min_point.x) / 2
 
-    def _rim_center_world(self, world: World, source: HasFillLevel) -> Point3:
+    def _rim_center_world(self, *, world: World, source: HasFillLevel) -> Point3:
         return (
             world.compose_forward_kinematics_expression(world.root, source.root)
             @ source.rim_point()
@@ -772,8 +871,8 @@ class TestLiquidExitPoint:
         )
         _set_source_offset(world, source, 0.0)
 
-        exit_point = source.liquid_exit_point(world)
-        rim_center = self._rim_center_world(world, source)
+        exit_point = source.liquid_exit_point(world=world)
+        rim_center = self._rim_center_world(world=world, source=source)
 
         assert exit_point.x.evaluate()[0] == pytest.approx(
             rim_center.x.evaluate()[0], abs=1e-3
@@ -790,17 +889,19 @@ class TestLiquidExitPoint:
         )
         _set_source_offset(world, source, 1.2)
 
-        exit_point = source.liquid_exit_point(world)
-        rim_center = self._rim_center_world(world, source)
+        exit_point = source.liquid_exit_point(world=world)
+        rim_center = self._rim_center_world(world=world, source=source)
         offset = exit_point - rim_center
         offset_x = offset.x.evaluate()[0]
         offset_y = offset.y.evaluate()[0]
         offset_z = offset.z.evaluate()[0]
 
         distance = math.sqrt(offset_x**2 + offset_y**2 + offset_z**2)
-        assert distance == pytest.approx(self._horizontal_half_extent(source), abs=1e-3)
+        assert distance == pytest.approx(
+            self._horizontal_half_extent(source=source), abs=1e-3
+        )
 
-        pour_direction = source.liquid_exit_direction(world)
+        pour_direction = source.opening_direction(world=world)
         horizontal_alignment = (
             offset_x * pour_direction.x.evaluate()[0]
             + offset_y * pour_direction.y.evaluate()[0]
@@ -815,29 +916,48 @@ class TestProjectileLandingPoint:
     """Validates the projectile model that locates where poured liquid
     lands."""
 
-    def test_rim_source_launches_horizontally(self):
-        """Liquid spilling over a rim has no vertical launch: the exit velocity
-        is the horizontal part of the exit direction scaled by the exit
-        speed."""
+    def test_rim_source_launches_horizontally(self) -> None:
+        """Liquid spilling over a rim has no vertical launch: it travels
+        towards where the opening faces, horizontally."""
+        world, source, _receiver = _build_world(
+            source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
+        )
+        _set_source_offset(world, source, 0.6)
+
+        exit_velocity = _evaluated_xyz(
+            source.liquid_exit_velocity(world=world, exit_speed=0.2)
+        )
+
+        opening_direction = _evaluated_xyz(source.opening_direction(world=world))
+        assert exit_velocity[2] == 0.0
+        assert _horizontal_unit(exit_velocity) == pytest.approx(
+            _horizontal_unit(opening_direction)
+        )
+
+    def test_a_tilted_rim_source_launches_at_the_exit_speed(self) -> None:
+        """A tilted source's stream leaves at the exit speed it is given,
+        whatever the tilt, up to the small share the smoothing of the upright
+        pose takes off it."""
         world, source, _receiver = _build_world(
             source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
         )
         _set_source_offset(world, source, 0.6)
         exit_speed = 0.2
 
-        exit_velocity = _evaluated_xyz(source.liquid_exit_velocity(world, exit_speed))
-
-        exit_direction = _evaluated_xyz(source.liquid_exit_direction(world))
-        assert exit_velocity == pytest.approx(
-            [exit_speed * exit_direction[0], exit_speed * exit_direction[1], 0.0]
+        exit_velocity = _evaluated_xyz(
+            source.liquid_exit_velocity(world=world, exit_speed=exit_speed)
         )
+
+        assert np.linalg.norm(exit_velocity[:2]) == pytest.approx(exit_speed, rel=1e-3)
 
     def test_upright_source_lands_below_its_rim(self):
         """With no tilt the liquid has no horizontal velocity, so it lands
         directly below the rim."""
         world, source, receiver = _build_world()
         _set_source_offset(world, source, 0.1)
-        landing = receiver.projectile_landing_point(source, world, exit_speed=0.2)
+        landing = receiver.projectile_landing_point(
+            source=source, world=world, exit_speed=0.2
+        )
         source_rim = (
             world.compose_forward_kinematics_expression(world.root, source.root)
             @ source.rim_point()
@@ -857,11 +977,11 @@ class TestProjectileLandingPoint:
         )
         _set_source_offset(world, source, 0.0)
         upright_landing = receiver.projectile_landing_point(
-            source, world, exit_speed=0.2
+            source=source, world=world, exit_speed=0.2
         ).x.evaluate()[0]
         _set_source_offset(world, source, 0.6)
         tilted_landing = receiver.projectile_landing_point(
-            source, world, exit_speed=0.2
+            source=source, world=world, exit_speed=0.2
         ).x.evaluate()[0]
         assert tilted_landing > upright_landing
 
@@ -885,28 +1005,25 @@ class TestProjectileLandingPoint:
             high_world
         )
         low_landing = low_receiver.projectile_landing_point(
-            low_source, low_world, exit_speed=0.2
+            source=low_source, world=low_world, exit_speed=0.2
         ).x.evaluate()[0]
         high_landing = high_receiver.projectile_landing_point(
-            high_source, high_world, exit_speed=0.2
+            source=high_source, world=high_world, exit_speed=0.2
         ).x.evaluate()[0]
         assert high_landing > low_landing
 
     def test_arc_terminates_at_the_opening_not_the_base(self):
-        """The arc ends where the liquid actually arrives -- the receiver's
-        opening.
-
-        Terminating it at the receiver's origin, which lies at the base
-        of the container, over-states the fall by the container's height
-        and so over-states the throw distance.
-        """
+        """The arc ends where the liquid arrives, the receiver's opening, not
+        the receiver's origin at its base."""
         world, source, receiver = _build_world()
         _set_source_offset(world, source, 0.1)
 
-        landing = receiver.projectile_landing_point(source, world, exit_speed=0.2)
+        landing = receiver.projectile_landing_point(
+            source=source, world=world, exit_speed=0.2
+        )
 
         assert landing.z.evaluate()[0] == pytest.approx(
-            receiver.opening_point(world).z.evaluate()[0], abs=1e-9
+            receiver.opening_point(world=world).z.evaluate()[0], abs=1e-9
         )
 
     def test_throw_distance_follows_the_fall_to_the_opening(self):
@@ -920,19 +1037,19 @@ class TestProjectileLandingPoint:
         _set_source_offset(world, source, 0.6)
 
         landing = receiver.projectile_landing_point(
-            source, world, exit_speed=exit_speed
+            source=source, world=world, exit_speed=exit_speed
         )
 
-        exit_point = source.liquid_exit_point(world)
-        exit_direction = source.liquid_exit_direction(world)
+        exit_point = source.liquid_exit_point(world=world)
+        exit_velocity = _evaluated_xyz(
+            source.liquid_exit_velocity(world=world, exit_speed=exit_speed)
+        )
         fall_height = (
-            exit_point.z.evaluate()[0] - receiver.opening_point(world).z.evaluate()[0]
+            exit_point.z.evaluate()[0]
+            - receiver.opening_point(world=world).z.evaluate()[0]
         )
-        flight_time = math.sqrt(2 * fall_height / STANDARD_GRAVITY)
-        expected_x = (
-            exit_point.x.evaluate()[0]
-            + exit_speed * exit_direction.x.evaluate()[0] * flight_time
-        )
+        flight_time = math.sqrt(2 * fall_height / FillEquation.standard_gravity)
+        expected_x = exit_point.x.evaluate()[0] + exit_velocity[0] * flight_time
         assert landing.x.evaluate()[0] == pytest.approx(expected_x, abs=1e-9)
 
 
@@ -1033,17 +1150,13 @@ class TestFillLevelInitializationGuard:
 
 
 class TestCouplingReconstruction:
-    """Validates that a transfer coupling is transmitted as a serializable
-    parametric descriptor and rebuilt against the receiving world.
-
-    The gate and inflow of a coupling are symbolic expressions bound to the world they were built
-    in, so they cannot be serialized to another process. ``receive_outflow_from`` therefore records
-    a :class:`~semantic_digital_twin.world_description.connections.LiquidTransferCoupling` descriptor
-    on the fill connection, which survives synchronization and lets the receiving world rebuild the
-    symbolic coupling locally.
+    """
+    A transfer coupling travels as a serializable
+    :class:`~semantic_digital_twin.physics.liquid_transfer.LiquidTransferCoupling`, from
+    which a world that lacks the symbolic inflow rebuilds it against its own symbols.
     """
 
-    def _coupled_world(self):
+    def _coupled_world(self) -> tuple[World, HasFillLevel, HasFillLevel]:
         return _build_world(
             source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
         )
@@ -1056,21 +1169,16 @@ class TestCouplingReconstruction:
         assert coupling is not None
         assert coupling.source_id == source.id
 
-        restored = from_json(to_json(coupling))
-        assert restored.source_id == source.id
-        assert restored.exit_speed == coupling.exit_speed
-        assert restored.height_gate_sharpness == coupling.height_gate_sharpness
-        assert restored.overlap_gate_sharpness == coupling.overlap_gate_sharpness
+        assert from_json(to_json(coupling)) == coupling
 
     def test_rebuild_reconstructs_inflow_when_symbolic_state_absent(self):
-        """
-        Given the state a synchronized world holds - the descriptor present but the symbolic inflow
-        side effect absent - the receiver rebuilds a working, world-bound inflow equation.
-        """
+        """A receiver holding the coupling description but no symbolic inflow,
+        as in a synchronized world, rebuilds an inflow bound to its own
+        world."""
         world, source, receiver = self._coupled_world()
         receiver.fill_connection.inflow_equation = None
 
-        receiver.ensure_inflow_coupling(world)
+        receiver.ensure_inflow_coupling(world=world)
 
         inflow_equation = receiver.fill_connection.inflow_equation
         assert inflow_equation is not None
@@ -1078,10 +1186,40 @@ class TestCouplingReconstruction:
         # the rebuilt coupling is bound to this world's symbols, not the ones it was first built in.
         JointState.from_mapping({source.root.parent_connection: 0.0}).apply_to(world)
         assert inflow_equation.gate.evaluate()[0] == pytest.approx(1.0, abs=1e-2)
-        # The inflow tracks the source's outflow: zero while upright, positive once the source tilts.
+        # The inflow tracks the source's outflow: zero while upright, its drain once tilted.
         assert inflow_equation.inflow.evaluate()[0] == pytest.approx(0.0)
         JointState.from_mapping({source.root.parent_connection: 1.0}).apply_to(world)
-        assert inflow_equation.inflow.evaluate()[0] > 0.0
+        assert inflow_equation.inflow.evaluate()[0] == pytest.approx(
+            source.outflow_volume_rate(world=world).evaluate()[0]
+        )
+
+    def test_a_rebuilt_coupling_moves_the_volume_the_source_loses(self) -> None:
+        """Rebuilding the coupling of a source whose drain is already gated
+        feeds the receiver the volume the source loses, not that volume gated a
+        second time."""
+        world, source, receiver = _build_world(
+            source_class=_TiltingContainer,
+            source_axis=Vector3(0, 1, 0),
+            settings=LiquidTransferSettings(
+                height_gate_sharpness=1.0, overlap_gate_sharpness=1.0
+            ),
+        )
+        _set_source_offset(world, source, 0.5)
+        receiver.fill_connection.inflow_equation = None
+
+        receiver.ensure_inflow_coupling(world=world)
+
+        gate = receiver.fill_connection.inflow_equation.gate.evaluate()[0]
+        assert 0.01 < gate < 0.99, "the setup must hold the gate partly open"
+        source_volume_loss = (
+            -source.fill_connection.symbolic_fill_velocity().evaluate()[0]
+            * source.capacity
+        )
+        receiver_volume_gain = (
+            receiver.fill_connection.symbolic_fill_velocity().evaluate()[0]
+            * receiver.capacity
+        )
+        assert receiver_volume_gain == pytest.approx(source_volume_loss)
 
     def test_rebuild_regates_source_outflow(self):
         """Rebuilding re-establishes the source's gated outflow, keeping the
@@ -1089,7 +1227,7 @@ class TestCouplingReconstruction:
         world, source, receiver = self._coupled_world()
         receiver.fill_connection.inflow_equation = None
 
-        receiver.ensure_inflow_coupling(world)
+        receiver.ensure_inflow_coupling(world=world)
 
         source_outflow = source.fill_connection.outflow_equation
         assert isinstance(source_outflow, GatedArticulatedPouringEquation)
@@ -1103,19 +1241,14 @@ class TestCouplingReconstruction:
         original_inflow = receiver.fill_connection.inflow_equation
         assert original_inflow is not None
 
-        receiver.ensure_inflow_coupling(world)
+        receiver.ensure_inflow_coupling(world=world)
 
         assert receiver.fill_connection.inflow_equation is original_inflow
 
     def test_rebuild_rebinds_fill_connection_to_the_target_world(self):
-        """An annotation holding a fill connection detached from its world is
-        re-pointed at the connection resident in that world, so the coupling
-        evaluates against the world's own symbols.
-
-        Synchronizing an annotation deserializes its fill connection by
-        value, so the synchronized annotation starts with a copy no
-        world holds.
-        """
+        """An annotation holding a detached copy of its fill connection, as a
+        synchronized one does, is re-pointed at the connection resident in the
+        world, so the coupling evaluates against the world's own symbols."""
         world, source, receiver = self._coupled_world()
         tracker = WorldEntityWithIDKwargsTracker.from_world(world)
         detached_connection = LiquidConnection.from_json(
@@ -1129,7 +1262,7 @@ class TestCouplingReconstruction:
             inflow_coupling=receiver.inflow_coupling,
         )
 
-        synchronized_receiver.ensure_inflow_coupling(world)
+        synchronized_receiver.ensure_inflow_coupling(world=world)
 
         assert synchronized_receiver.fill_connection is receiver.fill_connection
         assert synchronized_receiver.fill_connection._world is world
@@ -1139,30 +1272,19 @@ class TestCouplingReconstruction:
 
 
 class TestCouplingModelSwitch:
-    """Validates that switching the source's drain model against a live
-    coupling takes effect.
+    """A new ungated drain published for the source makes the symbolic coupling
+    another process built stale, so it is rebuilt from the new drain."""
 
-    A client switches models by publishing a new (ungated) source fill
-    equation; the symbolic coupling another process built earlier is
-    then stale and must be rebuilt from the new equation instead of
-    being kept because it merely exists.
-    """
-
-    def _coupled_world(self):
+    def _coupled_world(self) -> tuple[World, HasFillLevel, HasFillLevel]:
         return _build_world(
             source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
         )
 
     def _drain_swapped_like_a_synchronized_diff(
-        self, source: HasFillLevel
+        self, *, source: HasFillLevel
     ) -> ArticulatedPouringEquation:
-        """Replace the source's fill equation the way a synchronized attribute
-        diff does:
-
-        a plain attribute assignment of a fresh ungated equation,
-        doubling the outflow rate so the rebuilt coupling is
-        distinguishable from the stale one.
-        """
+        """Assign the source a fresh ungated drain of doubled outflow rate, as
+        a synchronized attribute diff does."""
         swapped = ArticulatedPouringEquation(
             container_height=source.fill_equation.container_height,
             container_width=source.fill_equation.container_width,
@@ -1177,9 +1299,9 @@ class TestCouplingModelSwitch:
         new equation."""
         world, source, receiver = self._coupled_world()
         stale_inflow = receiver.fill_connection.inflow_equation
-        swapped = self._drain_swapped_like_a_synchronized_diff(source)
+        swapped = self._drain_swapped_like_a_synchronized_diff(source=source)
 
-        receiver.ensure_inflow_coupling(world)
+        receiver.ensure_inflow_coupling(world=world)
 
         assert receiver.fill_connection.inflow_equation is not stale_inflow
         regated_drain = source.fill_equation
@@ -1187,15 +1309,26 @@ class TestCouplingModelSwitch:
         assert regated_drain.outflow_rate_constant == swapped.outflow_rate_constant
         assert source.fill_connection.outflow_equation is regated_drain
 
+    def test_a_synchronized_copy_of_the_same_drain_is_gated_again(self) -> None:
+        """A synchronized world receives the drain without its gate; even with
+        unchanged parameters the next ensure call gates it again."""
+        world, source, receiver = self._coupled_world()
+        source.fill_equation = source.fill_equation.drop_gate()
+
+        receiver.ensure_inflow_coupling(world=world)
+
+        assert isinstance(source.fill_equation, GatedArticulatedPouringEquation)
+        assert source.fill_connection.outflow_equation is source.fill_equation
+
     def test_rebuilt_inflow_reflects_the_new_drain(self):
         """The rebuilt inflow is derived from the swapped drain: doubling the
         source's outflow rate constant doubles the inflow volume rate at the
         same pose."""
         world, source, receiver = self._coupled_world()
         stale_inflow = receiver.fill_connection.inflow_equation
-        self._drain_swapped_like_a_synchronized_diff(source)
+        self._drain_swapped_like_a_synchronized_diff(source=source)
 
-        receiver.ensure_inflow_coupling(world)
+        receiver.ensure_inflow_coupling(world=world)
 
         JointState.from_mapping({source.root.parent_connection: 1.0}).apply_to(world)
         rebuilt_inflow = receiver.fill_connection.inflow_equation
@@ -1207,11 +1340,11 @@ class TestCouplingModelSwitch:
         """A rebuild settles: ensuring again without another synchronized swap
         is a no-op."""
         world, source, receiver = self._coupled_world()
-        self._drain_swapped_like_a_synchronized_diff(source)
-        receiver.ensure_inflow_coupling(world)
+        self._drain_swapped_like_a_synchronized_diff(source=source)
+        receiver.ensure_inflow_coupling(world=world)
         rebuilt_inflow = receiver.fill_connection.inflow_equation
 
-        receiver.ensure_inflow_coupling(world)
+        receiver.ensure_inflow_coupling(world=world)
 
         assert receiver.fill_connection.inflow_equation is rebuilt_inflow
 
@@ -1238,15 +1371,16 @@ class TestCouplingModelSwitch:
         assert receiver.inflow_coupling is not None
 
     def test_recouple_preserves_coupling_parameters(self):
-        """Recoupling forwards the existing coupling's exit speed and gate
-        sharpnesses instead of resetting them to the defaults."""
+        """Recoupling keeps the existing coupling's settings instead of
+        resetting them to the defaults."""
         world, source, receiver = _build_world(
             source_class=_TiltingContainer,
             source_axis=Vector3(0, 1, 0),
-            exit_speed=0.7,
-            height_gate_sharpness=42.0,
-            overlap_gate_sharpness=17.0,
+            settings=LiquidTransferSettings(
+                exit_speed=0.7, height_gate_sharpness=42.0, overlap_gate_sharpness=17.0
+            ),
         )
+        settings = receiver.inflow_coupling.settings
         replacement = ArticulatedPouringEquation(
             container_height=source.fill_equation.container_height,
             container_width=source.fill_equation.container_width,
@@ -1257,11 +1391,10 @@ class TestCouplingModelSwitch:
             source=source, world=world, fill_equation=replacement
         )
 
-        coupling = receiver.inflow_coupling
-        assert coupling.exit_speed == 0.7
-        assert coupling.height_gate_sharpness == 42.0
-        assert coupling.overlap_gate_sharpness == 17.0
-        assert receiver.fill_connection.inflow_equation.exit_speed == 0.7
+        assert receiver.inflow_coupling.settings == settings
+        assert (
+            receiver.fill_connection.inflow_equation.exit_speed == settings.exit_speed
+        )
 
 
 # %% non-cup liquid source
@@ -1271,10 +1404,11 @@ class TestNonCupLiquidSource:
     """A receiver fills from a :class:`LiquidSource` that is not a
     :class:`HasFillLevel` cup."""
 
-    def test_receiver_fills_from_static_source(self):
-        """Coupling a static faucet-like source (no fill level, no tilt) opens
-        the gate and gives the receiver a positive inflow — a transfer the cup-
-        only API could not express."""
+    def test_receiver_fills_from_static_source(
+        self, *, inflow_context: SymbolicFillContext
+    ) -> None:
+        """A static faucet-like source with no fill level and no tilt above the
+        receiver opens the gate and fills the receiver at its volume rate."""
         world = World()
         with world.modify_world():
             world.add_body(Body(name=PrefixedName("map")))
@@ -1300,9 +1434,11 @@ class TestNonCupLiquidSource:
         receiver.receive_outflow_from(source=source, world=world)
 
         inflow_equation = receiver.fill_connection.inflow_equation
-        assert inflow_equation is not None
-        assert inflow_equation.gate.evaluate()[0] == pytest.approx(1.0, abs=1e-2)
-        assert inflow_equation.symbolic_velocity(_INFLOW_CONTEXT).evaluate()[0] > 0.0
+        gate = inflow_equation.gate.evaluate()[0]
+        assert gate == pytest.approx(1.0, abs=1e-2)
+        assert inflow_equation.symbolic_velocity(context=inflow_context).evaluate()[
+            0
+        ] == pytest.approx(gate * source.volume_rate / receiver.capacity)
 
 
 # %% container that receives and pours
@@ -1314,6 +1450,8 @@ class TestReceivingAndPouringContainer:
     equation it carries."""
 
     def test_coupled_receiver_serializes_without_its_symbolic_inflow(self) -> None:
+        """The symbolic inflow stays in its process; the coupling description
+        travels."""
         world, _source, receiver = _build_world()
         assert receiver.fill_connection.inflow_equation is not None
 
@@ -1329,6 +1467,8 @@ class TestReceivingAndPouringContainer:
         )
 
     def test_receiver_can_pour_into_a_third_container(self) -> None:
+        """A container that receives from a stream can be coupled as the source
+        of a third container while it keeps its own inflow."""
         world, _source, can = _build_world(couple=False)
         stream = _StaticLiquidSource(
             exit_point=Point3(x=0.0, y=0.0, z=0.5, reference_frame=world.root),
@@ -1350,8 +1490,9 @@ class TestReceivingAndPouringContainer:
         pot.receive_outflow_from(source=can, world=world)
 
         assert isinstance(can.fill_equation, GatedArticulatedPouringEquation)
-        assert pot.fill_connection.inflow_equation is not None
-        assert can.fill_connection.inflow_equation is not None
+        assert pot.inflow_coupling.source_id == can.id
+        assert isinstance(pot.fill_connection.inflow_equation, GatedInflowEquation)
+        assert can.fill_connection.inflow_equation is can.inflow_equation
 
 
 # %% fill-level integration limits
@@ -1398,8 +1539,8 @@ class TestFillLevelIntegrationLimits:
         world, cup = self._lone_tilting_cup()
         cup.initialize_fill_level(world=world, initial_fill=0.9)
         with world.modify_world():
-            cup.add_inflow_equation(
-                InflowEquation(
+            cup.set_inflow_equation(
+                inflow_equation=InflowEquation(
                     container_height=0.2,
                     container_width=0.1,
                     inflow=sm.Scalar(0.005),
@@ -1410,6 +1551,22 @@ class TestFillLevelIntegrationLimits:
             _step_passive_state(world, 0.05)
 
         assert cup.fill_level == pytest.approx(1.0)
+
+    def test_an_empty_source_gives_the_receiver_nothing(self) -> None:
+        """A source tilted past the angle an empty container starts pouring at
+        has no contents left, so a receiver coupled to it gains nothing."""
+        world, source, receiver = _build_world(
+            source_class=_TiltingContainer,
+            source_axis=Vector3(0, 1, 0),
+            settings=LiquidTransferSettings(
+                height_gate_sharpness=1.0, overlap_gate_sharpness=1.0
+            ),
+        )
+        JointState.from_mapping({source.fill_connection: 0.0}).apply_to(world)
+        empty_onset = source.fill_equation.onset_tilt(fill=0.0).evaluate()[0]
+        _set_source_offset(world, source, empty_onset + 0.2)
+
+        assert receiver.fill_connection.symbolic_fill_velocity().evaluate()[0] == 0.0
 
 
 # %% coupling serialization
@@ -1429,10 +1586,26 @@ class TestLiquidCouplingSerialization:
         payload = source.fill_connection.to_json()
         restored_drain = from_json(payload["outflow_equation"])
 
-        assert type(restored_drain) is ArticulatedPouringEquation
-        assert restored_drain.container_height == pytest.approx(
-            source.fill_equation.container_height
+        assert restored_drain == source.fill_equation.drop_gate()
+
+    def test_a_coupled_source_round_trips_ungated_and_ready_to_pour(self) -> None:
+        """A coupled source annotation comes back with its drain ungated, so
+        the world that reads it can couple it again instead of finding it
+        already gated."""
+        world, source, _receiver = _build_world()
+        tracker = WorldEntityWithIDKwargsTracker.from_world(world)
+
+        restored_drain = from_json(
+            source.to_json()["fill_equation"], **tracker.create_kwargs()
         )
+
+        assert restored_drain == source.fill_equation.drop_gate()
+        _TranslatingContainer(
+            name=source.name,
+            root=source.root,
+            fill_connection=source.fill_connection,
+            fill_equation=restored_drain,
+        ).validate_can_pour()
 
     def test_symbolic_inflow_is_not_serialized(self):
         """The symbolic inflow cannot cross a process boundary; only the
@@ -1482,7 +1655,8 @@ def build_fill_level_limits() -> DegreeOfFreedomLimits:
 # %% passive fill degree of freedom
 
 
-def test_fill_dof_is_passive():
+def test_fill_dof_is_passive() -> None:
+    """The fill level is a passive degree of freedom the QP never commands."""
     world, connection = build_world_with_liquid_connection(build_fill_level_limits())
     assert connection.active_dofs == []
     assert connection.passive_dofs == [connection.raw_dof]
@@ -1494,17 +1668,67 @@ def test_fill_dof_is_passive():
 # %% fill-level connection clamping
 
 
-def test_update_state_without_position_limits_raises():
+def test_update_state_without_position_limits_raises() -> None:
+    """A fill level without position limits cannot be clamped, so stepping it
+    raises."""
     _, connection = build_world_with_liquid_connection(dof_limits=None)
     with pytest.raises(MissingFillLevelLimitsError) as error_info:
         connection.update_state(0.05)
     assert error_info.value.connection_name == connection.name
 
 
+# %% fill-level connection integration
+
+
+def test_repeated_steps_compile_the_fill_velocity_once(
+    *, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stepping the fill level reuses the fill velocity compiled at the first
+    step."""
+    _, connection = build_world_with_liquid_connection(build_fill_level_limits())
+    connection.outflow_equation = ArticulatedPouringEquation(
+        container_height=0.2, container_width=0.1
+    )
+    connection.update_state(0.05)
+    compilations = []
+    original_compile = sm.Scalar.compile
+
+    def counting_compile(expression: sm.Scalar, **kwargs) -> sm.CompiledFunction:
+        """Compiles ``expression`` and records that it was compiled."""
+        compilations.append(expression)
+        return original_compile(expression, **kwargs)
+
+    monkeypatch.setattr(sm.Scalar, "compile", counting_compile)
+    for _ in range(3):
+        connection.update_state(0.05)
+
+    assert compilations == []
+
+
+def test_a_new_inflow_takes_effect_at_the_next_step() -> None:
+    """Replacing an equation of a fill level that was stepped before integrates
+    the new one from the next step on."""
+    world, connection = build_world_with_liquid_connection(build_fill_level_limits())
+    connection.update_state(0.05)
+    inflow_equation = InflowEquation(
+        container_height=0.2, container_width=0.1, inflow=sm.Scalar(0.001)
+    )
+    connection.inflow_equation = inflow_equation
+    dt = 0.05
+
+    connection.update_state(dt)
+
+    assert world.state[connection.raw_dof.id].position == pytest.approx(
+        0.001 / inflow_equation.capacity * dt
+    )
+
+
 # %% fill-level connection serialization
 
 
-def test_json_round_trip_restores_ungated_outflow():
+def test_json_round_trip_restores_ungated_outflow() -> None:
+    """A connection with a gated drain comes back with the same drain ungated
+    and no inflow."""
     world, connection = build_world_with_liquid_connection(build_fill_level_limits())
     connection.outflow_equation = GatedArticulatedPouringEquation(
         container_height=0.2,
@@ -1519,15 +1743,13 @@ def test_json_round_trip_restores_ungated_outflow():
     )
 
     assert type(restored) is LiquidConnection
-    assert type(restored.outflow_equation) is ArticulatedPouringEquation
-    assert restored.outflow_equation.container_height == pytest.approx(0.2)
-    assert restored.outflow_equation.container_width == pytest.approx(0.1)
-    assert restored.outflow_equation.outflow_rate_constant == pytest.approx(2.0)
+    assert restored.outflow_equation == connection.outflow_equation.drop_gate()
     assert restored.inflow_equation is None
     assert restored.raw_dof.id == connection.raw_dof.id
 
 
-def test_json_round_trip_without_outflow_equation():
+def test_json_round_trip_without_outflow_equation() -> None:
+    """A connection without equations comes back without equations."""
     world, connection = build_world_with_liquid_connection(build_fill_level_limits())
     tracker = WorldEntityWithIDKwargsTracker.from_world(world)
     restored = LiquidConnection.from_json(
@@ -1540,27 +1762,44 @@ def test_json_round_trip_without_outflow_equation():
 # %% fill-level connection copy
 
 
-def test_copy_for_world_preserves_equations():
+def test_copy_for_world_evaluates_against_its_own_world() -> None:
+    """A connection copied into another world carries its drain ungated and no
+    inflow, so nothing it integrates reads the original world's symbols."""
     world, connection = build_world_with_liquid_connection(build_fill_level_limits())
-    connection.outflow_equation = ArticulatedPouringEquation(
-        container_height=0.2, container_width=0.1
+    original_fill = connection.dof.variables.position
+    connection.outflow_equation = GatedArticulatedPouringEquation(
+        container_height=0.2, container_width=0.1, gate=original_fill
     )
     connection.inflow_equation = InflowEquation(
-        container_height=0.2, container_width=0.1, inflow=sm.Scalar(0.005)
+        container_height=0.2, container_width=0.1, inflow=original_fill
     )
     world_copy = deepcopy(world)
 
     copied_connection = connection.copy_for_world(world_copy)
+    with world_copy.modify_world():
+        world_copy.remove_connection(
+            world_copy.get_connection(copied_connection.parent, copied_connection.child)
+        )
+        world_copy.add_connection(copied_connection)
 
-    assert type(copied_connection) is LiquidConnection
-    assert copied_connection.outflow_equation is connection.outflow_equation
-    assert copied_connection.inflow_equation is connection.inflow_equation
-    assert copied_connection.parent is world_copy.get_kinematic_structure_entity_by_id(
-        connection.parent.id
-    )
-    assert copied_connection.child is world_copy.get_kinematic_structure_entity_by_id(
-        connection.child.id
-    )
-    assert copied_connection.raw_dof is world_copy.get_degree_of_freedom_by_id(
+    copy_fill = world_copy.get_degree_of_freedom_by_id(
         connection.raw_dof.id
+    ).variables.position
+    assert copied_connection.outflow_equation == connection.outflow_equation.drop_gate()
+    assert copied_connection.inflow_equation is None
+    assert copied_connection.symbolic_fill_velocity().free_variables() == [copy_fill]
+
+
+# %% container extents
+
+
+def test_a_shape_collection_reports_the_extents_of_its_bounding_box() -> None:
+    """Depth, width and height are the bounding box's extents along x, y and
+    z."""
+    _, _, receiver = _build_world(couple=False, receiver_depth=0.4, receiver_height=0.3)
+
+    collision = receiver.root.collision
+
+    assert (collision.depth, collision.width, collision.height) == pytest.approx(
+        (0.4, 0.1, 0.3)
     )

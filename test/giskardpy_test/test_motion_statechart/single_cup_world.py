@@ -24,26 +24,22 @@ from semantic_digital_twin.world_description.world_entity import Body
 # %% shared pourable container mimic
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, kw_only=True)
 class PourableContainer(HasFillLevel):
-    """Minimal pourable container for testing.
-
-    Connected to its parent via a revolute joint representing the tilt
-    angle.
-    """
+    """Minimal pourable container for testing, hanging from its parent by a
+    revolute joint that tilts it."""
 
     @classmethod
     def parent_connection_specification(
         cls,
+        *,
         axis: Vector3 | None = None,
         dof_limits: DegreeOfFreedomLimits | None = None,
     ) -> RevoluteConnectionSpecification:
-        """Build the single-degree-of-freedom connection the container hangs
-        from.
-
+        """
         :param axis: Axis of the connection. Defaults to the z axis.
         :param dof_limits: Limits of the generated degree of freedom.
-        :return: The connection specification.
+        :return: The single-degree-of-freedom connection the container hangs from.
         """
         return RevoluteConnectionSpecification(
             axis=axis if axis is not None else Vector3.Z(), dof_limits=dof_limits
@@ -54,16 +50,16 @@ class PourableContainer(HasFillLevel):
 
 
 def build_single_cup_world(
+    *,
     outflow_rate_constant: float = 1.0,
     initial_tilt: float = 0.1,
 ) -> tuple[World, PourableContainer]:
-    """Builds a minimal world with one tilt-jointed pourable container filled
-    to 100%.
-
-    :param outflow_rate_constant: Outflow rate constant for the
-        container's fill equation.
+    """
+    :param outflow_rate_constant: Outflow rate constant for the container's fill
+        equation.
     :param initial_tilt: Initial tilt-joint position in radians.
-    :return: The world and the container annotation living in it.
+    :return: A minimal world with one tilt-jointed pourable container filled to
+        100%, and the container annotation living in it.
     """
     world = World()
     with world.modify_world():

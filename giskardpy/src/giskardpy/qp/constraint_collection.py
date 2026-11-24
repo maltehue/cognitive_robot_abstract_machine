@@ -217,7 +217,7 @@ class ConstraintCollection:
         self,
         *,
         state_velocity: sm.SymbolicScalar,
-        state_variable: sm.SymbolicScalar,
+        state_variable: sm.FloatVariable,
         goal_value: float,
         quadratic_weight: sm.ScalarData,
         cruise_velocity: sm.ScalarData,
@@ -227,13 +227,8 @@ class ConstraintCollection:
         coupled_states: list[CoupledState] | None = None,
     ) -> TerminalStatePredictionConstraint:
         """Add a constraint that drives the value a scalar state is predicted
-        to reach at the end of a prediction window toward ``goal_value``.
-
-        The state's rate is linearized at the current operating point
-        and its discrete-time recursion unrolled, which gives a single
-        linear row. The rate's dependence on the joint variables lets
-        the QP move the robot to reach the goal, for example tilting a
-        cup to pour or turning a valve to fill.
+        to reach at the end of a prediction window toward ``goal_value``, for
+        example a fill level reached by tilting a cup or turning a valve.
 
         :param state_velocity: Symbolic state rate at the current
             operating point; its jacobian w.r.t. the joint variables
