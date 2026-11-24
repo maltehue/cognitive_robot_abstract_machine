@@ -6,7 +6,16 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 import numpy as np
-from typing_extensions import TYPE_CHECKING, Self
+from typing_extensions import TYPE_CHECKING, Any, Self
+
+import krrood.symbolic_math.symbolic_math as sm
+from krrood.adapters.json_serializer import from_json, to_json, SubclassJSONSerializer
+from krrood.symbolic_math.symbolic_math import Scalar
+from semantic_digital_twin.physics.equations.pouring_equations import (
+    DEFAULT_GATE_SHARPNESS,
+    DEFAULT_POUR_EXIT_SPEED,
+    tilt_expression_from_fk,
+)
 
 from semantic_digital_twin.world_description.connection_properties import JointDynamics
 from semantic_digital_twin.world_description.degree_of_freedom import (
@@ -19,7 +28,10 @@ from semantic_digital_twin.world_description.world_entity import (
 )
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.datastructures.types import NpMatrix4x4
-from semantic_digital_twin.exceptions import MissingConnectionAxisError
+from semantic_digital_twin.exceptions import (
+    MissingConnectionAxisError,
+    MissingFillLevelLimitsError,
+)
 from krrood_spatial_math.spatial_types import (
     HomogeneousTransformationMatrix,
     Vector3,
@@ -29,6 +41,10 @@ from krrood_spatial_math.spatial_types import (
 
 if TYPE_CHECKING:
     from semantic_digital_twin.world import World
+    from semantic_digital_twin.physics.equations.pouring_equations import (
+        InflowEquation,
+        PouringEquation,
+    )
 
 
 class HasUpdateState(ABC):
@@ -957,3 +973,188 @@ class DifferentialDrive(WheeledDrive):
 
     def get_free_variable_names(self) -> list[UUID]:
         return [self.x.id, self.y.id, self.yaw.id]
+
+
+# %% liquid transfer
+
+
+@dataclass
+class LiquidTransferCoupling(SubclassJSONSerializer):
+    """Serializable description of a receiver's inflow coupling to a liquid
+    source.
+
+    The symbolic inflow and gate expressions of a transfer are bound to
+    the world they were built in and cannot be serialized. This
+    descriptor captures only the parameters needed to rebuild them, so
+    the coupling survives world synchronization and is reconstructed per
+    world.
+    """
+
+    source_id: UUID
+    """Id of the source semantic annotation whose gated outflow feeds this
+    receiver."""
+
+    exit_speed: float = field(default=DEFAULT_POUR_EXIT_SPEED)
+    """Horizontal speed of the liquid leaving the source, in metres per
+    second."""
+
+    height_gate_sharpness: float = field(default=DEFAULT_GATE_SHARPNESS)
+    """Logistic steepness of the source-above-receiver gate."""
+
+    overlap_gate_sharpness: float = field(default=DEFAULT_GATE_SHARPNESS)
+    """Logistic steepness of the projectile-landing gate."""
+
+    def to_json(self, **kwargs) -> dict[str, Any]:
+        return {
+            **super().to_json(**kwargs),
+            "source_id": to_json(self.source_id),
+            "exit_speed": self.exit_speed,
+            "height_gate_sharpness": self.height_gate_sharpness,
+            "overlap_gate_sharpness": self.overlap_gate_sharpness,
+        }
+
+    @classmethod
+    def _from_json(cls, data: dict[str, Any], **kwargs) -> LiquidTransferCoupling:
+        return cls(
+            source_id=from_json(data["source_id"]),
+            exit_speed=data["exit_speed"],
+            height_gate_sharpness=data["height_gate_sharpness"],
+            overlap_gate_sharpness=data["overlap_gate_sharpness"],
+        )
+
+
+@dataclass(eq=False)
+class LiquidConnection(PrismaticConnection, HasUpdateState):
+    """Prismatic connection whose degree of freedom is the normalized fill
+    level of a container, integrated from :attr:`outflow_equation` and
+    :attr:`inflow_equation` each physics step (either may be ``None``; the net
+    velocity is their sum).
+
+    The fill DOF is passive: it stays in the world state and forward-kinematics
+    parameter set so expressions reading :attr:`fill_position` remain valid, but it is
+    never a QP optimisation variable and can only be driven by the physics equations.
+    """
+
+    outflow_equation: PouringEquation | None = field(
+        default=None, kw_only=True, init=False
+    )
+    """ODE governing how liquid leaves this container (e.g. tilting to
+    pour)."""
+
+    inflow_equation: InflowEquation | None = field(
+        default=None, kw_only=True, init=False
+    )
+    """ODE governing how liquid enters this container from an external
+    source."""
+
+    coupled_source_equation_json: dict[str, Any] | None = field(
+        default=None, kw_only=True, init=False, repr=False, compare=False
+    )
+    """JSON of the source drain equation :attr:`inflow_equation` was built
+    from, recorded after the drain was gated.
+
+    Process-local and never serialized: when a synchronized world replaces the source's
+    fill equation, the mismatch marks the local symbolic coupling stale so it is rebuilt
+    from the new equation.
+    """
+
+    @property
+    def active_dofs(self) -> list[DegreeOfFreedom]:
+        """
+        :return: Empty list, so the QP solver cannot command the fill velocity directly.
+        """
+        return []
+
+    @property
+    def passive_dofs(self) -> list[DegreeOfFreedom]:
+        """
+        :return: List containing the single fill-level DOF, which stays in the world
+            state and forward-kinematics parameter set without being a QP optimisation
+            variable.
+        """
+        return [self.raw_dof]
+
+    def to_json(self, **kwargs) -> dict[str, Any]:
+        """Serializes the connection with its drain in ungated form and without
+        the inflow equation.
+
+        The symbolic gate and inflow expressions are bound to the world
+        they were built in; a deserialized gate would silently default
+        to fully open. The receiving world rebuilds both from the
+        recorded :class:`LiquidTransferCoupling`.
+        """
+        result = super().to_json(**kwargs)
+        result["outflow_equation"] = (
+            to_json(self.outflow_equation.ungated())
+            if self.outflow_equation is not None
+            else None
+        )
+        return result
+
+    @classmethod
+    def _from_json(cls, data: dict[str, Any], **kwargs) -> LiquidConnection:
+        instance = super()._from_json(data, **kwargs)
+        raw_outflow = data.get("outflow_equation")
+        if raw_outflow is not None:
+            instance.outflow_equation = from_json(raw_outflow)
+        return instance
+
+    def copy_for_world(self, world: World) -> LiquidConnection:
+        """Copy this connection into ``world``, preserving the physics
+        equations.
+
+        :param world: The target world.
+        :return: The copied connection registered in ``world``.
+        """
+        copy = super().copy_for_world(world)
+        copy.outflow_equation = self.outflow_equation
+        copy.inflow_equation = self.inflow_equation
+        return copy
+
+    @property
+    def tilt_expression(self) -> Scalar:
+        """Symbolic tilt angle used by :attr:`outflow_equation` during physics
+        integration."""
+        root_T_child = self._world.compose_forward_kinematics_expression(
+            self._world.root, self.child
+        )
+        return tilt_expression_from_fk(root_T_child)
+
+    @property
+    def fill_position(self) -> Scalar:
+        """Symbolic normalized fill level (the fill DOF position)."""
+        return self.dof.variables.position
+
+    def symbolic_fill_velocity(self) -> Scalar:
+        """
+        :return: The fill level's rate from :attr:`outflow_equation` and
+            :attr:`inflow_equation` together, zero without either.
+        """
+        velocity = sm.Scalar(0.0)
+        for equation in (self.outflow_equation, self.inflow_equation):
+            if equation is not None:
+                velocity = velocity + equation.symbolic_velocity(self)
+        return velocity
+
+    def update_state(self, dt: float) -> None:
+        """Advances the fill level by one physics step, clamped to the fill
+        DOF's limits.
+
+        Clamping keeps an empty tilted container from draining below
+        empty and a receiving container from filling past full, neither
+        of which the drain and inflow equations guard against
+        themselves.
+
+        :param dt: Time elapsed since the previous step, in seconds.
+        :raises MissingFillLevelLimitsError: If the fill DOF has no
+            position limits to clamp to.
+        """
+        limits = self.raw_dof.limits
+        if limits.lower.position is None or limits.upper.position is None:
+            raise MissingFillLevelLimitsError(connection_name=self.name)
+        state = self._world.state
+        velocity = self.symbolic_fill_velocity().evaluate()[0]
+        integrated_position = state[self.raw_dof.id].position + velocity * dt
+        state[self.raw_dof.id].position = min(
+            max(integrated_position, limits.lower.position), limits.upper.position
+        )
