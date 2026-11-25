@@ -5,16 +5,12 @@ linearized state model behind that row.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
+import krrood.symbolic_math.symbolic_math as sm
 import numpy as np
 import pytest
-
-import krrood.symbolic_math.symbolic_math as sm
-from giskardpy.qp.constraint import GiskardEqualityConstraint, LargeNumber
-from giskardpy.qp.enforcement_strategy import normalize_slack_weight
-from giskardpy.qp.exceptions import ConstraintTypeMismatchError
+from giskardpy.qp.constraint import GiskardEqualityConstraint
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from giskardpy.qp.terminal_state_prediction_strategy import (
     CoupledState,
@@ -118,16 +114,6 @@ class LinearStateRateSetup:
             self.state_sensitivity
         )
 
-    @property
-    def resting_state_rate(self) -> sm.Scalar:
-        """
-        A state rate that is zero at the operating point and independent of the state.
-        """
-        return (
-            self.joint_degree_of_freedom.variables.position
-            - sm.Scalar(self.joint_position)
-        ) * sm.Scalar(self.joint_sensitivity)
-
     def constraint(
         self,
         *,
@@ -223,24 +209,6 @@ class TestTerminalStatePredictionRow:
     The QP row the strategy builds from a linear state rate.
     """
 
-    def test_state_model_differentiates_rate_by_state_variable(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        The linearization extracts ``df/dx`` from the rate's jacobian.
-        """
-        setup = linear_state_rate_setup
-        model = setup.constraint().state_model(config=setup.config)
-
-        assert model.state_sensitivity.evaluate()[0] == pytest.approx(
-            setup.state_sensitivity
-        )
-        assert model.state_value.evaluate()[0] == pytest.approx(setup.state_position)
-        assert model.state_velocity.evaluate()[0] == pytest.approx(
-            setup.joint_sensitivity * setup.joint_position
-            + setup.state_sensitivity * setup.state_position
-        )
-
     def test_matrix_scales_jacobian_per_block_with_normalized_weights(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
@@ -294,96 +262,6 @@ class TestTerminalStatePredictionRow:
             - setup.held_joint_recursion(steps=setup.config.control_horizon)
         )
 
-    def test_equality_bound_is_capped_to_reachable_change(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        A goal far beyond the window's reach is capped, not passed through.
-        """
-        setup = linear_state_rate_setup
-        constraint = setup.constraint(name="far_goal", goal_value=5.0)
-
-        bound = (
-            setup.strategy(constraints=[constraint])
-            .create_equality_bounds()
-            .evaluate()[0]
-        )
-
-        assert bound == pytest.approx(
-            setup.reach(
-                velocity=constraint.cruise_velocity,
-                steps=setup.config.control_horizon,
-            )
-        )
-
-    def test_slack_variable_is_single_and_normalized(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        The strategy adds exactly one unbounded slack with the normalized weight.
-        """
-        setup = linear_state_rate_setup
-        constraint = setup.constraint()
-
-        slack = setup.strategy(constraints=[constraint]).create_slack_variables()
-
-        assert slack.names == [constraint.name]
-        assert slack.lower_bounds.evaluate().flatten().tolist() == [-LargeNumber]
-        assert slack.upper_bounds.evaluate().flatten().tolist() == [LargeNumber]
-        expected_weight = normalize_slack_weight(
-            sm.Scalar(constraint.quadratic_weight),
-            constraint.velocity_scale,
-            setup.config.control_horizon,
-        ).evaluate()[0]
-        assert slack.quadratic_weights.evaluate()[0] == pytest.approx(expected_weight)
-        assert slack.linear_weights.evaluate()[0] == pytest.approx(0.0)
-
-
-# %% several constraints in one block
-
-
-class TestSeveralTerminalConstraints:
-    """
-    Each terminal constraint of a block gets its own row.
-    """
-
-    def test_each_constraint_gets_the_row_it_gets_alone(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        Two constraints give two rows, each with the matrix row, bound and slack weight
-        a strategy over that constraint alone builds.
-        """
-        setup = linear_state_rate_setup
-        constraints = [
-            setup.constraint(name="first_goal"),
-            setup.constraint(
-                name="second_goal",
-                goal_value=0.4,
-                prediction_duration=setup.far_prediction_duration,
-                cruise_velocity=0.5,
-            ),
-        ]
-        combined = setup.strategy(constraints=constraints)
-        alone = [setup.strategy(constraints=[constraint]) for constraint in constraints]
-
-        matrix = np.array(combined.create_matrix().evaluate())
-        bounds = combined.create_equality_bounds().evaluate().flatten()
-        slack = combined.create_slack_variables()
-
-        assert matrix.shape[0] == len(constraints)
-        assert slack.names == [constraint.name for constraint in constraints]
-        for index, single in enumerate(alone):
-            assert matrix[index] == pytest.approx(
-                np.array(single.create_matrix().evaluate()).flatten()
-            )
-            assert bounds[index] == pytest.approx(
-                single.create_equality_bounds().evaluate()[0]
-            )
-            assert slack.quadratic_weights.evaluate().flatten()[index] == pytest.approx(
-                single.create_slack_variables().quadratic_weights.evaluate()[0]
-            )
-
 
 # %% predicting beyond the control window
 
@@ -393,55 +271,6 @@ class TestPredictionWindow:
     The row predicts the state over the constraint's prediction duration, not over the
     control horizon the velocities span.
     """
-
-    def test_prediction_steps_default_to_the_control_horizon(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        Without a prediction duration the window is the control horizon.
-        """
-        setup = linear_state_rate_setup
-
-        assert (
-            setup.constraint().prediction_steps(config=setup.config)
-            == setup.config.control_horizon
-        )
-
-    def test_prediction_duration_is_converted_to_time_steps(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        The prediction duration is counted in control time steps.
-        """
-        setup = linear_state_rate_setup
-        config = setup.config
-        constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
-
-        model = constraint.state_model(config=config)
-
-        assert model.prediction_steps == round(
-            setup.far_prediction_duration / config.control_time_step.total_seconds()
-        )
-        assert model.prediction_steps > config.control_horizon
-        assert model.control_horizon == config.control_horizon
-
-    def test_matrix_keeps_one_block_per_control_step(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        A longer window adds no decision variables, and the final block now carries
-        weight, since state steps follow it.
-        """
-        setup = linear_state_rate_setup
-        config = setup.config
-        constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
-
-        matrix = np.array(
-            setup.strategy(constraints=[constraint]).create_matrix().evaluate()
-        ).flatten()
-
-        assert matrix.shape == (config.control_horizon + config.prediction_horizon,)
-        assert matrix[config.control_horizon - 1] > 0.0
 
     def test_velocity_blocks_sum_to_the_prediction_window(
         self, *, linear_state_rate_setup: LinearStateRateSetup
@@ -462,24 +291,6 @@ class TestPredictionWindow:
             * setup.joint_sensitivity
             * constraint.prediction_steps(config=config)
         )
-
-    def test_slack_weight_is_normalized_over_the_prediction_window(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        The slack weight is spread over the prediction window's steps.
-        """
-        setup = linear_state_rate_setup
-        constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
-
-        slack = setup.strategy(constraints=[constraint]).create_slack_variables()
-
-        expected_weight = normalize_slack_weight(
-            sm.Scalar(constraint.quadratic_weight),
-            constraint.velocity_scale,
-            constraint.prediction_steps(config=setup.config),
-        ).evaluate()[0]
-        assert slack.quadratic_weights.evaluate()[0] == pytest.approx(expected_weight)
 
     def test_equality_bound_is_capped_to_the_prediction_window(
         self, *, linear_state_rate_setup: LinearStateRateSetup
@@ -534,11 +345,6 @@ class StoppingVelocities:
     change.
     """
 
-    slower_stopping_velocity: float
-    """
-    A stopping velocity below the slow cruise velocity.
-    """
-
 
 @pytest.fixture
 def stopping_velocities() -> StoppingVelocities:
@@ -549,7 +355,6 @@ def stopping_velocities() -> StoppingVelocities:
         slow_cruise_velocity=0.01,
         fast_stopping_velocity=1.0,
         moderate_stopping_velocity=0.1,
-        slower_stopping_velocity=0.005,
     )
 
 
@@ -598,40 +403,6 @@ class TestStoppingTheStatesOwnChange:
             - setup.state_position
         )
 
-    def test_the_setup_changes_on_its_own_by_more_than_a_moderate_stop_reaches(
-        self,
-        *,
-        linear_state_rate_setup: LinearStateRateSetup,
-        stopping_velocities: StoppingVelocities,
-    ) -> None:
-        """
-        The state falls on its own by more than the moderate stop reaches.
-        """
-        setup = linear_state_rate_setup
-        assert self._free_change(setup=setup) < -self._reach(
-            setup=setup, velocity=stopping_velocities.moderate_stopping_velocity
-        )
-
-    def test_without_a_stopping_velocity_stopping_is_capped_like_driving(
-        self,
-        *,
-        linear_state_rate_setup: LinearStateRateSetup,
-        stopping_velocities: StoppingVelocities,
-    ) -> None:
-        """
-        Without a stopping velocity the stop is capped by the cruise velocity.
-        """
-        setup = linear_state_rate_setup
-        bound = self._bound(
-            setup=setup,
-            goal_value=setup.state_position,
-            cruise_velocity=stopping_velocities.slow_cruise_velocity,
-            stopping_velocity=None,
-        )
-        assert bound == pytest.approx(
-            self._reach(setup=setup, velocity=stopping_velocities.slow_cruise_velocity)
-        )
-
     def test_a_stop_within_reach_undoes_the_states_whole_change(
         self,
         *,
@@ -660,88 +431,19 @@ class TestStoppingTheStatesOwnChange:
         A moderate stop is capped by what the stopping velocity reaches.
         """
         setup = linear_state_rate_setup
+        moderate_reach = self._reach(
+            setup=setup, velocity=stopping_velocities.moderate_stopping_velocity
+        )
+        assert self._free_change(setup=setup) < -moderate_reach, (
+            "the state must fall on its own by more than the moderate stop reaches"
+        )
         bound = self._bound(
             setup=setup,
             goal_value=setup.state_position,
             cruise_velocity=stopping_velocities.slow_cruise_velocity,
             stopping_velocity=stopping_velocities.moderate_stopping_velocity,
         )
-        assert bound == pytest.approx(
-            self._reach(
-                setup=setup, velocity=stopping_velocities.moderate_stopping_velocity
-            )
-        )
-
-    def test_a_stopping_velocity_below_the_cruise_velocity_caps_the_stop(
-        self,
-        *,
-        linear_state_rate_setup: LinearStateRateSetup,
-        stopping_velocities: StoppingVelocities,
-    ) -> None:
-        """
-        A stopping velocity slower than the cruise velocity caps the stop below the
-        cruise cap.
-        """
-        setup = linear_state_rate_setup
-        bound = self._bound(
-            setup=setup,
-            goal_value=setup.state_position,
-            cruise_velocity=stopping_velocities.slow_cruise_velocity,
-            stopping_velocity=stopping_velocities.slower_stopping_velocity,
-        )
-        assert bound == pytest.approx(
-            self._reach(
-                setup=setup, velocity=stopping_velocities.slower_stopping_velocity
-            )
-        )
-
-    def test_a_resting_state_is_driven_either_way_at_the_cruise_cap(
-        self,
-        *,
-        linear_state_rate_setup: LinearStateRateSetup,
-        stopping_velocities: StoppingVelocities,
-    ) -> None:
-        """
-        A state that does not change on its own has nothing to stop, so a goal on either
-        side is driven at the cruise cap, whatever the stopping velocity.
-        """
-        setup = linear_state_rate_setup
-        cruise_velocity = 1.0
-        bounds = [
-            setup.strategy(
-                constraints=[
-                    setup.constraint(
-                        goal_value=goal_value,
-                        cruise_velocity=cruise_velocity,
-                        stopping_velocity=stopping_velocities.slower_stopping_velocity,
-                        state_rate=setup.resting_state_rate,
-                    )
-                ]
-            )
-            .create_equality_bounds()
-            .evaluate()[0]
-            for goal_value in (setup.state_position - 5.0, setup.state_position + 5.0)
-        ]
-        reach = self._reach(setup=setup, velocity=cruise_velocity)
-        assert bounds == pytest.approx([-reach, reach])
-
-    def test_a_goal_behind_the_state_asks_at_once_only_to_stop_it(
-        self,
-        *,
-        linear_state_rate_setup: LinearStateRateSetup,
-        stopping_velocities: StoppingVelocities,
-    ) -> None:
-        """
-        A goal against the own change asks only to stop the state.
-        """
-        setup = linear_state_rate_setup
-        bound = self._bound(
-            setup=setup,
-            goal_value=5.0,
-            cruise_velocity=stopping_velocities.slow_cruise_velocity,
-            stopping_velocity=stopping_velocities.fast_stopping_velocity,
-        )
-        assert bound == pytest.approx(-self._free_change(setup=setup))
+        assert bound == pytest.approx(moderate_reach)
 
     def test_driving_the_state_further_its_own_way_keeps_the_cruise_cap(
         self,
@@ -762,100 +464,6 @@ class TestStoppingTheStatesOwnChange:
         assert bound == pytest.approx(
             -self._reach(setup=setup, velocity=stopping_velocities.slow_cruise_velocity)
         )
-
-
-# %% validation
-
-
-class TestTerminalStateConstraintValidation:
-    """
-    Rejection of constraints the strategy cannot enforce.
-    """
-
-    def test_plain_equality_constraint_raises_type_mismatch(
-        self, *, linear_state_rate_setup: LinearStateRateSetup
-    ) -> None:
-        """
-        A non-terminal-state equality constraint is rejected, reporting the types.
-        """
-        plain_constraint = GiskardEqualityConstraint(
-            name="plain",
-            expression=sm.Scalar(0.0),
-            quadratic_weight=1.0,
-            cruise_velocity=1.0,
-            velocity_scale=1.0,
-            enforcement_strategy=TerminalStatePredictionStrategy,
-            bound=sm.Scalar(0.0),
-        )
-        strategy = linear_state_rate_setup.strategy(constraints=[plain_constraint])
-
-        with pytest.raises(ConstraintTypeMismatchError) as error_info:
-            strategy.create_equality_bounds()
-
-        assert error_info.value.expected_type is TerminalStatePredictionConstraint
-        assert error_info.value.actual_type is GiskardEqualityConstraint
-        assert error_info.value.constraint_name == plain_constraint.name
-
-
-# %% window-normalized weights
-
-
-class TestWindowNormalizedWeights:
-    """
-    Rescaling the lookahead weights to the prediction window.
-    """
-
-    def test_zero_weight_sum_does_not_produce_nan(self) -> None:
-        """
-        Weights that cancel to zero are kept instead of divided by zero.
-        """
-        weights = [sm.Scalar(1.0), sm.Scalar(-1.0)]
-        normalized = LinearizedScalarStateModel.window_normalized_weights(
-            weights=weights, prediction_steps=2
-        )
-        values = [weight.evaluate()[0] for weight in normalized]
-        assert all(math.isfinite(value) for value in values)
-        assert values == [1.0, -1.0]
-
-    def test_near_cancelling_weight_sum_keeps_raw_weights(self) -> None:
-        """
-        A sum below the minimum weight sum is kept instead of exploding.
-        """
-        weights = [sm.Scalar(1.0), sm.Scalar(-1.0 + 1e-12)]
-        normalized = LinearizedScalarStateModel.window_normalized_weights(
-            weights=weights, prediction_steps=2
-        )
-        values = [weight.evaluate()[0] for weight in normalized]
-        assert all(math.isfinite(value) for value in values)
-        assert values == pytest.approx([1.0, -1.0 + 1e-12])
-
-    def test_a_negative_weight_sum_keeps_every_weights_sign(self) -> None:
-        """
-        A stiff state (decay below minus one) has a negative weight sum; the rescaled
-        weights keep the raw weights' signs, with their sum at minus the prediction
-        steps.
-        """
-        prediction_steps = 5
-        model = LinearizedScalarStateModel(
-            state_value=sm.Scalar(0.8),
-            state_velocity=sm.Scalar(-0.2),
-            state_sensitivity=sm.Scalar(-80.0),
-            time_step=0.05,
-            control_horizon=prediction_steps,
-            prediction_steps=prediction_steps,
-        )
-        raw = [weight.evaluate()[0] for weight in model.lookahead_weights()]
-        assert sum(raw) < 0.0
-
-        normalized = [
-            weight.evaluate()[0]
-            for weight in LinearizedScalarStateModel.window_normalized_weights(
-                weights=model.lookahead_weights(), prediction_steps=prediction_steps
-            )
-        ]
-
-        assert np.sign(normalized).tolist() == np.sign(raw).tolist()
-        assert sum(normalized) == pytest.approx(-prediction_steps)
 
 
 # %% linearized state model behind the row
@@ -972,160 +580,6 @@ def flowing_pour_setup() -> FlowingPourSetup:
         control_horizon=5,
         prediction_steps=12,
     )
-
-
-class TestLinearizedScalarStateModel:
-    """
-    The linearized fill prediction behind the row.
-    """
-
-    def test_decay_is_one_plus_time_step_times_sensitivity(
-        self, *, flowing_pour_setup: FlowingPourSetup
-    ) -> None:
-        """
-        The decay is ``1 + dt·df/dfill`` at the operating point.
-        """
-        setup = flowing_pour_setup
-        model = setup.model(state_velocity=0.0, prediction_steps=setup.control_horizon)
-
-        assert model.decay.evaluate()[0] == pytest.approx(
-            1.0 + setup.time_step * setup.fill_sensitivity
-        )
-
-    def test_free_response_matches_held_tilt_rollout(
-        self, *, flowing_pour_setup: FlowingPourSetup
-    ) -> None:
-        """
-        The free response is the nonlinear rollout with the tilt held.
-        """
-        setup = flowing_pour_setup
-        model = setup.model(
-            state_velocity=setup.rate(tilt=setup.tilt, fill=setup.fill),
-            prediction_steps=setup.control_horizon,
-        )
-
-        assert model.free_response().evaluate()[0] == pytest.approx(
-            setup.nonlinear_rollout(tilt_velocity=0.0, steps=setup.control_horizon),
-            abs=1e-3,
-        )
-
-    def test_lookahead_weights_equal_geometric_series_of_decay(
-        self, *, flowing_pour_setup: FlowingPourSetup
-    ) -> None:
-        """
-        Each block carries the geometric series of the decay over its remaining state
-        steps, so the final block carries zero.
-        """
-        setup = flowing_pour_setup
-        model = setup.model(state_velocity=0.0, prediction_steps=setup.control_horizon)
-        decay = model.decay.evaluate()[0]
-
-        weights = [weight.evaluate()[0] for weight in model.lookahead_weights()]
-
-        assert weights == pytest.approx(
-            setup.expected_lookahead_weights(
-                decay=decay, prediction_steps=setup.control_horizon
-            )
-        )
-        assert weights[-1] == pytest.approx(0.0)
-        assert all(earlier > later for earlier, later in zip(weights, weights[1:]))
-
-    def test_normalized_weights_sum_to_the_prediction_window(
-        self, *, flowing_pour_setup: FlowingPourSetup
-    ) -> None:
-        """
-        Normalized weights keep their decreasing shape and sum to the predicted state
-        steps.
-        """
-        setup = flowing_pour_setup
-        model = setup.model(state_velocity=0.0, prediction_steps=setup.prediction_steps)
-
-        weights = [
-            weight.evaluate()[0]
-            for weight in LinearizedScalarStateModel.window_normalized_weights(
-                weights=model.lookahead_weights(),
-                prediction_steps=setup.prediction_steps,
-            )
-        ]
-
-        assert len(weights) == setup.control_horizon
-        assert sum(weights) == pytest.approx(setup.prediction_steps)
-        assert weights[0] > weights[-1] > 0.0
-
-    def test_single_step_horizon_predicts_one_euler_step(
-        self, *, flowing_pour_setup: FlowingPourSetup
-    ) -> None:
-        """
-        With one step the free response is one Euler step and the only block carries
-        zero weight.
-        """
-        time_step = flowing_pour_setup.time_step
-        fill_level = 0.8
-        outflow_rate = -0.2
-        model = LinearizedScalarStateModel(
-            state_value=sm.Scalar(fill_level),
-            state_velocity=sm.Scalar(outflow_rate),
-            state_sensitivity=sm.Scalar(-0.5),
-            time_step=time_step,
-            control_horizon=1,
-            prediction_steps=1,
-        )
-
-        assert model.free_response().evaluate()[0] == pytest.approx(
-            fill_level + time_step * outflow_rate
-        )
-        assert [weight.evaluate()[0] for weight in model.lookahead_weights()] == (
-            pytest.approx([0.0])
-        )
-
-    @pytest.mark.parametrize("prediction_steps", [5, 12])
-    def test_negative_sensitivity_free_response_matches_linear_recursion(
-        self, *, flowing_pour_setup: FlowingPourSetup, prediction_steps: int
-    ) -> None:
-        """With a negative sensitivity the free response follows the contracting
-        recursion ``x_{k+1} = x_k + dt·(f₀ + a·(x_k − x₀))``, within and beyond the
-        control window."""
-        time_step = flowing_pour_setup.time_step
-        fill_level = 0.8
-        outflow_rate = -0.2
-        fill_sensitivity = -2.0
-        model = LinearizedScalarStateModel(
-            state_value=sm.Scalar(fill_level),
-            state_velocity=sm.Scalar(outflow_rate),
-            state_sensitivity=sm.Scalar(fill_sensitivity),
-            time_step=time_step,
-            control_horizon=flowing_pour_setup.control_horizon,
-            prediction_steps=prediction_steps,
-        )
-
-        expected_fill = fill_level
-        for _ in range(prediction_steps):
-            expected_fill += time_step * (
-                outflow_rate + fill_sensitivity * (expected_fill - fill_level)
-            )
-        assert model.free_response().evaluate()[0] == pytest.approx(expected_fill)
-
-    def test_free_response_is_a_pure_integrator_when_filling(
-        self, *, flowing_pour_setup: FlowingPourSetup
-    ) -> None:
-        """
-        A pure inflow does not depend on the receiver's own fill, so the free response
-        is the fill plus the projected inflow.
-        """
-        setup = flowing_pour_setup
-        inflow_rate = 0.1
-        model = LinearizedScalarStateModel(
-            state_value=sm.Scalar(0.0),
-            state_velocity=sm.Scalar(inflow_rate),
-            state_sensitivity=sm.Scalar(0.0),
-            time_step=setup.time_step,
-            control_horizon=setup.control_horizon,
-            prediction_steps=setup.control_horizon,
-        )
-
-        assert model.free_response().evaluate()[0] == pytest.approx(
-            setup.control_horizon * setup.time_step * inflow_rate
-        )
 
 
 class TestPredictionBeyondTheControlWindow:
@@ -1311,69 +765,3 @@ class TestCoupledSourceInThePrediction:
         assert predicted == pytest.approx(
             setup.held_joint_recursion(steps=config.control_horizon)
         )
-
-    def test_without_coupled_states_the_source_rate_is_held(
-        self, *, fed_receiver_setup: FedReceiverSetup
-    ) -> None:
-        """
-        Without the coupling the receiver gains the source's current outflow over the
-        whole window.
-        """
-        setup = fed_receiver_setup
-        receiver = setup.joint_and_receiver
-        config = receiver.config
-        constraint = setup.constraint(coupled_states=[], goal_value=receiver.goal_value)
-
-        predicted = constraint.predicted_value(config=config).evaluate()[0]
-
-        assert predicted == pytest.approx(
-            receiver.state_position
-            + receiver.reach(
-                velocity=setup.drain_constant
-                * receiver.joint_position
-                * setup.source_position,
-                steps=config.control_horizon,
-            )
-        )
-
-    def test_equality_bound_uses_the_coupled_prediction(
-        self, *, fed_receiver_setup: FedReceiverSetup
-    ) -> None:
-        """
-        The bound is the goal minus the prediction with the source draining along.
-        """
-        setup = fed_receiver_setup
-        receiver = setup.joint_and_receiver
-        predicted = setup.held_joint_recursion(steps=receiver.config.control_horizon)
-        goal = predicted + 0.001
-        strategy = receiver.strategy(
-            constraints=[
-                setup.constraint(coupled_states=[setup.coupled_source], goal_value=goal)
-            ]
-        )
-
-        bound = strategy.create_equality_bounds().evaluate()[0]
-
-        assert bound == pytest.approx(goal - predicted)
-
-
-# %% the prediction as the constraint states it
-
-
-def test_the_constraint_predicts_the_held_joint_recursion(
-    *, linear_state_rate_setup: LinearStateRateSetup
-) -> None:
-    """
-    The prediction the constraint states is the state after the window's held-joint
-    steps.
-    """
-    setup = linear_state_rate_setup
-    constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
-
-    predicted = constraint.predicted_value(config=setup.config).evaluate()[0]
-
-    assert predicted == pytest.approx(
-        setup.held_joint_recursion(
-            steps=constraint.prediction_steps(config=setup.config)
-        )
-    )

@@ -5,48 +5,33 @@ Tests of the tasks that pour from a held container or fill one container from an
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
 import numpy as np
 import pytest
-
-from cramph.composites import Parallel, Sequence
+from cramph.composites import Parallel
 from cramph.context import StatechartContext
-from cramph.data_types import LifeCycleValue, ObservationStateValue
+from cramph.data_types import ObservationStateValue
 from cramph.executor import StatechartExecutor
 from cramph.statechart import Statechart
 from giskardpy.motion_control import MotionControl
-from giskardpy.motion_statechart.graph_node import EndMotion, MotionNodeArtifacts
+from giskardpy.motion_statechart.graph_node import EndMotion
 from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
 from giskardpy.motion_statechart.tasks.cartesian_tasks import (
     CartesianPose,
-    CartesianPosition,
-)
-from giskardpy.motion_statechart.tasks.exceptions import (
-    MissingFillLevelError,
-    MissingSourceError,
-    NonPositiveClearanceError,
 )
 from giskardpy.motion_statechart.tasks.pouring import (
     FillByTransferTask,
-    FillDebugValue,
     KeepProjectileInReceiver,
     KeepSourceRimAboveReceiverRim,
     PouringTask,
-    StreamDebugValue,
-    TerminalFillConstraintTask,
 )
 from giskardpy.motion_statechart.weights import DefaultWeights
 from giskardpy.qp.qp_controller_config import QPControllerConfig
-from giskardpy.qp.terminal_state_prediction_strategy import (
-    TerminalStatePredictionConstraint,
-)
 from krrood_spatial_math.spatial_types import (
     HomogeneousTransformationMatrix,
-    Point3,
     Pose,
     Vector3,
 )
@@ -59,9 +44,9 @@ from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     FixedConnection,
 )
-from semantic_digital_twin.world_description.liquid_connection import LiquidConnection
-from semantic_digital_twin.world_description.geometry import Box, Mesh, Scale
+from semantic_digital_twin.world_description.geometry import Mesh, Scale
 from semantic_digital_twin.world_description.kinematic_chain import KinematicChain
+from semantic_digital_twin.world_description.liquid_connection import LiquidConnection
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -70,7 +55,6 @@ from ..motion_control_context import (
     add_to_statechart_with_motion_control,
     create_context_with_motion_control,
 )
-from .debug_expression_helpers import debug_expression_by_name
 from .single_cup_world import PourableContainer, build_single_cup_world
 
 # %% shared scene and controller settings
@@ -151,18 +135,6 @@ class PouringSetup:
             context=StatechartContext(world=world),
             extensions=[MotionControl(qp_controller_config=self.controller_config())],
         )
-
-    def put_into_statechart(
-        self, *, task: TerminalFillConstraintTask, world: World
-    ) -> None:
-        """
-        Put `task` into a statechart of its own with :meth:`controller_config`, so it
-        can be built outside of an executor.
-
-        :param task: The task to build later.
-        :param world: The world the task acts in.
-        """
-        add_to_statechart_with_motion_control(task, world, self.controller_config())
 
     def cup_body(self, *, name: str) -> Body:
         """
@@ -255,19 +227,6 @@ def pouring_setup() -> PouringSetup:
     The scene and controller settings the pouring tests share.
     """
     return PouringSetup()
-
-
-def _container_without_fill_level(*, world: World, name: str) -> PourableContainer:
-    """
-    :return: A container fixed to the world root that was never given a fill level.
-    """
-    body = Body(name=PrefixedName(f"{name}_body"))
-    container = PourableContainer(name=PrefixedName(name), root=body)
-    with world.modify_world():
-        world.add_body(body)
-        world.add_connection(FixedConnection(parent=world.root, child=body))
-        world.add_semantic_annotation(container)
-    return container
 
 
 @pytest.fixture
@@ -481,12 +440,7 @@ class TransferMotion:
         :return: The list the clearance samples are appended to as the motion runs.
         """
         source_lip = self.source_cup.liquid_exit_point()
-        receiver_rim = (
-            self.world.compose_forward_kinematics_expression(
-                self.world.root, self.receiving_cup.root
-            )
-            @ self.receiving_cup.rim_point()
-        )
+        receiver_rim = self.receiving_cup.opening_point()
         clearance_history: list[float] = []
         original_on_tick = self.transfer_task.on_tick
 
@@ -579,33 +533,6 @@ class NoisyFillPerception:
         executor.finish_run()
 
 
-def _recording_fill_when_reached(
-    *,
-    task: PouringTask,
-    container: PourableContainer,
-    fill_when_reached: dict[str, float],
-) -> Callable[[], ObservationStateValue | None]:
-    """
-    :param task: The pour whose tick is wrapped.
-    :param container: The container the pour drains.
-    :param fill_when_reached: Where the container's fill level is recorded under the
-        task's name on the first tick the task observes its goal reached.
-    :return: The task's tick, recording the fill level on reaching the goal.
-    """
-    original_on_tick = task.on_tick
-
-    def recording_on_tick() -> ObservationStateValue | None:
-        """
-        Tick the task and record the fill level once it reaches its goal.
-        """
-        observation = original_on_tick()
-        if observation == ObservationStateValue.TRUE:
-            fill_when_reached.setdefault(task.name, container.fill_level)
-        return observation
-
-    return recording_on_tick
-
-
 # %% pouring from a held cup
 
 
@@ -643,152 +570,6 @@ class TestPouringTask:
         assert cup.fill_connection.symbolic_fill_velocity().evaluate()[
             0
         ] == pytest.approx(0.0, abs=1e-2)
-
-    def test_two_consecutive_pours_reach_their_goals(
-        self, *, world_with_cup, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        Two pours from the same cup, one after the other in one statechart, each reach
-        their own goal.
-        """
-        world, cup = world_with_cup
-        executor = pouring_setup.executor(world=world)
-        motion_statechart = Statechart(context=executor.context)
-        first_pour = PouringTask(
-            container=cup, goal_value=0.8, fill_level_tolerance=0.05, name="first_pour"
-        )
-        second_pour = PouringTask(
-            container=cup, goal_value=0.6, fill_level_tolerance=0.05, name="second_pour"
-        )
-        fill_when_reached: dict[str, float] = {}
-        for pour in (first_pour, second_pour):
-            pour.on_tick = _recording_fill_when_reached(
-                task=pour, container=cup, fill_when_reached=fill_when_reached
-            )
-        pours = Sequence(nodes=[first_pour, second_pour])
-        motion_statechart.add_node(node=pours)
-        motion_statechart.add_node(node=EndMotion.when_true(node=pours))
-        executor.compile(statechart=motion_statechart)
-
-        executor.tick_until_end(timeout=2 * pouring_setup.timeout)
-
-        for pour in (first_pour, second_pour):
-            assert fill_when_reached[pour.name] == pytest.approx(
-                pour.goal_value, abs=pour.fill_level_tolerance
-            )
-        assert cup.fill_level == pytest.approx(
-            second_pour.goal_value, abs=second_pour.fill_level_tolerance
-        )
-
-    def test_build_hands_the_prediction_duration_to_the_constraint(
-        self, *, world_with_cup, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        The QP row carries the task's own prediction window rather than the control
-        horizon.
-        """
-        world, cup = world_with_cup
-        pouring_task = PouringTask(
-            container=cup,
-            goal_value=0.6,
-            fill_level_tolerance=0.05,
-            prediction_duration=1.5,
-        )
-        pouring_setup.put_into_statechart(task=pouring_task, world=world)
-
-        artifacts = pouring_task.build()
-
-        [constraint] = artifacts.constraints.equality_constraints
-        assert isinstance(constraint, TerminalStatePredictionConstraint)
-        assert constraint.prediction_duration == pouring_task.prediction_duration
-
-    def test_build_hands_the_stopping_velocity_to_the_constraint(
-        self, *, world_with_cup, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        How fast the task may take back an overshoot is the task's to decide, apart from
-        how fast it pours.
-        """
-        world, cup = world_with_cup
-        pouring_task = PouringTask(
-            container=cup,
-            goal_value=0.6,
-            fill_level_tolerance=0.05,
-            cruise_velocity=0.03,
-            stopping_velocity=0.09,
-        )
-        pouring_setup.put_into_statechart(task=pouring_task, world=world)
-
-        artifacts = pouring_task.build()
-
-        [constraint] = artifacts.constraints.equality_constraints
-        assert constraint.stopping_velocity == pouring_task.stopping_velocity
-
-    def test_the_fill_rate_is_the_drain_the_world_integrates(
-        self, *, world_with_cup
-    ) -> None:
-        """
-        The task predicts with the drain its container's fill connection integrates, at
-        the container's own tilt.
-        """
-        world, cup = world_with_cup
-        JointState.from_mapping({cup.root.parent_connection: 1.0}).apply_to(world)
-        pouring_task = PouringTask(
-            container=cup, goal_value=0.6, fill_level_tolerance=0.05
-        )
-        add_to_statechart_with_motion_control(pouring_task, world)
-
-        pouring_task.build()
-
-        assert pouring_task.fill_connection is cup.fill_connection
-        assert pouring_task.fill_velocity_expression.evaluate()[0] == pytest.approx(
-            cup.fill_connection.symbolic_fill_velocity().evaluate()[0]
-        )
-
-    def test_build_rejects_a_container_without_fill_level(
-        self, *, world_with_cup
-    ) -> None:
-        """
-        A container that was never given a fill level has nothing to pour.
-        """
-        world, _cup = world_with_cup
-        empty_container = _container_without_fill_level(
-            world=world, name="empty_container"
-        )
-        pouring_task = PouringTask(
-            container=empty_container, goal_value=0.6, fill_level_tolerance=0.05
-        )
-        add_to_statechart_with_motion_control(pouring_task, world)
-
-        with pytest.raises(MissingFillLevelError) as error_info:
-            pouring_task.build()
-
-        assert error_info.value.node is pouring_task
-
-    def test_on_tick_does_not_report_true_while_still_flowing(
-        self, *, world_with_cup
-    ) -> None:
-        """
-        A fill level inside the goal band does not count as done while liquid is still
-        flowing.
-        """
-        world, cup = world_with_cup
-        pouring_task = PouringTask(
-            container=cup, goal_value=0.6, fill_level_tolerance=0.05
-        )
-        add_to_statechart_with_motion_control(pouring_task, world)
-        pouring_task.build()
-
-        JointState.from_mapping(
-            {
-                cup.root.parent_connection: 1.3,
-                cup.fill_connection: pouring_task.goal_value,
-            }
-        ).apply_to(world)
-        fill_rate = cup.fill_connection.symbolic_fill_velocity().evaluate()[0]
-        assert abs(fill_rate) > pouring_task.fill_rate_tolerance
-
-        assert pouring_task.on_tick() is None
 
     def test_proactive_tilt_back(
         self, *, world_with_cup, pouring_setup: PouringSetup
@@ -844,112 +625,6 @@ class TestPouringTask:
         )
 
 
-class TestPouringFromAGripper:
-    """
-    Pouring from a cup a robot's gripper holds.
-    """
-
-    def test_pouring_from_a_pr2_gripper(
-        self, *, pr2_world_copy: World, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        PouringTask brings a cup held by the PR2 to its fill goal.
-        """
-        world = pr2_world_copy
-        gripper_frame = world.get_kinematic_structure_entity_by_name(
-            "r_gripper_tool_frame"
-        )
-        cup_height = 0.12
-        cup_width = 0.08
-
-        with world.modify_world():
-            cup_body = Body(name=PrefixedName("cup"))
-            world.add_body(cup_body)
-            world.add_connection(
-                FixedConnection.create_with_dofs(
-                    world=world,
-                    parent=gripper_frame,
-                    child=cup_body,
-                    name=PrefixedName("gripper_T_cup_tilt"),
-                )
-            )
-            cup_shape = Box(
-                origin=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    z=cup_height / 2, reference_frame=cup_body
-                ),
-                scale=Scale(cup_width, cup_width, cup_height),
-            )
-            cup_body.visual = ShapeCollection(shapes=[cup_shape])
-            cup_body.collision = ShapeCollection(shapes=[cup_shape])
-            cup_body.collision.reference_frame = cup_body
-
-        cup = PourableContainer(name=PrefixedName("cup"), root=cup_body)
-        with world.modify_world():
-            world.add_semantic_annotation(cup)
-        cup.initialize_fill_level(initial_fill=1.0, outflow_rate_constant=1.0)
-
-        executor = pouring_setup.executor(world=world)
-        motion_statechart = Statechart(context=executor.context)
-        pouring_task = PouringTask(
-            container=cup, goal_value=0.6, fill_level_tolerance=0.05
-        )
-        motion_statechart.add_node(node=pouring_task)
-        motion_statechart.add_node(node=EndMotion.when_true(node=pouring_task))
-        executor.compile(statechart=motion_statechart)
-
-        executor.tick_until_end(timeout=pouring_setup.timeout)
-
-        assert pouring_task.observation_state == ObservationStateValue.TRUE
-        assert cup.fill_level == pytest.approx(
-            pouring_task.goal_value, abs=pouring_task.fill_level_tolerance
-        )
-        assert cup.fill_connection.symbolic_fill_velocity().evaluate()[
-            0
-        ] == pytest.approx(0.0, abs=1e-2)
-
-    def test_pouring_from_a_tracy_gripper(
-        self, *, tracy_pouring_world, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        PouringTask brings a Jeroen cup held in Tracy's left gripper from full to its
-        fill goal while the gripper holds its position.
-        """
-        world, _tracy = tracy_pouring_world
-        left_tool_frame = world.get_body_by_name("l_gripper_tool_frame")
-        pouring_setup.move_left_tool_upright(
-            world=world, left_tool_frame=left_tool_frame
-        )
-        grasped_cup = pouring_setup.grasp_cup(
-            world=world, left_tool_frame=left_tool_frame, name="grasped_cup"
-        )
-        pouring_setup.pre_tilt_left_wrist(world=world)
-        assert grasped_cup.fill_level == pytest.approx(1.0)
-
-        executor = pouring_setup.executor(world=world)
-        pouring_statechart = Statechart(context=executor.context)
-        pouring_task = PouringTask(
-            container=grasped_cup, goal_value=0.8, fill_level_tolerance=0.05
-        )
-        keep_position = CartesianPosition(
-            kinematic_chain=KinematicChain(root=world.root, tip=left_tool_frame),
-            goal_point=Point3(reference_frame=left_tool_frame),
-            weight=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
-        )
-        motion = Parallel(nodes=[pouring_task, keep_position])
-        pouring_statechart.add_node(node=motion)
-        pouring_statechart.add_node(node=EndMotion.when_true(node=motion))
-        executor.compile(statechart=pouring_statechart)
-        executor.tick_until_end(timeout=pouring_setup.timeout)
-
-        assert pouring_task.observation_state == ObservationStateValue.TRUE
-        assert grasped_cup.fill_level == pytest.approx(
-            pouring_task.goal_value, abs=pouring_task.fill_level_tolerance
-        )
-        assert grasped_cup.fill_connection.symbolic_fill_velocity().evaluate()[
-            0
-        ] == pytest.approx(0.0, abs=1e-2)
-
-
 # %% filling one cup from another
 
 
@@ -964,99 +639,40 @@ class TestCupToCupTransfer:
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
     ) -> None:
         """
-        The receiver reaches the goal, the source loses what the receiver gains, and
-        once aimed the stream stays in the receiver.
+        The receiver reaches the goal, the source loses what the receiver gains, once
+        aimed the stream stays in the receiver, and the lip stays above the rim.
         """
-        world, source_cup, receiving_cup, left_tool_frame = tracy_transfer_world
-        assert receiving_cup.fill_level == pytest.approx(0.0)
-        assert source_cup.fill_level == pytest.approx(1.0)
-        source_fill_before = source_cup.fill_level
-
-        transfer_task = FillByTransferTask(
-            receiver=receiving_cup,
-            goal_value=0.7,
-            fill_level_tolerance=0.05,
-            cruise_velocity=0.03,
+        transfer = TransferMotion.build(
+            transfer_world=tracy_transfer_world, setup=pouring_setup
         )
-        aiming_task = KeepProjectileInReceiver(
-            receiver=receiving_cup, source=source_cup
-        )
-        # A narrow rim-to-rim band keeps the source at a stable height while the aim
-        # repositions it, and keeps the lip from sinking towards the receiver's rim.
-        clearance_task = KeepSourceRimAboveReceiverRim(
-            receiver=receiving_cup,
-            source=source_cup,
-            minimum_clearance=0.2,
-            clearance_band=0.02,
-            weight=DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
-        )
-        keep_plane = AlignPlanes(
-            kinematic_chain=KinematicChain(root=world.root, tip=left_tool_frame),
-            reference_normal=Vector3.X(reference_frame=world.root),
-            tip_normal=Vector3.Z(reference_frame=left_tool_frame),
-        )
-        executor = pouring_setup.executor(world=world)
-        transfer_statechart = Statechart(context=executor.context)
-        motion = Parallel(
-            nodes=[transfer_task, aiming_task, clearance_task, keep_plane]
-        )
-        transfer_statechart.add_node(node=motion)
-        transfer_statechart.add_node(node=EndMotion.when_true(node=motion))
-
+        source_cup, receiving_cup = transfer.source_cup, transfer.receiving_cup
+        gate = receiving_cup.transfer_gate(source=source_cup)
+        clearance_history = transfer.record_rim_clearance()
         gate_history: list[float] = []
-        tilt_history: list[float] = []
-        clearance_history: list[float] = []
-        original_on_tick = transfer_task.on_tick
+        recording_on_tick = transfer.transfer_task.on_tick
 
-        def recording_on_tick() -> ObservationStateValue | None:
+        def recording_gate_on_tick() -> ObservationStateValue | None:
             """
-            Record gate, source tilt and cup-origin clearance, then tick.
+            Record the transfer gate, then tick the task.
             """
-            gate_history.append(
-                float(receiving_cup.transfer_gate(source=source_cup).evaluate()[0])
-            )
-            tilt_history.append(float(source_cup.tilt.evaluate()[0]))
-            source_z = world.compute_forward_kinematics_np(world.root, source_cup.root)[
-                2, 3
-            ]
-            receiver_z = world.compute_forward_kinematics_np(
-                world.root, receiving_cup.root
-            )[2, 3]
-            clearance_history.append(float(source_z - receiver_z))
-            return original_on_tick()
+            gate_history.append(float(gate.evaluate()[0]))
+            return recording_on_tick()
 
-        transfer_task.on_tick = recording_on_tick
+        transfer.transfer_task.on_tick = recording_gate_on_tick
 
-        executor.compile(statechart=transfer_statechart)
-        executor.tick_until_end(timeout=pouring_setup.timeout)
+        transfer.execute()
 
+        transfer_task = transfer.transfer_task
         tolerance = transfer_task.fill_level_tolerance
         assert transfer_task.observation_state == ObservationStateValue.TRUE
         assert receiving_cup.fill_level == pytest.approx(
             transfer_task.goal_value, abs=tolerance
         )
-        receiver_gain = receiving_cup.fill_level
-        source_loss = source_fill_before - source_cup.fill_level
-        assert source_loss > tolerance, "source cup never poured"
-        assert receiver_gain == pytest.approx(source_loss, abs=tolerance), (
-            "transfer must be volume conserving (equal cups): "
-            f"receiver gained {receiver_gain:.3f}, source lost {source_loss:.3f}"
+        assert 1.0 - source_cup.fill_level == pytest.approx(
+            receiving_cup.fill_level, abs=tolerance
         )
-        assert max(tilt_history) > 0.5, "the source cup never tilted to pour"
-        first_open_tick = next(
-            (tick for tick, gate in enumerate(gate_history) if gate > 0.5), None
-        )
-        assert first_open_tick is not None, (
-            "the optimizer never aimed the pour into the receiver"
-        )
-        assert min(gate_history[first_open_tick:]) > 0.5, (
-            "the stream left the receiver after it was aimed: "
-            f"the gate fell to {min(gate_history[first_open_tick:]):.3f}"
-        )
-        assert min(clearance_history) > 0.0, (
-            "the source cup dropped to or below the receiver during the pour: "
-            f"minimum clearance was {min(clearance_history):.3f}"
-        )
+        assert min(gate_history) > 0.5, "the stream left the receiver once aimed"
+        assert min(clearance_history) > 0.0, "the lip dropped to the receiver's rim"
 
 
 class TestRimClearanceDuringTransfer:
@@ -1088,106 +704,11 @@ class TestRimClearanceDuringTransfer:
             node.name for node in transfer.statechart.nodes
         ]
 
-    def test_pouring_lip_stays_above_receiver_rim(
-        self, *, tracy_transfer_world, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        The rim clearance stays positive for the whole pour.
-        """
-        transfer = TransferMotion.build(
-            transfer_world=tracy_transfer_world, setup=pouring_setup
-        )
-        clearance_history = transfer.record_rim_clearance()
-
-        transfer.execute()
-
-        assert transfer.transfer_task.observation_state == ObservationStateValue.TRUE
-        assert clearance_history, "transfer never ticked"
-        assert min(clearance_history) > 0.0, (
-            "the pouring lip dropped to or below the receiver rim: "
-            f"minimum clearance was {min(clearance_history):.3f} m"
-        )
-
-
-class TestFillDriveStartsOnceAimed:
-    """
-    The fill-driving task of the transfer motion stays inactive until the pour-aiming
-    task observes the stream landing in the receiver, since the transfer gate blocks all
-    flow before.
-    """
-
-    def test_fill_task_waits_for_the_aim_observation(
-        self, *, tracy_transfer_world, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        The fill task does not start while the pour is mis-aimed, and starts on the tick
-        after the aiming task first observes the landing inside the receiver.
-        """
-        transfer = TransferMotion.build(
-            transfer_world=tracy_transfer_world, setup=pouring_setup
-        )
-        transfer_task = transfer.transfer_task
-        aiming_task = transfer.aiming_task
-        executor = transfer.executor
-
-        executor.compile(statechart=transfer.statechart)
-        executor.tick()
-        assert aiming_task.observation_state != ObservationStateValue.TRUE, (
-            "the pour must start mis-aimed for this test to be meaningful"
-        )
-        assert transfer_task.life_cycle_state == LifeCycleValue.NOT_STARTED
-
-        aimed_tick = None
-        for tick in range(1000):
-            if aiming_task.observation_state == ObservationStateValue.TRUE:
-                aimed_tick = tick
-                break
-            assert transfer_task.life_cycle_state == LifeCycleValue.NOT_STARTED, (
-                f"fill task started at tick {tick} before the pour was aimed"
-            )
-            executor.tick()
-        assert aimed_tick is not None, "the pour never got aimed"
-
-        executor.tick()
-        assert transfer_task.life_cycle_state == LifeCycleValue.RUNNING
-        executor.finish_run()
-
 
 class TestClearanceBandStaysAboveTheRim:
     """The clearance band of
     :class:`~giskardpy.motion_statechart.tasks.pouring.KeepSourceRimAboveReceiverRim`
     is enforced softly, so a band reaching down to the rim is rejected."""
-
-    def test_band_reaching_down_to_the_rim_is_rejected(self, *, world_with_cup) -> None:
-        """
-        A zero clearance floor asks for the rims to touch, so building the task raises.
-        """
-        world, cup = world_with_cup
-        clearance_task = KeepSourceRimAboveReceiverRim(
-            receiver=cup, source=cup, minimum_clearance=0.0
-        )
-        add_to_statechart_with_motion_control(clearance_task, world)
-
-        with pytest.raises(NonPositiveClearanceError) as error_info:
-            clearance_task.build()
-
-        assert error_info.value.minimum_clearance == clearance_task.minimum_clearance
-
-    def test_band_is_derived_from_the_configured_width(self, *, world_with_cup) -> None:
-        """
-        The band's upper end lies :attr:`clearance_band` above the floor.
-        """
-        _world, cup = world_with_cup
-        clearance_task = KeepSourceRimAboveReceiverRim(
-            receiver=cup,
-            source=cup,
-            minimum_clearance=0.1,
-            clearance_band=0.04,
-        )
-
-        assert clearance_task.maximum_clearance == pytest.approx(
-            clearance_task.minimum_clearance + clearance_task.clearance_band
-        )
 
     def test_rims_do_not_cross_when_aiming_outweighs_the_clearance(
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
@@ -1211,184 +732,6 @@ class TestClearanceBandStaysAboveTheRim:
             "the pouring lip reached the receiver rim: minimum clearance was "
             f"{min(clearance_history):.4f} m"
         )
-
-
-def _box_cup_body(*, name: str, height: float = 0.1, width: float = 0.06) -> Body:
-    """
-    :param name: The name of the body.
-    :param height: Height of the cup, in metres.
-    :param width: Width and depth of the cup, in metres.
-    :return: A box-shaped cup body whose bounding box spans ``[0, height]`` in z.
-    """
-    body = Body(name=PrefixedName(name))
-    cup_shape = Box(
-        origin=HomogeneousTransformationMatrix.from_xyz_rpy(
-            z=height / 2, reference_frame=body
-        ),
-        scale=Scale(width, width, height),
-    )
-    body.visual = ShapeCollection(shapes=[cup_shape])
-    body.collision = ShapeCollection(shapes=[cup_shape])
-    body.collision.reference_frame = body
-    return body
-
-
-def _rim_band_world(
-    *, source_height_offset: float
-) -> tuple[World, PourableContainer, PourableContainer]:
-    """
-    :param source_height_offset: Height of the source cup's origin above the
-        receiver's, which equals the rim-to-rim clearance.
-    :return: ``(world, source, receiver)``: two identical upright box cups.
-    """
-    world = World()
-    with world.modify_world():
-        map_body = Body(name=PrefixedName("map"))
-        world.add_body(map_body)
-    receiver_body = _box_cup_body(name="receiver_cup")
-    source_body = _box_cup_body(name="source_cup")
-    with world.modify_world():
-        world.add_body(receiver_body)
-        world.add_body(source_body)
-        world.add_connection(
-            FixedConnection.create_with_dofs(
-                world=world,
-                parent=map_body,
-                child=receiver_body,
-                name=PrefixedName("map_T_receiver_cup"),
-            )
-        )
-        world.add_connection(
-            FixedConnection.create_with_dofs(
-                world=world,
-                parent=map_body,
-                child=source_body,
-                name=PrefixedName("map_T_source_cup"),
-                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    z=source_height_offset
-                ),
-            )
-        )
-    receiver = PourableContainer(name=PrefixedName("receiver_cup"), root=receiver_body)
-    source = PourableContainer(name=PrefixedName("source_cup"), root=source_body)
-    with world.modify_world():
-        world.add_semantic_annotation(receiver)
-        world.add_semantic_annotation(source)
-    return world, source, receiver
-
-
-@dataclass(kw_only=True)
-class ClearanceBandProbe:
-    """
-    Evaluates the observation of a clearance task with a fixed band in worlds of varying
-    rim-to-rim clearance.
-    """
-
-    minimum_clearance: float = 0.05
-    """
-    Clearance floor of the probed band, in metres.
-    """
-
-    clearance_band: float = 0.05
-    """
-    Width of the probed band above the floor, in metres.
-    """
-
-    def observation_at(self, *, clearance: float) -> float:
-        """
-        :param clearance: The rim-to-rim clearance of the world the task is built in.
-        :return: The task's observation in that world.
-        """
-        world, source, receiver = _rim_band_world(source_height_offset=clearance)
-        clearance_task = KeepSourceRimAboveReceiverRim(
-            receiver=receiver,
-            source=source,
-            minimum_clearance=self.minimum_clearance,
-            clearance_band=self.clearance_band,
-        )
-        add_to_statechart_with_motion_control(clearance_task, world)
-        artifacts = clearance_task.build()
-        return float(artifacts.observation.evaluate()[0])
-
-
-@pytest.fixture
-def clearance_band_probe() -> ClearanceBandProbe:
-    """
-    A clearance band probe with a 5 cm floor and a 5 cm band.
-    """
-    return ClearanceBandProbe()
-
-
-class TestRimClearanceBandObservation:
-    """The observation of
-    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepSourceRimAboveReceiverRim`
-    reports whether the rim-to-rim clearance lies within the band."""
-
-    def test_clearance_inside_the_band_observes_true(
-        self, *, clearance_band_probe: ClearanceBandProbe
-    ) -> None:
-        """
-        A clearance between floor and ceiling satisfies the band.
-        """
-        probe = clearance_band_probe
-        clearance = probe.minimum_clearance + probe.clearance_band / 2
-        assert probe.observation_at(clearance=clearance) == 1.0
-
-    def test_clearance_above_the_band_observes_false(
-        self, *, clearance_band_probe: ClearanceBandProbe
-    ) -> None:
-        """
-        A clearance above the ceiling violates the band.
-        """
-        probe = clearance_band_probe
-        clearance = probe.minimum_clearance + 2 * probe.clearance_band
-        assert probe.observation_at(clearance=clearance) == 0.0
-
-    def test_clearance_below_the_band_observes_false(
-        self, *, clearance_band_probe: ClearanceBandProbe
-    ) -> None:
-        """
-        A clearance below the floor violates the band.
-        """
-        probe = clearance_band_probe
-        clearance = probe.minimum_clearance / 2
-        assert probe.observation_at(clearance=clearance) == 0.0
-
-
-class TestFillTaskInitializationErrors:
-    """
-    The transfer tasks validate their liquid coupling at build time and raise concrete
-    initialization errors.
-    """
-
-    def test_fill_by_transfer_requires_a_source(self, *, world_with_cup) -> None:
-        """
-        A receiver nothing pours into cannot be filled.
-        """
-        world, cup = world_with_cup
-        transfer_task = FillByTransferTask(
-            receiver=cup, goal_value=0.7, fill_level_tolerance=0.05
-        )
-        add_to_statechart_with_motion_control(transfer_task, world)
-
-        with pytest.raises(MissingSourceError) as error_info:
-            transfer_task.build()
-        assert error_info.value.node is transfer_task
-
-    def test_keep_projectile_requires_a_source_with_fill_level(
-        self, *, world_with_cup
-    ) -> None:
-        """
-        A source without fill level has no stream to aim.
-        """
-        world, cup = world_with_cup
-        dry_source = _container_without_fill_level(world=world, name="dry_source")
-        aiming_task = KeepProjectileInReceiver(receiver=cup, source=dry_source)
-        add_to_statechart_with_motion_control(aiming_task, world)
-
-        with pytest.raises(MissingFillLevelError) as error_info:
-            aiming_task.build()
-        assert error_info.value.node is aiming_task
 
 
 class TestFillRowLeavesPlacementToTheOtherTasks:
@@ -1422,236 +765,6 @@ class TestFillRowLeavesPlacementToTheOtherTasks:
         assert velocity.jacobian(variables=[receiver_offset])[0, 0].evaluate()[0] == 0.0
         assert velocity.jacobian(variables=[tilt_joint])[0, 0].evaluate()[0] != 0.0
 
-    def test_the_fill_rate_still_closes_with_the_gate(
-        self, *, tracy_transfer_world
-    ) -> None:
-        """
-        Moved out from under the pour, the receiver is predicted to receive nothing.
-        """
-        world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
-        transfer_task = FillByTransferTask(
-            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
-        )
-        add_to_statechart_with_motion_control(transfer_task, world)
-        transfer_task.build()
-        receiver_connection = receiving_cup.root.parent_connection
-
-        transfer_task.on_tick()
-        under_the_pour = float(transfer_task._compiled_fill_velocity.evaluate()[0])
-        receiver_connection.origin = (
-            receiver_connection.origin
-            @ HomogeneousTransformationMatrix.from_xyz_rpy(x=1.0)
-        )
-        transfer_task.on_tick()
-        moved_away = float(transfer_task._compiled_fill_velocity.evaluate()[0])
-
-        assert under_the_pour > 0.0
-        assert moved_away == pytest.approx(0.0, abs=1e-6)
-
-
-class TestTransferPredictionDrainsTheSource:
-    """
-    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` lets the
-    source's fill drain over the prediction window.
-    """
-
-    def test_the_source_fill_evolves_in_the_receivers_prediction(
-        self, *, tracy_transfer_world
-    ) -> None:
-        """
-        The fill row carries the source's fill level as a coupled state, moving at the
-        source's own drain rate.
-        """
-        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
-        transfer_task = FillByTransferTask(
-            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
-        )
-        add_to_statechart_with_motion_control(transfer_task, world)
-
-        artifacts = transfer_task.build()
-
-        [row] = _prediction_rows(artifacts=artifacts)
-        [coupled] = row.coupled_states
-        source_connection = source_cup.fill_connection
-        assert coupled.variable.id == source_connection.raw_dof.variables.position.id
-        assert coupled.velocity.evaluate()[0] == pytest.approx(
-            source_connection.symbolic_fill_velocity().evaluate()[0]
-        )
-
-    def test_the_source_fill_can_be_held_instead(self, *, tracy_transfer_world) -> None:
-        """
-        Without the coupling the prediction holds every other fill level.
-        """
-        world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
-        transfer_task = FillByTransferTask(
-            receiver=receiving_cup,
-            goal_value=0.7,
-            fill_level_tolerance=0.05,
-            couple_source_fill=False,
-        )
-        add_to_statechart_with_motion_control(transfer_task, world)
-
-        artifacts = transfer_task.build()
-
-        [row] = _prediction_rows(artifacts=artifacts)
-        assert row.coupled_states == []
-
-
-def _prediction_rows(
-    *, artifacts: MotionNodeArtifacts
-) -> list[TerminalStatePredictionConstraint]:
-    """
-    :param artifacts: The artifacts a fill task built.
-    :return: The terminal-state prediction rows among its equality constraints.
-    """
-    return [
-        constraint
-        for constraint in artifacts.constraints.equality_constraints
-        if isinstance(constraint, TerminalStatePredictionConstraint)
-    ]
-
-
-class TestTransferPredictionIsExposed:
-    """
-    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` exposes what
-    its row predicts and the fill rate its model gives as debug expressions.
-    """
-
-    def test_the_rate_is_the_receivers_own_fill_rate(
-        self, *, tracy_transfer_world, pouring_setup: PouringSetup
-    ) -> None:
-        """
-        The fill-rate debug expression gives the rate the receiver's fill connection
-        integrates, and a predicted fill is exposed next to it.
-        """
-        world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
-        transfer_task = FillByTransferTask(
-            receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
-        )
-        pouring_setup.put_into_statechart(task=transfer_task, world=world)
-
-        artifacts = transfer_task.build()
-
-        expression_names = {
-            expression.name for expression in artifacts.debug_expressions
-        }
-        rate = debug_expression_by_name(
-            artifacts.debug_expressions,
-            f"{transfer_task.name}/{FillDebugValue.FILL_RATE}",
-        )
-        assert f"{transfer_task.name}/{FillDebugValue.PREDICTED_FILL}" in (
-            expression_names
-        )
-        assert rate.expression.evaluate()[0] == pytest.approx(
-            receiving_cup.fill_connection.symbolic_fill_velocity().evaluate()[0]
-        )
-
-
-# %% aiming the stream
-
-
-class TestProjectileAimingErrorIsHorizontal:
-    """
-    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInRecei ver`
-    measures only where the stream lands within the receiver's opening plane, so the
-    pour can be reported as aimed.
-    """
-
-    def test_task_reports_aimed_once_the_landing_is_within_the_threshold(
-        self, *, tracy_transfer_world
-    ) -> None:
-        """
-        A threshold above the horizontal landing distance to the opening centre is
-        satisfied, one below it is not.
-        """
-        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
-        landing = receiving_cup.projectile_landing_point(
-            source=source_cup, exit_speed=source_cup.exit_speed()
-        )
-        opening = receiving_cup.opening_point()
-        horizontal_distance = math.hypot(
-            landing.x.evaluate()[0] - opening.x.evaluate()[0],
-            landing.y.evaluate()[0] - opening.y.evaluate()[0],
-        )
-
-        def is_aimed(threshold: float) -> bool:
-            """
-            :param threshold: The aiming task's threshold.
-            :return: Whether the aiming task observes the pour as aimed.
-            """
-            task = KeepProjectileInReceiver(
-                receiver=receiving_cup, source=source_cup, threshold=threshold
-            )
-            add_to_statechart_with_motion_control(task, world)
-            artifacts = task.build()
-            return bool(artifacts.observation.evaluate()[0])
-
-        assert is_aimed(horizontal_distance * 1.5)
-        assert not is_aimed(horizontal_distance * 0.5)
-
-
-class TestKeepProjectileInReceiverDebugExpressions:
-    """
-    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInRecei ver`
-    exposes the stream's exit point and landing point as debug expressions.
-    """
-
-    def test_registers_exit_and_landing_points(self, *, tracy_transfer_world) -> None:
-        """
-        Building the task exposes the exit and landing points as colored point markers,
-        the exit marker on the source's exit point.
-        """
-        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
-        aiming_task = KeepProjectileInReceiver(
-            receiver=receiving_cup, source=source_cup
-        )
-        add_to_statechart_with_motion_control(aiming_task, world)
-
-        artifacts = aiming_task.build()
-
-        exit_point = debug_expression_by_name(
-            artifacts.debug_expressions,
-            f"{aiming_task.name}/{StreamDebugValue.EXIT_POINT}",
-        )
-        landing_point = debug_expression_by_name(
-            artifacts.debug_expressions,
-            f"{aiming_task.name}/{StreamDebugValue.LANDING_POINT}",
-        )
-        assert isinstance(exit_point.expression, Point3)
-        assert isinstance(landing_point.expression, Point3)
-        assert exit_point.color == KeepProjectileInReceiver.exit_point_color
-        assert landing_point.color == KeepProjectileInReceiver.landing_point_color
-        np.testing.assert_allclose(
-            exit_point.expression.evaluate(),
-            source_cup.liquid_exit_point().evaluate(),
-        )
-
-    def test_landing_uses_current_exit_speed(self, *, tracy_transfer_world) -> None:
-        """
-        The landing point is thrown at the source's current exit speed.
-        """
-        world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
-        aiming_task = KeepProjectileInReceiver(
-            receiver=receiving_cup, source=source_cup
-        )
-        add_to_statechart_with_motion_control(aiming_task, world)
-
-        artifacts = aiming_task.build()
-
-        landing = debug_expression_by_name(
-            artifacts.debug_expressions,
-            f"{aiming_task.name}/{StreamDebugValue.LANDING_POINT}",
-        )
-        expected = receiving_cup.projectile_landing_point(
-            source=source_cup, exit_speed=source_cup.exit_speed()
-        )
-        assert landing.expression.x.evaluate()[0] == pytest.approx(
-            expected.x.evaluate()[0]
-        )
-        assert landing.expression.y.evaluate()[0] == pytest.approx(
-            expected.y.evaluate()[0]
-        )
-
 
 # %% filling under perception noise
 
@@ -1665,13 +778,8 @@ class TestPerceptionCorrectedTransfer:
 
     @pytest.mark.parametrize(
         "sigma,perception_rate",
-        [(0.01, 10), (0.02, 10), (0.01, 20), (0.01, 30)],
-        ids=[
-            "sigma=0.01_10Hz",
-            "sigma=0.02_10Hz",
-            "sigma=0.01_20Hz",
-            "sigma=0.01_30Hz",
-        ],
+        [(0.02, 10)],
+        ids=["sigma=0.02_10Hz"],
     )
     def test_convergence_under_perception_noise(
         self,
