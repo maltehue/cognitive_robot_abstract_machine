@@ -1649,20 +1649,18 @@ class LiquidSource(ABC):
         self, *, world: World, exit_speed: sm.ScalarData
     ) -> Vector3:
         """
-        Liquid leaving over a rim slides off without a vertical launch, so it travels
-        horizontally at the exit speed, towards where the opening faces.
+        Liquid leaving over a rim slides off without a vertical launch, so the exit
+        speed acts along the horizontal part of the opening direction only: the stream
+        is the faster the further the opening leans from vertical.
 
         :param world: The world providing the forward kinematics.
         :param exit_speed: Speed of the liquid leaving the source, in metres per second.
         :return: Symbolic world-frame velocity the departing liquid travels with.
         """
         world_V_opening = self.opening_direction(world=world)
-        horizontal_length = sm.sqrt(
-            world_V_opening.x**2 + world_V_opening.y**2 + self.upright_softening**2
-        )
         return Vector3(
-            x=exit_speed * world_V_opening.x / horizontal_length,
-            y=exit_speed * world_V_opening.y / horizontal_length,
+            x=exit_speed * world_V_opening.x,
+            y=exit_speed * world_V_opening.y,
             z=sm.Scalar(0.0),
             reference_frame=world.root,
         )

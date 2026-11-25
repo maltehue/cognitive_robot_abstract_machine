@@ -321,34 +321,22 @@ class TestOnsetTilt:
 
 class TestDrainRate:
     """The normalized fill falls at the outflow rate constant times the head
-    over the container height, fading out as the container runs empty."""
+    over the container height."""
 
     def test_the_drain_follows_the_closed_form(self, *, cup: PouringCup) -> None:
         """
-        ``ḣ = −k · d / A · (1 − exp(−s · h))`` at a pouring operating point.
+        ``ḣ = −k · d / A`` at a pouring operating point.
         """
         equation = cup.equation()
         head = cup.expected_head(
             lip_offset=equation.lip_offset, tilt=cup.tilt + 0.5, fill=cup.fill
         )
-        remaining_contents = 1 - math.exp(-equation.emptying_sharpness * cup.fill)
 
         assert _drain(
             equation=equation, tilt=cup.tilt + 0.5, fill=cup.fill
         ) == pytest.approx(
-            -equation.outflow_rate_constant
-            * head
-            / cup.container_height
-            * remaining_contents
+            -equation.outflow_rate_constant * head / cup.container_height
         )
-
-    def test_an_empty_container_does_not_drain(self, *, cup: PouringCup) -> None:
-        """Tilted past the onset of an empty container, there is nothing left
-        to pour."""
-        equation = cup.equation()
-        empty_onset = float(equation.onset_tilt(fill=0.0).evaluate()[0])
-
-        assert _drain(equation=equation, tilt=empty_onset + 0.2, fill=0.0) == 0.0
 
 
 # %% exit speed

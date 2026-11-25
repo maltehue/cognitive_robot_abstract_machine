@@ -934,10 +934,11 @@ class TestProjectileLandingPoint:
             _horizontal_unit(opening_direction)
         )
 
-    def test_a_tilted_rim_source_launches_at_the_exit_speed(self) -> None:
-        """A tilted source's stream leaves at the exit speed it is given,
-        whatever the tilt, up to the small share the smoothing of the upright
-        pose takes off it."""
+    def test_a_rim_source_launches_at_the_horizontal_share_of_the_exit_speed(
+        self,
+    ) -> None:
+        """The stream's horizontal speed is the exit speed scaled by how far the
+        opening leans from vertical."""
         world, source, _receiver = _build_world(
             source_class=_TiltingContainer, source_axis=Vector3(0, 1, 0)
         )
@@ -948,7 +949,8 @@ class TestProjectileLandingPoint:
             source.liquid_exit_velocity(world=world, exit_speed=exit_speed)
         )
 
-        assert np.linalg.norm(exit_velocity[:2]) == pytest.approx(exit_speed, rel=1e-3)
+        opening_direction = _evaluated_xyz(source.opening_direction(world=world))
+        assert exit_velocity[:2] == pytest.approx(exit_speed * opening_direction[:2])
 
     def test_upright_source_lands_below_its_rim(self):
         """With no tilt the liquid has no horizontal velocity, so it lands
@@ -1551,22 +1553,6 @@ class TestFillLevelIntegrationLimits:
             _step_passive_state(world, 0.05)
 
         assert cup.fill_level == pytest.approx(1.0)
-
-    def test_an_empty_source_gives_the_receiver_nothing(self) -> None:
-        """A source tilted past the angle an empty container starts pouring at
-        has no contents left, so a receiver coupled to it gains nothing."""
-        world, source, receiver = _build_world(
-            source_class=_TiltingContainer,
-            source_axis=Vector3(0, 1, 0),
-            settings=LiquidTransferSettings(
-                height_gate_sharpness=1.0, overlap_gate_sharpness=1.0
-            ),
-        )
-        JointState.from_mapping({source.fill_connection: 0.0}).apply_to(world)
-        empty_onset = source.fill_equation.onset_tilt(fill=0.0).evaluate()[0]
-        _set_source_offset(world, source, empty_onset + 0.2)
-
-        assert receiver.fill_connection.symbolic_fill_velocity().evaluate()[0] == 0.0
 
 
 # %% coupling serialization

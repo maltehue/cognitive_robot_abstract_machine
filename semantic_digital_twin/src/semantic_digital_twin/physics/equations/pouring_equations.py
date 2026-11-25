@@ -253,10 +253,6 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
     """Head the exit speed is computed from at least, in metres, which keeps
     its gradient bounded as the pour starts."""
 
-    emptying_sharpness: float = 100.0
-    """Steepness ``s`` with which the drain fades out as the fill level reaches
-    zero, per unit of normalized fill."""
-
     def __post_init__(self) -> None:
         """Places the lip at the container's wall where no lip offset is
         given."""
@@ -278,7 +274,6 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
             lip_offset=self.lip_offset,
             repose_angle=self.repose_angle,
             minimum_head=self.minimum_head,
-            emptying_sharpness=self.emptying_sharpness,
             gate=gate,
         )
 
@@ -319,16 +314,12 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
     def symbolic_velocity(self, *, context: FillContext) -> Scalar:
         """
         :param context: The symbolic tilt and fill level.
-        :return: Symbolic rate of the normalized fill level, zero once it is empty.
+        :return: Symbolic rate of the normalized fill level.
         """
-        remaining_contents = 1 - sm.exp(
-            -self.emptying_sharpness * context.fill_position
-        )
         return (
             -self.outflow_rate_constant
             * self.head_above_lip(context=context)
             / self.container_height
-            * remaining_contents
         )
 
 
@@ -362,7 +353,6 @@ class GatedArticulatedPouringEquation(ArticulatedPouringEquation):
             lip_offset=self.lip_offset,
             repose_angle=self.repose_angle,
             minimum_head=self.minimum_head,
-            emptying_sharpness=self.emptying_sharpness,
         )
 
 
