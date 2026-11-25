@@ -34,7 +34,9 @@ import semantic_digital_twin.reasoning.world_rdr.rules
 from semantic_digital_twin.physics.equations.pouring_equations import (
     RectangularContainerGeometry,
 )
-from semantic_digital_twin.world_description.connections import CompiledFillVelocity
+from semantic_digital_twin.world_description.liquid_connection import (
+    CompiledFillVelocity,
+)
 from semantic_digital_twin.semantic_annotations.position_descriptions import (
     SemanticDirection,
 )

@@ -24,64 +24,6 @@ if TYPE_CHECKING:
     from giskardpy.qp.qp_controller_config import QPControllerConfig
 
 
-def _geometric_series(*, base: Scalar, n: int) -> Scalar:
-    """
-    :param base: Symbolic base value λ.
-    :param n: Highest power (inclusive); a negative value yields an empty sum of zero.
-    :return: Symbolic ``1 + base + base² + … + base^n``.
-    """
-    power = sm.Scalar(1.0)
-    total = sm.Scalar(0.0)
-    for _ in range(n + 1):
-        total = total + power
-        power = power * base
-    return total
-
-
-def _compute_power(*, base: Scalar, n: int) -> Scalar:
-    """
-    :param base: Symbolic base value.
-    :param n: Non-negative integer exponent.
-    :return: Symbolic ``base^n``.
-    """
-    result = sm.Scalar(1.0)
-    for _ in range(n):
-        result = result * base
-    return result
-
-
-def window_normalized_weights(
-    *,
-    weights: list[Scalar],
-    prediction_steps: int,
-    minimum_weight_sum: float = 1e-9,
-) -> list[Scalar]:
-    """Rescales lookahead weights so their sum has the magnitude
-    ``prediction_steps``, keeping each weight's sign, which keeps the row at
-    the scale of the reactive integral row.
-
-    :param weights: Lookahead weights from :meth:`LinearizedScalarStateModel.lookahead_weights`.
-    :param prediction_steps: Number of predicted state steps the sum's magnitude is scaled to.
-    :param minimum_weight_sum: Smallest magnitude of the weight sum that is still rescaled;
-        weights summing to less are kept as they are.
-    :return: The rescaled weights.
-    """
-    total = sm.Scalar(0.0)
-    for weight in weights:
-        total = total + weight
-    window = sm.Scalar(float(prediction_steps))
-    magnitude = abs(total)
-    return [
-        sm.if_less(
-            magnitude,
-            sm.Scalar(minimum_weight_sum),
-            weight,
-            weight * window / magnitude,
-        )
-        for weight in weights
-    ]
-
-
 @dataclass(kw_only=True)
 class LinearizedScalarStateModel:
     """
@@ -91,22 +33,32 @@ class LinearizedScalarStateModel:
     """
 
     state_value: Scalar
-    """Current state value x₀ (passive DOF position)."""
+    """
+    Current state value x₀ (passive DOF position).
+    """
 
     state_velocity: Scalar
     """Current ODE rate f₀ = f(x₀, q₀)."""
 
     state_sensitivity: Scalar
-    """Partial derivative ∂f/∂x at the operating point."""
+    """
+    Partial derivative ∂f/∂x at the operating point.
+    """
 
     time_step: float
-    """MPC discretization step dt in seconds."""
+    """
+    MPC discretization step dt in seconds.
+    """
 
     control_horizon: int
-    """Number of velocity decision steps M over which commands are applied."""
+    """
+    Number of velocity decision steps M over which commands are applied.
+    """
 
     prediction_steps: int
-    """Number of state steps N the terminal state is predicted over."""
+    """
+    Number of state steps N the terminal state is predicted over.
+    """
 
     @property
     def decay(self) -> Scalar:
@@ -118,8 +70,8 @@ class LinearizedScalarStateModel:
         :return: The predicted terminal state with the joints held at their current
             positions; the state keeps evolving at the held control.
         """
-        decay_to_horizon = _compute_power(base=self.decay, n=self.prediction_steps)
-        series = _geometric_series(base=self.decay, n=self.prediction_steps - 1)
+        decay_to_horizon = self._decay_power(exponent=self.prediction_steps)
+        series = self._decay_series(highest_power=self.prediction_steps - 1)
         return decay_to_horizon * self.state_value + series * sm.Scalar(
             self.time_step
         ) * (self.state_velocity - self.state_sensitivity * self.state_value)
@@ -131,22 +83,93 @@ class LinearizedScalarStateModel:
             no state step follows has weight zero.
         """
         return [
-            _geometric_series(base=self.decay, n=self.prediction_steps - 2 - block)
+            self._decay_series(highest_power=self.prediction_steps - 2 - block)
             for block in range(self.control_horizon)
         ]
+
+    def normalized_lookahead_weights(self) -> list[Scalar]:
+        """
+        :return: The :meth:`lookahead_weights`, rescaled to the prediction window by
+            :meth:`window_normalized_weights`.
+        """
+        return self.window_normalized_weights(
+            weights=self.lookahead_weights(), prediction_steps=self.prediction_steps
+        )
+
+    @staticmethod
+    def window_normalized_weights(
+        *,
+        weights: list[Scalar],
+        prediction_steps: int,
+        minimum_weight_sum: float = 1e-9,
+    ) -> list[Scalar]:
+        """
+        Rescale lookahead weights so their sum has the magnitude ``prediction_steps``,
+        keeping each weight's sign, which keeps the row at the scale of the reactive
+        integral row.
+
+        :param weights: Lookahead weights from :meth:`lookahead_weights`.
+        :param prediction_steps: Number of predicted state steps the sum's magnitude is
+            scaled to.
+        :param minimum_weight_sum: Smallest magnitude of the weight sum that is still
+            rescaled; weights summing to less are kept as they are.
+        :return: The rescaled weights.
+        """
+        total = sm.Scalar(0.0)
+        for weight in weights:
+            total = total + weight
+        window = sm.Scalar(float(prediction_steps))
+        magnitude = abs(total)
+        return [
+            sm.if_less(
+                magnitude,
+                sm.Scalar(minimum_weight_sum),
+                weight,
+                weight * window / magnitude,
+            )
+            for weight in weights
+        ]
+
+    def _decay_series(self, *, highest_power: int) -> Scalar:
+        """
+        :param highest_power: Highest power of the decay, inclusive; a negative value
+            gives the empty sum zero.
+        :return: Symbolic ``1 + λ + λ² + … + λ^highest_power``.
+        """
+        power = sm.Scalar(1.0)
+        total = sm.Scalar(0.0)
+        for _ in range(highest_power + 1):
+            total = total + power
+            power = power * self.decay
+        return total
+
+    def _decay_power(self, *, exponent: int) -> Scalar:
+        """
+        :param exponent: Non-negative integer exponent.
+        :return: Symbolic ``λ^exponent``.
+        """
+        result = sm.Scalar(1.0)
+        for _ in range(exponent):
+            result = result * self.decay
+        return result
 
 
 @dataclass(kw_only=True)
 class CoupledState:
-    """A passive state the predicted state's rate depends on, evolving by its
-    own rate while the joints are held."""
+    """
+    A passive state the predicted state's rate depends on, evolving by its own rate
+    while the joints are held.
+    """
 
     variable: FloatVariable
-    """Symbolic current value of the coupled state (passive DOF position
-    variable)."""
+    """
+    Symbolic current value of the coupled state (passive DOF position variable).
+    """
 
     velocity: Scalar
-    """Symbolic rate of the coupled state."""
+    """
+    Symbolic rate of the coupled state.
+    """
 
 
 @dataclass(kw_only=True)
@@ -158,16 +181,24 @@ class LinearizedCoupledFreeResponse:
     """
 
     state_variables: list[FloatVariable]
-    """Current values; the predicted state first, then its coupled states."""
+    """
+    Current values; the predicted state first, then its coupled states.
+    """
 
     state_velocities: list[Scalar]
-    """Rates, in the order of :attr:`state_variables`."""
+    """
+    Rates, in the order of :attr:`state_variables`.
+    """
 
     time_step: float
-    """MPC discretization step dt in seconds."""
+    """
+    MPC discretization step dt in seconds.
+    """
 
     prediction_steps: int
-    """Number of state steps the terminal value is predicted over."""
+    """
+    Number of state steps the terminal value is predicted over.
+    """
 
     def terminal_value(self) -> Scalar:
         """
@@ -192,36 +223,48 @@ class LinearizedCoupledFreeResponse:
 
 @dataclass(kw_only=True)
 class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
-    """Equality constraint on the value a scalar state is predicted to reach at
-    the end of a prediction window.
+    """
+    Equality constraint on the value a scalar state is predicted to reach at the end of
+    a prediction window.
 
     Its ``expression`` is the state rate ``f(x₀, q₀)`` the
     :class:`TerminalStatePredictionStrategy` linearizes.
     """
 
-    state_variable: FloatVariable = field(kw_only=True)
-    """Symbolic current state x₀, the position variable of a passive degree of
-    freedom; the rate is differentiated with respect to it."""
+    state_variable: FloatVariable
+    """
+    Symbolic current state x₀, the position variable of a passive degree of freedom; the
+    rate is differentiated with respect to it.
+    """
 
-    goal_value: float = field(kw_only=True)
-    """Target state value at the end of the prediction window."""
+    goal_value: float
+    """
+    Target state value at the end of the prediction window.
+    """
 
-    prediction_duration: float | None = field(default=None, kw_only=True)
-    """Length of the prediction window in seconds; ``None`` predicts to the end
-    of the control horizon."""
+    prediction_duration: float | None = None
+    """
+    Length of the prediction window in seconds; ``None`` predicts to the end of the
+    control horizon.
+    """
 
-    stopping_velocity: float | None = field(default=None, kw_only=True)
-    """How fast the state may be brought back against the change it makes on
-    its own, in state units per second; ``None`` uses the cruise velocity."""
+    stopping_velocity: float | None = None
+    """
+    How fast the state may be brought back against the change it makes on its own, in
+    state units per second; ``None`` uses the cruise velocity.
+    """
 
-    coupled_states: list[CoupledState] = field(default_factory=list, kw_only=True)
-    """Passive states the rate depends on that keep evolving while the joints
-    are held; empty holds every other state at its current value over the
-    window."""
+    coupled_states: list[CoupledState] = field(default_factory=list)
+    """
+    Passive states the rate depends on that keep evolving while the joints are held;
+    empty holds every other state at its current value over the window.
+    """
 
-    bound: Scalar = field(default_factory=lambda: sm.Scalar(0.0), kw_only=True)
-    """Unused inherited equality bound; the strategy computes the terminal
-    bound ``goal − x_free`` instead."""
+    bound: Scalar = field(default_factory=lambda: sm.Scalar(0.0))
+    """
+    Unused inherited equality bound; the strategy computes the terminal bound ``goal −
+    x_free`` instead.
+    """
 
     def prediction_steps(self, *, config: QPControllerConfig) -> int:
         """
@@ -272,27 +315,39 @@ class TerminalStatePredictionConstraint(GiskardEqualityConstraint):
 
 @dataclass(kw_only=True)
 class TerminalStatePredictionRow:
-    """The QP row of one terminal-state constraint in one controller."""
+    """
+    The QP row of one terminal-state constraint in one controller.
+    """
 
     constraint: TerminalStatePredictionConstraint
-    """The constraint the row enforces."""
+    """
+    The constraint the row enforces.
+    """
 
     config: QPControllerConfig
-    """The controller the row is built for."""
+    """
+    The controller the row is built for.
+    """
 
     @cached_property
     def prediction_steps(self) -> int:
-        """Number of state steps the constraint's prediction window spans."""
+        """
+        Number of state steps the constraint's prediction window spans.
+        """
         return self.constraint.prediction_steps(config=self.config)
 
     @cached_property
     def state_model(self) -> LinearizedScalarStateModel:
-        """The constraint's ODE linearized at the current operating point."""
+        """
+        The constraint's ODE linearized at the current operating point.
+        """
         return self.constraint.state_model(config=self.config)
 
     @property
     def window_duration(self) -> float:
-        """Length of the prediction window in seconds."""
+        """
+        Length of the prediction window in seconds.
+        """
         return self.config.control_time_step.total_seconds() * self.prediction_steps
 
     def matrix(self, *, position_variables: Vector, jerk_columns: int) -> Matrix:
@@ -300,7 +355,8 @@ class TerminalStatePredictionRow:
         :param position_variables: The joint position variables of the velocity columns.
         :param jerk_columns: Number of jerk columns, padded with zeros.
         :return: The row: ``dt·∂f/∂q`` per velocity block, scaled by the block's
-            :func:`window_normalized_weights` lookahead weight.
+            :meth:`LinearizedScalarStateModel.normalized_lookahead_weights` lookahead
+            weight.
         """
         jacobian = (
             sm.Vector([self.constraint.expression]).jacobian(
@@ -308,10 +364,7 @@ class TerminalStatePredictionRow:
             )
             * self.config.control_time_step.total_seconds()
         )
-        weights = window_normalized_weights(
-            weights=self.state_model.lookahead_weights(),
-            prediction_steps=self.prediction_steps,
-        )
+        weights = self.state_model.normalized_lookahead_weights()
         return sm.Matrix.hstack(
             list_of_matrices=[jacobian * weight for weight in weights]
             + [sm.Matrix.zeros(rows=jacobian.shape[0], columns=jerk_columns)]
@@ -361,19 +414,21 @@ class TerminalStatePredictionRow:
 
 @dataclass(kw_only=True)
 class TerminalStatePredictionStrategy(IntegralStrategy):
-    """Enforces each terminal-state constraint of its block by its own
+    """
+    Enforces each terminal-state constraint of its block by its own
     :class:`TerminalStatePredictionRow`.
 
-    Where the control sensitivity ``∂f/∂q`` vanishes the row vanishes
-    and the state evolves on its own.
+    Where the control sensitivity ``∂f/∂q`` vanishes the row vanishes and the state
+    evolves on its own.
     """
 
     @cached_property
     def _rows(self) -> list[TerminalStatePredictionRow]:
-        """The row of each constraint, in constraint order.
+        """
+        The row of each constraint, in constraint order.
 
-        :raises ConstraintTypeMismatchError: If a constraint is not a
-            terminal-state constraint.
+        :raises ConstraintTypeMismatchError: If a constraint is not a terminal-state
+            constraint.
         """
         self._require_constraint_type(expected=TerminalStatePredictionConstraint)
         return [

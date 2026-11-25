@@ -24,7 +24,7 @@ from semantic_digital_twin.physics.equations.pouring_equations import (
     GatedInflowEquation,
 )
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel, LiquidSource
-from semantic_digital_twin.world_description.connections import LiquidConnection
+from semantic_digital_twin.world_description.liquid_connection import LiquidConnection
 from semantic_digital_twin.world_description.geometry import Color
 
 from giskardpy.motion_statechart.context import MotionControlContext
@@ -36,7 +36,6 @@ from giskardpy.motion_statechart.graph_node import (
 )
 from giskardpy.motion_statechart.mixins import (
     HasCruiseVelocityParameter,
-    HasThresholdParameter,
     HasWeightParameter,
 )
 from giskardpy.motion_statechart.tasks.exceptions import (
@@ -302,14 +301,32 @@ class FillByTransferTask(TerminalFillConstraintTask):
             raise MissingInflowEquationError(node=self)
         return fill_connection
 
+    def build_artifacts(self) -> MotionNodeArtifacts:
+        """
+        :return: The artifacts of the base task, with the transfer gate compiled and
+            read once, so the fill row starts from its current value.
+        """
+        self._compile_gate()
+        return super().build_artifacts()
+
+    def _compile_gate(self) -> None:
+        """
+        Compile the receiver's transfer gate and read its current value; a receiver
+        without a gated inflow has no gate to read.
+        """
+        self.fill_connection = self._resolve_fill_connection()
+        inflow_equation = self.fill_connection.inflow_equation
+        if not isinstance(inflow_equation, GatedInflowEquation):
+            return
+        self._compiled_gate = self._compile_against_state(
+            expression=inflow_equation.transfer_gate.product
+        )
+        self._read_gate()
+
     def _fill_velocity(self) -> Scalar:
         inflow_equation = self.fill_connection.inflow_equation
         if not isinstance(inflow_equation, GatedInflowEquation):
             return inflow_equation.symbolic_velocity(context=self.fill_connection)
-        self._compiled_gate = self._compile_against_state(
-            expression=inflow_equation.gate
-        )
-        self._read_gate()
         return self._gate_value * inflow_equation.ungated_velocity(
             context=self.fill_connection
         )

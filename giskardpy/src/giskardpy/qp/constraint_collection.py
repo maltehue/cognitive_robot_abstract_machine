@@ -25,15 +25,15 @@ from giskardpy.qp.constraint import (
     GiskardInequalityConstraint,
     LargeNumber,
 )
-from giskardpy.qp.terminal_state_prediction_strategy import (
-    CoupledState,
-    TerminalStatePredictionConstraint,
-    TerminalStatePredictionStrategy,
-)
 from giskardpy.qp.enforcement_strategy import (
     EnforcementStrategy,
     IntegralStrategy,
     VelocityStrategy,
+)
+from giskardpy.qp.terminal_state_prediction_strategy import (
+    CoupledState,
+    TerminalStatePredictionConstraint,
+    TerminalStatePredictionStrategy,
 )
 
 if TYPE_CHECKING:
@@ -226,30 +226,26 @@ class ConstraintCollection:
         stopping_velocity: float | None = None,
         coupled_states: list[CoupledState] | None = None,
     ) -> TerminalStatePredictionConstraint:
-        """Add a constraint that drives the value a scalar state is predicted
-        to reach at the end of a prediction window toward ``goal_value``, for
-        example a fill level reached by tilting a cup or turning a valve.
+        """
+        Add a constraint that drives the value a scalar state is predicted to reach at
+        the end of a prediction window toward ``goal_value``, for example a fill level
+        reached by tilting a cup or turning a valve.
 
-        :param state_velocity: Symbolic state rate at the current
-            operating point; its jacobian w.r.t. the joint variables
-            drives the prediction.
-        :param state_variable: Symbolic current state, the position
-            variable of a passive degree of freedom.
-        :param goal_value: Target state value at the end of the
-            prediction window.
-        :param quadratic_weight: How expensive it is to violate the
-            constraint.
-        :param cruise_velocity: The rate the state is driven at; it caps
-            the bound and scales the weight.
-        :param name: Name of the constraint, required if a node adds
-            more than one.
-        :param prediction_duration: Length of the prediction window in
-            seconds; the control horizon if not given.
-        :param stopping_velocity: How fast the state may be brought back
-            against the change it makes on its own; the cruise velocity
-            if not given.
-        :param coupled_states: Passive states the rate depends on that
-            keep evolving while the joints are held; none if not given.
+        :param state_velocity: Symbolic state rate at the current operating point; its
+            jacobian w.r.t. the joint variables drives the prediction.
+        :param state_variable: Symbolic current state, the position variable of a
+            passive degree of freedom.
+        :param goal_value: Target state value at the end of the prediction window.
+        :param quadratic_weight: How expensive it is to violate the constraint.
+        :param cruise_velocity: The rate the state is driven at; it caps the bound and
+            scales the weight.
+        :param name: Name of the constraint, required if a node adds more than one.
+        :param prediction_duration: Length of the prediction window in seconds; the
+            control horizon if not given.
+        :param stopping_velocity: How fast the state may be brought back against the
+            change it makes on its own; the cruise velocity if not given.
+        :param coupled_states: Passive states the rate depends on that keep evolving
+            while the joints are held; none if not given.
         :return: The constraint added.
         """
         constraint = TerminalStatePredictionConstraint(

@@ -1,5 +1,6 @@
-"""Exceptions raised by the semantic annotations of the semantic digital
-twin."""
+"""
+Exceptions raised by the semantic annotations of the semantic digital twin.
+"""
 
 from __future__ import annotations
 
@@ -17,11 +18,15 @@ if TYPE_CHECKING:
 
 @dataclass(kw_only=True)
 class MissingFillEquationError(UsageError):
-    """Raised when a liquid transfer is requested from a source that has no
-    outflow physics."""
+    """
+    Raised when a liquid transfer is requested from a source that has no outflow
+    physics.
+    """
 
     source: HasRootBody
-    """The annotation that was supposed to act as the liquid source."""
+    """
+    The annotation that was supposed to act as the liquid source.
+    """
 
     def error_message(self) -> str:
         return (
@@ -35,11 +40,15 @@ class MissingFillEquationError(UsageError):
 
 @dataclass(kw_only=True)
 class SourceAlreadyCoupledError(UsageError):
-    """Raised when a liquid source whose outflow is already coupled to a
-    receiver is coupled again."""
+    """
+    Raised when a liquid source whose outflow is already coupled to a receiver is
+    coupled again.
+    """
 
     source: HasRootBody
-    """The annotation acting as the liquid source that is already coupled."""
+    """
+    The annotation acting as the liquid source that is already coupled.
+    """
 
     def error_message(self) -> str:
         return (
@@ -48,16 +57,20 @@ class SourceAlreadyCoupledError(UsageError):
         )
 
     def suggest_correction(self) -> str:
-        return "couple each source to a single receiver, or re-initialize the source's fill level first."
+        return "couple each source to a single receiver."
 
 
 @dataclass(kw_only=True)
 class ReceiverNotInitializedError(UsageError):
-    """Raised when a container is asked to receive liquid before its fill level
-    was initialized."""
+    """
+    Raised when a container is asked to receive liquid before its fill level was
+    initialized.
+    """
 
     receiver: HasRootBody
-    """The annotation that was supposed to receive the liquid."""
+    """
+    The annotation that was supposed to receive the liquid.
+    """
 
     def error_message(self) -> str:
         return (
@@ -71,11 +84,15 @@ class ReceiverNotInitializedError(UsageError):
 
 @dataclass(kw_only=True)
 class ReceiverAlreadyCoupledError(UsageError):
-    """Raised when a container whose inflow is already coupled to a source is
-    coupled to another source."""
+    """
+    Raised when a container whose inflow is already coupled to a source is coupled to
+    another source.
+    """
 
     receiver: HasRootBody
-    """The annotation acting as the liquid receiver that is already coupled."""
+    """
+    The annotation acting as the liquid receiver that is already coupled.
+    """
 
     def error_message(self) -> str:
         return (
@@ -85,19 +102,19 @@ class ReceiverAlreadyCoupledError(UsageError):
         )
 
     def suggest_correction(self) -> str:
-        return (
-            "couple each receiver to a single source, or replace the existing coupling "
-            "via receiver.recouple_outflow_from(...)."
-        )
+        return "couple each receiver to a single source."
 
 
 @dataclass(kw_only=True)
 class FillLevelAlreadyInitializedError(UsageError):
-    """Raised when a fill level is initialized on a container that already
-    carries one."""
+    """
+    Raised when a fill level is initialized on a container that already carries one.
+    """
 
     container: HasRootBody
-    """The annotation whose fill level is already initialized."""
+    """
+    The annotation whose fill level is already initialized.
+    """
 
     def error_message(self) -> str:
         return (

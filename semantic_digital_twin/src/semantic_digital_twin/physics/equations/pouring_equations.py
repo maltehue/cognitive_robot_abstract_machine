@@ -1,4 +1,6 @@
-"""Fill-level dynamics of containers that pour liquid out and receive it."""
+"""
+Fill-level dynamics of containers that pour liquid out and receive it.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ from krrood.adapters.json_serializer import (
     SubclassJSONSerializer,
 )
 from krrood.patterns.classproperty import classproperty
-from krrood.symbolic_math.symbolic_math import FloatVariable, Scalar
+from krrood.symbolic_math.symbolic_math import Scalar
 from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix, Vector3
 
 from semantic_digital_twin.physics.equations.differential_equation import (
@@ -28,19 +30,24 @@ from semantic_digital_twin.physics.exceptions import (
 
 
 class FillContext(ABC):
-    """The symbolic tilt and fill level of a container that a fill equation is
-    evaluated in."""
+    """
+    The symbolic tilt and fill level of a container that a fill equation is evaluated
+    in.
+    """
 
     @property
     @abstractmethod
     def tilt_expression(self) -> Scalar:
-        """Symbolic tilt angle of the container from the vertical, in
-        radians."""
+        """
+        Symbolic tilt angle of the container from the vertical, in radians.
+        """
 
     @property
     @abstractmethod
     def fill_position(self) -> Scalar:
-        """Symbolic normalized fill level of the container in ``[0, 1]``."""
+        """
+        Symbolic normalized fill level of the container in ``[0, 1]``.
+        """
 
     @staticmethod
     def tilt_from_vertical(
@@ -58,14 +65,20 @@ class FillContext(ABC):
 
 @dataclass(kw_only=True)
 class SymbolicFillContext(FillContext):
-    """A fill context made of given tilt and fill expressions, for callers that
-    hold no fill connection."""
+    """
+    A fill context made of given tilt and fill expressions, for callers that hold no
+    fill connection.
+    """
 
     tilt: Scalar
-    """Symbolic tilt angle of the container from the vertical, in radians."""
+    """
+    Symbolic tilt angle of the container from the vertical, in radians.
+    """
 
     fill: Scalar
-    """Symbolic normalized fill level of the container in ``[0, 1]``."""
+    """
+    Symbolic normalized fill level of the container in ``[0, 1]``.
+    """
 
     @property
     def tilt_expression(self) -> Scalar:
@@ -87,22 +100,28 @@ class SymbolicFillContext(FillContext):
 
 @dataclass(kw_only=True)
 class RectangularContainerGeometry:
-    """Extents of the 2-D rectangular container the fill equations model; the
-    container tilts about its vertical centre axis.
+    """
+    Extents of the 2-D rectangular container the fill equations model; the container
+    tilts about its vertical centre axis.
 
     .. note:: This mixin carries no persistence of its own; the equations inheriting it
         map its fields within their own single-rooted DAO hierarchy.
     """
 
     container_height: float
-    """Inner height of the rectangular container, in metres."""
+    """
+    Inner height of the rectangular container, in metres.
+    """
 
     container_width: float
-    """Inner width of the rectangular container, in metres."""
+    """
+    Inner width of the rectangular container, in metres.
+    """
 
     capacity: float | None = None
-    """Volume the container holds at full fill, in cubic metres; converts a
-    normalized fill rate to a volume rate.
+    """
+    Volume the container holds at full fill, in cubic metres; converts a normalized fill
+    rate to a volume rate.
 
     Without one, the box of the width squared times the height.
     """
@@ -128,26 +147,16 @@ class RectangularContainerGeometry:
 
 
 @dataclass(kw_only=True)
-class FillVelocityPartialDerivatives:
-    """The partial derivatives of a fill velocity at one operating point."""
-
-    tilt: Scalar
-    """Derivative of the fill velocity with respect to the tilt angle."""
-
-    fill: Scalar
-    """Derivative of the fill velocity with respect to the normalized fill
-    level."""
-
-
-@dataclass(kw_only=True)
 class FillEquation(DifferentialEquation):
-    """First-order differential equation of a container's normalized fill
-    level."""
+    """
+    First-order differential equation of a container's normalized fill level.
+    """
 
     @classproperty
     def standard_gravity(cls) -> float:
-        """Gravitational acceleration liquid falls with, in metres per second
-        squared."""
+        """
+        Gravitational acceleration liquid falls with, in metres per second squared.
+        """
         return 9.81
 
     @abstractmethod
@@ -160,15 +169,17 @@ class FillEquation(DifferentialEquation):
 
 @dataclass(kw_only=True)
 class PouringEquation(SubclassJSONSerializer, FillEquation):
-    """Fill equation of a container draining as it tilts.
+    """
+    Fill equation of a container draining as it tilts.
 
     It serializes without any transfer gate: a gate is bound to the world it was built
     in, so the receiving world gates the drain again.
     """
 
     outflow_rate_constant: float = 1.0
-    """Proportionality constant scaling the discharge gap to the normalized
-    drain rate."""
+    """
+    Proportionality constant scaling the discharge gap to the normalized drain rate.
+    """
 
     @abstractmethod
     def gate_drain(self, *, gate: Scalar) -> PouringEquation:
@@ -182,34 +193,6 @@ class PouringEquation(SubclassJSONSerializer, FillEquation):
         :return: This drain without any transfer gate; an ungated drain returns itself.
         """
         return self
-
-    def fill_velocity_partial_derivatives(
-        self, *, tilt: Scalar, fill: Scalar
-    ) -> FillVelocityPartialDerivatives:
-        """
-        :param tilt: Symbolic tilt angle of the operating point.
-        :param fill: Symbolic normalized fill level of the operating point.
-        :return: The partial derivatives of :meth:`symbolic_velocity` at ``(tilt, fill)``.
-        """
-        tilt_variable = FloatVariable("partial_derivative_tilt")
-        fill_variable = FloatVariable("partial_derivative_fill")
-        velocity = self.symbolic_velocity(
-            context=SymbolicFillContext(tilt=tilt_variable, fill=fill_variable)
-        )
-
-        def at_operating_point(variable: FloatVariable) -> Scalar:
-            """
-            :return: The derivative along ``variable`` at the operating point.
-            """
-            return velocity.jacobian(variables=[variable])[0, 0].substitute(
-                old_variables=[tilt_variable, fill_variable],
-                new_variables=[tilt, fill],
-            )
-
-        return FillVelocityPartialDerivatives(
-            tilt=at_operating_point(tilt_variable),
-            fill=at_operating_point(fill_variable),
-        )
 
     def to_json(self, **kwargs: Any) -> dict[str, Any]:
         """
@@ -234,31 +217,34 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
         L(h)    = √((A · (1 − h))² + r²)
         φ(h)    = atan2(A · (1 − h), r) + repose angle
         d(α, h) = max(0, L(h) · sin(α − φ(h)))
-        ḣ       = −k · d(α, h) / A · (1 − exp(−s · h))
+        ḣ       = −k · d(α, h) / A
     """
 
     discharge_coefficient: float = 0.3
-    """Coefficient scaling the Torricelli exit speed to a rim pour, whose thin
-    film over the lip leaves far slower than an orifice's ``0.6``-``1.0``."""
-
-    lip_offset: float | None = None
-    """Horizontal distance of the pouring lip from the tilt axis, in metres;
-    half the container width when not given."""
+    """
+    Coefficient scaling the Torricelli exit speed to a rim pour, whose thin film over
+    the lip leaves far slower than an orifice's ``0.6``-``1.0``.
+    """
 
     repose_angle: float = 0.0
-    """Angle the contents' surface holds before it slumps, in radians; zero for
-    a liquid, positive for solids that stand in a heap."""
+    """
+    Angle the contents' surface holds before it slumps, in radians; zero for a liquid,
+    positive for solids that stand in a heap.
+    """
 
     minimum_head: float = 0.01
-    """Head the exit speed is computed from at least, in metres, which keeps
-    its gradient bounded as the pour starts."""
+    """
+    Head the exit speed is computed from at least, in metres, which keeps its gradient
+    bounded as the pour starts.
+    """
 
-    def __post_init__(self) -> None:
-        """Places the lip at the container's wall where no lip offset is
-        given."""
-        super().__post_init__()
-        if self.lip_offset is None:
-            self.lip_offset = self.container_width / 2
+    @property
+    def lip_offset(self) -> float:
+        """
+        Horizontal distance of the pouring lip, the container's wall, from the tilt
+        axis, in metres.
+        """
+        return self.container_width / 2
 
     def gate_drain(self, *, gate: Scalar) -> GatedArticulatedPouringEquation:
         """
@@ -271,7 +257,6 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
             capacity=self.capacity,
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
-            lip_offset=self.lip_offset,
             repose_angle=self.repose_angle,
             minimum_head=self.minimum_head,
             gate=gate,
@@ -325,13 +310,15 @@ class ArticulatedPouringEquation(RectangularContainerGeometry, PouringEquation):
 
 @dataclass(kw_only=True)
 class GatedArticulatedPouringEquation(ArticulatedPouringEquation):
-    """Articulated drain that flows only while a differentiable gate is open,
-    i.e. while the stream lands in the receiver it pours into, so the transfer
-    spills nothing."""
+    """
+    Articulated drain that flows only while a differentiable gate is open, i.e. while
+    the stream lands in the receiver it pours into, so the transfer spills nothing.
+    """
 
     gate: Scalar = field(default_factory=lambda: sm.Scalar(1.0))
-    """Symbolic transfer gate in ``[0, 1]``; ``1`` while the stream lands in
-    the receiver."""
+    """
+    Symbolic transfer gate in ``[0, 1]``; ``1`` while the stream lands in the receiver.
+    """
 
     def symbolic_velocity(self, *, context: FillContext) -> Scalar:
         """
@@ -350,7 +337,6 @@ class GatedArticulatedPouringEquation(ArticulatedPouringEquation):
             capacity=self.capacity,
             outflow_rate_constant=self.outflow_rate_constant,
             discharge_coefficient=self.discharge_coefficient,
-            lip_offset=self.lip_offset,
             repose_angle=self.repose_angle,
             minimum_head=self.minimum_head,
         )
@@ -358,12 +344,15 @@ class GatedArticulatedPouringEquation(ArticulatedPouringEquation):
 
 @dataclass(kw_only=True)
 class InflowEquation(RectangularContainerGeometry, FillEquation):
-    """Fill equation of a container receiving liquid, converting an inflow
-    volume rate to a normalized fill rate by its capacity."""
+    """
+    Fill equation of a container receiving liquid, converting an inflow volume rate to a
+    normalized fill rate by its capacity.
+    """
 
     inflow: Scalar = field(default_factory=lambda: sm.Scalar(0.0))
-    """The symbolic inflow volume rate entering this container, in cubic metres
-    per second."""
+    """
+    The symbolic inflow volume rate entering this container, in cubic metres per second.
+    """
 
     def symbolic_velocity(self, *, context: FillContext) -> Scalar:
         """
@@ -379,16 +368,20 @@ class InflowEquation(RectangularContainerGeometry, FillEquation):
 
 @dataclass(kw_only=True)
 class TransferGate:
-    """The two independent factors of the geometric transfer gate, each held by
-    a different positioning task."""
+    """
+    The two independent factors of the geometric transfer gate, each held by a different
+    positioning task.
+    """
 
     height: Scalar
-    """Vertical factor, closing as the source lip sinks toward the receiver's
-    opening."""
+    """
+    Vertical factor, closing as the source lip sinks toward the receiver's opening.
+    """
 
     overlap: Scalar
-    """Horizontal factor, closing as the stream lands further from the
-    opening."""
+    """
+    Horizontal factor, closing as the stream lands further from the opening.
+    """
 
     @property
     def product(self) -> Scalar:
@@ -400,36 +393,33 @@ class TransferGate:
 
 @dataclass(kw_only=True)
 class GatedInflowEquation(InflowEquation):
-    """Inflow of a cup-to-cup transfer: :attr:`inflow` carries the source's
-    drain as a volume rate and :attr:`gate` lets it in only while the stream
-    lands in this receiver's opening."""
+    """
+    Inflow of a cup-to-cup transfer: :attr:`inflow` carries the source's drain as a
+    volume rate and :attr:`transfer_gate` lets it in only while the stream lands in this
+    receiver's opening.
+    """
 
     exit_speed: float
-    """Fallback speed of the stream leaving the source, in metres per second,
-    which the landing point uses where the source models no exit speed of its
-    own."""
+    """
+    Fallback speed of the stream leaving the source, in metres per second, which the
+    landing point uses where the source models no exit speed of its own.
+    """
 
-    gate: Scalar = field(default_factory=lambda: sm.Scalar(1.0))
-    """Symbolic transfer gate in ``[0, 1]``; ``1`` while the stream lands in
-    this receiver."""
-
-    height_gate: Scalar = field(default_factory=lambda: sm.Scalar(1.0))
-    """The vertical factor of :attr:`gate`, closing as the source lip sinks
-    toward this receiver's opening."""
-
-    overlap_gate: Scalar = field(default_factory=lambda: sm.Scalar(1.0))
-    """The horizontal factor of :attr:`gate`, closing as the stream lands
-    further from this receiver's opening."""
-
-    source_tilt_expression: Scalar = field(default_factory=lambda: sm.Scalar(0.0))
-    """Symbolic tilt angle of the source whose drain feeds this inflow."""
+    transfer_gate: TransferGate = field(
+        default_factory=lambda: TransferGate(
+            height=sm.Scalar(1.0), overlap=sm.Scalar(1.0)
+        )
+    )
+    """
+    The symbolic transfer gate, open while the stream lands in this receiver.
+    """
 
     def symbolic_velocity(self, *, context: FillContext) -> Scalar:
         """
         :param context: The symbolic tilt and fill level.
         :return: The fill rate scaled by the gate; zero while the gate is closed.
         """
-        return self.gate * self.ungated_velocity(context=context)
+        return self.transfer_gate.product * self.ungated_velocity(context=context)
 
     def ungated_velocity(self, *, context: FillContext) -> Scalar:
         """

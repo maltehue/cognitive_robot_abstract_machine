@@ -1,5 +1,6 @@
-"""Tests of the tasks that pour from a held container or fill one container
-from another."""
+"""
+Tests of the tasks that pour from a held container or fill one container from another.
+"""
 
 from __future__ import annotations
 
@@ -59,8 +60,8 @@ from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     FixedConnection,
-    LiquidConnection,
 )
+from semantic_digital_twin.world_description.liquid_connection import LiquidConnection
 from semantic_digital_twin.world_description.geometry import Box, Mesh, Scale
 from semantic_digital_twin.world_description.kinematic_chain import KinematicChain
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
@@ -79,7 +80,9 @@ from .single_cup_world import PourableContainer, build_single_cup_world
 
 @dataclass(kw_only=True)
 class PouringSetup:
-    """The scene and controller settings the pouring tests share."""
+    """
+    The scene and controller settings the pouring tests share.
+    """
 
     cup_mesh_path: str = field(
         default_factory=lambda: str(
@@ -89,34 +92,49 @@ class PouringSetup:
             / "jeroen_cup.stl"
         )
     )
-    """The mesh of the Jeroen cup the robot pours with."""
+    """
+    The mesh of the Jeroen cup the robot pours with.
+    """
 
     cup_mesh_scale: Scale = field(default_factory=lambda: Scale(1, 1, 1))
-    """Scale of the Jeroen cup mesh."""
+    """
+    Scale of the Jeroen cup mesh.
+    """
 
     table_surface_height: float = 0.9
-    """Height of the table surface in the world, in metres."""
+    """
+    Height of the table surface in the world, in metres.
+    """
 
     target_frequency: int = 80
-    """Control frequency the QP runs at, in Hz."""
+    """
+    Control frequency the QP runs at, in Hz.
+    """
 
     timeout: int = 4000
-    """Most control cycles a pour may take in simulation."""
+    """
+    Most control cycles a pour may take in simulation.
+    """
 
     carry_height: float = 0.3
-    """Height of the left tool above the table when a pour starts, in
-    metres."""
+    """
+    Height of the left tool above the table when a pour starts, in metres.
+    """
 
     carry_side: float = 0.2
-    """Sideways position of the left tool in the world when a pour starts, in
-    metres."""
+    """
+    Sideways position of the left tool in the world when a pour starts, in metres.
+    """
 
     pre_tilt: float = 0.1
-    """Tilt the held cup starts a pour at, in radians."""
+    """
+    Tilt the held cup starts a pour at, in radians.
+    """
 
     bottom_grasp: float = 0.0
-    """Offset of the held cup's base along the left tool's y axis, in
-    metres."""
+    """
+    Offset of the held cup's base along the left tool's y axis, in metres.
+    """
 
     def controller_config(self) -> QPControllerConfig:
         """
@@ -139,8 +157,9 @@ class PouringSetup:
     def put_into_statechart(
         self, *, task: TerminalFillConstraintTask, world: World
     ) -> None:
-        """Put `task` into a statechart of its own with
-        :meth:`controller_config`, so it can be built outside of an executor.
+        """
+        Put `task` into a statechart of its own with :meth:`controller_config`, so it
+        can be built outside of an executor.
 
         :param task: The task to build later.
         :param world: The world the task acts in.
@@ -162,7 +181,8 @@ class PouringSetup:
         )
 
     def move_left_tool_upright(self, *, world: World, left_tool_frame: Body) -> None:
-        """Move Tracy's left tool to the upright carry pose above the table.
+        """
+        Move Tracy's left tool to the upright carry pose above the table.
 
         :param world: The world holding Tracy.
         :param left_tool_frame: Tracy's left tool frame.
@@ -222,7 +242,8 @@ class PouringSetup:
         return cup
 
     def pre_tilt_left_wrist(self, *, world: World) -> None:
-        """Turn Tracy's left wrist by :attr:`pre_tilt`.
+        """
+        Turn Tracy's left wrist by :attr:`pre_tilt`.
 
         :param world: The world holding Tracy.
         """
@@ -234,14 +255,17 @@ class PouringSetup:
 
 @pytest.fixture
 def pouring_setup() -> PouringSetup:
-    """The scene and controller settings the pouring tests share."""
+    """
+    The scene and controller settings the pouring tests share.
+    """
     return PouringSetup()
 
 
 @pytest.fixture
 def world_with_cup() -> tuple[World, PourableContainer]:
-    """World containing a single pourable container with a tilt joint, filled
-    to 100%."""
+    """
+    World containing a single pourable container with a tilt joint, filled to 100%.
+    """
     return build_single_cup_world()
 
 
@@ -249,8 +273,9 @@ def world_with_cup() -> tuple[World, PourableContainer]:
 def tracy_pouring_world(
     tracy_world_copy: World, pouring_setup: PouringSetup
 ) -> tuple[World, Tracy]:
-    """Tracy world with both arms in park position and a Jeroen cup on the
-    table."""
+    """
+    Tracy world with both arms in park position and a Jeroen cup on the table.
+    """
     world = tracy_world_copy
     [tracy] = world.get_semantic_annotations_by_type(Tracy)
 
@@ -278,8 +303,9 @@ def tracy_pouring_world(
 def tracy_transfer_world(
     tracy_pouring_world: tuple[World, Tracy], pouring_setup: PouringSetup
 ) -> tuple[World, PourableContainer, PourableContainer, Body]:
-    """World with a full source cup in Tracy's left gripper, pre-tilted, and an
-    empty receiving cup on the table coupled to it.
+    """
+    World with a full source cup in Tracy's left gripper, pre-tilted, and an empty
+    receiving cup on the table coupled to it.
 
     :returns:``(world, source_cup, receiving_cup, left_tool_frame)``
     """
@@ -324,36 +350,55 @@ def tracy_transfer_world(
 
 @dataclass(kw_only=True)
 class TransferMotion:
-    """A built cup-to-cup transfer motion together with the entities its tasks
-    act on, so the transfer tests share one construction path."""
+    """
+    A built cup-to-cup transfer motion together with the entities its tasks act on, so
+    the transfer tests share one construction path.
+    """
 
     world: World
-    """The world the motion is built against."""
+    """
+    The world the motion is built against.
+    """
 
     source_cup: PourableContainer
-    """The cup being poured from."""
+    """
+    The cup being poured from.
+    """
 
     receiving_cup: PourableContainer
-    """The cup being poured into."""
+    """
+    The cup being poured into.
+    """
 
     transfer_task: FillByTransferTask
-    """The fill-driving task, whose tick hook the clearance recorder wraps."""
+    """
+    The fill-driving task, whose tick hook the clearance recorder wraps.
+    """
 
     aiming_task: KeepProjectileInReceiver
-    """The task keeping the stream landing in the receiver, which the fill task
-    waits for."""
+    """
+    The task keeping the stream landing in the receiver, which the fill task waits for.
+    """
 
     clearance_task: KeepSourceRimAboveReceiverRim
-    """The task holding the source lip above the receiver rim."""
+    """
+    The task holding the source lip above the receiver rim.
+    """
 
     executor: StatechartExecutor
-    """The executor the motion is built for."""
+    """
+    The executor the motion is built for.
+    """
 
     statechart: Statechart
-    """The statechart executing the transfer."""
+    """
+    The statechart executing the transfer.
+    """
 
     setup: PouringSetup
-    """The settings the motion was built with."""
+    """
+    The settings the motion was built with.
+    """
 
     @classmethod
     def build(
@@ -422,11 +467,11 @@ class TransferMotion:
         )
 
     def record_rim_clearance(self) -> list[float]:
-        """Start recording the source-lip-above-receiver-rim clearance on every
-        transfer tick.
+        """
+        Start recording the source-lip-above-receiver-rim clearance on every transfer
+        tick.
 
-        :return: The list the clearance samples are appended to as the
-            motion runs.
+        :return: The list the clearance samples are appended to as the motion runs.
         """
         source_lip = self.source_cup.liquid_exit_point(world=self.world)
         receiver_rim = (
@@ -439,7 +484,9 @@ class TransferMotion:
         original_on_tick = self.transfer_task.on_tick
 
         def recording_on_tick() -> ObservationStateValue | None:
-            """Record the clearance, then tick the task."""
+            """
+            Record the clearance, then tick the task.
+            """
             clearance_history.append(
                 float(source_lip.z.evaluate()[0] - receiver_rim.z.evaluate()[0])
             )
@@ -449,7 +496,9 @@ class TransferMotion:
         return clearance_history
 
     def execute(self) -> None:
-        """Run the transfer to completion in simulation."""
+        """
+        Run the transfer to completion in simulation.
+        """
         self.executor.compile(statechart=self.statechart)
         self.executor.tick_until_end(timeout=self.setup.timeout)
 
@@ -459,39 +508,52 @@ class TransferMotion:
 
 @dataclass(kw_only=True)
 class NoisyFillPerception:
-    """Replaces the controller's belief of a receiver's fill level with a noisy
-    measurement of the true fill, at a rate below the control rate."""
+    """
+    Replaces the controller's belief of a receiver's fill level with a noisy measurement
+    of the true fill, at a rate below the control rate.
+    """
 
     world: World
-    """The world whose fill state is corrected."""
+    """
+    The world whose fill state is corrected.
+    """
 
     fill_connection: LiquidConnection
-    """The receiver's fill connection the belief lives on."""
+    """
+    The receiver's fill connection the belief lives on.
+    """
 
     sigma: float
-    """Standard deviation of the additive Gaussian measurement noise."""
+    """
+    Standard deviation of the additive Gaussian measurement noise.
+    """
 
-    perception_hz: float
-    """Rate the measurements arrive at, in Hz."""
+    perception_rate: float
+    """
+    Rate the measurements arrive at, in Hz.
+    """
 
-    rng: np.random.Generator
-    """Random number generator of the noise."""
+    random_generator: np.random.Generator
+    """
+    Random number generator of the noise.
+    """
 
     true_fill: float = field(init=False)
-    """The receiver's true fill, advanced by the inflow the world integrates;
-    the inflow does not depend on the receiver's own fill."""
+    """
+    The receiver's true fill, advanced by the inflow the world integrates; the inflow
+    does not depend on the receiver's own fill.
+    """
 
     def run(self, *, executor: StatechartExecutor, setup: PouringSetup) -> None:
-        """Tick `executor` until its statechart ends, correcting the belief on
-        every perception tick.
+        """
+        Tick `executor` until its statechart ends, correcting the belief on every
+        perception tick.
 
-        :param executor: The executor driving the compiled motion
-            statechart.
-        :param setup: The settings giving the control rate and the
-            timeout.
+        :param executor: The executor driving the compiled motion statechart.
+        :param setup: The settings giving the control rate and the timeout.
         """
         ticks_per_perception = max(
-            1, round(setup.target_frequency / self.perception_hz)
+            1, round(setup.target_frequency / self.perception_rate)
         )
         self.true_fill = float(self.fill_connection.position)
         for tick_index in range(setup.timeout):
@@ -499,7 +561,9 @@ class NoisyFillPerception:
             executor.tick()
             self.true_fill += float(self.fill_connection.position) - belief_before_tick
             if tick_index % ticks_per_perception == 0:
-                measurement = self.true_fill + self.rng.normal(0.0, self.sigma)
+                measurement = self.true_fill + self.random_generator.normal(
+                    0.0, self.sigma
+                )
                 JointState.from_mapping(
                     {self.fill_connection: float(np.clip(measurement, 0.0, 1.0))}
                 ).apply_to(self.world)
@@ -524,7 +588,9 @@ def _recording_fill_when_reached(
     original_on_tick = task.on_tick
 
     def recording_on_tick() -> ObservationStateValue | None:
-        """Tick the task and record the fill level once it reaches its goal."""
+        """
+        Tick the task and record the fill level once it reaches its goal.
+        """
         observation = original_on_tick()
         if observation == ObservationStateValue.TRUE:
             fill_when_reached.setdefault(task.name, container.fill_level)
@@ -537,12 +603,16 @@ def _recording_fill_when_reached(
 
 
 class TestPouringTask:
-    """Pouring from a held container down to a fill-level goal."""
+    """
+    Pouring from a held container down to a fill-level goal.
+    """
 
     def test_pouring_task_achieves_goal(
         self, *, world_with_cup, pouring_setup: PouringSetup
     ) -> None:
-        """PouringTask tilts the cup and brings its fill level to the goal."""
+        """
+        PouringTask tilts the cup and brings its fill level to the goal.
+        """
         world, cup = world_with_cup
         executor = pouring_setup.executor(world=world)
         motion_statechart = Statechart(context=executor.context)
@@ -570,8 +640,10 @@ class TestPouringTask:
     def test_two_consecutive_pours_reach_their_goals(
         self, *, world_with_cup, pouring_setup: PouringSetup
     ) -> None:
-        """Two pours from the same cup, one after the other in one statechart,
-        each reach their own goal."""
+        """
+        Two pours from the same cup, one after the other in one statechart, each reach
+        their own goal.
+        """
         world, cup = world_with_cup
         executor = pouring_setup.executor(world=world)
         motion_statechart = Statechart(context=executor.context)
@@ -604,8 +676,10 @@ class TestPouringTask:
     def test_build_hands_the_prediction_duration_to_the_constraint(
         self, *, world_with_cup, pouring_setup: PouringSetup
     ) -> None:
-        """The QP row carries the task's own prediction window rather than the
-        control horizon."""
+        """
+        The QP row carries the task's own prediction window rather than the control
+        horizon.
+        """
         world, cup = world_with_cup
         pouring_task = PouringTask(
             container=cup,
@@ -624,8 +698,10 @@ class TestPouringTask:
     def test_build_hands_the_stopping_velocity_to_the_constraint(
         self, *, world_with_cup, pouring_setup: PouringSetup
     ) -> None:
-        """How fast the task may take back an overshoot is the task's to
-        decide, apart from how fast it pours."""
+        """
+        How fast the task may take back an overshoot is the task's to decide, apart from
+        how fast it pours.
+        """
         world, cup = world_with_cup
         pouring_task = PouringTask(
             container=cup,
@@ -644,8 +720,10 @@ class TestPouringTask:
     def test_the_fill_rate_is_the_drain_the_world_integrates(
         self, *, world_with_cup
     ) -> None:
-        """The task predicts with the drain its container's fill connection
-        integrates, at the container's own tilt."""
+        """
+        The task predicts with the drain its container's fill connection integrates, at
+        the container's own tilt.
+        """
         world, cup = world_with_cup
         JointState.from_mapping({cup.root.parent_connection: 1.0}).apply_to(world)
         pouring_task = PouringTask(
@@ -663,8 +741,9 @@ class TestPouringTask:
     def test_build_rejects_a_container_without_fill_level(
         self, *, world_with_cup
     ) -> None:
-        """A container that was never given a fill level has nothing to
-        pour."""
+        """
+        A container that was never given a fill level has nothing to pour.
+        """
         world, _cup = world_with_cup
         empty_container = PourableContainer(
             name=PrefixedName("empty_container"),
@@ -683,8 +762,10 @@ class TestPouringTask:
     def test_on_tick_does_not_report_true_while_still_flowing(
         self, *, world_with_cup
     ) -> None:
-        """A fill level inside the goal band does not count as done while
-        liquid is still flowing."""
+        """
+        A fill level inside the goal band does not count as done while liquid is still
+        flowing.
+        """
         world, cup = world_with_cup
         pouring_task = PouringTask(
             container=cup, goal_value=0.6, fill_level_tolerance=0.05
@@ -725,7 +806,9 @@ class TestPouringTask:
         original_on_tick = pouring_task.on_tick
 
         def recording_on_tick() -> ObservationStateValue | None:
-            """Record tilt and fill, then tick the task."""
+            """
+            Record tilt and fill, then tick the task.
+            """
             tilt_history.append(float(cup.root.parent_connection.position))
             fill_history.append(float(cup.fill_level))
             return original_on_tick()
@@ -756,12 +839,16 @@ class TestPouringTask:
 
 
 class TestPouringFromAGripper:
-    """Pouring from a cup a robot's gripper holds."""
+    """
+    Pouring from a cup a robot's gripper holds.
+    """
 
     def test_pouring_from_a_pr2_gripper(
         self, *, pr2_world_copy: World, pouring_setup: PouringSetup
     ) -> None:
-        """PouringTask brings a cup held by the PR2 to its fill goal."""
+        """
+        PouringTask brings a cup held by the PR2 to its fill goal.
+        """
         world = pr2_world_copy
         gripper_frame = world.get_kinematic_structure_entity_by_name(
             "r_gripper_tool_frame"
@@ -819,8 +906,10 @@ class TestPouringFromAGripper:
     def test_pouring_from_a_tracy_gripper(
         self, *, tracy_pouring_world, pouring_setup: PouringSetup
     ) -> None:
-        """PouringTask brings a Jeroen cup held in Tracy's left gripper from
-        full to its fill goal while the gripper holds its position."""
+        """
+        PouringTask brings a Jeroen cup held in Tracy's left gripper from full to its
+        fill goal while the gripper holds its position.
+        """
         world, _tracy = tracy_pouring_world
         left_tool_frame = world.get_body_by_name("l_gripper_tool_frame")
         pouring_setup.move_left_tool_upright(
@@ -861,15 +950,19 @@ class TestPouringFromAGripper:
 
 
 class TestCupToCupTransfer:
-    """A fill-level goal on a receiving cup on the table makes the optimizer
-    tilt the source cup in Tracy's gripper, the only one it controls, until the
-    receiver reaches the goal."""
+    """
+    A fill-level goal on a receiving cup on the table makes the optimizer tilt the
+    source cup in Tracy's gripper, the only one it controls, until the receiver reaches
+    the goal.
+    """
 
     def test_the_receiver_is_filled_to_the_goal(
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
     ) -> None:
-        """The receiver reaches the goal, the source loses what the receiver
-        gains, and once aimed the stream stays in the receiver."""
+        """
+        The receiver reaches the goal, the source loses what the receiver gains, and
+        once aimed the stream stays in the receiver.
+        """
         world, source_cup, receiving_cup, left_tool_frame = tracy_transfer_world
         assert receiving_cup.fill_level == pytest.approx(0.0)
         assert source_cup.fill_level == pytest.approx(1.0)
@@ -912,12 +1005,14 @@ class TestCupToCupTransfer:
         original_on_tick = transfer_task.on_tick
 
         def recording_on_tick() -> ObservationStateValue | None:
-            """Record gate, source tilt and cup-origin clearance, then tick."""
+            """
+            Record gate, source tilt and cup-origin clearance, then tick.
+            """
             inflow_equation = transfer_task.fill_connection.inflow_equation
-            gate_history.append(float(inflow_equation.gate.evaluate()[0]))
-            tilt_history.append(
-                float(inflow_equation.source_tilt_expression.evaluate()[0])
+            gate_history.append(
+                float(inflow_equation.transfer_gate.product.evaluate()[0])
             )
+            tilt_history.append(float(source_cup.pour_tilt_expression.evaluate()[0]))
             source_z = world.compute_forward_kinematics_np(world.root, source_cup.root)[
                 2, 3
             ]
@@ -948,9 +1043,9 @@ class TestCupToCupTransfer:
         first_open_tick = next(
             (tick for tick, gate in enumerate(gate_history) if gate > 0.5), None
         )
-        assert (
-            first_open_tick is not None
-        ), "the optimizer never aimed the pour into the receiver"
+        assert first_open_tick is not None, (
+            "the optimizer never aimed the pour into the receiver"
+        )
         assert min(gate_history[first_open_tick:]) > 0.5, (
             "the stream left the receiver after it was aimed: "
             f"the gate fell to {min(gate_history[first_open_tick:]):.3f}"
@@ -962,15 +1057,19 @@ class TestCupToCupTransfer:
 
 
 class TestRimClearanceDuringTransfer:
-    """:class:`~giskardpy.motion_statechart.tasks.pouring.KeepSourceRimAboveRec
-    eiverRim` keeps the pouring cup's lip above the receiving cup's rim
-    throughout the transfer, and the motion statechart stays serializable."""
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepSourceRimAboveRec eiverRim`
+    keeps the pouring cup's lip above the receiving cup's rim throughout the transfer,
+    and the motion statechart stays serializable.
+    """
 
     def test_transfer_motion_is_json_serializable(
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
     ) -> None:
-        """The transfer motion statechart survives a JSON round trip, as it
-        must to be sent to a Giskard server."""
+        """
+        The transfer motion statechart survives a JSON round trip, as it must to be sent
+        to a Giskard server.
+        """
         transfer = TransferMotion.build(
             transfer_world=tracy_transfer_world, setup=pouring_setup
         )
@@ -989,7 +1088,9 @@ class TestRimClearanceDuringTransfer:
     def test_pouring_lip_stays_above_receiver_rim(
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
     ) -> None:
-        """The rim clearance stays positive for the whole pour."""
+        """
+        The rim clearance stays positive for the whole pour.
+        """
         transfer = TransferMotion.build(
             transfer_world=tracy_transfer_world, setup=pouring_setup
         )
@@ -1006,16 +1107,19 @@ class TestRimClearanceDuringTransfer:
 
 
 class TestFillDriveStartsOnceAimed:
-    """The fill-driving task of the transfer motion stays inactive until the
-    pour-aiming task observes the stream landing in the receiver, since the
-    transfer gate blocks all flow before."""
+    """
+    The fill-driving task of the transfer motion stays inactive until the pour-aiming
+    task observes the stream landing in the receiver, since the transfer gate blocks all
+    flow before.
+    """
 
     def test_fill_task_waits_for_the_aim_observation(
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
     ) -> None:
-        """The fill task does not start while the pour is mis-aimed, and starts
-        on the tick after the aiming task first observes the landing inside the
-        receiver."""
+        """
+        The fill task does not start while the pour is mis-aimed, and starts on the tick
+        after the aiming task first observes the landing inside the receiver.
+        """
         transfer = TransferMotion.build(
             transfer_world=tracy_transfer_world, setup=pouring_setup
         )
@@ -1025,9 +1129,9 @@ class TestFillDriveStartsOnceAimed:
 
         executor.compile(statechart=transfer.statechart)
         executor.tick()
-        assert (
-            aiming_task.observation_state != ObservationStateValue.TRUE
-        ), "the pour must start mis-aimed for this test to be meaningful"
+        assert aiming_task.observation_state != ObservationStateValue.TRUE, (
+            "the pour must start mis-aimed for this test to be meaningful"
+        )
         assert transfer_task.life_cycle_state == LifeCycleValue.NOT_STARTED
 
         aimed_tick = None
@@ -1035,9 +1139,9 @@ class TestFillDriveStartsOnceAimed:
             if aiming_task.observation_state == ObservationStateValue.TRUE:
                 aimed_tick = tick
                 break
-            assert (
-                transfer_task.life_cycle_state == LifeCycleValue.NOT_STARTED
-            ), f"fill task started at tick {tick} before the pour was aimed"
+            assert transfer_task.life_cycle_state == LifeCycleValue.NOT_STARTED, (
+                f"fill task started at tick {tick} before the pour was aimed"
+            )
             executor.tick()
         assert aimed_tick is not None, "the pour never got aimed"
 
@@ -1052,8 +1156,9 @@ class TestClearanceBandStaysAboveTheRim:
     is enforced softly, so a band reaching down to the rim is rejected."""
 
     def test_band_reaching_down_to_the_rim_is_rejected(self, *, world_with_cup) -> None:
-        """A zero clearance floor asks for the rims to touch, so building the
-        task raises."""
+        """
+        A zero clearance floor asks for the rims to touch, so building the task raises.
+        """
         world, cup = world_with_cup
         clearance_task = KeepSourceRimAboveReceiverRim(
             receiver=cup, source=cup, minimum_clearance=0.0
@@ -1066,7 +1171,9 @@ class TestClearanceBandStaysAboveTheRim:
         assert error_info.value.minimum_clearance == clearance_task.minimum_clearance
 
     def test_band_is_derived_from_the_configured_width(self, *, world_with_cup) -> None:
-        """The band's upper end lies :attr:`clearance_band` above the floor."""
+        """
+        The band's upper end lies :attr:`clearance_band` above the floor.
+        """
         _world, cup = world_with_cup
         clearance_task = KeepSourceRimAboveReceiverRim(
             receiver=cup,
@@ -1082,8 +1189,10 @@ class TestClearanceBandStaysAboveTheRim:
     def test_rims_do_not_cross_when_aiming_outweighs_the_clearance(
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
     ) -> None:
-        """With the pour-aiming task at maximum weight the pouring lip still
-        never reaches the receiver rim."""
+        """
+        With the pour-aiming task at maximum weight the pouring lip still never reaches
+        the receiver rim.
+        """
         transfer = TransferMotion.build(
             transfer_world=tracy_transfer_world,
             setup=pouring_setup,
@@ -1167,14 +1276,20 @@ def _rim_band_world(
 
 @dataclass(kw_only=True)
 class ClearanceBandProbe:
-    """Evaluates the observation of a clearance task with a fixed band in
-    worlds of varying rim-to-rim clearance."""
+    """
+    Evaluates the observation of a clearance task with a fixed band in worlds of varying
+    rim-to-rim clearance.
+    """
 
     minimum_clearance: float = 0.05
-    """Clearance floor of the probed band, in metres."""
+    """
+    Clearance floor of the probed band, in metres.
+    """
 
     clearance_band: float = 0.05
-    """Width of the probed band above the floor, in metres."""
+    """
+    Width of the probed band above the floor, in metres.
+    """
 
     def observation_at(self, *, clearance: float) -> float:
         """
@@ -1195,7 +1310,9 @@ class ClearanceBandProbe:
 
 @pytest.fixture
 def clearance_band_probe() -> ClearanceBandProbe:
-    """A clearance band probe with a 5 cm floor and a 5 cm band."""
+    """
+    A clearance band probe with a 5 cm floor and a 5 cm band.
+    """
     return ClearanceBandProbe()
 
 
@@ -1207,7 +1324,9 @@ class TestRimClearanceBandObservation:
     def test_clearance_inside_the_band_observes_true(
         self, *, clearance_band_probe: ClearanceBandProbe
     ) -> None:
-        """A clearance between floor and ceiling satisfies the band."""
+        """
+        A clearance between floor and ceiling satisfies the band.
+        """
         probe = clearance_band_probe
         clearance = probe.minimum_clearance + probe.clearance_band / 2
         assert probe.observation_at(clearance=clearance) == 1.0
@@ -1215,7 +1334,9 @@ class TestRimClearanceBandObservation:
     def test_clearance_above_the_band_observes_false(
         self, *, clearance_band_probe: ClearanceBandProbe
     ) -> None:
-        """A clearance above the ceiling violates the band."""
+        """
+        A clearance above the ceiling violates the band.
+        """
         probe = clearance_band_probe
         clearance = probe.minimum_clearance + 2 * probe.clearance_band
         assert probe.observation_at(clearance=clearance) == 0.0
@@ -1223,19 +1344,24 @@ class TestRimClearanceBandObservation:
     def test_clearance_below_the_band_observes_false(
         self, *, clearance_band_probe: ClearanceBandProbe
     ) -> None:
-        """A clearance below the floor violates the band."""
+        """
+        A clearance below the floor violates the band.
+        """
         probe = clearance_band_probe
         clearance = probe.minimum_clearance / 2
         assert probe.observation_at(clearance=clearance) == 0.0
 
 
 class TestFillTaskInitializationErrors:
-    """The transfer tasks validate their liquid coupling at build time and
-    raise concrete initialization errors."""
+    """
+    The transfer tasks validate their liquid coupling at build time and raise concrete
+    initialization errors.
+    """
 
     def test_fill_by_transfer_requires_inflow_coupling(self, *, world_with_cup) -> None:
-        """A receiver never coupled via receive_outflow_from cannot drive a
-        transfer."""
+        """
+        A receiver never coupled via receive_outflow_from cannot drive a transfer.
+        """
         world, cup = world_with_cup
         transfer_task = FillByTransferTask(
             receiver=cup, goal_value=0.7, fill_level_tolerance=0.05
@@ -1246,8 +1372,10 @@ class TestFillTaskInitializationErrors:
             transfer_task.build()
 
     def test_keep_projectile_requires_inflow_coupling(self, *, world_with_cup) -> None:
-        """The aiming task needs the receiver's inflow equation to derive the
-        landing point."""
+        """
+        The aiming task needs the receiver's inflow equation to derive the landing
+        point.
+        """
         world, cup = world_with_cup
         aiming_task = KeepProjectileInReceiver(receiver=cup, source=cup)
         add_to_statechart_with_motion_control(aiming_task, world)
@@ -1256,8 +1384,10 @@ class TestFillTaskInitializationErrors:
             aiming_task.build()
 
     def test_keep_projectile_requires_an_exit_speed(self, *, world_with_cup) -> None:
-        """A source with no live outflow model and an ungated inflow equation
-        leave no exit speed to throw the stream at."""
+        """
+        A source with no live outflow model and an ungated inflow equation leave no exit
+        speed to throw the stream at.
+        """
         world, cup = world_with_cup
         cup.fill_connection.inflow_equation = InflowEquation(
             container_height=0.1, container_width=0.06
@@ -1283,8 +1413,10 @@ class TestFillRowLeavesPlacementToTheOtherTasks:
     def test_the_fill_row_does_not_move_the_source_towards_the_receiver(
         self, *, tracy_transfer_world
     ) -> None:
-        """The fill velocity has no gradient along the receiver's own degrees
-        of freedom, while the tilt still drives it."""
+        """
+        The fill velocity has no gradient along the receiver's own degrees of freedom,
+        while the tilt still drives it.
+        """
         world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         transfer_task = FillByTransferTask(
             receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
@@ -1306,8 +1438,9 @@ class TestFillRowLeavesPlacementToTheOtherTasks:
     def test_the_fill_rate_still_closes_with_the_gate(
         self, *, tracy_transfer_world
     ) -> None:
-        """Moved out from under the pour, the receiver is predicted to receive
-        nothing."""
+        """
+        Moved out from under the pour, the receiver is predicted to receive nothing.
+        """
         world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         transfer_task = FillByTransferTask(
             receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
@@ -1330,14 +1463,18 @@ class TestFillRowLeavesPlacementToTheOtherTasks:
 
 
 class TestTransferPredictionDrainsTheSource:
-    """:class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask`
-    lets the source's fill drain over the prediction window."""
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` lets the
+    source's fill drain over the prediction window.
+    """
 
     def test_the_source_fill_evolves_in_the_receivers_prediction(
         self, *, tracy_transfer_world
     ) -> None:
-        """The fill row carries the source's fill level as a coupled state,
-        moving at the source's own drain rate."""
+        """
+        The fill row carries the source's fill level as a coupled state, moving at the
+        source's own drain rate.
+        """
         world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         transfer_task = FillByTransferTask(
             receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
@@ -1355,7 +1492,9 @@ class TestTransferPredictionDrainsTheSource:
         )
 
     def test_the_source_fill_can_be_held_instead(self, *, tracy_transfer_world) -> None:
-        """Without the coupling the prediction holds every other fill level."""
+        """
+        Without the coupling the prediction holds every other fill level.
+        """
         world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         transfer_task = FillByTransferTask(
             receiver=receiving_cup,
@@ -1386,15 +1525,18 @@ def _prediction_rows(
 
 
 class TestTransferPredictionIsExposed:
-    """:class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask`
-    exposes what its row predicts and the fill rate its model gives as debug
-    expressions."""
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` exposes what
+    its row predicts and the fill rate its model gives as debug expressions.
+    """
 
     def test_the_rate_is_the_receivers_own_fill_rate(
         self, *, tracy_transfer_world, pouring_setup: PouringSetup
     ) -> None:
-        """The fill-rate debug expression gives the rate the receiver's fill
-        connection integrates, and a predicted fill is exposed next to it."""
+        """
+        The fill-rate debug expression gives the rate the receiver's fill connection
+        integrates, and a predicted fill is exposed next to it.
+        """
         world, _source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         transfer_task = FillByTransferTask(
             receiver=receiving_cup, goal_value=0.7, fill_level_tolerance=0.05
@@ -1422,15 +1564,19 @@ class TestTransferPredictionIsExposed:
 
 
 class TestProjectileAimingErrorIsHorizontal:
-    """:class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInRecei
-    ver` measures only where the stream lands within the receiver's opening
-    plane, so the pour can be reported as aimed."""
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInRecei ver`
+    measures only where the stream lands within the receiver's opening plane, so the
+    pour can be reported as aimed.
+    """
 
     def test_task_reports_aimed_once_the_landing_is_within_the_threshold(
         self, *, tracy_transfer_world
     ) -> None:
-        """A threshold above the horizontal landing distance to the opening
-        centre is satisfied, one below it is not."""
+        """
+        A threshold above the horizontal landing distance to the opening centre is
+        satisfied, one below it is not.
+        """
         world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         landing = receiving_cup.projectile_landing_point(
             source=source_cup,
@@ -1460,13 +1606,16 @@ class TestProjectileAimingErrorIsHorizontal:
 
 
 class TestKeepProjectileInReceiverDebugExpressions:
-    """:class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInRecei
-    ver` exposes the stream's exit point and landing point as debug
-    expressions."""
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.KeepProjectileInRecei ver`
+    exposes the stream's exit point and landing point as debug expressions.
+    """
 
     def test_registers_exit_and_landing_points(self, *, tracy_transfer_world) -> None:
-        """Building the task exposes the exit and landing points as colored
-        point markers, the exit marker on the source's exit point."""
+        """
+        Building the task exposes the exit and landing points as colored point markers,
+        the exit marker on the source's exit point.
+        """
         world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         aiming_task = KeepProjectileInReceiver(
             receiver=receiving_cup, source=source_cup
@@ -1493,8 +1642,10 @@ class TestKeepProjectileInReceiverDebugExpressions:
         )
 
     def test_landing_uses_current_exit_speed(self, *, tracy_transfer_world) -> None:
-        """The landing point is thrown at the source's live exit speed, not the
-        nominal speed stored on the inflow coupling."""
+        """
+        The landing point is thrown at the source's live exit speed, not the nominal
+        speed stored on the inflow coupling.
+        """
         world, source_cup, receiving_cup, _left_tool_frame = tracy_transfer_world
         aiming_task = KeepProjectileInReceiver(
             receiver=receiving_cup, source=source_cup
@@ -1525,13 +1676,14 @@ class TestKeepProjectileInReceiverDebugExpressions:
 
 
 class TestPerceptionCorrectedTransfer:
-    """:class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask`
-    converges when the receiver's fill belief is replaced by noisy measurements
-    of the true fill at a rate below the control rate."""
+    """
+    :class:`~giskardpy.motion_statechart.tasks.pouring.FillByTransferTask` converges
+    when the receiver's fill belief is replaced by noisy measurements of the true fill
+    at a rate below the control rate.
+    """
 
-    @pytest.mark.slow
     @pytest.mark.parametrize(
-        "sigma,perception_hz",
+        "sigma,perception_rate",
         [(0.01, 10), (0.02, 10), (0.01, 20), (0.01, 30)],
         ids=[
             "sigma=0.01_10Hz",
@@ -1546,14 +1698,15 @@ class TestPerceptionCorrectedTransfer:
         tracy_transfer_world,
         pouring_setup: PouringSetup,
         sigma: float,
-        perception_hz: float,
+        perception_rate: float,
     ) -> None:
-        """The transfer ends with the receiver's true fill at the goal, within
-        the tolerance widened by two noise deviations, as the task ends on the
-        perceived fill.
+        """
+        The transfer ends with the receiver's true fill at the goal, within the
+        tolerance widened by two noise deviations, as the task ends on the perceived
+        fill.
 
         :param sigma: Standard deviation of the measurement noise.
-        :param perception_hz: Rate of the measurements, in Hz.
+        :param perception_rate: Rate of the measurements, in Hz.
         """
         transfer = TransferMotion.build(
             transfer_world=tracy_transfer_world,
@@ -1565,8 +1718,8 @@ class TestPerceptionCorrectedTransfer:
             world=transfer.world,
             fill_connection=transfer.receiving_cup.fill_connection,
             sigma=sigma,
-            perception_hz=perception_hz,
-            rng=np.random.default_rng(seed=42),
+            perception_rate=perception_rate,
+            random_generator=np.random.default_rng(seed=42),
         )
 
         perception.run(executor=transfer.executor, setup=pouring_setup)
@@ -1574,16 +1727,16 @@ class TestPerceptionCorrectedTransfer:
         transfer_task = transfer.transfer_task
         assert transfer_task.observation_state == ObservationStateValue.TRUE, (
             f"Transfer task did not converge "
-            f"(sigma={sigma}, perception_hz={perception_hz} Hz)"
+            f"(sigma={sigma}, perception_rate={perception_rate} Hz)"
         )
         source_loss = 1.0 - float(transfer.source_cup.fill_level)
-        assert (
-            source_loss > transfer_task.fill_level_tolerance
-        ), "source cup never poured"
+        assert source_loss > transfer_task.fill_level_tolerance, (
+            "source cup never poured"
+        )
         assert perception.true_fill == pytest.approx(
             transfer_task.goal_value,
             abs=transfer_task.fill_level_tolerance + 2.0 * sigma,
         ), (
             f"true receiver fill {perception.true_fill:.3f} outside goal band around "
-            f"{transfer_task.goal_value} (sigma={sigma}, perception_hz={perception_hz} Hz)"
+            f"{transfer_task.goal_value} (sigma={sigma}, perception_rate={perception_rate} Hz)"
         )

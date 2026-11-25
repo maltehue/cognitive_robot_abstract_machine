@@ -1,5 +1,7 @@
-"""Tests of the terminal-state prediction constraint, the row its strategy
-builds and the linearized state model behind that row."""
+"""
+Tests of the terminal-state prediction constraint, the row its strategy builds and the
+linearized state model behind that row.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +21,6 @@ from giskardpy.qp.terminal_state_prediction_strategy import (
     LinearizedScalarStateModel,
     TerminalStatePredictionConstraint,
     TerminalStatePredictionStrategy,
-    window_normalized_weights,
 )
 from krrood_spatial_math.spatial_types import Vector3
 from semantic_digital_twin.datastructures.joint_state import JointState
@@ -58,38 +59,60 @@ class LinearStateRateSetup:
     """
 
     world: World
-    """The world owning both degrees of freedom."""
+    """
+    The world owning both degrees of freedom.
+    """
 
     joint_degree_of_freedom: DegreeOfFreedom
-    """The controlled joint the strategy optimizes."""
+    """
+    The controlled joint the strategy optimizes.
+    """
 
     state_degree_of_freedom: DegreeOfFreedom
-    """The passive state whose terminal value is constrained."""
+    """
+    The passive state whose terminal value is constrained.
+    """
 
     config: QPControllerConfig
-    """The controller the strategies are built for."""
+    """
+    The controller the strategies are built for.
+    """
 
     joint_position: float
-    """Position of the controlled joint at the operating point."""
+    """
+    Position of the controlled joint at the operating point.
+    """
 
     state_position: float
-    """Position of the passive state at the operating point."""
+    """
+    Position of the passive state at the operating point.
+    """
 
     joint_sensitivity: float
-    """Constant ``df/dq`` of the state rate."""
+    """
+    Constant ``df/dq`` of the state rate.
+    """
 
     state_sensitivity: float
-    """Constant ``df/dx`` of the state rate."""
+    """
+    Constant ``df/dx`` of the state rate.
+    """
 
     goal_value: float
-    """Terminal state goal within the reachable cap."""
+    """
+    Terminal state goal within the reachable cap.
+    """
 
     far_prediction_duration: float
-    """A prediction window in seconds longer than the control window."""
+    """
+    A prediction window in seconds longer than the control window.
+    """
 
     @property
     def state_rate(self) -> sm.Scalar:
-        """The linear state rate ``f``."""
+        """
+        The linear state rate ``f``.
+        """
         return self.joint_degree_of_freedom.variables.position * sm.Scalar(
             self.joint_sensitivity
         ) + self.state_degree_of_freedom.variables.position * sm.Scalar(
@@ -98,8 +121,9 @@ class LinearStateRateSetup:
 
     @property
     def resting_state_rate(self) -> sm.Scalar:
-        """A state rate that is zero at the operating point and independent of
-        the state."""
+        """
+        A state rate that is zero at the operating point and independent of the state.
+        """
         return (
             self.joint_degree_of_freedom.variables.position
             - sm.Scalar(self.joint_position)
@@ -165,7 +189,9 @@ class LinearStateRateSetup:
 
 @pytest.fixture
 def linear_state_rate_setup() -> LinearStateRateSetup:
-    """A joint and a passive state at their operating point."""
+    """
+    A joint and a passive state at their operating point.
+    """
     joint_position = 0.2
     state_position = 0.5
     world = World()
@@ -194,12 +220,16 @@ def linear_state_rate_setup() -> LinearStateRateSetup:
 
 
 class TestTerminalStatePredictionRow:
-    """The QP row the strategy builds from a linear state rate."""
+    """
+    The QP row the strategy builds from a linear state rate.
+    """
 
     def test_state_model_differentiates_rate_by_state_variable(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The linearization extracts ``df/dx`` from the rate's jacobian."""
+        """
+        The linearization extracts ``df/dx`` from the rate's jacobian.
+        """
         setup = linear_state_rate_setup
         model = setup.constraint().state_model(config=setup.config)
 
@@ -215,8 +245,10 @@ class TestTerminalStatePredictionRow:
     def test_matrix_scales_jacobian_per_block_with_normalized_weights(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The row holds ``dt·df/dq`` scaled by each velocity block's
-        normalized lookahead weight, followed by zero-padded jerk columns."""
+        """
+        The row holds ``dt·df/dq`` scaled by each velocity block's normalized lookahead
+        weight, followed by zero-padded jerk columns.
+        """
         setup = linear_state_rate_setup
         config = setup.config
         constraint = setup.constraint()
@@ -227,7 +259,7 @@ class TestTerminalStatePredictionRow:
 
         expected_weights = [
             weight.evaluate()[0]
-            for weight in window_normalized_weights(
+            for weight in LinearizedScalarStateModel.window_normalized_weights(
                 weights=constraint.state_model(config=config).lookahead_weights(),
                 prediction_steps=config.control_horizon,
             )
@@ -247,7 +279,9 @@ class TestTerminalStatePredictionRow:
     def test_equality_bound_is_goal_minus_free_response(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The bound is the terminal prediction error with the joint held."""
+        """
+        The bound is the terminal prediction error with the joint held.
+        """
         setup = linear_state_rate_setup
 
         bound = (
@@ -264,8 +298,9 @@ class TestTerminalStatePredictionRow:
     def test_equality_bound_is_capped_to_reachable_change(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """A goal far beyond the window's reach is capped, not passed
-        through."""
+        """
+        A goal far beyond the window's reach is capped, not passed through.
+        """
         setup = linear_state_rate_setup
         constraint = setup.constraint(name="far_goal", goal_value=5.0)
 
@@ -285,8 +320,9 @@ class TestTerminalStatePredictionRow:
     def test_slack_variable_is_single_and_normalized(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The strategy adds exactly one unbounded slack with the normalized
-        weight."""
+        """
+        The strategy adds exactly one unbounded slack with the normalized weight.
+        """
         setup = linear_state_rate_setup
         constraint = setup.constraint()
 
@@ -308,13 +344,17 @@ class TestTerminalStatePredictionRow:
 
 
 class TestSeveralTerminalConstraints:
-    """Each terminal constraint of a block gets its own row."""
+    """
+    Each terminal constraint of a block gets its own row.
+    """
 
     def test_each_constraint_gets_the_row_it_gets_alone(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """Two constraints give two rows, each with the matrix row, bound and
-        slack weight a strategy over that constraint alone builds."""
+        """
+        Two constraints give two rows, each with the matrix row, bound and slack weight
+        a strategy over that constraint alone builds.
+        """
         setup = linear_state_rate_setup
         constraints = [
             setup.constraint(name="first_goal"),
@@ -350,13 +390,17 @@ class TestSeveralTerminalConstraints:
 
 
 class TestPredictionWindow:
-    """The row predicts the state over the constraint's prediction duration,
-    not over the control horizon the velocities span."""
+    """
+    The row predicts the state over the constraint's prediction duration, not over the
+    control horizon the velocities span.
+    """
 
     def test_prediction_steps_default_to_the_control_horizon(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """Without a prediction duration the window is the control horizon."""
+        """
+        Without a prediction duration the window is the control horizon.
+        """
         setup = linear_state_rate_setup
 
         assert (
@@ -367,7 +411,9 @@ class TestPredictionWindow:
     def test_prediction_duration_is_converted_to_time_steps(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The prediction duration is counted in control time steps."""
+        """
+        The prediction duration is counted in control time steps.
+        """
         setup = linear_state_rate_setup
         config = setup.config
         constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
@@ -383,8 +429,10 @@ class TestPredictionWindow:
     def test_matrix_keeps_one_block_per_control_step(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """A longer window adds no decision variables, and the final block now
-        carries weight, since state steps follow it."""
+        """
+        A longer window adds no decision variables, and the final block now carries
+        weight, since state steps follow it.
+        """
         setup = linear_state_rate_setup
         config = setup.config
         constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
@@ -399,8 +447,9 @@ class TestPredictionWindow:
     def test_velocity_blocks_sum_to_the_prediction_window(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The row's gain follows the prediction window, not the controller's
-        horizon."""
+        """
+        The row's gain follows the prediction window, not the controller's horizon.
+        """
         setup = linear_state_rate_setup
         config = setup.config
         constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
@@ -418,7 +467,9 @@ class TestPredictionWindow:
     def test_slack_weight_is_normalized_over_the_prediction_window(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The slack weight is spread over the prediction window's steps."""
+        """
+        The slack weight is spread over the prediction window's steps.
+        """
         setup = linear_state_rate_setup
         constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
 
@@ -434,8 +485,9 @@ class TestPredictionWindow:
     def test_equality_bound_is_capped_to_the_prediction_window(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """The cap is what the state can change within the prediction
-        window."""
+        """
+        The cap is what the state can change within the prediction window.
+        """
         setup = linear_state_rate_setup
         constraint = setup.constraint(
             name="far_goal",
@@ -462,26 +514,38 @@ class TestPredictionWindow:
 
 @dataclass(kw_only=True)
 class StoppingVelocities:
-    """Cruise and stopping velocities relative to how much the linear setup's
-    state changes on its own within the control window."""
+    """
+    Cruise and stopping velocities relative to how much the linear setup's state changes
+    on its own within the control window.
+    """
 
     slow_cruise_velocity: float
-    """A cruise velocity whose cap lies far below the state's own change."""
+    """
+    A cruise velocity whose cap lies far below the state's own change.
+    """
 
     fast_stopping_velocity: float
-    """A stopping velocity whose reach covers the state's whole own change."""
+    """
+    A stopping velocity whose reach covers the state's whole own change.
+    """
 
     moderate_stopping_velocity: float
-    """A stopping velocity whose reach lies between the cruise cap and the
-    state's own change."""
+    """
+    A stopping velocity whose reach lies between the cruise cap and the state's own
+    change.
+    """
 
     slower_stopping_velocity: float
-    """A stopping velocity below the slow cruise velocity."""
+    """
+    A stopping velocity below the slow cruise velocity.
+    """
 
 
 @pytest.fixture
 def stopping_velocities() -> StoppingVelocities:
-    """Velocities around the linear setup's own change of the state."""
+    """
+    Velocities around the linear setup's own change of the state.
+    """
     return StoppingVelocities(
         slow_cruise_velocity=0.01,
         fast_stopping_velocity=1.0,
@@ -491,9 +555,11 @@ def stopping_velocities() -> StoppingVelocities:
 
 
 class TestStoppingTheStatesOwnChange:
-    """The cruise velocity caps how fast the controller drives the state; a
-    stopping velocity caps, separately, how fast it brings the state back
-    against the change the state makes on its own."""
+    """
+    The cruise velocity caps how fast the controller drives the state; a stopping
+    velocity caps, separately, how fast it brings the state back against the change the
+    state makes on its own.
+    """
 
     def _bound(
         self,
@@ -539,8 +605,9 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """The state falls on its own by more than the moderate stop
-        reaches."""
+        """
+        The state falls on its own by more than the moderate stop reaches.
+        """
         setup = linear_state_rate_setup
         assert self._free_change(setup=setup) < -self._reach(
             setup=setup, velocity=stopping_velocities.moderate_stopping_velocity
@@ -552,8 +619,9 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """Without a stopping velocity the stop is capped by the cruise
-        velocity."""
+        """
+        Without a stopping velocity the stop is capped by the cruise velocity.
+        """
         setup = linear_state_rate_setup
         bound = self._bound(
             setup=setup,
@@ -571,7 +639,9 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """A fast stop asks to undo the whole own change."""
+        """
+        A fast stop asks to undo the whole own change.
+        """
         setup = linear_state_rate_setup
         bound = self._bound(
             setup=setup,
@@ -587,7 +657,9 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """A moderate stop is capped by what the stopping velocity reaches."""
+        """
+        A moderate stop is capped by what the stopping velocity reaches.
+        """
         setup = linear_state_rate_setup
         bound = self._bound(
             setup=setup,
@@ -607,8 +679,10 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """A stopping velocity slower than the cruise velocity caps the stop
-        below the cruise cap."""
+        """
+        A stopping velocity slower than the cruise velocity caps the stop below the
+        cruise cap.
+        """
         setup = linear_state_rate_setup
         bound = self._bound(
             setup=setup,
@@ -628,9 +702,10 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """A state that does not change on its own has nothing to stop, so a
-        goal on either side is driven at the cruise cap, whatever the stopping
-        velocity."""
+        """
+        A state that does not change on its own has nothing to stop, so a goal on either
+        side is driven at the cruise cap, whatever the stopping velocity.
+        """
         setup = linear_state_rate_setup
         cruise_velocity = 1.0
         bounds = [
@@ -657,7 +732,9 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """A goal against the own change asks only to stop the state."""
+        """
+        A goal against the own change asks only to stop the state.
+        """
         setup = linear_state_rate_setup
         bound = self._bound(
             setup=setup,
@@ -673,7 +750,9 @@ class TestStoppingTheStatesOwnChange:
         linear_state_rate_setup: LinearStateRateSetup,
         stopping_velocities: StoppingVelocities,
     ) -> None:
-        """A goal along the own change is capped by the cruise velocity."""
+        """
+        A goal along the own change is capped by the cruise velocity.
+        """
         setup = linear_state_rate_setup
         bound = self._bound(
             setup=setup,
@@ -690,13 +769,16 @@ class TestStoppingTheStatesOwnChange:
 
 
 class TestTerminalStateConstraintValidation:
-    """Rejection of constraints the strategy cannot enforce."""
+    """
+    Rejection of constraints the strategy cannot enforce.
+    """
 
     def test_plain_equality_constraint_raises_type_mismatch(
         self, *, linear_state_rate_setup: LinearStateRateSetup
     ) -> None:
-        """A non-terminal-state equality constraint is rejected, reporting the
-        types."""
+        """
+        A non-terminal-state equality constraint is rejected, reporting the types.
+        """
         plain_constraint = GiskardEqualityConstraint(
             name="plain",
             expression=sm.Scalar(0.0),
@@ -720,28 +802,40 @@ class TestTerminalStateConstraintValidation:
 
 
 class TestWindowNormalizedWeights:
-    """Rescaling the lookahead weights to the prediction window."""
+    """
+    Rescaling the lookahead weights to the prediction window.
+    """
 
     def test_zero_weight_sum_does_not_produce_nan(self) -> None:
-        """Weights that cancel to zero are kept instead of divided by zero."""
+        """
+        Weights that cancel to zero are kept instead of divided by zero.
+        """
         weights = [sm.Scalar(1.0), sm.Scalar(-1.0)]
-        normalized = window_normalized_weights(weights=weights, prediction_steps=2)
+        normalized = LinearizedScalarStateModel.window_normalized_weights(
+            weights=weights, prediction_steps=2
+        )
         values = [weight.evaluate()[0] for weight in normalized]
         assert all(math.isfinite(value) for value in values)
         assert values == [1.0, -1.0]
 
     def test_near_cancelling_weight_sum_keeps_raw_weights(self) -> None:
-        """A sum below the minimum weight sum is kept instead of exploding."""
+        """
+        A sum below the minimum weight sum is kept instead of exploding.
+        """
         weights = [sm.Scalar(1.0), sm.Scalar(-1.0 + 1e-12)]
-        normalized = window_normalized_weights(weights=weights, prediction_steps=2)
+        normalized = LinearizedScalarStateModel.window_normalized_weights(
+            weights=weights, prediction_steps=2
+        )
         values = [weight.evaluate()[0] for weight in normalized]
         assert all(math.isfinite(value) for value in values)
         assert values == pytest.approx([1.0, -1.0 + 1e-12])
 
     def test_a_negative_weight_sum_keeps_every_weights_sign(self) -> None:
-        """A stiff state (decay below minus one) has a negative weight sum; the
-        rescaled weights keep the raw weights' signs, with their sum at minus
-        the prediction steps."""
+        """
+        A stiff state (decay below minus one) has a negative weight sum; the rescaled
+        weights keep the raw weights' signs, with their sum at minus the prediction
+        steps.
+        """
         prediction_steps = 5
         model = LinearizedScalarStateModel(
             state_value=sm.Scalar(0.8),
@@ -756,7 +850,7 @@ class TestWindowNormalizedWeights:
 
         normalized = [
             weight.evaluate()[0]
-            for weight in window_normalized_weights(
+            for weight in LinearizedScalarStateModel.window_normalized_weights(
                 weights=model.lookahead_weights(), prediction_steps=prediction_steps
             )
         ]
@@ -770,27 +864,40 @@ class TestWindowNormalizedWeights:
 
 @dataclass(kw_only=True)
 class FlowingPourSetup:
-    """A pouring equation at an operating point at which liquid flows, and the
-    discretization its linearized model uses."""
+    """
+    A pouring equation at an operating point at which liquid flows, and the
+    discretization its linearized model uses.
+    """
 
     equation: ArticulatedPouringEquation
-    """The drain of the pouring container."""
+    """
+    The drain of the pouring container.
+    """
 
     tilt: float
-    """Tilt at the operating point, well above the onset so both partials are
-    non-zero."""
+    """
+    Tilt at the operating point, well above the onset so both partials are non-zero.
+    """
 
     fill: float
-    """Fill level at the operating point."""
+    """
+    Fill level at the operating point.
+    """
 
     time_step: float
-    """Time step of the linearized model."""
+    """
+    Time step of the linearized model.
+    """
 
     control_horizon: int
-    """Control horizon of the linearized model."""
+    """
+    Control horizon of the linearized model.
+    """
 
     prediction_steps: int
-    """State steps of the far-looking model, more than its control horizon."""
+    """
+    State steps of the far-looking model, more than its control horizon.
+    """
 
     def rate(self, *, tilt: float, fill: float) -> float:
         """
@@ -802,10 +909,18 @@ class FlowingPourSetup:
 
     @property
     def fill_sensitivity(self) -> float:
-        """``df/dfill`` at the operating point."""
-        return self.equation.fill_velocity_partial_derivatives(
-            tilt=sm.Scalar(self.tilt), fill=sm.Scalar(self.fill)
-        ).fill.evaluate()[0]
+        """
+        ``df/dfill`` at the operating point.
+        """
+        fill = sm.FloatVariable("fill")
+        velocity = self.equation.symbolic_velocity(
+            context=SymbolicFillContext(tilt=sm.Scalar(self.tilt), fill=fill)
+        )
+        return (
+            velocity.jacobian(variables=[fill])[0, 0]
+            .substitute(old_variables=[fill], new_variables=[sm.Scalar(self.fill)])
+            .evaluate()[0]
+        )
 
     def model(
         self, *, state_velocity: float, prediction_steps: int
@@ -847,7 +962,9 @@ class FlowingPourSetup:
 
 @pytest.fixture
 def flowing_pour_setup() -> FlowingPourSetup:
-    """A container pouring at a tilt well above its onset."""
+    """
+    A container pouring at a tilt well above its onset.
+    """
     return FlowingPourSetup(
         equation=ArticulatedPouringEquation(
             container_height=0.2, container_width=0.08, outflow_rate_constant=1.0
@@ -861,12 +978,16 @@ def flowing_pour_setup() -> FlowingPourSetup:
 
 
 class TestLinearizedScalarStateModel:
-    """The linearized fill prediction behind the row."""
+    """
+    The linearized fill prediction behind the row.
+    """
 
     def test_decay_is_one_plus_time_step_times_sensitivity(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """The decay is ``1 + dt·df/dfill`` at the operating point."""
+        """
+        The decay is ``1 + dt·df/dfill`` at the operating point.
+        """
         setup = flowing_pour_setup
         model = setup.model(state_velocity=0.0, prediction_steps=setup.control_horizon)
 
@@ -877,7 +998,9 @@ class TestLinearizedScalarStateModel:
     def test_free_response_matches_held_tilt_rollout(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """The free response is the nonlinear rollout with the tilt held."""
+        """
+        The free response is the nonlinear rollout with the tilt held.
+        """
         setup = flowing_pour_setup
         model = setup.model(
             state_velocity=setup.rate(tilt=setup.tilt, fill=setup.fill),
@@ -892,8 +1015,10 @@ class TestLinearizedScalarStateModel:
     def test_lookahead_weights_equal_geometric_series_of_decay(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """Each block carries the geometric series of the decay over its
-        remaining state steps, so the final block carries zero."""
+        """
+        Each block carries the geometric series of the decay over its remaining state
+        steps, so the final block carries zero.
+        """
         setup = flowing_pour_setup
         model = setup.model(state_velocity=0.0, prediction_steps=setup.control_horizon)
         decay = model.decay.evaluate()[0]
@@ -911,14 +1036,16 @@ class TestLinearizedScalarStateModel:
     def test_normalized_weights_sum_to_the_prediction_window(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """Normalized weights keep their decreasing shape and sum to the
-        predicted state steps."""
+        """
+        Normalized weights keep their decreasing shape and sum to the predicted state
+        steps.
+        """
         setup = flowing_pour_setup
         model = setup.model(state_velocity=0.0, prediction_steps=setup.prediction_steps)
 
         weights = [
             weight.evaluate()[0]
-            for weight in window_normalized_weights(
+            for weight in LinearizedScalarStateModel.window_normalized_weights(
                 weights=model.lookahead_weights(),
                 prediction_steps=setup.prediction_steps,
             )
@@ -931,8 +1058,10 @@ class TestLinearizedScalarStateModel:
     def test_single_step_horizon_predicts_one_euler_step(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """With one step the free response is one Euler step and the only block
-        carries zero weight."""
+        """
+        With one step the free response is one Euler step and the only block carries
+        zero weight.
+        """
         time_step = flowing_pour_setup.time_step
         fill_level = 0.8
         outflow_rate = -0.2
@@ -982,8 +1111,10 @@ class TestLinearizedScalarStateModel:
     def test_free_response_is_a_pure_integrator_when_filling(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """A pure inflow does not depend on the receiver's own fill, so the
-        free response is the fill plus the projected inflow."""
+        """
+        A pure inflow does not depend on the receiver's own fill, so the free response
+        is the fill plus the projected inflow.
+        """
         setup = flowing_pour_setup
         inflow_rate = 0.1
         model = LinearizedScalarStateModel(
@@ -1001,14 +1132,18 @@ class TestLinearizedScalarStateModel:
 
 
 class TestPredictionBeyondTheControlWindow:
-    """With more predicted state steps than control steps the model predicts
-    the state after the joints have come to rest."""
+    """
+    With more predicted state steps than control steps the model predicts the state
+    after the joints have come to rest.
+    """
 
     def test_free_response_matches_held_tilt_rollout_over_the_prediction_window(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """The free response follows the held-tilt rollout over the whole
-        window, not only over the control window."""
+        """
+        The free response follows the held-tilt rollout over the whole window, not only
+        over the control window.
+        """
         setup = flowing_pour_setup
         model = setup.model(
             state_velocity=setup.rate(tilt=setup.tilt, fill=setup.fill),
@@ -1029,8 +1164,10 @@ class TestPredictionBeyondTheControlWindow:
     def test_lookahead_weights_count_the_state_steps_after_each_block(
         self, *, flowing_pour_setup: FlowingPourSetup
     ) -> None:
-        """Every weight counts the predicted state steps after its block, so
-        the last block is no longer weightless."""
+        """
+        Every weight counts the predicted state steps after its block, so the last block
+        is no longer weightless.
+        """
         setup = flowing_pour_setup
         model = setup.model(state_velocity=0.0, prediction_steps=setup.prediction_steps)
         decay = model.decay.evaluate()[0]
@@ -1056,21 +1193,30 @@ class FedReceiverSetup:
     """
 
     joint_and_receiver: LinearStateRateSetup
-    """The joint and the receiver's state."""
+    """
+    The joint and the receiver's state.
+    """
 
     source_variable: sm.FloatVariable
-    """The source's fill, a passive state the receiver's rate depends on."""
+    """
+    The source's fill, a passive state the receiver's rate depends on.
+    """
 
     source_position: float
-    """Fill of the source at the operating point."""
+    """
+    Fill of the source at the operating point.
+    """
 
     drain_constant: float
-    """Share of the source draining per second and per unit of joint
-    position."""
+    """
+    Share of the source draining per second and per unit of joint position.
+    """
 
     @property
     def source_velocity(self) -> sm.Scalar:
-        """The source's own fill rate ``-k·q·s``."""
+        """
+        The source's own fill rate ``-k·q·s``.
+        """
         return (
             -sm.Scalar(self.drain_constant)
             * self.joint_and_receiver.joint_degree_of_freedom.variables.position
@@ -1079,7 +1225,9 @@ class FedReceiverSetup:
 
     @property
     def coupled_source(self) -> CoupledState:
-        """The source as a state coupled to the receiver's prediction."""
+        """
+        The source as a state coupled to the receiver's prediction.
+        """
         return CoupledState(
             variable=self.source_variable, velocity=self.source_velocity
         )
@@ -1123,8 +1271,9 @@ class FedReceiverSetup:
 def fed_receiver_setup(
     linear_state_rate_setup: LinearStateRateSetup,
 ) -> FedReceiverSetup:
-    """The linear setup's joint and state, with a source the state is fed
-    from."""
+    """
+    The linear setup's joint and state, with a source the state is fed from.
+    """
     source_position = 0.8
     source_connection = _prismatic_connection(
         world=linear_state_rate_setup.world, name="source_body"
@@ -1141,14 +1290,18 @@ def fed_receiver_setup(
 
 
 class TestCoupledSourceInThePrediction:
-    """A receiver's prediction lets the source it feeds on drain over the
-    window instead of holding the source's current outflow."""
+    """
+    A receiver's prediction lets the source it feeds on drain over the window instead of
+    holding the source's current outflow.
+    """
 
     def test_coupled_free_response_follows_both_states(
         self, *, fed_receiver_setup: FedReceiverSetup
     ) -> None:
-        """The coupled system is linear in its states here, so the prediction
-        equals the held-joint recursion of source and receiver together."""
+        """
+        The coupled system is linear in its states here, so the prediction equals the
+        held-joint recursion of source and receiver together.
+        """
         setup = fed_receiver_setup
         config = setup.joint_and_receiver.config
         constraint = setup.constraint(
@@ -1165,8 +1318,10 @@ class TestCoupledSourceInThePrediction:
     def test_without_coupled_states_the_source_rate_is_held(
         self, *, fed_receiver_setup: FedReceiverSetup
     ) -> None:
-        """Without the coupling the receiver gains the source's current outflow
-        over the whole window."""
+        """
+        Without the coupling the receiver gains the source's current outflow over the
+        whole window.
+        """
         setup = fed_receiver_setup
         receiver = setup.joint_and_receiver
         config = receiver.config
@@ -1187,8 +1342,9 @@ class TestCoupledSourceInThePrediction:
     def test_equality_bound_uses_the_coupled_prediction(
         self, *, fed_receiver_setup: FedReceiverSetup
     ) -> None:
-        """The bound is the goal minus the prediction with the source draining
-        along."""
+        """
+        The bound is the goal minus the prediction with the source draining along.
+        """
         setup = fed_receiver_setup
         receiver = setup.joint_and_receiver
         predicted = setup.held_joint_recursion(steps=receiver.config.control_horizon)
@@ -1210,8 +1366,10 @@ class TestCoupledSourceInThePrediction:
 def test_the_constraint_predicts_the_held_joint_recursion(
     *, linear_state_rate_setup: LinearStateRateSetup
 ) -> None:
-    """The prediction a recorder reads off the constraint is the state after
-    the window's held-joint steps."""
+    """
+    The prediction the constraint states is the state after the window's held-joint
+    steps.
+    """
     setup = linear_state_rate_setup
     constraint = setup.constraint(prediction_duration=setup.far_prediction_duration)
 

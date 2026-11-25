@@ -1,7 +1,3 @@
-"""
-Collections of the shapes that make up a body's visual or collision geometry.
-"""
-
 from __future__ import annotations
 
 import itertools
@@ -243,27 +239,6 @@ class ShapeCollection(SubclassJSONSerializer):
             .bounding_box()
             .scale
         )
-
-    @property
-    def depth(self) -> float:
-        """
-        :return: The extent along x of the bounding box containing all shapes.
-        """
-        return self.scale.x
-
-    @property
-    def width(self) -> float:
-        """
-        :return: The extent along y of the bounding box containing all shapes.
-        """
-        return self.scale.y
-
-    @property
-    def height(self) -> float:
-        """
-        :return: The extent along z of the bounding box containing all shapes.
-        """
-        return self.scale.z
 
     @property
     def min_point(self) -> Point3:

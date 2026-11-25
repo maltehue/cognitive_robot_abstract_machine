@@ -79,8 +79,8 @@ from krrood_spatial_math.spatial_types import Pose, RotationMatrix
 from semantic_digital_twin.world_description.connections import (
     FixedConnection,
     ActiveConnection1DOF,
-    LiquidConnection,
 )
+from semantic_digital_twin.world_description.liquid_connection import LiquidConnection
 from semantic_digital_twin.world_description.geometry import (
     VolumetricBoundingBox,
     Color,
@@ -1805,11 +1805,10 @@ class HasFillLevel(HasRootBody, LiquidSource):
         if self.fill_connection is not None:
             raise FillLevelAlreadyInitializedError(container=self)
         fill_equation = self.create_pouring_equation(
-            world=world,
             outflow_rate_constant=outflow_rate_constant,
             discharge_coefficient=discharge_coefficient,
+            repose_angle=repose_angle,
         )
-        fill_equation.repose_angle = repose_angle
         phantom = Body(name=PrefixedName(f"{self.root.name.name}_fill_level_phantom"))
         with world.modify_world():
             world.add_body(phantom)
@@ -1871,40 +1870,6 @@ class HasFillLevel(HasRootBody, LiquidSource):
                 self.set_inflow_coupling(coupling=coupling)
         self._establish_inflow_coupling(source=source, world=world, settings=settings)
 
-    def recouple_outflow_from(
-        self, *, source: HasFillLevel, world: World, fill_equation: PouringEquation
-    ) -> None:
-        """
-        Replace the drain of an already coupled source and couple it anew with the
-        previous settings, e.g. to switch head models against a live process; the
-        published swap marks the coupling stale in every synchronized world.
-
-        :param source: The liquid source whose drain is replaced.
-        :param world: The world providing the forward kinematics for the gate.
-        :param fill_equation: The new, ungated drain of the source.
-        """
-        previous_coupling = self.inflow_coupling
-        with world.modify_world():
-            source.set_fill_equation(fill_equation=fill_equation)
-        self._clear_inflow_coupling(world=world)
-        if previous_coupling is None:
-            self.receive_outflow_from(source=source, world=world)
-            return
-        self.receive_outflow_from(
-            source=source, world=world, settings=previous_coupling.settings
-        )
-
-    def _clear_inflow_coupling(self, *, world: World) -> None:
-        """
-        Detach the coupling description and the local symbolic inflow so this receiver
-        can be coupled anew.
-
-        :param world: The world the coupling was built against.
-        """
-        with world.modify_world(publish_changes=False):
-            self.set_inflow_equation(inflow_equation=None)
-            self.set_inflow_coupling(coupling=None)
-
     def _establish_inflow_coupling(
         self, *, source: LiquidSource, world: World, settings: LiquidTransferSettings
     ) -> None:
@@ -1926,15 +1891,13 @@ class HasFillLevel(HasRootBody, LiquidSource):
         gate = self._geometric_transfer_gate(
             source=source, world=world, landing_point=landing_point, settings=settings
         )
+        extents = self.root.collision.scale
         inflow_equation = GatedInflowEquation(
-            container_height=self.root.collision.height,
-            container_width=self.root.collision.width,
+            container_height=extents.z,
+            container_width=extents.y,
             capacity=self.capacity,
             inflow=source_volume_rate,
-            gate=gate.product,
-            height_gate=gate.height,
-            overlap_gate=gate.overlap,
-            source_tilt_expression=source.pour_tilt_expression,
+            transfer_gate=gate,
             exit_speed=settings.exit_speed,
         )
         with world.modify_world(publish_changes=False):
@@ -2014,25 +1977,28 @@ class HasFillLevel(HasRootBody, LiquidSource):
     def create_pouring_equation(
         self,
         *,
-        world: World,
         outflow_rate_constant: float,
         discharge_coefficient: float,
+        repose_angle: float,
     ) -> ArticulatedPouringEquation:
         """
         The liquid stands across the collision geometry's width and pours over its top
         corner once it reaches the collision geometry's height.
 
-        :param world: The world the container lives in.
         :param outflow_rate_constant: Outflow rate constant of the drain.
         :param discharge_coefficient: Scales the Torricelli exit speed.
+        :param repose_angle: Tilt past the geometric onset before the contents flow, in
+            radians.
         :return: The ungated drain of this container.
         """
+        extents = self.root.collision.scale
         return ArticulatedPouringEquation(
-            container_width=self.root.collision.width,
-            container_height=self.root.collision.height,
+            container_width=extents.y,
+            container_height=extents.z,
             capacity=self.capacity,
             outflow_rate_constant=outflow_rate_constant,
             discharge_coefficient=discharge_coefficient,
+            repose_angle=repose_angle,
         )
 
     def current_exit_speed(self, *, world: World) -> sm.Scalar | None:
@@ -2177,7 +2143,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         receiver_opening = self.opening_point(world=world)
 
         height_gate = self._logistic(
-            value=(source_exit.z - receiver_opening.z) / self.root.collision.height,
+            value=(source_exit.z - receiver_opening.z) / self.root.collision.scale.z,
             sharpness=settings.height_gate_sharpness,
         )
         landing_distance = sm.sqrt(
@@ -2195,7 +2161,7 @@ class HasFillLevel(HasRootBody, LiquidSource):
         """
         Radius of this container's opening, in metres.
         """
-        return self.root.collision.width / 2
+        return self.root.collision.scale.y / 2
 
     @property
     def capacity(self) -> float:
@@ -2205,8 +2171,8 @@ class HasFillLevel(HasRootBody, LiquidSource):
         """
         if self.measured_capacity is not None:
             return self.measured_capacity
-        collision = self.root.collision
-        return collision.depth * collision.width * collision.height
+        extents = self.root.collision.scale
+        return extents.x * extents.y * extents.z
 
     def opening_point(self, *, world: World) -> Point3:
         """
