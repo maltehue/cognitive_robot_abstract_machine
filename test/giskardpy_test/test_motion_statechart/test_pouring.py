@@ -14,7 +14,7 @@ import pytest
 from cramph.composites import Parallel
 from cramph.context import StatechartContext
 from cramph.data_types import ObservationStateValue
-from cramph.executor import StatechartExecutor
+from cramph.executor import Executor, StatechartExecutor
 from cramph.statechart import Statechart
 from giskardpy.motion_control import MotionControl
 from giskardpy.motion_statechart.graph_node import EndMotion
@@ -209,6 +209,31 @@ class PouringSetup:
         cup.initialize_fill_level(initial_fill=1.0, outflow_rate_constant=1.0)
         return cup
 
+    def place_receiving_cup(self, *, world: World) -> PourableContainer:
+        """
+        :param world: The world holding the table.
+        :return: An empty Jeroen cup on the table in front of Tracy.
+        """
+        cup_body = self.cup_body(name="receiving_cup")
+        with world.modify_world():
+            world.add_body(cup_body)
+            world.add_connection(
+                Connection6DoF.create_with_dofs(
+                    world=world,
+                    parent=world.root,
+                    child=cup_body,
+                    name=PrefixedName("table_T_receiving_cup"),
+                    parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
+                        1.0, 0.1, self.table_surface_height
+                    ),
+                )
+            )
+        cup = PourableContainer(name=PrefixedName("receiving_cup"), root=cup_body)
+        with world.modify_world():
+            world.add_semantic_annotation(cup)
+        cup.initialize_fill_level(initial_fill=0.0, outflow_rate_constant=1.0)
+        return cup
+
     def pre_tilt_left_wrist(self, *, world: World) -> None:
         """
         Turn Tracy's left wrist by :attr:`pre_tilt`.
@@ -284,27 +309,7 @@ def tracy_transfer_world(
         world=world, left_tool_frame=left_tool_frame, name="source_cup"
     )
 
-    receiving_cup_body = pouring_setup.cup_body(name="receiving_cup")
-    with world.modify_world():
-        world.add_body(receiving_cup_body)
-        world.add_connection(
-            Connection6DoF.create_with_dofs(
-                world=world,
-                parent=world.root,
-                child=receiving_cup_body,
-                name=PrefixedName("table_T_receiving_cup"),
-                parent_T_connection_expression=HomogeneousTransformationMatrix.from_xyz_rpy(
-                    1.0, 0.1, pouring_setup.table_surface_height
-                ),
-            )
-        )
-    receiving_cup = PourableContainer(
-        name=PrefixedName("receiving_cup"), root=receiving_cup_body
-    )
-    with world.modify_world():
-        world.add_semantic_annotation(receiving_cup)
-    receiving_cup.initialize_fill_level(initial_fill=0.0, outflow_rate_constant=1.0)
-
+    receiving_cup = pouring_setup.place_receiving_cup(world=world)
     receiving_cup.receive_outflow_from(source=source_cup)
     pouring_setup.pre_tilt_left_wrist(world=world)
 
@@ -351,9 +356,10 @@ class TransferMotion:
     The task holding the source lip above the receiver rim.
     """
 
-    executor: StatechartExecutor
+    executor: Executor
     """
-    The executor the motion is built for.
+    The executor the motion is built for, a local simulation unless the motion is sent
+    elsewhere.
     """
 
     statechart: Statechart
@@ -377,6 +383,7 @@ class TransferMotion:
         aiming_weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE,
         aiming_cruise_velocity: float = 0.2,
         fill_level_tolerance: float = 0.05,
+        executor: Executor | None = None,
     ) -> TransferMotion:
         """
         :param transfer_world: The transfer world fixture value.
@@ -386,6 +393,8 @@ class TransferMotion:
         :param aiming_weight: Weight of the pour-aiming task.
         :param aiming_cruise_velocity: Cruise velocity of the pour-aiming task.
         :param fill_level_tolerance: Tolerance around the fill goal.
+        :param executor: The executor to build the motion for; one simulating
+            :attr:`PouringSetup.controller_config` locally if not given.
         :return: The transfer motion, whose fill task starts once the pour is aimed.
         """
         world, source_cup, receiving_cup, left_tool_frame = transfer_world
@@ -415,7 +424,8 @@ class TransferMotion:
         motion = Parallel(
             nodes=[transfer_task, aiming_task, clearance_task, keep_plane]
         )
-        executor = setup.executor(world=world)
+        if executor is None:
+            executor = setup.executor(world=world)
         statechart = Statechart(context=executor.context)
         statechart.add_node(node=motion)
         statechart.add_node(node=EndMotion.when_true(node=motion))
@@ -458,7 +468,7 @@ class TransferMotion:
 
     def execute(self) -> None:
         """
-        Run the transfer to completion in simulation.
+        Run the transfer to completion in the local simulation :attr:`executor` is.
         """
         self.executor.compile(statechart=self.statechart)
         self.executor.tick_until_end(timeout=self.setup.timeout)
