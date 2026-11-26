@@ -18,6 +18,7 @@ from krrood.symbolic_math.symbolic_math import (
     VariableParameters,
 )
 from krrood_spatial_math.spatial_types import Point3, Vector3
+from semantic_digital_twin.semantic_annotations.pouring_stream import PouringStream
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.world_description.fill_level_connection import (
     FillLevelConnection,
@@ -303,7 +304,7 @@ class FillByTransferTask(TerminalFillConstraintTask):
         Compile the receiver's transfer gate and read its current value.
         """
         self._compiled_gate = self._compile_against_state(
-            expression=self.receiver.transfer_gate(source=self.source)
+            expression=PouringStream(source=self.source, receiver=self.receiver).gate()
         )
         self._read_gate()
 
@@ -388,9 +389,7 @@ class PourStreamTask(Task, ABC):
         """
         if self.source.fill_connection is None:
             raise MissingFillLevelError(node=self)
-        return self.receiver.projectile_landing_point(
-            source=self.source, exit_speed=self.source.exit_speed()
-        )
+        return PouringStream(source=self.source, receiver=self.receiver).landing_point()
 
 
 @dataclass(eq=False, repr=False, kw_only=True)

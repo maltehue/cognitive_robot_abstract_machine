@@ -658,7 +658,7 @@ class TestCupToCupTransfer:
             transfer_world=tracy_transfer_world, setup=pouring_setup
         )
         source_cup, receiving_cup = transfer.source_cup, transfer.receiving_cup
-        gate = receiving_cup.transfer_gate(source=source_cup)
+        gate = receiving_cup.incoming_stream().gate()
         clearance_history = transfer.record_rim_clearance()
         gate_history: list[float] = []
         recording_on_tick = transfer.transfer_task.on_tick

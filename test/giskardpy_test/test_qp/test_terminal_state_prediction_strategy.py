@@ -27,6 +27,7 @@ from semantic_digital_twin.physics.equations.pouring_equations import (
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import ScrewAxisConnection
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
+from semantic_digital_twin.world_description.geometry import Scale
 from semantic_digital_twin.world_description.world_entity import Body
 
 # %% a linear state rate over a joint and a passive state
@@ -577,7 +578,7 @@ def flowing_pour_setup() -> FlowingPourSetup:
     """
     return FlowingPourSetup(
         equation=PouringEquation(
-            container_height=0.2, container_width=0.08, outflow_rate_constant=1.0
+            container_scale=Scale(0.08, 0.08, 0.2), outflow_rate_constant=1.0
         ),
         tilt=1.3,
         fill=0.8,
