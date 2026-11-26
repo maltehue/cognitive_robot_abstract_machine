@@ -46,7 +46,9 @@ from semantic_digital_twin.world_description.connections import (
 )
 from semantic_digital_twin.world_description.geometry import Mesh, Scale
 from semantic_digital_twin.world_description.kinematic_chain import KinematicChain
-from semantic_digital_twin.world_description.liquid_connection import LiquidConnection
+from semantic_digital_twin.world_description.fill_level_connection import (
+    FillLevelConnection,
+)
 from semantic_digital_twin.world_description.shape_collection import ShapeCollection
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -489,7 +491,7 @@ class NoisyFillPerception:
     The world whose fill state is corrected.
     """
 
-    fill_connection: LiquidConnection
+    fill_connection: FillLevelConnection
     """
     The receiver's fill connection the belief lives on.
     """
@@ -526,18 +528,18 @@ class NoisyFillPerception:
         ticks_per_perception = max(
             1, round(setup.target_frequency / self.perception_rate)
         )
-        self.true_fill = float(self.fill_connection.position)
+        self.true_fill = float(self.fill_connection.fill_level)
         for tick_index in range(setup.timeout):
-            belief_before_tick = float(self.fill_connection.position)
+            belief_before_tick = float(self.fill_connection.fill_level)
             executor.tick()
-            self.true_fill += float(self.fill_connection.position) - belief_before_tick
+            self.true_fill += (
+                float(self.fill_connection.fill_level) - belief_before_tick
+            )
             if tick_index % ticks_per_perception == 0:
                 measurement = self.true_fill + self.random_generator.normal(
                     0.0, self.sigma
                 )
-                JointState.from_mapping(
-                    {self.fill_connection: float(np.clip(measurement, 0.0, 1.0))}
-                ).apply_to(self.world)
+                self.fill_connection.fill_level = float(np.clip(measurement, 0.0, 1.0))
             if executor.statechart.is_ended():
                 break
         executor.finish_run()

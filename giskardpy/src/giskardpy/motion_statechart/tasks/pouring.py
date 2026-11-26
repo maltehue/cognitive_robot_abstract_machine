@@ -19,7 +19,9 @@ from krrood.symbolic_math.symbolic_math import (
 )
 from krrood_spatial_math.spatial_types import Point3, Vector3
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
-from semantic_digital_twin.world_description.liquid_connection import LiquidConnection
+from semantic_digital_twin.world_description.fill_level_connection import (
+    FillLevelConnection,
+)
 from semantic_digital_twin.world_description.geometry import Color
 
 from giskardpy.motion_statechart.context import MotionControlContext
@@ -90,7 +92,7 @@ class TerminalFillConstraintTask(
     """How far ahead the fill level is predicted, in seconds, independent of
     the controller's prediction horizon."""
 
-    fill_connection: LiquidConnection = field(init=False)
+    fill_connection: FillLevelConnection = field(init=False)
     """World-resident fill connection resolved while building."""
 
     fill_velocity_expression: Scalar = field(init=False)
@@ -108,7 +110,7 @@ class TerminalFillConstraintTask(
         return super().required_context_extensions + (MotionControlContext,)
 
     @abstractmethod
-    def _resolve_fill_connection(self) -> LiquidConnection:
+    def _resolve_fill_connection(self) -> FillLevelConnection:
         """
         :return: The world-resident fill connection whose fill level the
             constraint drives.
@@ -164,7 +166,7 @@ class TerminalFillConstraintTask(
         row = artifacts.constraints.add_terminal_state_prediction_constraint(
             name=str(self.fill_connection.name),
             state_velocity=self.fill_velocity_expression,
-            state_variable=self.fill_connection.dof.variables.position,
+            state_variable=self.fill_connection.fill_dof.variables.position,
             goal_value=self.goal_value,
             quadratic_weight=self.weight,
             cruise_velocity=self.cruise_velocity,
@@ -201,7 +203,7 @@ class TerminalFillConstraintTask(
         :return: True once the fill reaches the goal and the modelled fill rate has
             settled to zero.
         """
-        fill_level = float(self.fill_connection.position)
+        fill_level = float(self.fill_connection.fill_level)
         fill_rate = float(self._compiled_fill_velocity.evaluate()[0])
         rate_settled = -self.fill_rate_tolerance < fill_rate < self.fill_rate_tolerance
         if rate_settled and self._fill_goal_reached(fill_level=fill_level):
@@ -218,7 +220,7 @@ class PouringTask(TerminalFillConstraintTask):
     """The container poured from, whose fill level is driven down to
     :attr:`goal_value`."""
 
-    def _resolve_fill_connection(self) -> LiquidConnection:
+    def _resolve_fill_connection(self) -> FillLevelConnection:
         """
         :raises MissingFillLevelError: if the container has no fill level.
         """
@@ -280,7 +282,7 @@ class FillByTransferTask(TerminalFillConstraintTask):
             raise MissingSourceError(node=self)
         return source
 
-    def _resolve_fill_connection(self) -> LiquidConnection:
+    def _resolve_fill_connection(self) -> FillLevelConnection:
         """
         :raises MissingSourceError: if no container pours into the receiver.
         """
@@ -325,14 +327,14 @@ class FillByTransferTask(TerminalFillConstraintTask):
         }
         return [
             CoupledState(
-                variable=connection.raw_dof.variables.position,
+                variable=connection.fill_dof.variables.position,
                 velocity=connection.symbolic_fill_velocity(),
             )
             for connection in self.context.world.get_connections_by_type(
-                LiquidConnection
+                FillLevelConnection
             )
             if connection is not self.fill_connection
-            and connection.raw_dof.variables.position.id in rate_variables
+            and connection.fill_dof.variables.position.id in rate_variables
         ]
 
     def _read_gate(self) -> None:

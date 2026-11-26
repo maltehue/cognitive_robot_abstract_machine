@@ -25,22 +25,27 @@ from semantic_digital_twin.physics.equations.pouring_equations import (
     PouringEquation,
 )
 from semantic_digital_twin.world import World
-from semantic_digital_twin.world_description.connections import PrismaticConnection
+from semantic_digital_twin.world_description.connections import ScrewAxisConnection
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
 from semantic_digital_twin.world_description.world_entity import Body
 
 # %% a linear state rate over a joint and a passive state
 
 
-def _prismatic_connection(*, world: World, name: str) -> PrismaticConnection:
+def _prismatic_connection(*, world: World, name: str) -> ScrewAxisConnection:
     """
     :return: A new prismatic connection below the world's root.
     """
     with world.modify_world():
         body = Body(name=PrefixedName(name))
         world.add_body(body)
-        connection = PrismaticConnection.create_with_dofs(
-            world=world, parent=world.root, child=body, axis=Vector3.X()
+        connection = ScrewAxisConnection.create_with_dofs(
+            world=world,
+            parent=world.root,
+            child=body,
+            screw_axis=ScrewAxisConnection.create_prismatic_screw_axis(
+                axis=Vector3.X()
+            ),
         )
         world.add_connection(connection)
     return connection

@@ -12,9 +12,10 @@ from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.semantic_annotations.mixins import HasFillLevel
 from semantic_digital_twin.specifications.connections import (
-    RevoluteConnectionSpecification,
+    ScrewAxisConnectionSpecification,
 )
 from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.connections import ScrewAxisConnection
 from semantic_digital_twin.world_description.degree_of_freedom import (
     DegreeOfFreedomLimits,
 )
@@ -38,14 +39,17 @@ class PourableContainer(HasFillLevel):
         *,
         axis: Vector3 | None = None,
         dof_limits: DegreeOfFreedomLimits | None = None,
-    ) -> RevoluteConnectionSpecification:
+    ) -> ScrewAxisConnectionSpecification:
         """
         :param axis: Axis of the connection. Defaults to the z axis.
         :param dof_limits: Limits of the generated degree of freedom.
         :return: The single-degree-of-freedom connection the container hangs from.
         """
-        return RevoluteConnectionSpecification(
-            axis=axis if axis is not None else Vector3.Z(), dof_limits=dof_limits
+        return ScrewAxisConnectionSpecification(
+            screw_axis=ScrewAxisConnection.create_revolute_screw_axis(
+                axis=axis if axis is not None else Vector3.Z()
+            ),
+            dof_limits=dof_limits,
         )
 
 
