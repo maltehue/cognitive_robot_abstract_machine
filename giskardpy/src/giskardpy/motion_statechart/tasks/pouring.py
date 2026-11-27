@@ -303,9 +303,10 @@ class FillByTransferTask(TerminalFillConstraintTask):
         """
         Compile the receiver's transfer gate and read its current value.
         """
-        self._compiled_gate = self._compile_against_state(
-            expression=PouringStream(source=self.source, receiver=self.receiver).gate()
-        )
+        stream = self.receiver.incoming_stream()
+        if stream is None:
+            raise MissingSourceError(node=self)
+        self._compiled_gate = self._compile_against_state(expression=stream.gate())
         self._read_gate()
 
     def _fill_velocity(self) -> Scalar:

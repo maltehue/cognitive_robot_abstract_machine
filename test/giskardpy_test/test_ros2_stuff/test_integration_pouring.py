@@ -178,7 +178,7 @@ def test_a_transfer_the_client_coupled_fills_the_receiver_on_the_server(
     server_source = robot.world.get_semantic_annotation_by_id(source_cup.id)
     server_receiver = robot.world.get_semantic_annotation_by_id(receiving_cup.id)
     tolerance = transfer.transfer_task.fill_level_tolerance
-    assert server_source.pours_into is server_receiver
+    assert server_receiver.poured_from() is server_source
     assert server_receiver.fill_level == pytest.approx(
         transfer.transfer_task.goal_value, abs=tolerance
     )
