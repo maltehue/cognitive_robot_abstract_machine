@@ -27,7 +27,6 @@ from semantic_digital_twin.physics.equations.pouring_equations import (
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import ScrewAxisConnection
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
-from semantic_digital_twin.world_description.geometry import Scale
 from semantic_digital_twin.world_description.world_entity import Body
 
 # %% a linear state rate over a joint and a passive state
@@ -487,6 +486,11 @@ class FlowingPourSetup:
     The drain of the pouring container.
     """
 
+    lip_offset: float
+    """
+    Horizontal distance from the container's tilt axis to its lip, in metres.
+    """
+
     tilt: float
     """
     Tilt at the operating point, well above the onset so both partials are non-zero.
@@ -517,7 +521,7 @@ class FlowingPourSetup:
         :return: The nonlinear fill velocity at the given point.
         """
         return self.equation.fill_velocity(
-            tilt=sm.Scalar(tilt), fill=sm.Scalar(fill)
+            tilt=sm.Scalar(tilt), fill=sm.Scalar(fill), lip_offset=self.lip_offset
         ).evaluate()[0]
 
     @property
@@ -526,7 +530,9 @@ class FlowingPourSetup:
         ``df/dfill`` at the operating point.
         """
         fill = sm.FloatVariable("fill")
-        velocity = self.equation.fill_velocity(tilt=sm.Scalar(self.tilt), fill=fill)
+        velocity = self.equation.fill_velocity(
+            tilt=sm.Scalar(self.tilt), fill=fill, lip_offset=self.lip_offset
+        )
         return (
             velocity.jacobian(variables=[fill])[0, 0]
             .substitute(old_variables=[fill], new_variables=[sm.Scalar(self.fill)])
@@ -577,9 +583,8 @@ def flowing_pour_setup() -> FlowingPourSetup:
     A container pouring at a tilt well above its onset.
     """
     return FlowingPourSetup(
-        equation=PouringEquation(
-            container_scale=Scale(0.08, 0.08, 0.2), outflow_rate_constant=1.0
-        ),
+        equation=PouringEquation(container_height=0.2, outflow_rate_constant=1.0),
+        lip_offset=0.04,
         tilt=1.3,
         fill=0.8,
         time_step=0.05,
