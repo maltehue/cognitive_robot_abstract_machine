@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from importlib.resources import files
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -68,14 +66,7 @@ class PouringSetup:
     The scene and controller settings the pouring tests share.
     """
 
-    cup_mesh_path: str = field(
-        default_factory=lambda: str(
-            Path(files("semantic_digital_twin")).parent.parent
-            / "resources"
-            / "stl"
-            / "jeroen_cup.stl"
-        )
-    )
+    cup_mesh_path: str = "package://iai_objects/objects/jeroen_cup.stl"
     """
     The mesh of the Jeroen cup the robot pours with.
     """
