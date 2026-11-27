@@ -373,24 +373,40 @@ class StreamDebugValue(StrEnum):
 
 @dataclass(eq=False, repr=False, kw_only=True)
 class PourStreamTask(Task, ABC):
-    """A task on the stream a source pours into a receiver, which leaves the
-    source at its exit point and lands on the receiver's opening plane."""
+    """A task on the stream pouring into a receiver, which leaves the source at its
+    exit point and lands on the receiver's opening plane."""
 
     receiver: HasFillLevel
     """The container poured into."""
 
-    source: HasFillLevel
-    """The container poured from."""
+    @property
+    def stream(self) -> PouringStream:
+        """
+        The stream pouring into :attr:`receiver`.
+
+        :raises MissingSourceError: if no container pours into the receiver.
+        """
+        stream = self.receiver.incoming_stream()
+        if stream is None:
+            raise MissingSourceError(node=self)
+        return stream
+
+    @property
+    def source(self) -> HasFillLevel:
+        """
+        The container pouring into :attr:`receiver`.
+
+        :raises MissingSourceError: if no container pours into the receiver.
+        """
+        return self.stream.source
 
     def landing_point(self) -> Point3:
         """
         :return: Where the stream lands on the receiver's opening plane, thrown at the
             source's current exit speed.
-        :raises MissingFillLevelError: if the source has no fill level.
+        :raises MissingSourceError: if no container pours into the receiver.
         """
-        if self.source.fill_connection is None:
-            raise MissingFillLevelError(node=self)
-        return PouringStream(source=self.source, receiver=self.receiver).landing_point()
+        return self.stream.landing_point()
 
 
 @dataclass(eq=False, repr=False, kw_only=True)

@@ -408,7 +408,6 @@ class TransferMotion:
         )
         aiming_task = KeepProjectileInReceiver(
             receiver=receiving_cup,
-            source=source_cup,
             weight=aiming_weight,
             cruise_velocity=aiming_cruise_velocity,
         )
