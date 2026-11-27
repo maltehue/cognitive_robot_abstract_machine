@@ -441,7 +441,7 @@ class TransferMotion:
 
         :return: The list the clearance samples are appended to as the motion runs.
         """
-        source_lip = self.source_cup.liquid_exit_point()
+        source_lip = self.source_cup.substance_exit_point()
         receiver_rim = self.receiving_cup.opening_point()
         clearance_history: list[float] = []
         original_on_tick = self.transfer_task.on_tick

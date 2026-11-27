@@ -458,7 +458,7 @@ class KeepProjectileInReceiver(
             [
                 DebugExpression(
                     name=f"{self.name}/{StreamDebugValue.EXIT_POINT}",
-                    expression=self.source.liquid_exit_point(),
+                    expression=self.source.substance_exit_point(),
                     color=self.exit_point_color,
                 ),
                 DebugExpression(
@@ -517,7 +517,7 @@ class KeepSourceRimAboveReceiverRim(
                 node=self, minimum_clearance=self.minimum_clearance
             )
         artifacts = MotionNodeArtifacts()
-        source_lip = self.source.liquid_exit_point()
+        source_lip = self.source.substance_exit_point()
         receiver_rim = self.receiver.opening_point()
         clearance = (source_lip - receiver_rim) @ Vector3.Z()
         artifacts.constraints.add_inequality_constraint(
